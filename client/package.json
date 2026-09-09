@@ -10,7 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ant-design/icons": "^6.3.4",
     "@floating-ui/react": "^0.27.20",
+    "antd": "^6.6.3",
     "axios": "^1.18.1",
     "emoji-picker-react": "^4.19.1",
     "html2pdf.js": "^0.14.0",

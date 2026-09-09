@@ -5,8 +5,8 @@ import {
   History, BarChart2, Save, RefreshCw, Plus, Trash2, Edit2, Check,
   X, Copy, RotateCcw, Zap, Eye, Brain, ChevronRight,
 } from 'lucide-react';
-import { api } from '../src/services/api.js';
-import { POPULAR_GOOGLE_FONTS, loadGoogleFont, renderTextOverlayCanvas, extractPunchyHeadline } from '../src/utils/canvasTextOverlay.js';
+import { api } from '../services/api.js';
+import { POPULAR_GOOGLE_FONTS, loadGoogleFont, renderTextOverlayCanvas, extractPunchyHeadline } from '../utils/canvasTextOverlay.js';
 
 
 // ── Theme ──────────────────────────────────────────────────────────────────

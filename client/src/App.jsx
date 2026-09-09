@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link } from 'react-router-dom';
+import { ConfigProvider, Card, Form, Input, Button, Typography, Alert, theme } from 'antd';
+import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import leadosLogo from './assets/leadoslogo.png';
 import { Building2, Globe, Mail, Phone, MapPin, FileText, ShieldCheck, ArrowRight, Lock } from 'lucide-react';
 import { STYLE } from './constants/theme.js';
 import { PrivacyPolicy } from './views/PrivacyPolicy.jsx';
 import { TermsAndConditions } from './views/TermsAndConditions.jsx';
-import { LandingPage } from './views/LandingPage.jsx';
 import { Sidebar } from './components/layout/Sidebar.jsx';
 import { Header } from './components/layout/Header.jsx';
 import { useAuth } from './hooks/useAuth.js';
@@ -37,7 +38,7 @@ import { CampaignPlanner } from './views/alliance/CampaignPlanner.jsx';
 import { EmailSetup } from './views/alliance/EmailSetup.jsx';
 import { EmailCampaignBuilder } from './views/alliance/EmailCampaignBuilder.jsx';
 import { WhatsAppCampaignBuilder } from './views/alliance/WhatsAppCampaignBuilder.jsx';
-import ContentOSDashboard from '../contentos/ContentOSDashboard.jsx';
+import ContentOSDashboard from './contentos/ContentOSDashboard.jsx';
 
 import KeywordTracking from './views/thedal/KeywordTracking.jsx';
 import ThedalHQ from './views/thedal/ThedalHQ.jsx';
@@ -70,307 +71,127 @@ import PlanManagementMafiya from './views/mafiya/PlanManagement.jsx';
 import Family from './views/mafiya/Family.jsx';
 
 function LoginPage({ login, authLoading, authError }) {
-  const [email, setEmail] = useState('');
-  const [pass, setPass] = useState('');
   const [loginError, setLoginError] = useState('');
-  const navigate = useNavigate();
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
+  const onFinish = async (values) => {
     setLoginError('');
-    const success = await login(email, pass);
+    const success = await login(values.email, values.password);
     if (!success) {
       setLoginError('Invalid email or password');
     }
   };
 
   return (
-    <>
-      <style>{STYLE}</style>
+    <ConfigProvider 
+      theme={{ 
+        token: { 
+          colorPrimary: '#2563eb',
+          fontFamily: "'Inter', system-ui, sans-serif",
+          borderRadius: 8,
+          controlHeight: 44,
+          fontSize: 14,
+        } 
+      }}
+    >
       <div style={{
         minHeight: '100vh',
         width: '100%',
-        background: '#040812',
-        color: '#e2e8f0',
-        fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
+        background: '#f8fafc',
         display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'space-between',
-        overflowX: 'hidden'
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontFamily: "'Inter', system-ui, sans-serif"
       }}>
-        {/* ---------------- STICKY NAVBAR ---------------- */}
-        <header style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 100,
-          background: 'rgba(6, 12, 23, 0.85)',
-          backdropFilter: 'blur(16px)',
-          borderBottom: '1px solid rgba(30, 41, 59, 0.7)',
-          padding: '14px 28px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between'
-        }}>
-          {/* Logo */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }} onClick={() => navigate('/')}>
+        <Card 
+          style={{ 
+            width: 420, 
+            maxWidth: '90%', 
+            boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01)',
+            border: '1px solid #e2e8f0'
+          }}
+          bordered={false}
+        >
+          <div style={{ textAlign: 'center', marginBottom: 32 }}>
             <img
               src={leadosLogo}
               alt="Lead OS Logo"
               style={{
-                height: 56,
+                height: 48,
                 width: 'auto',
                 objectFit: 'contain',
-                borderRadius: 8,
-                filter: 'drop-shadow(0 2px 10px rgba(249, 115, 22, 0.35))'
+                margin: '0 auto 16px auto',
               }}
             />
-            <div>
-              <div style={{ fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 22, color: '#f8fafc', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
-                Lead OS
-              </div>
-            </div>
+            <Typography.Title level={3} style={{ margin: 0, color: '#0f172a', fontWeight: 700 }}>
+              Sign in to your account
+            </Typography.Title>
+            <Typography.Text style={{ color: '#64748b', fontSize: 14 }}>
+              Welcome back! Please enter your details.
+            </Typography.Text>
           </div>
 
-          {/* Navigation Links */}
-          <nav style={{ display: 'flex', alignItems: 'center', gap: 24 }} className="nav-links">
-            <Link to="/#about" style={{ color: '#94a3b8', textDecoration: 'none', fontSize: 14, fontWeight: 500, transition: 'color 0.2s' }}>About Lead OS</Link>
-            <Link to="/#how-it-works" style={{ color: '#94a3b8', textDecoration: 'none', fontSize: 14, fontWeight: 500, transition: 'color 0.2s' }}>How It Works</Link>
-            <Link to="/#security" style={{ color: '#94a3b8', textDecoration: 'none', fontSize: 14, fontWeight: 500, transition: 'color 0.2s' }}>Security & OAuth</Link>
-            <Link to="/#preview" style={{ color: '#94a3b8', textDecoration: 'none', fontSize: 14, fontWeight: 500, transition: 'color 0.2s' }}>Dashboard Preview</Link>
-            <Link to="/#faq" style={{ color: '#94a3b8', textDecoration: 'none', fontSize: 14, fontWeight: 500, transition: 'color 0.2s' }}>FAQ</Link>
-          </nav>
+          {(loginError || authError) && (
+            <Alert 
+              message={loginError || authError} 
+              type="error" 
+              showIcon 
+              style={{ marginBottom: 24 }} 
+            />
+          )}
 
-          {/* Home CTA */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <button
-              onClick={() => navigate('/')}
-              style={{
-                background: 'transparent',
-                border: '1px solid #334155',
-                borderRadius: 9,
-                padding: '9px 18px',
-                color: '#e2e8f0',
-                fontSize: 14,
-                fontWeight: 600,
-                cursor: 'pointer',
-                transition: 'all 0.2s'
-              }}>
-              ← Home Page
-            </button>
-          </div>
-        </header>
-
-        {/* ---------------- LOGIN CARD CONTAINER ---------------- */}
-        <div style={{
-          padding: '60px 20px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          position: 'relative'
-        }}>
-          <div style={{
-            position: 'absolute',
-            inset: 0,
-            background: 'radial-gradient(circle at 25% 25%, rgba(249,115,22,0.06) 0%, transparent 50%), radial-gradient(circle at 75% 75%, rgba(59,130,246,0.06) 0%, transparent 50%)',
-            pointerEvents: 'none'
-          }} />
-
-          <div style={{
-            background: '#0c1525',
-            border: '1px solid #1a2e4a',
-            borderRadius: 18,
-            padding: 42,
-            width: 420,
-            maxWidth: '100%',
-            position: 'relative',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.6)'
-          }}>
-            <div style={{ textAlign: 'center', marginBottom: 30 }}>
-              <img
-                src={leadosLogo}
-                alt="Lead OS Logo"
-                style={{
-                  height: 52,
-                  width: 'auto',
-                  objectFit: 'contain',
-                  margin: '0 auto 12px auto',
-                  filter: 'drop-shadow(0 2px 10px rgba(249, 115, 22, 0.35))'
-                }}
+          <Form
+            name="login_form"
+            layout="vertical"
+            onFinish={onFinish}
+            requiredMark={false}
+          >
+            <Form.Item
+              name="email"
+              label={<span style={{ color: '#334155', fontWeight: 500 }}>Email</span>}
+              rules={[{ required: true, message: 'Please input your email!' }]}
+            >
+              <Input 
+                prefix={<UserOutlined style={{ color: '#94a3b8' }}/>} 
+                placeholder="Enter your email" 
+                size="large"
               />
-              <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 24, fontWeight: 800, color: '#f8fafc' }}>
-                Sign In to Lead OS
-              </h1>
-              <p style={{ color: '#64748b', fontSize: 12, marginTop: 4 }}>
-                ABM Groups - Powered by BM TechX
-              </p>
-            </div>
+            </Form.Item>
 
-            <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div>
-                <label style={{ display: 'block', fontSize: 10, color: '#64748b', marginBottom: 6, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase' }}>Email</label>
-                <input
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  type="email"
-                  placeholder="Enter email"
-                  style={{ width: '100%', background: '#060c17', border: '1px solid #1a2e4a', borderRadius: 9, padding: '12px 14px', color: '#e2e8f0', fontSize: 13, outline: 'none' }}
-                />
-              </div>
+            <Form.Item
+              name="password"
+              label={<span style={{ color: '#334155', fontWeight: 500 }}>Password</span>}
+              rules={[{ required: true, message: 'Please input your password!' }]}
+            >
+              <Input.Password 
+                prefix={<LockOutlined style={{ color: '#94a3b8' }}/>} 
+                placeholder="••••••••" 
+                size="large"
+              />
+            </Form.Item>
 
-              <div>
-                <label style={{ display: 'block', fontSize: 10, color: '#64748b', marginBottom: 6, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase' }}>Password</label>
-                <input
-                  value={pass}
-                  onChange={(e) => setPass(e.target.value)}
-                  type="password"
-                  placeholder="Enter password"
-                  style={{ width: '100%', background: '#060c17', border: '1px solid #1a2e4a', borderRadius: 9, padding: '12px 14px', color: '#e2e8f0', fontSize: 13, outline: 'none' }}
-                />
-              </div>
+            <Form.Item style={{ marginTop: 24, marginBottom: 0 }}>
+              <Button 
+                type="primary" 
+                htmlType="submit" 
+                size="large"
+                loading={authLoading}
+                block
+                style={{ fontWeight: 600 }}
+              >
+                Sign in
+              </Button>
+            </Form.Item>
+          </Form>
 
-              {(loginError || authError) && (
-                <div style={{ background: '#2d1010', border: '1px solid #7c2d12', borderRadius: 7, padding: 10, color: '#ef4444', fontSize: 12 }}>
-                  {loginError || authError}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={authLoading}
-                style={{
-                  width: '100%',
-                  background: 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
-                  border: 'none',
-                  borderRadius: 9,
-                  padding: 14,
-                  color: '#fff',
-                  fontSize: 14,
-                  fontWeight: 700,
-                  boxShadow: '0 4px 20px rgba(249, 115, 22, 0.35)',
-                  opacity: authLoading ? 0.6 : 1,
-                  cursor: authLoading ? 'not-allowed' : 'pointer'
-                }}>
-                {authLoading ? 'Signing in...' : 'Sign In to Lead OS'}
-              </button>
-            </form>
-
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 14, marginTop: 24, paddingTop: 18, borderTop: '1px solid #1a2e4a', fontSize: 12 }}>
-              <Link to="/" style={{ color: '#f97316', textDecoration: 'none', fontWeight: 600 }}>
-                ← Back to Home
-              </Link>
-              <span style={{ color: '#334155' }}>•</span>
-              <Link to="/privacy-policy" style={{ color: '#94a3b8', textDecoration: 'none', fontWeight: 500 }}>
-                Privacy Policy
-              </Link>
-            </div>
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: 32, paddingTop: 20, borderTop: '1px solid #f1f5f9', fontSize: 13 }}>
+            <span style={{ color: '#64748b', marginRight: 6 }}>Protected by</span>
+            <Link to="/privacy-policy" style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 500 }}>
+              Privacy Policy
+            </Link>
           </div>
-        </div>
-
-        {/* ---------------- GOOGLE DISCLAIMER BANNER ---------------- */}
-        <section style={{
-          padding: '20px 20px',
-          maxWidth: 1050,
-          margin: '20px auto 0 auto',
-          textAlign: 'center',
-          borderTop: '1px solid rgba(30, 41, 59, 0.5)'
-        }}>
-          <p style={{
-            fontSize: 11,
-            color: '#64748b',
-            lineHeight: 1.6,
-            maxWidth: 820,
-            margin: '0 auto'
-          }}>
-            <strong>Disclaimer:</strong> Lead OS uses Google Business Profile APIs and Google OAuth 2.0 for authentication. Lead OS is an independent application and is not affiliated with, endorsed by, or sponsored by Google LLC.
-          </p>
-        </section>
-
-        {/* ---------------- FOOTER WITH CONTACT & LEGAL ---------------- */}
-        <footer style={{
-          background: '#02050c',
-          borderTop: '1px solid #1a2e4a',
-          padding: '40px 24px 30px 24px',
-          marginTop: 20
-        }}>
-          <div style={{ maxWidth: 1050, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 30 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 30 }}>
-              {/* Column 1 - App Branding */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <img
-                    src={leadosLogo}
-                    alt="Lead OS Logo"
-                    style={{
-                      height: 48,
-                      width: 'auto',
-                      objectFit: 'contain',
-                      borderRadius: 8,
-                      filter: 'drop-shadow(0 2px 8px rgba(249, 115, 22, 0.3))'
-                    }}
-                  />
-                  <span style={{ fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 20, color: '#f8fafc' }}>Lead OS</span>
-                </div>
-                <p style={{ fontSize: 12, color: '#64748b', maxWidth: 300, lineHeight: 1.5 }}>
-                  Lead OS is an AI-powered Google Business Profile management platform.
-                </p>
-                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8, fontWeight: 600 }}>
-                  ABM Groups - Powered by BM TechX
-                </div>
-              </div>
-
-              {/* Column 2 - Organization & Contact Info */}
-              <div style={{ maxWidth: 340 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#f97316', marginBottom: 10, textTransform: 'uppercase' }}>Organization & Contact</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12, color: '#94a3b8' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Building2 size={15} style={{ color: '#f97316', flexShrink: 0 }} />
-                    <span>Company: <b>ABM Groups - Powered by BM TechX</b></span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Globe size={15} style={{ color: '#a855f7', flexShrink: 0 }} />
-                    <span>Website: <a href="https://abmgroups.org" target="_blank" rel="noopener noreferrer" style={{ color: '#a855f7', textDecoration: 'none' }}>abmgroups.org</a></span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Mail size={15} style={{ color: '#38bdf8', flexShrink: 0 }} />
-                    <span>Support Email: <a href="mailto:admin@abmgroups.org" style={{ color: '#38bdf8', textDecoration: 'none' }}>admin@abmgroups.org</a></span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Phone size={15} style={{ color: '#10b981', flexShrink: 0 }} />
-                    <span>Phone: <a href="tel:+919944940051" style={{ color: '#10b981', textDecoration: 'none' }}>+91 9944940051</a></span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                    <MapPin size={15} style={{ color: '#f59e0b', flexShrink: 0, marginTop: 2 }} />
-                    <span style={{ lineHeight: 1.4 }}>Address: 252, 2nd Floor, MG Road, Kottakuppam, Vanur, Puducherry, 605104</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Column 3 - Legal Links */}
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#f97316', marginBottom: 10, textTransform: 'uppercase' }}>Legal Policies</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
-                  <Link to="/privacy-policy" style={{ color: '#94a3b8', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <FileText size={14} />
-                    <span>Privacy Policy</span>
-                  </Link>
-                  <Link to="/terms-and-conditions" style={{ color: '#94a3b8', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <FileText size={14} />
-                    <span>Terms & Conditions</span>
-                  </Link>
-                </div>
-              </div>
-            </div>
-
-            <div style={{ borderTop: '1px solid #1e293b', paddingTop: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 14, fontSize: 12, color: '#64748b' }}>
-              <div>© {new Date().getFullYear()} Lead OS • ABM Groups. All rights reserved.</div>
-              <div style={{ display: 'flex', gap: 16 }}>
-                <span>Secure Google OAuth 2.0 Integration</span>
-              </div>
-            </div>
-          </div>
-        </footer>
+        </Card>
       </div>
-    </>
+    </ConfigProvider>
   );
 }
 
@@ -472,7 +293,6 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
 
               <Route path="/privacy-policy" element={<PrivacyPolicy />} />
               <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
-              <Route path="/landing" element={<LandingPage />} />
 
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
@@ -493,7 +313,6 @@ export default function App() {
       <Routes>
         <Route path="/privacy-policy" element={<PrivacyPolicy />} />
         <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
-        <Route path="/landing" element={<LandingPage />} />
         <Route
           path="/login"
           element={
@@ -517,7 +336,7 @@ export default function App() {
                 />
               </ClientProvider>
             ) : (
-              <LandingPage />
+              <Navigate to="/login" replace />
             )
           }
         />

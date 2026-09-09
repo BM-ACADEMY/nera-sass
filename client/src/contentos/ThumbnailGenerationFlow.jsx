@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { loadConfig } from './thumbnailBrain/thumbnailBrainConfig.js';
-import { renderTextOverlayCanvas, extractPunchyHeadline, extractMarketingCopy } from '../src/utils/canvasTextOverlay.js';
+import { renderTextOverlayCanvas, extractPunchyHeadline, extractMarketingCopy } from '../utils/canvasTextOverlay.js';
 
 import {
   Video,

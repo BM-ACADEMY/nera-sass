@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api } from '../src/services/api.js';
+import { api } from '../services/api.js';
 
 export function SocialAccounts({
   connectedAccounts,

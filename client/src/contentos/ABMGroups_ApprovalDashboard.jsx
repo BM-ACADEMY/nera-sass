@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { api } from "../src/services/api";
-import { useAuth } from "../src/hooks/useAuth";
+import { api } from "../services/api";
+import { useAuth } from "../hooks/useAuth";
 
 const COLORS = [
   { c: "#7C3AED", bg: "#F5F3FF" }, { c: "#06B6D4", bg: "#ECFEFF" },

@@ -15,7 +15,7 @@
  * for thumbnail generation. They should call generateThumbnail() instead.
  */
 
-import { api } from '../../src/services/api.js';
+import { api } from '../../services/api.js';
 import { loadConfig, validateConfig, isConfigSaved } from './thumbnailBrainConfig.js';
 import { buildFinalPrompt } from './thumbnailPromptBuilder.js';
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { api } from '../src/services/api.js';
+import { api } from '../services/api.js';
 
 function normPlatform(p) {
   return (p || '').toLowerCase().replace(/_(post|reel|short|story|video)$/, '');

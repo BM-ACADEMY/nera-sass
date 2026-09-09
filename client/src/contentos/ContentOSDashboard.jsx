@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { api } from '../src/services/api.js';
-import '../src/views/ContentOS.css';
+import { api } from '../services/api.js';
+import '../views/ContentOS.css';
 
 // Import modular features
 import { ApprovalRoom } from './ApprovalRoom.jsx';
