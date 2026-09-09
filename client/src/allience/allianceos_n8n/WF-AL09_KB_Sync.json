@@ -1,0 +1,154 @@
+{
+  "name": "WF-AL09 KB Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "2c1ec1ef-f056-4c8b-afe1-f8e995bb5a8c",
+      "name": "Daily 06:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.LEADOS_API}}/ai-brain/brands",
+        "method": "GET",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "386527db-3ff5-4f71-85cb-a348792717d9",
+      "name": "Pull LeadOS AI Brain",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// turn LeadOS brand records into flat KB facts per audience\\nconst map = { academy:'college', techx:'smb', coretalents:'hr', travellersneed:'iv' };\\nconst out=[];\\nfor (const b of items){\\n  const d=b.json;\\n  const audience = map[d.brand_key] || 'smb';\\n  (d.facts||[]).forEach(f => out.push({ json:{ audience, brand:d.brand_key, fact:f } }));\\n}\\nreturn out;"
+      },
+      "id": "6edbaea6-25b1-4dad-ba8e-de6a9ad4f91c",
+      "name": "Map Brand Facts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alliance_kb (audience, brand, fact, active, updated_at)\\nVALUES ('{{$json.audience}}', '{{$json.brand}}', $f$ {{$json.fact}} $f$, true, NOW())\\nON CONFLICT (audience, fact) DO UPDATE SET active=true, updated_at=NOW();",
+        "options": {}
+      },
+      "id": "1bf3d356-a90b-452c-b5e9-45ecd1ed2917",
+      "name": "Upsert Into alliance_kb",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "WF-AL09 \u2014 KNOWLEDGE BASE SYNC\\nDaily pulls brand facts from the LeadOS AI Brain (single source of truth)\\ninto alliance_kb, mapped to the right audience. No duplicate brand data.",
+        "height": 140,
+        "width": 460,
+        "color": 3
+      },
+      "id": "c918595f-155e-4b90-b9be-225c64db5b2e",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 06:00": {
+      "main": [
+        [
+          {
+            "node": "Pull LeadOS AI Brain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pull LeadOS AI Brain": {
+      "main": [
+        [
+          {
+            "node": "Map Brand Facts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Brand Facts": {
+      "main": [
+        [
+          {
+            "node": "Upsert Into alliance_kb",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "allianceos"
+  },
+  "tags": [
+    {
+      "name": "AllianceOS"
+    }
+  ]
+}

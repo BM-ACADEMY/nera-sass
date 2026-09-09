@@ -1,0 +1,301 @@
+{
+  "name": "WF-AL08 MoU + Analytics",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 23 * * *"
+            }
+          ]
+        }
+      },
+      "id": "10d37dc0-b0b9-4047-87cb-90092bc6b844",
+      "name": "Daily 23:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT channel, COUNT(*) FILTER (WHERE status='sent') AS sent,\\n       COUNT(*) FILTER (WHERE status='replied') AS replied\\nFROM alliance_touches\\nWHERE sent_at::date = CURRENT_DATE\\nGROUP BY channel;",
+        "options": {}
+      },
+      "id": "3a358dc9-7011-4170-81b3-ff24582e3299",
+      "name": "Roll Up Stats",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.x.ai/v1/chat/completions",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"model\":\"grok-3\",\\n  \"messages\":[\\n    {\"role\":\"system\",\"content\":\"Score B2B lead warmth 0-100 from the thread. Return ONLY a number.\"},\\n    {\"role\":\"user\",\"content\":\"Thread summary here\"}\\n  ]\\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "afa75263-860f-4f44-a09c-b35d94569b3d",
+      "name": "Score Warm Leads (Grok)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/v20.0/{{$env.LEADOS_PHONE_ID}}/messages",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"messaging_product\":\"whatsapp\",\\n  \"to\":\"919944509441\",\\n  \"type\":\"text\",\\n  \"text\":{\"body\":\"AllianceOS daily: sent {{$json.sent}}, replies {{$json.replied}}. Check LeadOS inbox for warm leads.\"}\\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1c7aa933-975f-4229-bb4c-a559c5690063",
+      "name": "Send Daily Digest (WhatsApp)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alliance/mou",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "e01c58e4-ad80-436e-b279-c80dbdfd9c24",
+      "name": "Interested Trigger (MoU)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.x.ai/v1/chat/completions",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"model\":\"grok-3\",\\n  \"messages\":[\\n    {\"role\":\"system\",\"content\":\"Extract org name, contact, designation, address as JSON for MoU auto-fill.\"},\\n    {\"role\":\"user\",\"content\":\"Thread: {{$json.thread}}\"}\\n  ]\\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9033f692-16e9-42b7-9f71-9e66d4c86b8e",
+      "name": "Grok Extract Org Fields",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.PDF_SERVICE_URL}}/mou",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "442a50bb-685d-491e-b0e7-be7b1959aa6e",
+      "name": "Generate MoU PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.LEADOS_INBOX_WEBHOOK}}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"prospect_id\":\"{{$json.prospect_id}}\",\\n  \"attachment\":\"mou_pdf\",\\n  \"url\":\"{{$json.pdf_url}}\"\\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7383decf-c0a1-4d61-ab57-f2eca8031969",
+      "name": "Attach To LeadOS Card",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "content": "WF-AL08 \u2014 MOU + ANALYTICS\\nDaily: roll up sends/replies, score warm leads, WhatsApp digest to Kamar.\\nOn 'interested' (college/HR): AI extracts org data -> fill MoU PDF -> attach to LeadOS card.",
+        "height": 150,
+        "width": 460,
+        "color": 5
+      },
+      "id": "6db43e8d-40d7-4876-a166-e2532eba1914",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 23:00": {
+      "main": [
+        [
+          {
+            "node": "Roll Up Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Roll Up Stats": {
+      "main": [
+        [
+          {
+            "node": "Score Warm Leads (Grok)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Warm Leads (Grok)": {
+      "main": [
+        [
+          {
+            "node": "Send Daily Digest (WhatsApp)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interested Trigger (MoU)": {
+      "main": [
+        [
+          {
+            "node": "Grok Extract Org Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grok Extract Org Fields": {
+      "main": [
+        [
+          {
+            "node": "Generate MoU PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate MoU PDF": {
+      "main": [
+        [
+          {
+            "node": "Attach To LeadOS Card",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "allianceos"
+  },
+  "tags": [
+    {
+      "name": "AllianceOS"
+    }
+  ]
+}

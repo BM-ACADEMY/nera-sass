@@ -1,0 +1,351 @@
+{
+  "name": "WF-AL04 WhatsApp Sender",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "411b1212-c407-4348-af87-9449e33ed334",
+      "name": "Every 30 min ",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM alliance_numbers\\nWHERE status='active' AND quality_rating='green' AND sent_today < daily_cap\\nORDER BY sent_today ASC LIMIT 1;",
+        "options": {}
+      },
+      "id": "4f2c736e-0101-4738-ba00-a9e1d3c20f0b",
+      "name": "Pick Green Number",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.id ? 'yes':'no'}}",
+              "rightValue": "yes",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "70f7d61f-1891-4337-b208-40f09c25d39c",
+      "name": "Number Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.*, p.name, p.business_name, p.industry, p.location, p.audience, p.phone,\\n       tpl.body AS template_body, s.purpose\\nFROM alliance_touches t\\nJOIN alliance_prospects p ON p.id=t.prospect_id\\nJOIN alliance_sequences s ON s.campaign_id=t.campaign_id AND s.touch_no=t.touch_no\\nJOIN alliance_templates tpl ON tpl.audience=p.audience AND tpl.channel='whatsapp' AND tpl.touch_no=t.touch_no\\nWHERE t.channel='whatsapp' AND t.status='scheduled' AND t.scheduled_at <= NOW()\\nLIMIT 20;   -- rate-safe batch",
+        "options": {}
+      },
+      "id": "01ccdda9-a925-4649-9c42-777a91602411",
+      "name": "Get Due WA Touches",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        660,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\\n  (SELECT string_agg(fact, ' | ') FROM alliance_kb\\n     WHERE audience='{{$json.audience}}' AND active=true) AS brand_facts,\\n  (SELECT prompt_text FROM alliance_prompts\\n     WHERE job='personalize' AND channel='whatsapp' LIMIT 1) AS sys_prompt;",
+        "options": {}
+      },
+      "id": "b5f29213-fa36-4a1a-81e7-1011d81701cf",
+      "name": "Fetch AI Brain + Prompt ",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        770,
+        110
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.x.ai/v1/chat/completions",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"model\": \"grok-3\",\\n  \"messages\": [\\n    {\"role\":\"system\",\"content\":\"{{$json.sys_prompt}}\"},\\n    {\"role\":\"user\",\"content\":\"Touch {{$node[\\\"Get Due WA Touches\\\"].json.touch_no}} ({{$node[\\\"Get Due WA Touches\\\"].json.purpose}}) | {{$node[\\\"Get Due WA Touches\\\"].json.business_name}}, {{$node[\\\"Get Due WA Touches\\\"].json.industry}}, {{$node[\\\"Get Due WA Touches\\\"].json.location}} | Base: {{$node[\\\"Get Due WA Touches\\\"].json.template_body}} | KNOWLEDGE BASE (use only these facts): {{$json.brand_facts}} . Return ONLY the message.\"}\\n  ]\\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1166ddfc-8811-459d-a969-61138c3e6f8f",
+      "name": "Grok Personalize ",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/v20.0/{{$node['Pick Green Number'].json.phone_number_id}}/messages",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"messaging_product\":\"whatsapp\",\\n  \"to\":\"{{$json.phone}}\",\\n  \"type\":\"text\",\\n  \"text\":{\"body\":\"{{$json.choices[0].message.content}}\"}\\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1294e309-727a-4cac-9e9e-424c2ec7a4c2",
+      "name": "Send WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE alliance_touches SET status='sent', sent_at=NOW(), number_id={{$node['Pick Green Number'].json.id}}, message_body=$body$ {{$json.choices[0].message.content}} $body$ WHERE id={{$json.id}};\\nUPDATE alliance_numbers SET sent_today = sent_today + 1 WHERE id={{$node['Pick Green Number'].json.id}};",
+        "options": {}
+      },
+      "id": "5b7326e0-54f1-4866-9de4-b8246452df68",
+      "name": "Mark WA Sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1320,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 90,
+        "unit": "seconds"
+      },
+      "id": "f0b9bfd4-8480-437d-97f9-db4b56fea52e",
+      "name": "Jitter 60-120s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1540,
+        260
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "b141d01a-6f89-4813-befc-9c7e170c262c",
+      "name": "No Green Number - Alert",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        660,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "content": "WF-AL04 \u2014 WHATSAPP SENDER\\nPicks a GREEN number with headroom, batch of 20 max, AI-personalize, send via Meta Cloud API, rotate on cap.",
+        "height": 140,
+        "width": 440,
+        "color": 2
+      },
+      "id": "88196531-bad9-47b4-b3d8-4d72d1a638b2",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Every 30 min ": {
+      "main": [
+        [
+          {
+            "node": "Pick Green Number",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Green Number": {
+      "main": [
+        [
+          {
+            "node": "Number Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Number Available?": {
+      "main": [
+        [
+          {
+            "node": "Get Due WA Touches",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Green Number - Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Due WA Touches": {
+      "main": [
+        [
+          {
+            "node": "Fetch AI Brain + Prompt ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch AI Brain + Prompt ": {
+      "main": [
+        [
+          {
+            "node": "Grok Personalize ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grok Personalize ": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Mark WA Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark WA Sent": {
+      "main": [
+        [
+          {
+            "node": "Jitter 60-120s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "allianceos"
+  },
+  "tags": [
+    {
+      "name": "AllianceOS"
+    }
+  ]
+}

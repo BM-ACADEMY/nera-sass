@@ -1,0 +1,144 @@
+{
+  "name": "WF-AL06 Sequencer",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 120
+            }
+          ]
+        }
+      },
+      "id": "f05f8930-23a8-415e-ad4b-05bae606782b",
+      "name": "Every 2 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id AS prospect_id, p.campaign_id, p.channel_pref, p.audience,\\n       MAX(t.touch_no) AS last_touch, MAX(t.sent_at) AS last_sent\\nFROM alliance_prospects p\\nJOIN alliance_touches t ON t.prospect_id = p.id\\nWHERE p.status = 'in_sequence' AND p.suppressed = false\\nGROUP BY p.id;",
+        "options": {}
+      },
+      "id": "16733c93-57ec-442f-b4d2-7d11013dd987",
+      "name": "Get Active Sequences",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const offsets = {1:0,2:2,3:5,4:9};   // day offsets\\nconst out=[];\\nfor (const i of items){\\n  const d=i.json; const next=(d.last_touch||0)+1;\\n  if (next>4) continue;                 // max 4 touches\\n  const gapDays=offsets[next]-offsets[d.last_touch||1];\\n  const due=new Date(new Date(d.last_sent).getTime()+gapDays*864e5);\\n  if (Date.now()>=due.getTime()) out.push({json:{...d, next_touch:next}});\\n}\\nreturn out;"
+      },
+      "id": "254282eb-c5ac-47bb-8067-e6c8a94e1513",
+      "name": "Compute Next Touch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alliance_touches (prospect_id, campaign_id, touch_no, channel, status, scheduled_at)\\nVALUES ({{$json.prospect_id}}, {{$json.campaign_id}}, {{$json.next_touch}}, COALESCE('{{$json.channel_pref}}', 'email'), 'scheduled', NOW());",
+        "options": {}
+      },
+      "id": "9aae6b11-64ae-4a3f-b3ec-0d7856b41a21",
+      "name": "Schedule Next Touch",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "WF-AL06 \u2014 SEQUENCER\\nDay offsets 0/2/5/9. Schedules the next touch when due. STOPS at touch 4, on reply, or on suppression.",
+        "height": 130,
+        "width": 420,
+        "color": 4
+      },
+      "id": "1f0a928e-ef4c-4556-a1ac-f606ff10de79",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Every 2 Hours": {
+      "main": [
+        [
+          {
+            "node": "Get Active Sequences",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Active Sequences": {
+      "main": [
+        [
+          {
+            "node": "Compute Next Touch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Next Touch": {
+      "main": [
+        [
+          {
+            "node": "Schedule Next Touch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "allianceos"
+  },
+  "tags": [
+    {
+      "name": "AllianceOS"
+    }
+  ]
+}

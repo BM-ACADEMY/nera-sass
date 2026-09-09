@@ -1,0 +1,1154 @@
+[{
+  "_id": {
+    "$oid": "69ca6407f59011bbd5af2be5"
+  },
+  "userId": {
+    "$oid": "69ca4bece46f91fef1b90f92"
+  },
+  "flowId": {
+    "$oid": "69ca4ca81f95be39c358f4ee"
+  },
+  "currentStep": "step_1774944648307",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-03-31T12:01:01.062Z"
+  },
+  "createdAt": {
+    "$date": "2026-03-30T11:52:39.996Z"
+  },
+  "updatedAt": {
+    "$date": "2026-03-31T12:01:01.043Z"
+  },
+  "__v": 0,
+  "lastStepId": "step_1774944648307"
+},
+{
+  "_id": {
+    "$oid": "69cbbd0e96336760f78c9838"
+  },
+  "userId": {
+    "$oid": "69ca4bece46f91fef1b90f92"
+  },
+  "flowId": {
+    "$oid": "69cbbc3fea2001ea47acc451"
+  },
+  "currentStep": "start_name",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-03-31T12:26:21.250Z"
+  },
+  "createdAt": {
+    "$date": "2026-03-31T12:24:46.184Z"
+  },
+  "updatedAt": {
+    "$date": "2026-03-31T12:26:21.249Z"
+  },
+  "__v": 0,
+  "lastStepId": "start_name"
+},
+{
+  "_id": {
+    "$oid": "69cbbefdda1b64074bfc6ed9"
+  },
+  "userId": {
+    "$oid": "69cbbef8da1b64074bfc6ec9"
+  },
+  "flowId": {
+    "$oid": "69cbbc3fea2001ea47acc451"
+  },
+  "currentStep": "ai_course",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-03-31T12:33:35.389Z"
+  },
+  "createdAt": {
+    "$date": "2026-03-31T12:33:01.139Z"
+  },
+  "updatedAt": {
+    "$date": "2026-03-31T12:33:35.388Z"
+  },
+  "__v": 0,
+  "lastStepId": "academy_entry"
+},
+{
+  "_id": {
+    "$oid": "69cbc1e1e794b30080c83dbb"
+  },
+  "userId": {
+    "$oid": "69cbc1dae794b30080c83dab"
+  },
+  "flowId": {
+    "$oid": "69cbbc3fea2001ea47acc451"
+  },
+  "currentStep": "talk_to_team",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": true,
+  "lastUpdated": {
+    "$date": "2026-03-31T12:55:48.900Z"
+  },
+  "createdAt": {
+    "$date": "2026-03-31T12:45:21.466Z"
+  },
+  "updatedAt": {
+    "$date": "2026-03-31T12:55:48.900Z"
+  },
+  "__v": 0,
+  "lastStepId": null
+},
+{
+  "_id": {
+    "$oid": "69cd151d6533281d563dd489"
+  },
+  "userId": {
+    "$oid": "69cd15156533281d563dd479"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "start_name",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-04-06T10:20:02.381Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-01T12:52:45.499Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T10:20:02.381Z"
+  },
+  "__v": 0,
+  "lastStepId": "start_name"
+},
+{
+  "_id": {
+    "$oid": "69ce18b6dbc512d8442c48be"
+  },
+  "userId": {
+    "$oid": "69ce18b4dbc512d8442c48a1"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "start_name",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-04-02T07:20:22.209Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-02T07:20:22.118Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-02T07:20:22.209Z"
+  },
+  "__v": 0,
+  "lastStepId": "start_name"
+},
+{
+  "_id": {
+    "$oid": "69ce18b6dbc512d8442c48c0"
+  },
+  "userId": {
+    "$oid": "69ce18b4dbc512d8442c48a0"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "start_name",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-04-02T07:20:22.339Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-02T07:20:22.139Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-02T07:20:22.339Z"
+  },
+  "__v": 0,
+  "lastStepId": "start_name"
+},
+{
+  "_id": {
+    "$oid": "69ce32598f88e2285123a6ae"
+  },
+  "userId": {
+    "$oid": "69ce32508f88e2285123a69d"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "final_thanks",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-04-02T09:12:21.124Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-02T09:09:46.041Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-02T09:12:21.123Z"
+  },
+  "__v": 0,
+  "lastStepId": "final_thanks"
+},
+{
+  "_id": {
+    "$oid": "69d39fbedaef78f05fa70af7"
+  },
+  "userId": {
+    "$oid": "69d39fbcdaef78f05fa70ae6"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "start_name",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-04-06T11:57:50.148Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-06T11:57:50.117Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T11:57:50.147Z"
+  },
+  "__v": 0,
+  "lastStepId": "start_name"
+},
+{
+  "_id": {
+    "$oid": "69d39fcadaef78f05fa70b09"
+  },
+  "userId": {
+    "$oid": "69d39fbddaef78f05fa70ae8"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "final_thanks",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-04-06T12:09:08.250Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-06T11:58:02.200Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T12:09:08.250Z"
+  },
+  "__v": 0,
+  "lastStepId": "final_thanks"
+},
+{
+  "_id": {
+    "$oid": "69d3a557b2005edd803eefc6"
+  },
+  "userId": {
+    "$oid": "69d3a555b2005edd803eefb9"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "final_thanks",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": true,
+  "lastUpdated": {
+    "$date": "2026-04-06T12:25:35.498Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-06T12:21:43.077Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T12:25:35.498Z"
+  },
+  "__v": 0,
+  "lastStepId": "final_thanks"
+},
+{
+  "_id": {
+    "$oid": "69d3a816feb0f66ff02fe696"
+  },
+  "userId": {
+    "$oid": "69d3a815feb0f66ff02fe686"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "start_name",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-04-06T12:33:26.622Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-06T12:33:26.592Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T12:33:26.621Z"
+  },
+  "__v": 0,
+  "lastStepId": "start_name"
+},
+{
+  "_id": {
+    "$oid": "69d3a833feb0f66ff02fe6c0"
+  },
+  "userId": {
+    "$oid": "69d3a832feb0f66ff02fe6a9"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "start_name",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-04-06T12:33:55.865Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-06T12:33:55.848Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T12:33:55.865Z"
+  },
+  "__v": 0,
+  "lastStepId": "start_name"
+},
+{
+  "_id": {
+    "$oid": "69d3a83dfeb0f66ff02fe6d2"
+  },
+  "userId": {
+    "$oid": "69d3a833feb0f66ff02fe6aa"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "contact_dm",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "lastUpdated": {
+    "$date": "2026-04-06T13:00:36.109Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-06T12:34:05.512Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T13:00:36.109Z"
+  },
+  "__v": 0,
+  "lastStepId": "contact_dm",
+  "emailSent": false
+},
+{
+  "_id": {
+    "$oid": "69d3a85ffeb0f66ff02fe6f6"
+  },
+  "userId": {
+    "$oid": "69d3a815feb0f66ff02fe685"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "final_thanks",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": true,
+  "lastUpdated": {
+    "$date": "2026-04-07T13:27:18.951Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-06T12:34:39.297Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-07T13:27:18.951Z"
+  },
+  "__v": 0,
+  "lastStepId": "final_thanks",
+  "emailSent": true
+},
+{
+  "_id": {
+    "$oid": "69d3aeaeece971663a7faf4c"
+  },
+  "userId": {
+    "$oid": "69d3aeadece971663a7faf3f"
+  },
+  "flowId": {
+    "$oid": "69cd14dca882fefeb702327f"
+  },
+  "currentStep": "final_thanks",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": true,
+  "emailSent": true,
+  "lastUpdated": {
+    "$date": "2026-04-06T13:02:26.846Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-06T13:01:34.767Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T13:02:26.846Z"
+  },
+  "__v": 0,
+  "lastStepId": "final_thanks"
+},
+{
+  "_id": {
+    "$oid": "69d5e51b9f3ccce40636bbfb"
+  },
+  "userId": {
+    "$oid": "69d5e5149f3ccce40636bbeb"
+  },
+  "flowId": {
+    "$oid": "69d5e4908f5eafd73ab3647d"
+  },
+  "currentStep": "1",
+  "selectedOptions": [],
+  "followUpHistory": [
+    48,
+    24
+  ],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-17T05:20:00.827Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-08T05:18:19.180Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T05:20:00.826Z"
+  },
+  "__v": 2,
+  "lastStepId": "1"
+},
+{
+  "_id": {
+    "$oid": "69d5e5359f3ccce40636bc3f"
+  },
+  "userId": {
+    "$oid": "69ce32508f88e2285123a69d"
+  },
+  "flowId": {
+    "$oid": "69d5e4908f5eafd73ab3647d"
+  },
+  "currentStep": "ai_course",
+  "selectedOptions": [],
+  "followUpHistory": [
+    48,
+    24
+  ],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-17T05:20:00.848Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-08T05:18:45.106Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T05:20:00.848Z"
+  },
+  "__v": 2,
+  "lastStepId": "ai_course"
+},
+{
+  "_id": {
+    "$oid": "69de1c58a216a4cd3e16487b"
+  },
+  "userId": {
+    "$oid": "69d3a815feb0f66ff02fe685"
+  },
+  "flowId": {
+    "$oid": "69d5e4908f5eafd73ab3647d"
+  },
+  "currentStep": "ai_course",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-17T05:41:16.157Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-14T10:52:08.668Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T05:41:16.157Z"
+  },
+  "__v": 0,
+  "lastStepId": "ai_course"
+},
+{
+  "_id": {
+    "$oid": "69de1cbda216a4cd3e1648d1"
+  },
+  "userId": {
+    "$oid": "69ca4bece46f91fef1b90f92"
+  },
+  "flowId": {
+    "$oid": "69d5e4908f5eafd73ab36482"
+  },
+  "currentStep": "1",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-14T10:53:49.552Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-14T10:53:49.548Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-14T10:53:49.552Z"
+  },
+  "__v": 0,
+  "lastStepId": null
+},
+{
+  "_id": {
+    "$oid": "69e1ccd81667e077cb42c4cb"
+  },
+  "userId": {
+    "$oid": "69ca4bece46f91fef1b90f92"
+  },
+  "flowId": {
+    "$oid": "69d5e4908f5eafd73ab3647d"
+  },
+  "currentStep": "1",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-17T06:02:00.395Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T06:02:00.373Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T06:02:00.395Z"
+  },
+  "__v": 0,
+  "lastStepId": "1"
+},
+{
+  "_id": {
+    "$oid": "69e1da4c376363c5046940c7"
+  },
+  "userId": {
+    "$oid": "69ca4bece46f91fef1b90f92"
+  },
+  "flowId": {
+    "$oid": "69e1d98ff470d2c47bfb0753"
+  },
+  "currentStep": "end",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": true,
+  "emailSent": true,
+  "lastUpdated": {
+    "$date": "2026-04-17T06:59:45.161Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T06:59:24.200Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T06:59:45.161Z"
+  },
+  "__v": 0,
+  "lastStepId": null
+},
+{
+  "_id": {
+    "$oid": "69e1da7f376363c504694163"
+  },
+  "userId": {
+    "$oid": "69d3a815feb0f66ff02fe685"
+  },
+  "flowId": {
+    "$oid": "69e1d98ff470d2c47bfb0753"
+  },
+  "currentStep": "end",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": true,
+  "emailSent": true,
+  "lastUpdated": {
+    "$date": "2026-04-17T07:00:22.390Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T07:00:15.075Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T07:00:22.390Z"
+  },
+  "__v": 0,
+  "lastStepId": null
+},
+{
+  "_id": {
+    "$oid": "69e1db62a123d2adefe261c3"
+  },
+  "userId": {
+    "$oid": "69d3a815feb0f66ff02fe685"
+  },
+  "flowId": {
+    "$oid": "69e1db026d3010adabecfd79"
+  },
+  "currentStep": "academy_entry",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-17T07:12:15.484Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T07:04:02.110Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T07:12:01.169Z"
+  },
+  "__v": 0,
+  "lastStepId": "academy_entry"
+},
+{
+  "_id": {
+    "$oid": "69e1e1f9a7370974462abafa"
+  },
+  "userId": {
+    "$oid": "69d3a815feb0f66ff02fe685"
+  },
+  "flowId": {
+    "$oid": "69e1e17b830bda58d5f6deff"
+  },
+  "currentStep": "tech_web",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-17T07:32:37.634Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T07:32:09.196Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T07:32:37.634Z"
+  },
+  "__v": 0,
+  "lastStepId": "tech_web"
+},
+{
+  "_id": {
+    "$oid": "69e1e4b032b91255f35ef91e"
+  },
+  "userId": {
+    "$oid": "69d3a815feb0f66ff02fe685"
+  },
+  "flowId": {
+    "$oid": "69e1e449119e73fc54cd794b"
+  },
+  "currentStep": "final_thank_you",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": true,
+  "lastUpdated": {
+    "$date": "2026-04-17T07:46:52.612Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T07:43:44.466Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T07:46:52.612Z"
+  },
+  "__v": 0,
+  "lastStepId": "final_thank_you"
+},
+{
+  "_id": {
+    "$oid": "69e1e57032b91255f35efbef"
+  },
+  "userId": {
+    "$oid": "69e1e57032b91255f35efbe2"
+  },
+  "flowId": {
+    "$oid": "69e1e449119e73fc54cd794b"
+  },
+  "currentStep": "tech_expert_msg",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-17T07:49:59.888Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T07:46:56.910Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T07:49:59.888Z"
+  },
+  "__v": 0,
+  "lastStepId": "tech_expert_msg"
+},
+{
+  "_id": {
+    "$oid": "69e1e72290face600d204a04"
+  },
+  "userId": {
+    "$oid": "69e1e57032b91255f35efbe2"
+  },
+  "flowId": {
+    "$oid": "69e1e6955bf9565f5c16d8e2"
+  },
+  "currentStep": "final_thank_you",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": true,
+  "lastUpdated": {
+    "$date": "2026-04-17T07:55:35.355Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T07:54:10.443Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T07:55:35.354Z"
+  },
+  "__v": 0,
+  "lastStepId": "final_thank_you"
+},
+{
+  "_id": {
+    "$oid": "69e1e78290face600d204ae6"
+  },
+  "userId": {
+    "$oid": "69e1e78190face600d204ad9"
+  },
+  "flowId": {
+    "$oid": "69e1e6955bf9565f5c16d8e2"
+  },
+  "currentStep": "prop_buy",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-17T07:59:47.003Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T07:55:46.285Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T07:59:47.003Z"
+  },
+  "__v": 0,
+  "lastStepId": "prop_buy"
+},
+{
+  "_id": {
+    "$oid": "69e1ea3727e7d7e502b98e20"
+  },
+  "userId": {
+    "$oid": "69e1e78190face600d204ad9"
+  },
+  "flowId": {
+    "$oid": "69e1ea18b6bc9dda79092002"
+  },
+  "currentStep": "prop_expert_msg",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": true,
+  "lastUpdated": {
+    "$date": "2026-04-17T08:10:41.266Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T08:07:19.783Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T08:10:41.266Z"
+  },
+  "__v": 0,
+  "lastStepId": "prop_expert_msg"
+},
+{
+  "_id": {
+    "$oid": "69e1f39cf5c01513e107798e"
+  },
+  "userId": {
+    "$oid": "69e1f39bf5c01513e1077981"
+  },
+  "flowId": {
+    "$oid": "69e1f31268838f492c2f33c4"
+  },
+  "currentStep": "job_details_capture",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-17T08:51:57.469Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T08:47:24.489Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T08:51:57.469Z"
+  },
+  "__v": 0,
+  "lastStepId": "job_details_capture"
+},
+{
+  "_id": {
+    "$oid": "69e1f719d8fff827e45bb16b"
+  },
+  "userId": {
+    "$oid": "69e1f39bf5c01513e1077981"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "academy_syllabus",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-17T10:04:06.226Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-17T09:02:17.325Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T10:04:06.226Z"
+  },
+  "__v": 0,
+  "lastStepId": "academy_syllabus"
+},
+{
+  "_id": {
+    "$oid": "69e31e66181f606408284f65"
+  },
+  "userId": {
+    "$oid": "69e31e63181f606408284f5a"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "main_menu",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-18T06:02:51.287Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-18T06:02:14.353Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T06:02:51.287Z"
+  },
+  "__v": 0,
+  "lastStepId": "main_menu"
+},
+{
+  "_id": {
+    "$oid": "69e3204d181f606408284fd6"
+  },
+  "userId": {
+    "$oid": "69e3204b181f606408284fcb"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "final_thank_you",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": true,
+  "lastUpdated": {
+    "$date": "2026-04-18T06:14:03.294Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-18T06:10:21.620Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T06:14:03.294Z"
+  },
+  "__v": 0,
+  "lastStepId": "final_thank_you"
+},
+{
+  "_id": {
+    "$oid": "69e32195181f60640828511e"
+  },
+  "userId": {
+    "$oid": "69e32193181f606408285113"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "prop_media_msg",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": true,
+  "lastUpdated": {
+    "$date": "2026-04-18T06:20:09.614Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-18T06:15:49.760Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T06:20:09.614Z"
+  },
+  "__v": 0,
+  "lastStepId": "prop_media_msg"
+},
+{
+  "_id": {
+    "$oid": "69e3299c181f606408285335"
+  },
+  "userId": {
+    "$oid": "69e32999181f606408285322"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "main_menu",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-18T06:52:57.864Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-18T06:50:04.664Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T06:52:57.864Z"
+  },
+  "__v": 0,
+  "lastStepId": "main_menu"
+},
+{
+  "_id": {
+    "$oid": "69e33452dd7b1bfdb0865968"
+  },
+  "userId": {
+    "$oid": "69e3344fdd7b1bfdb086595d"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "prop_expert_msg",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-18T07:56:54.311Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-18T07:35:46.423Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T07:56:54.310Z"
+  },
+  "__v": 0,
+  "lastStepId": "prop_expert_msg"
+},
+{
+  "_id": {
+    "$oid": "69e362665a9d48f5769cbf67"
+  },
+  "userId": {
+    "$oid": "69e362645a9d48f5769cbf5c"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "hi",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-18T10:52:23.381Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-18T10:52:22.760Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T10:52:23.380Z"
+  },
+  "__v": 0,
+  "lastStepId": "hi"
+},
+{
+  "_id": {
+    "$oid": "69e364d05a9d48f5769cc048"
+  },
+  "userId": {
+    "$oid": "69e364ce5a9d48f5769cc03d"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "final_thank_you",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": true,
+  "lastUpdated": {
+    "$date": "2026-04-18T11:11:57.686Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-18T11:02:40.898Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T11:11:57.686Z"
+  },
+  "__v": 0,
+  "lastStepId": "final_thank_you"
+},
+{
+  "_id": {
+    "$oid": "69e367025a9d48f5769cc24b"
+  },
+  "userId": {
+    "$oid": "69e367005a9d48f5769cc240"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "academy_mentor",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-18T11:17:08.654Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-18T11:12:02.257Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T11:17:08.654Z"
+  },
+  "__v": 0,
+  "lastStepId": "academy_mentor"
+},
+{
+  "_id": {
+    "$oid": "69ecb3b275af6691559392c5"
+  },
+  "userId": {
+    "$oid": "69ecb3af75af6691559392ba"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "final_thank_you",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": true,
+  "lastUpdated": {
+    "$date": "2026-04-25T12:42:04.979Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-25T12:29:38.537Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-25T12:42:04.979Z"
+  },
+  "__v": 0,
+  "lastStepId": "final_thank_you"
+},
+{
+  "_id": {
+    "$oid": "69ecb6b475af669155939429"
+  },
+  "userId": {
+    "$oid": "69ecb6b275af66915593941e"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "tech_demo_calendar_date",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-04-25T12:44:13.267Z"
+  },
+  "createdAt": {
+    "$date": "2026-04-25T12:42:28.873Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-25T12:44:13.267Z"
+  },
+  "__v": 0,
+  "lastStepId": "tech_demo_calendar_date"
+},
+{
+  "_id": {
+    "$oid": "6a359b271075769e95127fd5"
+  },
+  "userId": {
+    "$oid": "6a359b241075769e95127fca"
+  },
+  "flowId": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "currentStep": "capture_phone",
+  "selectedOptions": [],
+  "followUpHistory": [],
+  "completed": false,
+  "emailSent": false,
+  "lastUpdated": {
+    "$date": "2026-06-19T19:40:38.406Z"
+  },
+  "createdAt": {
+    "$date": "2026-06-19T19:40:23.936Z"
+  },
+  "updatedAt": {
+    "$date": "2026-06-19T19:40:38.406Z"
+  },
+  "__v": 0,
+  "lastStepId": "capture_phone"
+}]

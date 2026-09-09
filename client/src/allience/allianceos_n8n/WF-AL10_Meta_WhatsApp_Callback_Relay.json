@@ -1,0 +1,101 @@
+{
+  "name": "WF-AL10 AllianceOS Meta WhatsApp Callback Relay",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "whatsapp-incoming",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "meta-verification-webhook",
+      "name": "Meta Verification GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 140],
+      "webhookId": "allianceos-whatsapp-incoming-get"
+    },
+    {
+      "parameters": {
+        "url": "https://leados-api.abmgroups.org/api/alliance-inbox/webhook",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "hub.mode", "value": "={{$json.query['hub.mode']}}" },
+            { "name": "hub.verify_token", "value": "={{$json.query['hub.verify_token']}}" },
+            { "name": "hub.challenge", "value": "={{$json.query['hub.challenge']}}" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "neverError": true, "responseFormat": "text" } }
+        }
+      },
+      "id": "verify-through-api",
+      "name": "Verify Through Alliance API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 140],
+      "credentials": {
+        "httpHeaderAuth": { "id": "SELECT_IN_N8N", "name": "Alliance API Relay" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{$json.data || $json.body || $json}}",
+        "options": { "responseHeaders": { "entries": [{ "name": "Content-Type", "value": "text/plain" }] } }
+      },
+      "id": "verification-response",
+      "name": "Return Meta Challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [520, 140]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-incoming",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "meta-events-webhook",
+      "name": "Meta Events POST",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 380],
+      "webhookId": "allianceos-whatsapp-incoming-post"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://leados-api.abmgroups.org/api/alliance-inbox/webhook",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.body || $json}}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "forward-to-alliance-api",
+      "name": "Forward to Alliance Inbox API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [280, 380],
+      "credentials": {
+        "httpHeaderAuth": { "id": "SELECT_IN_N8N", "name": "Alliance API Relay" }
+      }
+    }
+  ],
+  "connections": {
+    "Meta Verification GET": { "main": [[{ "node": "Verify Through Alliance API", "type": "main", "index": 0 }]] },
+    "Verify Through Alliance API": { "main": [[{ "node": "Return Meta Challenge", "type": "main", "index": 0 }]] },
+    "Meta Events POST": { "main": [[{ "node": "Forward to Alliance Inbox API", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false,
+  "versionId": "allianceos-meta-whatsapp-callback-relay-v2"
+}

@@ -1,0 +1,1629 @@
+[
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a8466c"
+    },
+    "stepId": "hi",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "👋 Hi! Welcome to BM Group 🚀\nWe’re excited to help you with your career, business, and investments!\n👉 May I know your name? (Letters only)",
+    "isEntryPoint": true,
+    "nextStep": "capture_phone",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "name",
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.206Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.206Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a8466e"
+    },
+    "stepId": "capture_phone",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "😊 Thank you, {name}!\n👉 Could you please share your phone number?",
+    "isEntryPoint": false,
+    "nextStep": "capture_location",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "phone",
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.214Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.214Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84670"
+    },
+    "stepId": "capture_location",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📞 Thanks, {name}!\n👉 Please tell us your location (City/Area) (Letters only)",
+    "isEntryPoint": false,
+    "nextStep": "main_menu",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "location",
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.217Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.217Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84672"
+    },
+    "stepId": "main_menu",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📍 Got it, {name}! Thanks for sharing.\n\nHere’s how we can help you 👇\n✨ We help you with:\n\n👉 **What are you looking for today?**",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [
+      {
+        "label": "🎓 BM Academy – Career & Courses",
+        "nextStep": "academy_entry"
+      },
+      {
+        "label": "💼 Core Talents – Jobs & Skill Development",
+        "nextStep": "talents_entry"
+      },
+      {
+        "label": "🏡 Namma Pondy Properties – Property Investment",
+        "nextStep": "namma_pondy_entry"
+      },
+      {
+        "label": "📈 BM TechX – Business Growth & Marketing",
+        "nextStep": "techx_entry"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.223Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.223Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84674"
+    },
+    "stepId": "academy_entry",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "🎓 Welcome to BM Academy 🚀\n👉 Please choose a course:",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [
+      {
+        "label": "Digital Marketing",
+        "nextStep": "course_dm"
+      },
+      {
+        "label": "Full Stack Development",
+        "nextStep": "course_fs"
+      },
+      {
+        "label": "Data Analytics",
+        "nextStep": "course_da"
+      },
+      {
+        "label": "Video Editing",
+        "nextStep": "course_ve"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.228Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.228Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84676"
+    },
+    "stepId": "course_dm",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "🔥 Digital Marketing Course\n📚 Key Topics: SEO, SMM, Paid Ads\n💰 Fees: Starts from ₹14,999",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "service_enquiry",
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [
+      {
+        "label": "Syllabus",
+        "nextStep": "academy_syllabus"
+      },
+      {
+        "label": "Contact Mentor",
+        "nextStep": "academy_mentor"
+      },
+      {
+        "label": "Book Demo Session",
+        "nextStep": "academy_demo_date"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.231Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.231Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84678"
+    },
+    "stepId": "course_fs",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "💻 Full Stack Development\n📚 Key Topics: React, Node.js, Next.js\n💰 Fees: Starts from ₹18,999",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "service_enquiry",
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [
+      {
+        "label": "Syllabus",
+        "nextStep": "academy_syllabus"
+      },
+      {
+        "label": "Contact Mentor",
+        "nextStep": "academy_mentor"
+      },
+      {
+        "label": "Book Demo Session",
+        "nextStep": "academy_demo_date"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.234Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.234Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a8467a"
+    },
+    "stepId": "course_da",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📊 Data Analytics\n📚 Key Topics: Python, Power BI, SQL\n💰 Fees: Starts from ₹22,999",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "service_enquiry",
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [
+      {
+        "label": "Syllabus",
+        "nextStep": "academy_syllabus"
+      },
+      {
+        "label": "Contact Mentor",
+        "nextStep": "academy_mentor"
+      },
+      {
+        "label": "Book Demo Session",
+        "nextStep": "academy_demo_date"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.237Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.237Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a8467c"
+    },
+    "stepId": "course_ve",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "🎬 Video Editing\n📚 Key Topics: Premiere Pro, Reels\n💰 Fees: Starts from ₹14,999",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "service_enquiry",
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [
+      {
+        "label": "Syllabus",
+        "nextStep": "academy_syllabus"
+      },
+      {
+        "label": "Contact Mentor",
+        "nextStep": "academy_mentor"
+      },
+      {
+        "label": "Book Demo Session",
+        "nextStep": "academy_demo_date"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.241Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.241Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a8467e"
+    },
+    "stepId": "academy_syllabus",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📄 Here is the detailed syllabus:\n- Java: https://drive.google.com/file/d/13T7Hso7y-EyLVDQMd4lUZ-6wHI1pb-G4/view\n- MEAN: https://drive.google.com/file/d/1e_xuM7jeROgey-UsgIvU1SOtkzXsYr73/view\n- MERN: https://drive.google.com/file/d/1Qo-z9VH1UPYidbjhqGkmY6GMe2haTj66/view",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [
+      {
+        "label": "Contact Mentor",
+        "nextStep": "academy_mentor"
+      },
+      {
+        "label": "Book Demo Session",
+        "nextStep": "academy_demo_date"
+      },
+      {
+        "label": "➕ Enquire More",
+        "nextStep": "multi_enquiry_loop"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.243Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.243Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84680"
+    },
+    "stepId": "academy_mentor",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "👨‍‍🏫 Connect with Mentor:\n📞 9944940051\n💬 https://wa.me/919944940051",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [
+      {
+        "label": "Book Demo Session",
+        "nextStep": "academy_demo_date"
+      },
+      {
+        "label": "🏁 Finish & Submit",
+        "nextStep": "final_thank_you"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.246Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.246Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84682"
+    },
+    "stepId": "academy_demo_date",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📅 Please select your preferred **date** for the demo session:",
+    "isEntryPoint": false,
+    "nextStep": "academy_demo_time",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "demo_date",
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.248Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.248Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84684"
+    },
+    "stepId": "academy_demo_time",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "✅ Now choose an available **time slot**:",
+    "isEntryPoint": false,
+    "nextStep": "multi_enquiry_loop",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "demo_time",
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.249Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.249Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84686"
+    },
+    "stepId": "talents_entry",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "👋 Hi {name}! Welcome to **Core Talent** 💼\nYour Career Growth Partner 🚀\n\nWe help you:\n✔️ Get job opportunities\n✔️ Improve your skills\n✔️ Get placement support\n✔️ Build your career faster\n\n👉 What are you looking for?",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 750,
+      "y": 900
+    },
+    "options": [
+      {
+        "label": "1️⃣ Find Jobs",
+        "nextStep": "talents_job_intro"
+      },
+      {
+        "label": "2️⃣ Skill Training",
+        "nextStep": "talents_training_entry"
+      },
+      {
+        "label": "3️⃣ Placement Support",
+        "nextStep": "talents_placement_intro"
+      },
+      {
+        "label": "4️⃣ Talk to Team",
+        "nextStep": "talents_team_msg"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.251Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:41.584Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84688"
+    },
+    "stepId": "talents_job_intro",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "Great 👍 Let’s help you get a job fast!\n\n📄 **Available Opportunities:**\n✔️ Fresher Jobs\n✔️ Experienced Roles\n✔️ Local Company Openings\n✔️ Immediate Joining\n\n👉 Let’s collect your profile details first.",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 1080,
+      "y": -240
+    },
+    "options": [
+      {
+        "label": "Collect Basic Details",
+        "nextStep": "talents_job_details"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.254Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:26.600Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a8468a"
+    },
+    "stepId": "talents_job_details",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📝 **Step 1: Profile Details**\n👉 Please share your **Qualification & Experience** (Letters only):",
+    "isEntryPoint": false,
+    "nextStep": "talents_job_location",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "job_qual_exp",
+    "captureType": "text",
+    "position": {
+      "x": 1635,
+      "y": 690
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.255Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:37.542Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a8468c"
+    },
+    "stepId": "talents_job_location",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📍 **Preferred Location**\n👉 Where would you like to work? (Letters only):",
+    "isEntryPoint": false,
+    "nextStep": "talents_job_resume",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "job_pref_location",
+    "captureType": "text",
+    "position": {
+      "x": 1110,
+      "y": 45
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.257Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:21.974Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a8468e"
+    },
+    "stepId": "talents_job_resume",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📄 **Step 2: Resume Upload**\n👉 Please upload your resume (PDF/Doc):",
+    "isEntryPoint": false,
+    "nextStep": "talents_job_finish",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "resume",
+    "captureType": "file",
+    "position": {
+      "x": 885,
+      "y": 615
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.258Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:18.663Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84690"
+    },
+    "stepId": "talents_job_finish",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "✅ **Thank you! Your details have been received**\n🚀 Our team will:\n✔️ Review your profile\n✔️ Match with suitable jobs\n✔️ Contact you shortly\n\n(We have added this to your enquiry list)",
+    "isEntryPoint": false,
+    "nextStep": "multi_enquiry_loop",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 1170,
+      "y": 360
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.261Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:33.200Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84692"
+    },
+    "stepId": "talents_training_entry",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "🚀 Upgrade your skills & grow your career faster!\n\n📚 **Our Training Programs**\n🎓 Includes:\n✔️ Practical training\n✔️ Real-time projects\n✔️ Certification\n\n👉 Choose a program to see details:",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": -495,
+      "y": 690
+    },
+    "options": [
+      {
+        "label": "🎓 Digital Marketing",
+        "nextStep": "course_dm"
+      },
+      {
+        "label": "💻 Full Stack Development",
+        "nextStep": "course_fs"
+      },
+      {
+        "label": "📊 Data Analytics",
+        "nextStep": "course_da"
+      },
+      {
+        "label": "🎬 Video Editing",
+        "nextStep": "course_ve"
+      },
+      {
+        "label": "💼 Job-Ready Skills",
+        "nextStep": "academy_mentor"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.263Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:11.211Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84694"
+    },
+    "stepId": "talents_placement_intro",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "We don’t just train — we place 👍\n\n📄 **Placement Opportunities:**\n✔️ Fresher Jobs | ✔️ Local Company Openings\n✔️ Immediate Joining | ✔️ Expert Guidance\n\n👉 How would you like to proceed?",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 390,
+      "y": 735
+    },
+    "options": [
+      {
+        "label": "Collect Basic Details",
+        "nextStep": "talents_job_details"
+      },
+      {
+        "label": "Talk to mentor",
+        "nextStep": "talents_team_msg"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.264Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:15.664Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84696"
+    },
+    "stepId": "talents_team_msg",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "Perfect 👍\nYou can directly connect with our mentor for guidance:\n📞 Call: 9944940051\n💬 WhatsApp: https://wa.me/919944940051\nFeel free to ask any doubts anytime 👍",
+    "isEntryPoint": false,
+    "nextStep": "multi_enquiry_loop",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": -60,
+      "y": 705
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.266Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:13.134Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a84698"
+    },
+    "stepId": "namma_pondy_entry",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "👋 Hi! Welcome to **Real Estate with Kamar** 🏡\nYour Trusted Property Partner in Pondicherry\n\n👉 What are you looking for?",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": -90,
+      "y": -1530
+    },
+    "options": [
+      {
+        "label": "1️⃣ Buy Property",
+        "nextStep": "prop_buy_budget"
+      },
+      {
+        "label": "2️⃣ Sell Property",
+        "nextStep": "prop_sell_type"
+      },
+      {
+        "label": "3️⃣ Investment Advice",
+        "nextStep": "prop_invest_entry"
+      },
+      {
+        "label": "4️⃣ Talk to Expert",
+        "nextStep": "prop_expert_msg"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.268Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:58:38.012Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a8469a"
+    },
+    "stepId": "prop_buy_budget",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "Great choice 👍 👉 Tell me your **Budget Range**:",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "property_budget",
+    "captureType": "text",
+    "position": {
+      "x": 1530,
+      "y": -690
+    },
+    "options": [
+      {
+        "label": "10L – 20L",
+        "nextStep": "prop_buy_location"
+      },
+      {
+        "label": "20L – 50L",
+        "nextStep": "prop_buy_location"
+      },
+      {
+        "label": "50L+",
+        "nextStep": "prop_buy_location"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.270Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:58:30.226Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a8469c"
+    },
+    "stepId": "prop_buy_location",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "Got it! Preferred Location? (Letters only)",
+    "isEntryPoint": false,
+    "nextStep": "prop_buy_cta",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "property_pref_location",
+    "captureType": "text",
+    "position": {
+      "x": 735,
+      "y": -1185
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.272Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:56:45.395Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a8469e"
+    },
+    "stepId": "prop_buy_cta",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📞 9944940051\n💬 https://wa.me/919944940051",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 1500,
+      "y": -375
+    },
+    "options": [
+      {
+        "label": "Show Property",
+        "nextStep": "prop_showcase_final"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.273Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:58:25.721Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846a0"
+    },
+    "stepId": "prop_sell_type",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "Property Type? (Letters only)",
+    "isEntryPoint": false,
+    "nextStep": "prop_sell_location",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "property_type",
+    "captureType": "text",
+    "position": {
+      "x": 1410,
+      "y": 1140
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.274Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:58.218Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846a2"
+    },
+    "stepId": "prop_sell_location",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "Location? (Letters only)",
+    "isEntryPoint": false,
+    "nextStep": "prop_sell_price",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "property_sell_location",
+    "captureType": "text",
+    "position": {
+      "x": 795,
+      "y": -495
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.276Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:56:10.295Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846a4"
+    },
+    "stepId": "prop_sell_price",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "Expected Price?",
+    "isEntryPoint": false,
+    "nextStep": "prop_sell_finish",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "property_price",
+    "captureType": "text",
+    "position": {
+      "x": 1845,
+      "y": 960
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.277Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:56:01.248Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846a6"
+    },
+    "stepId": "prop_sell_finish",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "✅ Thank you!",
+    "isEntryPoint": false,
+    "nextStep": "multi_enquiry_loop",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 615,
+      "y": -765
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.278Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:56:10.501Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846a8"
+    },
+    "stepId": "prop_invest_entry",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📊 Hot Locations: ECR, Villianur\n👉 What do you want?",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": -330,
+      "y": -1125
+    },
+    "options": [
+      {
+        "label": "Current Deals",
+        "nextStep": "prop_showcase_final"
+      },
+      {
+        "label": "ROI Details",
+        "nextStep": "prop_invest_roi"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.280Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:56:32.457Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846aa"
+    },
+    "stepId": "prop_invest_roi",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📈 15-20% ROI annually.",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 330,
+      "y": -930
+    },
+    "options": [
+      {
+        "label": "Show Deals",
+        "nextStep": "prop_showcase_final"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.282Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:56:25.715Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846ac"
+    },
+    "stepId": "prop_showcase_final",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "🏡 **Featured Properties**\n🔥 Limited plots available",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 1710,
+      "y": 195
+    },
+    "options": [
+      {
+        "label": "Photos",
+        "nextStep": "prop_media_msg"
+      },
+      {
+        "label": "👉 DOUBT",
+        "nextStep": "prop_objections_start"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.287Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:47.540Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846ae"
+    },
+    "stepId": "prop_media_msg",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "Sending links... 👉 Trust Details?",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 1170,
+      "y": -690
+    },
+    "options": [
+      {
+        "label": "Yes",
+        "nextStep": "prop_trust_final"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.290Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:56:21.469Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846b0"
+    },
+    "stepId": "prop_trust_final",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "🤝 Verified only | Transparent pricing\n👉 Doubts?",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": -30,
+      "y": 1140
+    },
+    "options": [
+      {
+        "label": "DOUBT",
+        "nextStep": "prop_objections_start"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.292Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:45.042Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846b2"
+    },
+    "stepId": "prop_objections_start",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "What is your doubt?",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": -615,
+      "y": -480
+    },
+    "options": [
+      {
+        "label": "Is this genuine?",
+        "nextStep": "prop_obs_genuine"
+      },
+      {
+        "label": "Price High",
+        "nextStep": "prop_obs_price"
+      },
+      {
+        "label": "Team",
+        "nextStep": "prop_expert_msg"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.295Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:56:19.009Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846b4"
+    },
+    "stepId": "prop_obs_genuine",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "100% genuine 👍",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": -420,
+      "y": -735
+    },
+    "options": [
+      {
+        "label": "Show Property",
+        "nextStep": "prop_showcase_final"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.299Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:56:15.011Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846b6"
+    },
+    "stepId": "prop_obs_price",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "Budget options available.",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 60,
+      "y": -840
+    },
+    "options": [
+      {
+        "label": "Under 10L",
+        "nextStep": "prop_showcase_final"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.302Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:56:12.702Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846b8"
+    },
+    "stepId": "prop_expert_msg",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📞 9944940051\n💬 https://wa.me/919944940051",
+    "isEntryPoint": false,
+    "nextStep": "multi_enquiry_loop",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 240,
+      "y": -1170
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.304Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:56:39.982Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846ba"
+    },
+    "stepId": "techx_entry",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "👋 Welcome to BM TechX 🚀\n👉 What are you looking for?",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": -585,
+      "y": -150
+    },
+    "options": [
+      {
+        "label": "1️⃣ Ads / Leads",
+        "nextStep": "tech_leads"
+      },
+      {
+        "label": "2️⃣ Social Media",
+        "nextStep": "tech_smm"
+      },
+      {
+        "label": "3️⃣ Website",
+        "nextStep": "tech_web"
+      },
+      {
+        "label": "4️⃣ Branding",
+        "nextStep": "tech_branding"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.305Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:54:37.112Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846bc"
+    },
+    "stepId": "tech_leads",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "🔥 Lead Generation\n💰 Starts from ₹4,999",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 105,
+      "y": -315
+    },
+    "options": [
+      {
+        "label": "Case Studies",
+        "nextStep": "tech_demo_calendar_date"
+      },
+      {
+        "label": "Free Consultation",
+        "nextStep": "tech_demo_calendar_date"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.307Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:54:46.079Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846be"
+    },
+    "stepId": "tech_smm",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📱 Social Media Growth\n💰 Starts from ₹4,999/mo",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": -675,
+      "y": 375
+    },
+    "options": [
+      {
+        "label": "Portfolio",
+        "nextStep": "tech_demo_calendar_date"
+      },
+      {
+        "label": "Talk to Expert",
+        "nextStep": "tech_expert_msg"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.309Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:54:42.228Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846c0"
+    },
+    "stepId": "tech_web",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "🌐 Website Development\n💰 Starts from ₹2,999",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": -210,
+      "y": -300
+    },
+    "options": [
+      {
+        "label": "Portfolio",
+        "nextStep": "tech_demo_calendar_date"
+      },
+      {
+        "label": "Talk to Expert",
+        "nextStep": "tech_expert_msg"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.310Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:54:40.182Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846c2"
+    },
+    "stepId": "tech_branding",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "🎨 Branding Services",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 360,
+      "y": -555
+    },
+    "options": [
+      {
+        "label": "Portfolio",
+        "nextStep": "tech_demo_calendar_date"
+      },
+      {
+        "label": "Free Consultation",
+        "nextStep": "tech_demo_calendar_date"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.312Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:55:00.433Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846c4"
+    },
+    "stepId": "tech_demo_calendar_date",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📅 Please select your preferred **date**:",
+    "isEntryPoint": false,
+    "nextStep": "tech_demo_calendar_time",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "demo_date",
+    "captureType": "text",
+    "position": {
+      "x": 495,
+      "y": 435
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.314Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:54:52.826Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846c6"
+    },
+    "stepId": "tech_demo_calendar_time",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "✅ Now choose a **time slot**:",
+    "isEntryPoint": false,
+    "nextStep": "multi_enquiry_loop",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureMapping": "demo_time",
+    "captureType": "text",
+    "position": {
+      "x": 660,
+      "y": 135
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.317Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:54:50.344Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846c8"
+    },
+    "stepId": "tech_expert_msg",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "📞 9944940051\n💬 WhatsApp: https://wa.me/919944940051",
+    "isEntryPoint": false,
+    "nextStep": "multi_enquiry_loop",
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 675,
+      "y": -180
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.319Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:54:48.220Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846ca"
+    },
+    "stepId": "multi_enquiry_loop",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "I’ve added that to your enquiry list! ✅\n\nWould you like to enquire about **anything else** or finish?",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [],
+    "captureType": "text",
+    "position": {
+      "x": 510,
+      "y": -1575
+    },
+    "options": [
+      {
+        "label": "➕ Add Another Service",
+        "nextStep": "main_menu"
+      },
+      {
+        "label": "🏁 Finish & Submit All",
+        "nextStep": "final_thank_you"
+      }
+    ],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.321Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-18T10:58:52.340Z"
+    },
+    "__v": 0
+  },
+  {
+    "_id": {
+      "$oid": "69e1f6f249eb687d24a846cc"
+    },
+    "stepId": "final_thank_you",
+    "flowId": {
+      "$oid": "69e1f6f249eb687d24a84669"
+    },
+    "question": "🙏 Thank you, {name}!\nOur team will guide you throughout the process 🚀\n\nIf you have any questions, feel free to message us anytime 😊",
+    "isEntryPoint": false,
+    "type": "message",
+    "tagsOnReach": [
+      "Final Submission"
+    ],
+    "captureType": "text",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "options": [],
+    "createdAt": {
+      "$date": "2026-04-17T09:01:38.324Z"
+    },
+    "updatedAt": {
+      "$date": "2026-04-17T09:01:38.324Z"
+    },
+    "__v": 0
+  }
+]

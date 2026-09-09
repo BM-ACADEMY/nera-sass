@@ -1,0 +1,64 @@
+{
+  "name": "AllianceOS - WhatsApp Follow-up Reminders",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "minutes", "minutesInterval": 1 }] } },
+      "id": "schedule",
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://leados-api.abmgroups.org/api/internal/alliance/whatsapp-followups/due?limit=20",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "x-n8n-execution-id", "value": "={{$execution.id}}" }] },
+        "options": { "timeout": 30000 }
+      },
+      "id": "get-due",
+      "name": "Claim due reminders",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "SELECT_IN_N8N", "name": "Alliance API Relay" }
+      }
+    },
+    {
+      "parameters": { "fieldToSplitOut": "jobs", "options": {} },
+      "id": "split-jobs",
+      "name": "One reminder per item",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [740, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://leados-api.abmgroups.org/api/internal/alliance/whatsapp-followups/{{$json.id}}/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 30000 }
+      },
+      "id": "send-reminder",
+      "name": "Policy check and send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [980, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "SELECT_IN_N8N", "name": "Alliance API Relay" }
+      }
+    }
+  ],
+  "connections": {
+    "Every minute": { "main": [[{ "node": "Claim due reminders", "type": "main", "index": 0 }]] },
+    "Claim due reminders": { "main": [[{ "node": "One reminder per item", "type": "main", "index": 0 }]] },
+    "One reminder per item": { "main": [[{ "node": "Policy check and send", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false,
+  "versionId": "alliance-whatsapp-followups-v1"
+}

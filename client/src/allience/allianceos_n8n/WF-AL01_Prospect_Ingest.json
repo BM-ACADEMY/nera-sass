@@ -1,0 +1,308 @@
+{
+  "name": "WF-AL01 Prospect Ingest",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alliance/import",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "4bc7d1af-5af8-4a39-aeb9-3065d182265b",
+      "name": "Upload Received",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// clean each row: trim, lowercase email, normalize phone\\nreturn items.map(i => {\\n  const d = i.json;\\n  d.email = (d.email||'').trim().toLowerCase();\\n  d.phone = (d.phone||'').replace(/[^0-9]/g,'');\\n  if (d.phone && d.phone.length===10) d.phone = '91'+d.phone;\\n  return { json: d };\\n});"
+      },
+      "id": "9ce257b7-4fbe-45f5-a377-c48cca9085dd",
+      "name": "Normalize Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT 1 FROM alliance_suppression\\nWHERE phone = '{{$json.phone}}' OR email = '{{$json.email}}'\\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "996dc712-8335-4b21-9ecc-f209a387f4c9",
+      "name": "Check Suppression",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.length ? 'yes':'no'}}",
+              "rightValue": "no",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "96b2b2c9-2200-43a5-a4c0-4a82afbbdffc",
+      "name": "Is Suppressed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id FROM alliance_prospects\\nWHERE phone = '{{$json.phone}}' OR email = '{{$json.email}}'\\nLIMIT 1;",
+        "options": {}
+      },
+      "id": "d6837659-bf4c-41fc-a18a-f15fb07004cd",
+      "name": "Check Duplicate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        880,
+        240
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.length ? 'dupe':'new'}}",
+              "rightValue": "new",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "da42cc13-4c5a-4df0-b4d5-3304a05847f2",
+      "name": "Is New?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alliance_prospects\\n(campaign_id, audience, name, business_name, phone, email, industry, location, channel_pref, consent, source, status)\\nVALUES\\n({{$json.campaign_id}}, '{{$json.audience}}', '{{$json.name}}', '{{$json.business_name}}', '{{$json.phone}}', '{{$json.email}}', '{{$json.industry}}', '{{$json.location}}', '{{$json.channel_pref}}', 'cold', '{{$json.source}}', 'new')\\nRETURNING id;",
+        "options": {}
+      },
+      "id": "868bad74-2b27-4fc0-a815-f313e3652b01",
+      "name": "Insert Prospect",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1320,
+        180
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- row skipped (on suppression list)\\nSELECT 'skipped_suppressed' AS result;",
+        "options": {}
+      },
+      "id": "2b993dff-c5c7-454f-82ef-96e1fbf9dee1",
+      "name": "Log Suppressed Skip",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        880,
+        420
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- row skipped (duplicate)\\nSELECT 'skipped_dupe' AS result;",
+        "options": {}
+      },
+      "id": "05dababc-b2a9-4ae1-9f22-7e668a60d94e",
+      "name": "Log Duplicate Skip",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1320,
+        360
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "WF-AL01 \u2014 PROSPECT INGEST\\nWebhook receives uploaded rows from the AllianceOS Upload screen.\\nCleans -> checks do-not-contact -> dedupes -> inserts new prospects.",
+        "height": 150,
+        "width": 420,
+        "color": 6
+      },
+      "id": "bfafc16d-8e48-4074-a52f-ca38a27f92ec",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Upload Received": {
+      "main": [
+        [
+          {
+            "node": "Normalize Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Rows": {
+      "main": [
+        [
+          {
+            "node": "Check Suppression",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Suppression": {
+      "main": [
+        [
+          {
+            "node": "Is Suppressed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Suppressed?": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Suppressed Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Is New?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is New?": {
+      "main": [
+        [
+          {
+            "node": "Insert Prospect",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Duplicate Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "allianceos"
+  },
+  "tags": [
+    {
+      "name": "AllianceOS"
+    }
+  ]
+}

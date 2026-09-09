@@ -1,0 +1,377 @@
+{
+  "name": "WF-AL07 Reply Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alliance/reply",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "d86caca1-aa65-44ed-9186-e042c8d4debe",
+      "name": "Reply Received",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// inbound from Meta WA webhook OR email-inbound webhook\\nconst d = items[0].json;\\nconst from = d.phone || d.email;\\nconst body = d.text || d.body || '';\\nreturn [{ json: { from, body } }];"
+      },
+      "id": "1b568b36-763a-4eff-9e61-d8caf9150714",
+      "name": "Identify Prospect",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, business_name, audience FROM alliance_prospects\\nWHERE phone = '{{$json.from}}' OR email = '{{$json.from}}' LIMIT 1;",
+        "options": {}
+      },
+      "id": "d352eba2-3cf7-4de1-812b-7ed64fd6e5ea",
+      "name": "Lookup Prospect",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.x.ai/v1/chat/completions",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"model\":\"grok-3\",\\n  \"messages\":[\\n    {\"role\":\"system\",\"content\":\"Classify the B2B reply into EXACTLY one label: interested | question | objection | not_interested | ooo | other. Return ONLY a JSON object with a single key named intent.\"},\\n    {\"role\":\"user\",\"content\":\"Reply: {{$node[\\\"Identify Prospect\\\"].json.body}}\"}\\n  ]\\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "14a2d872-b2f5-4b9d-85dc-cb6a9ba614e9",
+      "name": "Grok Classify Intent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- pull approved objection answers + tone for this audience\\nSELECT\\n  (SELECT string_agg(objection || ' => ' || approved_answer, ' || ')\\n     FROM alliance_objections\\n     WHERE audience = (SELECT audience FROM alliance_prospects WHERE id={{$node['Lookup Prospect'].json.id}})\\n       AND active=true) AS approved_answers,\\n  (SELECT prompt_text FROM alliance_prompts WHERE job='draft_reply' LIMIT 1) AS sys_prompt;",
+        "options": {}
+      },
+      "id": "85edb0fc-6101-400a-b88a-dc3bbe3779db",
+      "name": "Match Objection (KB)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        880,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.x.ai/v1/chat/completions",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"model\":\"grok-3\",\\n  \"messages\":[\\n    {\"role\":\"system\",\"content\":\"{{$json.sys_prompt}}\"},\\n    {\"role\":\"user\",\"content\":\"Prospect: {{$node[\\\"Lookup Prospect\\\"].json.name}}, {{$node[\\\"Lookup Prospect\\\"].json.business_name}}. Detected intent: {{$node[\\\"Grok Classify Intent\\\"].json.intent}}. Their reply: {{$node[\\\"Identify Prospect\\\"].json.body}} . APPROVED ANSWERS (use if the reply matches an objection): {{$json.approved_answers}} . Draft for HUMAN approval, never auto-send.\"}\\n  ]\\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e8d171bf-b6d3-4ff3-b6cd-c7bf9e833db1",
+      "name": "Grok Draft Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1080,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alliance_replies (prospect_id, channel, body, ai_intent, ai_draft, routed_to)\\nVALUES ({{$node['Lookup Prospect'].json.id}}, 'inbound', $b$ {{$node['Identify Prospect'].json.body}} $b$, '{{$node['Grok Classify Intent'].json.intent}}', $d$ {{$json.choices[0].message.content}} $d$, 'leados_inbox');\\n\\nUPDATE alliance_touches SET status='cancelled'\\nWHERE prospect_id={{$node['Lookup Prospect'].json.id}} AND status='scheduled';\\n\\nUPDATE alliance_prospects SET status = CASE\\n  WHEN '{{$node['Grok Classify Intent'].json.intent}}'='not_interested' THEN 'not_interested'\\n  WHEN '{{$node['Grok Classify Intent'].json.intent}}'='interested' THEN 'interested'\\n  ELSE 'replied' END\\nWHERE id={{$node['Lookup Prospect'].json.id}};",
+        "options": {}
+      },
+      "id": "0bc122ed-d986-453b-9e54-c85aa406e73c",
+      "name": "Save Reply + Stop Sequence",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1280,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$node['Grok Classify Intent'].json.intent}}",
+              "rightValue": "not_interested",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "9f5dc161-870f-4aca-ae53-f4b8f2b2af69",
+      "name": "Not Interested?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alliance_suppression (phone, email, reason)\\nSELECT phone, email, 'not_interested' FROM alliance_prospects WHERE id={{$node['Lookup Prospect'].json.id}};",
+        "options": {}
+      },
+      "id": "365e8855-747f-4dc1-80e3-123119a4aac0",
+      "name": "Add To Suppression",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1540,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{$env.LEADOS_INBOX_WEBHOOK}}",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"source\":\"allianceos\",\\n  \"prospect_id\":\"{{$node[\\\"Lookup Prospect\\\"].json.id}}\",\\n  \"reply\":\"{{$node[\\\"Identify Prospect\\\"].json.body}}\",\\n  \"intent\":\"{{$node[\\\"Grok Classify Intent\\\"].json.intent}}\",\\n  \"ai_draft\":\"{{$node[\\\"Grok Draft Reply\\\"].json.choices[0].message.content}}\"\\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "65717d45-15c4-4d26-9e7a-22abbe593fa5",
+      "name": "Push To LeadOS Inbox",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "content": "WF-AL07 \u2014 REPLY HANDLER (the money loop)\\nAny reply -> AI reads intent -> AI drafts response -> STOP sequence -> push to LeadOS inbox for human approval.\\nnot_interested -> auto-suppress.",
+        "height": 170,
+        "width": 480,
+        "color": 6
+      },
+      "id": "eb413350-0d9e-4999-a863-a0bda42bd6b1",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        60
+      ]
+    }
+  ],
+  "connections": {
+    "Reply Received": {
+      "main": [
+        [
+          {
+            "node": "Identify Prospect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Identify Prospect": {
+      "main": [
+        [
+          {
+            "node": "Lookup Prospect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Prospect": {
+      "main": [
+        [
+          {
+            "node": "Grok Classify Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grok Classify Intent": {
+      "main": [
+        [
+          {
+            "node": "Match Objection (KB)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match Objection (KB)": {
+      "main": [
+        [
+          {
+            "node": "Grok Draft Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grok Draft Reply": {
+      "main": [
+        [
+          {
+            "node": "Save Reply + Stop Sequence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Reply + Stop Sequence": {
+      "main": [
+        [
+          {
+            "node": "Not Interested?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Not Interested?": {
+      "main": [
+        [
+          {
+            "node": "Add To Suppression",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Push To LeadOS Inbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add To Suppression": {
+      "main": [
+        [
+          {
+            "node": "Push To LeadOS Inbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "allianceos"
+  },
+  "tags": [
+    {
+      "name": "AllianceOS"
+    }
+  ]
+}

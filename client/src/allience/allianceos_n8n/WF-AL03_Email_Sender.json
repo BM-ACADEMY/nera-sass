@@ -1,0 +1,285 @@
+{
+  "name": "WF-AL03 Email Sender",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "3346a401-b074-4344-baf5-b807e84c4398",
+      "name": "Every 30 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM alliance_domains\\nWHERE status='active' AND sent_today < daily_cap\\nORDER BY sent_today ASC LIMIT 1;",
+        "options": {}
+      },
+      "id": "af7f4ec7-e0ea-45c8-886d-edb2ca2ab9df",
+      "name": "Pick Email Inbox",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.*, p.name, p.business_name, p.industry, p.location, p.audience, p.email,\\n       tpl.subject, tpl.body AS template_body, s.purpose\\nFROM alliance_touches t\\nJOIN alliance_prospects p ON p.id = t.prospect_id\\nJOIN alliance_sequences s ON s.campaign_id = t.campaign_id AND s.touch_no = t.touch_no\\nJOIN alliance_templates tpl ON tpl.audience = p.audience AND tpl.channel='email' AND tpl.touch_no = t.touch_no\\nWHERE t.channel='email' AND t.status='scheduled' AND t.scheduled_at <= NOW()\\nLIMIT 40;",
+        "options": {}
+      },
+      "id": "ae3b7182-3361-4e77-8d22-f2f70a34ffc0",
+      "name": "Get Due Email Touches",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\\n  (SELECT string_agg(fact, ' | ') FROM alliance_kb\\n     WHERE audience='{{$json.audience}}' AND active=true) AS brand_facts,\\n  (SELECT prompt_text FROM alliance_prompts\\n     WHERE job='personalize' AND channel='email' LIMIT 1) AS sys_prompt;",
+        "options": {}
+      },
+      "id": "25129f79-e1cb-4e2c-bbb8-4231e9313637",
+      "name": "Fetch AI Brain + Prompt",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        640,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.x.ai/v1/chat/completions",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"model\": \"grok-3\",\\n  \"messages\": [\\n    {\"role\":\"system\",\"content\":\"{{$json.sys_prompt}}\"},\\n    {\"role\":\"user\",\"content\":\"Audience: {{$node[\\\"Get Due Email Touches\\\"].json.audience}} | Touch {{$node[\\\"Get Due Email Touches\\\"].json.touch_no}} ({{$node[\\\"Get Due Email Touches\\\"].json.purpose}}) | Prospect: {{$node[\\\"Get Due Email Touches\\\"].json.name}}, {{$node[\\\"Get Due Email Touches\\\"].json.business_name}}, {{$node[\\\"Get Due Email Touches\\\"].json.industry}}, {{$node[\\\"Get Due Email Touches\\\"].json.location}} | Base: {{$node[\\\"Get Due Email Touches\\\"].json.template_body}} | KNOWLEDGE BASE (use only these facts): {{$json.brand_facts}} . Return ONLY the message.\"}\\n  ]\\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a3ae2b03-ee8f-43cc-b4f7-d4403e6a2415",
+      "name": "Grok Personalize",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{$node['Pick Email Inbox'].json.inbox_email}}",
+        "toEmail": "={{$json.email}}",
+        "subject": "={{$json.subject}}",
+        "html": "={{$json.choices[0].message.content}}",
+        "options": {}
+      },
+      "id": "e2f36de2-29ac-4926-a240-85442e61a443",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "REPLACE",
+          "name": "Cold Domain SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE alliance_touches SET status='sent', sent_at=NOW(), domain_id={{$node['Pick Email Inbox'].json.id}}, message_body=$body$ {{$json.choices[0].message.content}} $body$ WHERE id={{$json.id}};\\nUPDATE alliance_domains SET sent_today = sent_today + 1 WHERE id={{$node['Pick Email Inbox'].json.id}};",
+        "options": {}
+      },
+      "id": "e99e69da-67da-4586-9d03-65eb2e6182d5",
+      "name": "Mark Email Sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        1100,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 60,
+        "unit": "seconds"
+      },
+      "id": "6e7dae81-96bf-4470-8e7b-b4ae71f50a9d",
+      "name": "Jitter 30-90s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "WF-AL03 \u2014 EMAIL SENDER\\nPicks an inbox with headroom (warm-up cap), AI-personalizes, sends, logs, jitters between sends.",
+        "height": 130,
+        "width": 420,
+        "color": 3
+      },
+      "id": "6108872c-d0bb-4b1f-b051-d148163a800c",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Every 30 min": {
+      "main": [
+        [
+          {
+            "node": "Pick Email Inbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Email Inbox": {
+      "main": [
+        [
+          {
+            "node": "Get Due Email Touches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Due Email Touches": {
+      "main": [
+        [
+          {
+            "node": "Fetch AI Brain + Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch AI Brain + Prompt": {
+      "main": [
+        [
+          {
+            "node": "Grok Personalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Grok Personalize": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Mark Email Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Email Sent": {
+      "main": [
+        [
+          {
+            "node": "Jitter 30-90s",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "allianceos"
+  },
+  "tags": [
+    {
+      "name": "AllianceOS"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+[{
+  "_id": {
+    "$oid": "69e1f6f249eb687d24a84669"
+  },
+  "name": "ABM Connect - Final Core Talents Flow",
+  "description": "Professional career growth, training, and placement flow for Core Talents.",
+  "isActive": true,
+  "isPublished": true,
+  "createdAt": {
+    "$date": "2026-04-17T09:01:38.170Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T09:01:38.170Z"
+  },
+  "__v": 0
+}]

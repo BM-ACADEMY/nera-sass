@@ -1,0 +1,973 @@
+[{
+  "_id": {
+    "$oid": "69ca4bece46f91fef1b90f92"
+  },
+  "name": "hi",
+  "phone": "dcdd",
+  "password": "$2b$10$whgG37RHptCNCk02S.8qDObB2YkOhZeWPVjkOfYNSMVHU.finbUMa",
+  "role": "admin",
+  "specialty": "hr",
+  "createdAt": {
+    "$date": "2026-03-30T10:09:48.496Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T12:38:59.237Z"
+  },
+  "__v": 4,
+  "documents": [],
+  "pushSubscription": {
+    "endpoint": "https://fcm.googleapis.com/wp/cFMQyzeqQlM:APA91bGjOA2L5gZowhyd4b_T_9-iva8iB6eCHNrviwYsAvdkvoCzoJ2xyyd3F6YvdtWw-2jkFh6H3FKppg9ck5IJiku2WHLU9FlUd4AN8FGwxAiTb6wFdttZcMlmVFTo7HxNUZr5HEJ6",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BJtdDS7sP5yK71WpyVFXkMk_jjgmiyq_e3wJgFnp07zcyhqxjFGZ6x1FyoluGLzxELMU8nyk_-ES8PO5j2TK-dk",
+      "auth": "dQHqacMZRrOSXh2DlGUL5A"
+    }
+  },
+  "tags": [],
+  "leadData": {
+    "address": "dfidf"
+  },
+  "email": "charles.bmtechx@gmail.com",
+  "address": "puducherry",
+  "enquiries": [],
+  "leadStatus": "New",
+  "userAttachments": []
+},
+{
+  "_id": {
+    "$oid": "69cbbef8da1b64074bfc6ec9"
+  },
+  "name": "Sugu",
+  "phone": "sugu@gmail.com",
+  "password": "$2b$10$xD1hKHiDVXc7j2u5xX8NY..a4o5nOoZ.XPw25/GQZt.GIdzm3Xrva",
+  "role": "user",
+  "tags": [
+    "BM Academy"
+  ],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-03-31T12:32:56.545Z"
+  },
+  "updatedAt": {
+    "$date": "2026-03-31T12:33:31.796Z"
+  },
+  "__v": 1,
+  "pushSubscription": {
+    "endpoint": "https://fcm.googleapis.com/wp/dbUQY4rlqcg:APA91bFzQu7zR477OUrcOaBXdKR23y2FSRfx3mqlYX422Z4d6urya6Din1xc89STjO_GqF1ZIXznRyvhEUQZRFYhyOoUuYiB7qAAJNl7Rf9tiMyaFsFQ1rMOh6PyA9xo2XWeBkBwrHXg",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BJfdbVGVjkI9qOBV_NnTMZGeaMJzuxiGmhKBg-TawNyh4aEtT7TBGGxTyXWiOrdOJVETxMInYMSdkDZpvMP6o1Q",
+      "auth": "ur_QVCOAUfMU4ToocCfG-w"
+    }
+  },
+  "email": "cuddalore",
+  "address": "cuddalore"
+},
+{
+  "_id": {
+    "$oid": "69cbc1dae794b30080c83dab"
+  },
+  "name": "karthika",
+  "phone": "karthika@gmail.com",
+  "password": "$2b$10$luU7uZyJT3PSYhZpf1J3me/ecAZwxLVfiChMgWOHkD39AAo.dtNOK",
+  "role": "user",
+  "tags": [
+    "BM Academy"
+  ],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-03-31T12:45:14.611Z"
+  },
+  "updatedAt": {
+    "$date": "2026-03-31T12:45:44.234Z"
+  },
+  "__v": 1,
+  "pushSubscription": {
+    "endpoint": "https://fcm.googleapis.com/wp/dbUQY4rlqcg:APA91bFzQu7zR477OUrcOaBXdKR23y2FSRfx3mqlYX422Z4d6urya6Din1xc89STjO_GqF1ZIXznRyvhEUQZRFYhyOoUuYiB7qAAJNl7Rf9tiMyaFsFQ1rMOh6PyA9xo2XWeBkBwrHXg",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BJfdbVGVjkI9qOBV_NnTMZGeaMJzuxiGmhKBg-TawNyh4aEtT7TBGGxTyXWiOrdOJVETxMInYMSdkDZpvMP6o1Q",
+      "auth": "ur_QVCOAUfMU4ToocCfG-w"
+    }
+  },
+  "email": "karthika@gmail.com",
+  "address": "puducherry"
+},
+{
+  "_id": {
+    "$oid": "69cd15156533281d563dd479"
+  },
+  "name": "Anonymous Lead",
+  "phone": "9458945934",
+  "password": "$2b$10$O2j/KjdSFdftXcjThoQSD.fJ8CLvSS3PAXW1rU/u8wEO.UqdOtmJG",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-01T12:52:37.445Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T10:20:02.348Z"
+  },
+  "__v": 0,
+  "pushSubscription": {
+    "endpoint": "https://fcm.googleapis.com/wp/enh9OOer3jM:APA91bFu13xvEdtH6ukuoiKul8-1W2q6toJA6Jb9VTfRA57za4O1_EmV964nBvpsL5-yVARmrkeVydvlgTCSoHurDzwpBLHmUTxO-1PmAaDcDZ19-NJkUvrq18N3n7vK7ahd_0t4nbFT",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BH7KG8R9NwZ4QBJtksRkeBz8v6UPLVMGR8_KMLg5G2q86kk-vPKRJXZ87bNB3JNkjVp87ZAt51zsg1saPTCd2kY",
+      "auth": "0cjHM9YB9Btn_zeEdEJavw"
+    }
+  },
+  "leadData": {
+    "location": "cuddalore",
+    "demo_date": "2026-04-06",
+    "demo_time": "10:30 AM"
+  }
+},
+{
+  "_id": {
+    "$oid": "69ce0924f6701804583fff3f"
+  },
+  "name": "Anonymous Lead",
+  "phone": "guest_1775110436238_6105062",
+  "password": "$2b$10$ngs5iBJSnFsAXs4R4mdBS.jnSrDeCCQqLYnA36QZS7MNzM78Oeq4q",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-02T06:13:56.303Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-02T06:13:56.303Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "69ce18b4dbc512d8442c48a0"
+  },
+  "name": "Anonymous Lead",
+  "phone": "guest_1775114420358_8019287",
+  "password": "$2b$10$frpGCxTFM.8uqwJpYvawP.23UwEh80pTF3YT3tNjaHJhW.2XnMNhG",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-02T07:20:20.391Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-02T07:20:20.391Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "69ce18b4dbc512d8442c48a1"
+  },
+  "name": "Anonymous Lead",
+  "phone": "guest_1775114420514_7903793",
+  "password": "$2b$10$UI6..vuzw8KHFIrYKm5qIuzqPgQMjFQNzUzxAH.RrqUV2RfjV1hRq",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-02T07:20:20.519Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-02T07:20:20.519Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "69ce1983dbc512d8442c48ee"
+  },
+  "name": "admin",
+  "phone": "8807226257",
+  "password": "$2b$10$fJr9cVzVYDLODOOxl57ZYuQC/AEJHZAUgwE1dEu.E4lMHUuRaO.vi",
+  "role": "admin",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-02T07:23:47.141Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T10:54:08.305Z"
+  },
+  "__v": 1,
+  "pushSubscription": {
+    "endpoint": "https://fcm.googleapis.com/wp/fRqLJXYC5RQ:APA91bEnqv0_7iQBxElEoIzjXKNyBP_C1r2C3T19YZ2LfpbYqQdO1tpc0fD5gpmA2k5jUcD92Z7xa52ToQn7kZ1hvbmZLJXZevDdHBkKXCS2lAlIh6TTJzL7UvnFEnbtqMF1EaENXyYn",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BKYIHFsv2JiRnMDZGtRY7MT5P5R8Kg029atKA_mLMJOFlrn_yT1kNSdCPu63am3qjNv8hcQpUpQUTKvN5MJSJxw",
+      "auth": "M0tP6GEHy0zqt6YYi0WuKA"
+    }
+  },
+  "enquiries": [],
+  "leadStatus": "New",
+  "userAttachments": []
+},
+{
+  "_id": {
+    "$oid": "69ce32518f88e2285123a69e"
+  },
+  "name": "Anonymous Lead",
+  "phone": "guest_1775120977067_4076344",
+  "password": "$2b$10$82abs2GqiCGf/.m9Bmc9LexoD0n/u9zCgQluGJKEsxQ1.J0BxfLBK",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-02T09:09:37.224Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-02T09:09:37.224Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "69ce32508f88e2285123a69d"
+  },
+  "name": "Anonymous Lead",
+  "phone": "9876543210",
+  "password": "$2b$10$RlrwSblyrxUmlp/KuKke3uMw86nbRoB7kA0erGR6lPoidoA5raXlq",
+  "role": "user",
+  "tags": [
+    "Academy Lead",
+    "Interested",
+    "Hot Lead"
+  ],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-02T09:09:36.858Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-08T05:23:10.389Z"
+  },
+  "__v": 3,
+  "leadData": {
+    "location": "bangalore",
+    "demo_date": "2026-05-09",
+    "demo_time": "1:00 PM",
+    "goal": "2️⃣ Digital Marketing, 1️⃣ AI Courses"
+  }
+},
+{
+  "_id": {
+    "$oid": "69d39fbcdaef78f05fa70ae6"
+  },
+  "name": "Anonymous Lead",
+  "phone": "guest_1775476668973_6734221",
+  "password": "$2b$10$wJ77fyfFhcP.GvA2KNZHnOtDZ2VTW7j.YqPIyIPtrO4ouk1BPdJb6",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-06T11:57:48.992Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T11:57:48.992Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "69d39fbddaef78f05fa70ae8"
+  },
+  "name": "jeni",
+  "phone": "7656756644",
+  "password": "$2b$10$Vjuw7PR1KbpRRQ0O5UoofO.iYd6BeYDM0.HSXmzPEB/DIpD8244gW",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-06T11:57:49.122Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T12:09:08.232Z"
+  },
+  "__v": 0,
+  "address": "237 no ,nelli thop ,india,tamil nadu,870864",
+  "leadData": {
+    "demo_date": "2026-06-08",
+    "demo_time": "1:00 PM"
+  }
+},
+{
+  "_id": {
+    "$oid": "69d3a555b2005edd803eefb9"
+  },
+  "name": "mohan",
+  "phone": "9987878667",
+  "password": "$2b$10$.LCourQBbCIn5GEWWCpcuOH9KrSGLBndp.X238pCrGishZ0XDRr6K",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-06T12:21:41.946Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T12:25:35.476Z"
+  },
+  "__v": 0,
+  "address": "no 23 ,nelli kollai,india,tamil nadu,cuddalore,986757",
+  "leadData": {
+    "demo_date": "2026-08-09",
+    "demo_time": "1:00 PM"
+  }
+},
+{
+  "_id": {
+    "$oid": "69d3a815feb0f66ff02fe686"
+  },
+  "name": "Anonymous Lead",
+  "phone": "guest_1775478805435_3777028",
+  "password": "$2b$10$kycm24M3zYI0x49rMn7gS.XMh8jGmxsgTmmA3xaTrja1bCAyo18G2",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-06T12:33:25.437Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T12:33:25.437Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "69d3a815feb0f66ff02fe685"
+  },
+  "name": "manoj",
+  "phone": "9485748574",
+  "password": "$2b$10$C/ZFe7UlVpYORLF8/MmBROcTrbX39klnnkf8zowzbS4pzkY0HlEKa",
+  "role": "user",
+  "tags": [
+    "Academy Lead",
+    "Final Submission"
+  ],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-06T12:33:25.321Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T07:46:52.995Z"
+  },
+  "__v": 8,
+  "address": "hosur",
+  "leadData": {
+    "demo_date": "2026-05-07",
+    "demo_time": "9:30 AM",
+    "goal": "1️⃣ AI Courses",
+    "job_profile": "📈 Business Growth"
+  },
+  "enquiries": [
+    {
+      "service": "📈 Digital Marketing",
+      "details": "Captured at step: enq_add_fs",
+      "timestamp": {
+        "$date": "2026-04-17T07:11:20.563Z"
+      },
+      "_id": {
+        "$oid": "69e1dd18a123d2adefe2626e"
+      }
+    },
+    {
+      "service": "⬅️ Back to Courses",
+      "details": "Captured at step: enq_add_dm",
+      "timestamp": {
+        "$date": "2026-04-17T07:11:32.347Z"
+      },
+      "_id": {
+        "$oid": "69e1dd24a123d2adefe2629a"
+      }
+    },
+    {
+      "service": "⬅️ Back to Courses",
+      "details": "Captured at step: enq_add_da",
+      "timestamp": {
+        "$date": "2026-04-17T07:11:42.744Z"
+      },
+      "_id": {
+        "$oid": "69e1dd2ea123d2adefe262e7"
+      }
+    },
+    {
+      "service": "⬅️ Back to Courses",
+      "details": "Captured at step: enq_add_ve",
+      "timestamp": {
+        "$date": "2026-04-17T07:12:01.138Z"
+      },
+      "_id": {
+        "$oid": "69e1dd41a123d2adefe2633e"
+      }
+    },
+    {
+      "service": "1️⃣ Case Studies",
+      "details": "Captured at step: tech_leads",
+      "timestamp": {
+        "$date": "2026-04-17T07:45:28.961Z"
+      },
+      "_id": {
+        "$oid": "69e1e51832b91255f35efb3e"
+      }
+    }
+  ],
+  "email": "john@gmail.com"
+},
+{
+  "_id": {
+    "$oid": "69d3a832feb0f66ff02fe6a9"
+  },
+  "name": "Anonymous Lead",
+  "phone": "guest_1775478834959_4405163",
+  "password": "$2b$10$9PfBLiVB5dDgCHIh4oi9Ce7OXTKhMOnOgvzi4pKwCQLo.c4VK10FG",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-06T12:33:54.960Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T12:33:54.960Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "69d3a833feb0f66ff02fe6aa"
+  },
+  "name": "arsath",
+  "phone": "8987776665",
+  "password": "$2b$10$RTtPh5rQgRn8kSBK0KiMm.RWf0nehqsfIwwMM2ZeKwqTqskLtsDpG",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-06T12:33:55.052Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T13:00:21.270Z"
+  },
+  "__v": 0,
+  "address": "no 21,anna nager,india,tamil nadu,kottakuppam,980678"
+},
+{
+  "_id": {
+    "$oid": "69d3aeadece971663a7faf3f"
+  },
+  "name": "hari",
+  "phone": "9988887777",
+  "password": "$2b$10$PvtnXICc5Wb.dFXVeMsOh.3QEiyzd8ojzQN.f3c5TPIoc9mCZyIqO",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-06T13:01:33.644Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-06T13:02:26.813Z"
+  },
+  "__v": 0,
+  "address": "no 98,anna,india,tamil nadu,cuddaore,945846",
+  "leadData": {
+    "demo_date": "2026-08-09",
+    "demo_time": "12:00 PM"
+  }
+},
+{
+  "_id": {
+    "$oid": "69d5e5149f3ccce40636bbeb"
+  },
+  "name": "Anonymous Lead",
+  "phone": "1234567890",
+  "password": "$2b$10$19gv0CP5VO2L3YzNqLameuwyu0PEiVAAYeNPPCD/pfoirmoO/1jtS",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "createdAt": {
+    "$date": "2026-04-08T05:18:12.701Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-08T05:18:19.417Z"
+  },
+  "__v": 0,
+  "pushSubscription": {
+    "endpoint": "https://fcm.googleapis.com/fcm/send/dZhrqZNIPas:APA91bEOU4EaPosjybmct-2jVQHal_JegZLcjcnNa_TWOgycgxAlL97_TdFswD1PyWQ4k2g-MqwMuNATo3uKeSET2oo4yVy6OrW2CWZJcDltJTyK1tgrcbSEiJc9QTUTzWGRRS7a80u-",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BOmsPjb29zHXiqtbIawDZnEIHhd5iXDhQ_4GTdELxajCV_WvfdP-pH8yKXZQ5dkTU0d612bF5dlMZOcEfZd9k_g",
+      "auth": "2dga_c_MG7PArZe0-JIW4Q"
+    }
+  }
+},
+{
+  "_id": {
+    "$oid": "69e1e57032b91255f35efbe2"
+  },
+  "name": "anbu",
+  "phone": "9845475485",
+  "password": "$2b$10$B9alSHQUUJqgg6MoSGpfl.1L/MoWfG.RP5ua6Cifd8EoE5Uq6suWq",
+  "role": "user",
+  "tags": [
+    "Final Submission"
+  ],
+  "documents": [],
+  "enquiries": [
+    {
+      "service": "1️⃣ Pricing",
+      "details": "Captured at step: tech_smm",
+      "timestamp": {
+        "$date": "2026-04-17T07:49:40.775Z"
+      },
+      "_id": {
+        "$oid": "69e1e61432b91255f35efc67"
+      }
+    },
+    {
+      "service": "1️⃣ Demo Websites",
+      "details": "Captured at step: tech_web",
+      "timestamp": {
+        "$date": "2026-04-17T07:54:38.375Z"
+      },
+      "_id": {
+        "$oid": "69e1e73e90face600d204a33"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2026-04-17T07:46:56.392Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T07:55:35.767Z"
+  },
+  "__v": 3,
+  "address": "vadalore",
+  "leadData": {
+    "demo_date": "2026-05-07",
+    "demo_time": "10:00 AM"
+  }
+},
+{
+  "_id": {
+    "$oid": "69e1e78190face600d204ad9"
+  },
+  "name": "josh",
+  "phone": "9874545443",
+  "password": "$2b$10$Ua.xk.HVHMAiSzFkqagz3.TU8KlXYBfoceE2UhpT/KDtEdD7eIgDW",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "enquiries": [
+    {
+      "service": "1️⃣ Portfolio",
+      "details": "Captured at step: tech_branding",
+      "timestamp": {
+        "$date": "2026-04-17T07:56:54.890Z"
+      },
+      "_id": {
+        "$oid": "69e1e7c690face600d204b5e"
+      }
+    },
+    {
+      "service": "Showcase Properties",
+      "details": "Captured at step: prop_buy",
+      "timestamp": {
+        "$date": "2026-04-17T07:59:28.939Z"
+      },
+      "_id": {
+        "$oid": "69e1e86090face600d204be1"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2026-04-17T07:55:45.675Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T08:10:19.192Z"
+  },
+  "__v": 2,
+  "address": "kanada",
+  "leadData": {
+    "property_budget": "10L – 20L",
+    "property_pref_location": "mangalore",
+    "property_type": "3️⃣ Investment Advice"
+  }
+},
+{
+  "_id": {
+    "$oid": "69e1f39bf5c01513e1077981"
+  },
+  "name": "susgu",
+  "phone": "9874584758",
+  "password": "$2b$10$v2K3nSMKa1MkljyJHzwr/Ou7ktn06aYAc/uelnW/ju9cVpkiABNHG",
+  "role": "user",
+  "tags": [],
+  "documents": [],
+  "enquiries": [
+    {
+      "service": "Syllabus",
+      "details": "Step: course_ve",
+      "timestamp": {
+        "$date": "2026-04-17T10:04:06.196Z"
+      },
+      "_id": {
+        "$oid": "69e205960893cf9521204067"
+      }
+    }
+  ],
+  "createdAt": {
+    "$date": "2026-04-17T08:47:23.095Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-17T10:04:06.197Z"
+  },
+  "__v": 0,
+  "address": "cuddalore",
+  "leadData": {
+    "property_budget": "💼 Jobs & Skill Development",
+    "job_qual_exp": "🎓 BM Academy – Career & Courses",
+    "job_pref_location": "pune"
+  },
+  "userAttachments": [
+    {
+      "name": "invoice_260318032644.pdf",
+      "url": "/uploads/file-1776420016474-311639595.pdf",
+      "type": "application/pdf",
+      "_id": {
+        "$oid": "69e204b10893cf9521203f41"
+      },
+      "uploadedAt": {
+        "$date": "2026-04-17T10:00:17.204Z"
+      }
+    }
+  ]
+},
+{
+  "_id": {
+    "$oid": "69e31e63181f606408284f5a"
+  },
+  "name": "charles",
+  "phone": "9745856856",
+  "password": "$2b$10$d5OaZywYhg14LFi7h3eRD.WnKjLwTTrV2BLH0pQ1xOc6Rqtd7FtAO",
+  "role": "user",
+  "tags": [],
+  "leadStatus": "New",
+  "enquiries": [],
+  "userAttachments": [],
+  "createdAt": {
+    "$date": "2026-04-18T06:02:11.417Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T06:02:50.859Z"
+  },
+  "__v": 0,
+  "address": "cuddalore"
+},
+{
+  "_id": {
+    "$oid": "69e3204b181f606408284fcb"
+  },
+  "name": "Arshad",
+  "phone": "9198586298",
+  "password": "$2b$10$dj7hwN6lzQ9xaTCmHSxcIOFv99QCG8M3Wq0/TbYBYAwY5.7yJxrtC",
+  "role": "user",
+  "tags": [
+    "Final Submission"
+  ],
+  "leadStatus": "New",
+  "enquiries": [],
+  "userAttachments": [],
+  "createdAt": {
+    "$date": "2026-04-18T06:10:19.200Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T06:14:03.811Z"
+  },
+  "__v": 1,
+  "address": "Chennai",
+  "leadData": {
+    "demo_date": "2555-06-25",
+    "demo_time": "9:30 AM"
+  }
+},
+{
+  "_id": {
+    "$oid": "69e32193181f606408285113"
+  },
+  "name": "Imran",
+  "phone": "9052463178",
+  "password": "$2b$10$XA5GRU9AF9NY.XpRvFj0seGfyt19U.12agDt2dHUca/d5cz3XLVpu",
+  "role": "user",
+  "tags": [],
+  "leadStatus": "New",
+  "enquiries": [],
+  "userAttachments": [],
+  "createdAt": {
+    "$date": "2026-04-18T06:15:47.028Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T06:19:25.730Z"
+  },
+  "__v": 0,
+  "address": "T Nagar",
+  "leadData": {
+    "property_budget": "50L+",
+    "property_pref_location": "Pondy",
+    "property_type": "Villa",
+    "property_sell_location": "Chennai or Pondy",
+    "property_price": "10L"
+  }
+},
+{
+  "_id": {
+    "$oid": "69e32999181f606408285322"
+  },
+  "name": "Testing",
+  "phone": "0000000000",
+  "password": "$2b$10$PdgF5opUvHbQvCokoakuSO0tSH6qo97oD1jWq53v4GrP9YLwWT/8G",
+  "role": "user",
+  "tags": [],
+  "leadStatus": "New",
+  "enquiries": [],
+  "userAttachments": [],
+  "createdAt": {
+    "$date": "2026-04-18T06:50:01.541Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T06:52:57.442Z"
+  },
+  "__v": 0,
+  "address": "T Nagar, Chennai"
+},
+{
+  "_id": {
+    "$oid": "69e3344fdd7b1bfdb086595d"
+  },
+  "name": "TEST",
+  "phone": "3563565558",
+  "password": "$2b$10$x0FTzmrEfPymx9vXv7dY..lfUyP3thNlWq2E2w72uOv3nHW820WjS",
+  "role": "user",
+  "tags": [],
+  "leadStatus": "New",
+  "enquiries": [],
+  "userAttachments": [],
+  "createdAt": {
+    "$date": "2026-04-18T07:35:43.683Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T07:36:10.993Z"
+  },
+  "__v": 0,
+  "address": "PONDY"
+},
+{
+  "_id": {
+    "$oid": "69e362645a9d48f5769cbf5c"
+  },
+  "name": "Anonymous Lead",
+  "phone": "guest_1776509540070_6005179",
+  "password": "$2b$10$PByEkMy5XSDZS/cyeNUUYeb/AJM5c1.e78FMW5m6Co6xmhEel37Ia",
+  "role": "user",
+  "tags": [],
+  "leadStatus": "New",
+  "enquiries": [],
+  "userAttachments": [],
+  "createdAt": {
+    "$date": "2026-04-18T10:52:20.077Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T10:52:20.077Z"
+  },
+  "__v": 0
+},
+{
+  "_id": {
+    "$oid": "69e364ce5a9d48f5769cc03d"
+  },
+  "name": "Priya",
+  "phone": "6566654264",
+  "password": "$2b$10$WF5nX5WIQyPAnbk6qT/9oOBfiuY8t9XpeMOW/689baEJ9Bd65wHC2",
+  "role": "user",
+  "tags": [
+    "Final Submission"
+  ],
+  "leadStatus": "New",
+  "enquiries": [
+    {
+      "service": "Syllabus",
+      "details": "Step: course_dm",
+      "timestamp": {
+        "$date": "2026-04-18T11:04:39.719Z"
+      },
+      "_id": {
+        "$oid": "69e365475a9d48f5769cc0c1"
+      }
+    },
+    {
+      "service": "Contact Mentor",
+      "details": "Step: course_fs",
+      "timestamp": {
+        "$date": "2026-04-18T11:05:27.569Z"
+      },
+      "_id": {
+        "$oid": "69e365775a9d48f5769cc134"
+      }
+    },
+    {
+      "service": "Contact Mentor",
+      "details": "Step: course_da",
+      "timestamp": {
+        "$date": "2026-04-18T11:11:01.964Z"
+      },
+      "_id": {
+        "$oid": "69e366c55a9d48f5769cc18f"
+      }
+    }
+  ],
+  "userAttachments": [],
+  "createdAt": {
+    "$date": "2026-04-18T11:02:38.586Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T11:11:58.338Z"
+  },
+  "__v": 1,
+  "address": "Anna Nagar, Chennai",
+  "leadData": {
+    "demo_date": "5555-05-05",
+    "demo_time": "10:00 AM"
+  }
+},
+{
+  "_id": {
+    "$oid": "69e367005a9d48f5769cc240"
+  },
+  "name": "Arshad",
+  "phone": "8888888888",
+  "password": "$2b$10$O9snJxpHZ2NAiv1H360R1OCHIQ.P/bAmrcABE0b3xByR5zmhnBUdm",
+  "role": "user",
+  "tags": [],
+  "leadStatus": "New",
+  "enquiries": [
+    {
+      "service": "Full Stack Development",
+      "details": "Step: course_ve",
+      "timestamp": {
+        "$date": "2026-04-18T11:13:52.673Z"
+      },
+      "_id": {
+        "$oid": "69e367705a9d48f5769cc2c4"
+      }
+    },
+    {
+      "service": "Syllabus",
+      "details": "Step: course_fs",
+      "timestamp": {
+        "$date": "2026-04-18T11:15:58.744Z"
+      },
+      "_id": {
+        "$oid": "69e367ee5a9d48f5769cc2e0"
+      }
+    },
+    {
+      "service": "Syllabus",
+      "details": "Step: course_ve",
+      "timestamp": {
+        "$date": "2026-04-18T11:16:24.781Z"
+      },
+      "_id": {
+        "$oid": "69e368085a9d48f5769cc31a"
+      }
+    }
+  ],
+  "userAttachments": [],
+  "createdAt": {
+    "$date": "2026-04-18T11:12:00.171Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-18T11:16:24.781Z"
+  },
+  "__v": 0,
+  "address": "mdu"
+},
+{
+  "_id": {
+    "$oid": "69ecb3af75af6691559392ba"
+  },
+  "name": "Swetha",
+  "phone": "8072503693",
+  "password": "$2b$10$CrOhFIOCYCQrq80vLd5mJOaSnc5GieWIEFPlj0dSRJjxq91NRDP7e",
+  "role": "user",
+  "tags": [
+    "Final Submission"
+  ],
+  "leadStatus": "New",
+  "enquiries": [
+    {
+      "service": "Syllabus",
+      "details": "Step: course_da",
+      "timestamp": {
+        "$date": "2026-04-25T12:33:44.873Z"
+      },
+      "_id": {
+        "$oid": "69ecb4a875af669155939362"
+      }
+    }
+  ],
+  "userAttachments": [],
+  "createdAt": {
+    "$date": "2026-04-25T12:29:35.699Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-25T12:42:05.508Z"
+  },
+  "__v": 1,
+  "address": "Villupuram",
+  "leadData": {
+    "demo_date": "2026-05-12",
+    "demo_time": "1:00 PM"
+  }
+},
+{
+  "_id": {
+    "$oid": "69ecb6b275af66915593941e"
+  },
+  "name": "Kamali",
+  "phone": "guest_1777120946541_385780",
+  "password": "$2b$10$wbzqp/G/3OubOvrpLstnO.MgapqiZ4fV6097PNzdpZlxFC.5Yz9li",
+  "role": "user",
+  "tags": [],
+  "leadStatus": "New",
+  "enquiries": [],
+  "userAttachments": [],
+  "createdAt": {
+    "$date": "2026-04-25T12:42:26.541Z"
+  },
+  "updatedAt": {
+    "$date": "2026-04-25T12:43:50.310Z"
+  },
+  "__v": 0,
+  "address": "vpm"
+},
+{
+  "_id": {
+    "$oid": "6a359b241075769e95127fca"
+  },
+  "name": "Hi",
+  "phone": "guest_1781898020802_8309676",
+  "password": "$2b$10$GlWI5eNHpIlKLDKKzFKrGOl.ChGtNAkVyPx8TFyJJAI.m0Zupw3am",
+  "role": "user",
+  "tags": [],
+  "leadStatus": "New",
+  "enquiries": [],
+  "userAttachments": [],
+  "createdAt": {
+    "$date": "2026-06-19T19:40:20.808Z"
+  },
+  "updatedAt": {
+    "$date": "2026-06-19T19:40:37.978Z"
+  },
+  "__v": 0
+}]

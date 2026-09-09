@@ -1,0 +1,1499 @@
+[
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/",
+    "inspectedAt": "2026-08-24T06:33:43.065Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=bXYMwZCDIKP4s_3GGWbuQQ&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-22T09:40:39Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://abmgroups.org/",
+        "https://www.bmtechx.in/"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/",
+    "inspectedAt": "2026-08-24T06:44:28.583Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=T9DXsjebPbmcSlqXWwyVEg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-22T09:40:39Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://abmgroups.org/",
+        "https://www.bmtechx.in/"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/",
+    "inspectedAt": "2026-08-24T07:04:01.954Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=t0xx2HPl0AB7CfDby5h7zQ&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-22T09:40:39Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://abmgroups.org/",
+        "https://www.bmtechx.in/"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/about.html",
+    "inspectedAt": "2026-08-24T07:04:08.914Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=wx7zzo4mrZQNOjQ_sFguOQ&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-08T12:03:30Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/about.html",
+      "userCanonical": "https://bmtechx.in/about.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/googleads.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/seo.html",
+    "inspectedAt": "2026-08-24T07:04:16.035Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=KV88uBxmF4bKhjnmVPXYbw&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-23T21:21:01Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/seo.html",
+      "userCanonical": "https://bmtechx.in/seo.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/googlesearch.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/contact.html",
+    "inspectedAt": "2026-08-24T07:04:23.221Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=JMIAUPjN4aMWkV-9XenvTA&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-23T21:05:55Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/contact.html",
+      "userCanonical": "https://bmtechx.in/contact.html",
+      "referringUrls": [
+        "https://bmtechx.in/blog/ai-human-collaboration-workplace.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/local.html",
+    "inspectedAt": "2026-08-24T07:04:30.258Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=J7S9nv2qVKn8R1OK90OU1w&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:04:51Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/local.html",
+      "userCanonical": "https://bmtechx.in/local.html",
+      "referringUrls": [
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/onpage.html",
+    "inspectedAt": "2026-08-24T07:04:37.364Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=oTwjvSGzFu1zyKbSyROarQ&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-19T15:28:52Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/onpage.html",
+      "userCanonical": "https://bmtechx.in/onpage.html",
+      "referringUrls": [
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/offpage.html",
+    "inspectedAt": "2026-08-24T07:04:44.722Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=c24ZgV6W_XCsGvtP4OqLNw&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-20T15:10:43Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/offpage.html",
+      "userCanonical": "https://bmtechx.in/offpage.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/about.html",
+        "https://bmtechx.in/small.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/technical.html",
+    "inspectedAt": "2026-08-24T07:04:52.053Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=Ekh_orAIfQ3ecOde56ot0g&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:11:57Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/technical.html",
+      "userCanonical": "https://bmtechx.in/technical.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/index.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/gmbservices.html",
+    "inspectedAt": "2026-08-24T07:04:58.975Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=Y4AP9otBX6qMVO55nKAvTg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-08T14:00:07Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/gmbservices.html",
+      "userCanonical": "https://bmtechx.in/gmbservices.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/about.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/socialmedia.html",
+    "inspectedAt": "2026-08-24T07:05:06.081Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=5qqpexg-U0DKe3wX2d03Pg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:05:37Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/socialmedia.html",
+      "userCanonical": "https://bmtechx.in/socialmedia.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/",
+    "inspectedAt": "2026-08-24T07:04:06.599Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=r3wFL6JPD4W5xaMq6JgdDw&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-22T09:40:39Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://abmgroups.org/",
+        "https://www.bmtechx.in/"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/about.html",
+    "inspectedAt": "2026-08-24T07:04:13.564Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=3kc0eQ4urJ0MCzycOiDkkQ&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-08T12:03:30Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/about.html",
+      "userCanonical": "https://bmtechx.in/about.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/googleads.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/seo.html",
+    "inspectedAt": "2026-08-24T07:04:20.553Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=vB0yyDwfPw0OePBpTdDVJA&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-23T21:21:01Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/seo.html",
+      "userCanonical": "https://bmtechx.in/seo.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/googlesearch.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/contact.html",
+    "inspectedAt": "2026-08-24T07:04:27.662Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=JuvpU9Kr2MmSwaSjQFxEvg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-23T21:05:55Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/contact.html",
+      "userCanonical": "https://bmtechx.in/contact.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/blog/ai-human-collaboration-workplace.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/local.html",
+    "inspectedAt": "2026-08-24T07:04:34.810Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=JikScCGnBG0H5Z6x7wf-yw&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:04:51Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/local.html",
+      "userCanonical": "https://bmtechx.in/local.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/onpage.html",
+    "inspectedAt": "2026-08-24T07:04:42.057Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=NI8iJfvA5DeJYoWTfZb1xQ&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-19T15:28:52Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/onpage.html",
+      "userCanonical": "https://bmtechx.in/onpage.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/offpage.html",
+    "inspectedAt": "2026-08-24T07:04:49.018Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=1cWZbeDAfhkvQOHISiVSqg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-20T15:10:43Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/offpage.html",
+      "userCanonical": "https://bmtechx.in/offpage.html",
+      "referringUrls": [
+        "https://bmtechx.in/about.html",
+        "https://bmtechx.in/small.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/technical.html",
+    "inspectedAt": "2026-08-24T07:04:56.173Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=pWh6cv3jjNQZm9bBSbwe1Q&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:11:57Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/technical.html",
+      "userCanonical": "https://bmtechx.in/technical.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/index.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/gmbservices.html",
+    "inspectedAt": "2026-08-24T07:05:03.118Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=mljdeJ2edbPcuXv7Qu9eeg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-08T14:00:07Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/gmbservices.html",
+      "userCanonical": "https://bmtechx.in/gmbservices.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/about.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/socialmedia.html",
+    "inspectedAt": "2026-08-24T07:05:10.014Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=6PDk4xaVXII8cnlE0GXbMw&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:05:37Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/socialmedia.html",
+      "userCanonical": "https://bmtechx.in/socialmedia.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/",
+    "inspectedAt": "2026-08-24T07:04:18.824Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=p0RUKzj_sf8YjtE7FQRMHA&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-22T09:40:39Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://abmgroups.org/",
+        "https://www.bmtechx.in/"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/about.html",
+    "inspectedAt": "2026-08-24T07:04:25.930Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=gy05gEaP9giMd-4aDZxlEg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-08T12:03:30Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/about.html",
+      "userCanonical": "https://bmtechx.in/about.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/googleads.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/seo.html",
+    "inspectedAt": "2026-08-24T07:04:33.120Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=EhyvX4W3sl7efRVgBTvPeg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-23T21:21:01Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/seo.html",
+      "userCanonical": "https://bmtechx.in/seo.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/googlesearch.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/contact.html",
+    "inspectedAt": "2026-08-24T07:04:40.230Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=-W-5wYZnjTSSoPKgbZrF2g&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-23T21:05:55Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/contact.html",
+      "userCanonical": "https://bmtechx.in/contact.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/blog/ai-human-collaboration-workplace.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/local.html",
+    "inspectedAt": "2026-08-24T07:04:47.383Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=_-QMeDbVQpclvTL0SDrztA&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:04:51Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/local.html",
+      "userCanonical": "https://bmtechx.in/local.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/onpage.html",
+    "inspectedAt": "2026-08-24T07:04:54.312Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=PuEGoCnUYVLRY4D41ERvQQ&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-19T15:28:52Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/onpage.html",
+      "userCanonical": "https://bmtechx.in/onpage.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/offpage.html",
+    "inspectedAt": "2026-08-24T07:05:01.236Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=_YOZtdBbZx6UEGsVj02QGA&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-20T15:10:43Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/offpage.html",
+      "userCanonical": "https://bmtechx.in/offpage.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/about.html",
+        "https://bmtechx.in/small.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/technical.html",
+    "inspectedAt": "2026-08-24T07:05:08.324Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=z1tz43VY4qOw_p1IIU62aw&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:11:57Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/technical.html",
+      "userCanonical": "https://bmtechx.in/technical.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/index.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/gmbservices.html",
+    "inspectedAt": "2026-08-24T07:05:15.396Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=_6QJ1LShOYspKbP9TSOfpg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-08T14:00:07Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/gmbservices.html",
+      "userCanonical": "https://bmtechx.in/gmbservices.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/about.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "https://bmtechx.in/",
+    "inspectionUrl": "https://bmtechx.in/socialmedia.html",
+    "inspectedAt": "2026-08-24T07:05:22.522Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=https://bmtechx.in/&id=UTeJ2fACCCNIACGr7vCVdA&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:05:37Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/socialmedia.html",
+      "userCanonical": "https://bmtechx.in/socialmedia.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/",
+    "inspectedAt": "2026-08-24T07:21:21.901Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=qMsm3CUGYCyLrqRQlq1w2Q&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-22T09:40:39Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://abmgroups.org/",
+        "https://www.bmtechx.in/"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/",
+    "inspectedAt": "2026-08-24T07:21:34.334Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=Bf9b1UmOt1UoeCfJKzTxhA&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-22T09:40:39Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://abmgroups.org/",
+        "https://www.bmtechx.in/"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/",
+    "inspectedAt": "2026-08-24T07:21:19.564Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=ECgFGYtO_hjylPCcIpViDg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-22T09:40:39Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://abmgroups.org/",
+        "https://www.bmtechx.in/"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/index.html",
+    "inspectedAt": "2026-08-24T07:21:26.886Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=B0c2b7j7rYgj56JFetWdAg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "NEUTRAL",
+      "coverageState": "Duplicate without user-selected canonical",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-22T09:13:23Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/",
+        "https://bmtechx.in/blog/security-mistakes.html",
+        "https://bmtechx.in/sitemap.xml",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/about.html",
+    "inspectedAt": "2026-08-24T07:21:34.267Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=Hf2DYhni2Euqg_0PiKIkaw&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-08T12:03:30Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/about.html",
+      "userCanonical": "https://bmtechx.in/about.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/googleads.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/seo.html",
+    "inspectedAt": "2026-08-24T07:21:41.618Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=rSrtwjV94j0OAcgRhlM51w&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-23T21:21:01Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/seo.html",
+      "userCanonical": "https://bmtechx.in/seo.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/googlesearch.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/local.html",
+    "inspectedAt": "2026-08-24T07:21:49.385Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=ZTWKZ-ap7eSi_E80uqwS6g&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:04:51Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/local.html",
+      "userCanonical": "https://bmtechx.in/local.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/outsource.html",
+    "inspectedAt": "2026-08-24T07:21:56.778Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=-dKRGAsiiTP5F7fzWOMpbw&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-23T21:11:14Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/outsource.html",
+      "userCanonical": "https://bmtechx.in/outsource.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/pinterest.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/small.html",
+    "inspectedAt": "2026-08-24T07:22:04.025Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=A_Et8ndHUCCIJKbFzEkTTw&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-25T15:54:11Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/small.html",
+      "userCanonical": "https://bmtechx.in/small.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/career.html",
+        "http://bmtechx.in/"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/onpage.html",
+    "inspectedAt": "2026-08-24T07:22:11.340Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=v-CK89cHwgY5soRwJ3-64g&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-19T15:28:52Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/onpage.html",
+      "userCanonical": "https://bmtechx.in/onpage.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/offpage.html",
+    "inspectedAt": "2026-08-24T07:22:18.486Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=7OeHc8PQYJ3lCGqd1Pq9Mg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-08-20T15:10:43Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/offpage.html",
+      "userCanonical": "https://bmtechx.in/offpage.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/about.html",
+        "https://bmtechx.in/small.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/competitor.html",
+    "inspectedAt": "2026-08-24T07:22:25.762Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=LU4mOhMZSFiBrAWB1qs0Sg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T23:32:53Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/competitor.html",
+      "userCanonical": "https://bmtechx.in/competitor.html",
+      "referringUrls": [
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/technical.html",
+    "inspectedAt": "2026-08-24T07:22:33.058Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=e4bAd3BdJoIxLVPuq2Kcag&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:11:57Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/technical.html",
+      "userCanonical": "https://bmtechx.in/technical.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/software.html",
+        "https://bmtechx.in/index.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/whitelabel.html",
+    "inspectedAt": "2026-08-24T07:22:40.421Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=JQl3J3k925BVj1qBnmsVZg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T17:49:15Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/whitelabel.html",
+      "userCanonical": "https://bmtechx.in/whitelabel.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/index.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/cms.html",
+    "inspectedAt": "2026-08-24T07:22:47.555Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=T_3Yraq-y1shUClNh943xA&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "NEUTRAL",
+      "coverageState": "Crawled - currently not indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T13:34:15Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/cms.html",
+      "userCanonical": "https://bmtechx.in/cms.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/smo.html",
+    "inspectedAt": "2026-08-24T07:22:54.631Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=mjwrnksyWXzHqfCim4NF_g&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-25T13:07:19Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/smo.html",
+      "userCanonical": "https://bmtechx.in/smo.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/socialmedia.html",
+    "inspectedAt": "2026-08-24T07:23:02.166Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=2Ifryo3P_0GGDiNKDjKI4w&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:05:37Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/socialmedia.html",
+      "userCanonical": "https://bmtechx.in/socialmedia.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/webdesign.html",
+    "inspectedAt": "2026-08-24T07:23:09.364Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=mLs5cETqSXGm84yqL0xdXg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T18:47:00Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/webdesign.html",
+      "userCanonical": "https://bmtechx.in/webdesign.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/local.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/facebook.html",
+    "inspectedAt": "2026-08-24T07:23:16.900Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=uwE0qIXGgi8UqPKTbS-TRg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-25T01:03:58Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/facebook.html",
+      "userCanonical": "https://bmtechx.in/facebook.html",
+      "referringUrls": [
+        "https://bmtechx.in/custom.html",
+        "http://bmtechx.in/"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/instagram.html",
+    "inspectedAt": "2026-08-24T07:23:24.264Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=Ag_bPxvYPGd7G1Q37DCOew&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T17:40:07Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/instagram.html",
+      "userCanonical": "https://bmtechx.in/instagram.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/graphic.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/youtube.html",
+    "inspectedAt": "2026-08-24T07:23:31.622Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=_gzgC1GqFXJzwbjx39asYg&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "NEUTRAL",
+      "coverageState": "Crawled - currently not indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-03T22:26:46Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/youtube.html",
+      "userCanonical": "https://bmtechx.in/youtube.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/technical.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  },
+  {
+    "clientId": "default",
+    "siteUrl": "sc-domain:bmtechx.in",
+    "inspectionUrl": "https://bmtechx.in/pinterest.html",
+    "inspectedAt": "2026-08-24T07:23:38.743Z",
+    "inspectionResultLink": "https://search.google.com/search-console/inspect?resource_id=sc-domain:bmtechx.in&id=-7hH6LN1vKFYS1cPQV2UbA&utm_medium=link&utm_source=api",
+    "indexStatusResult": {
+      "verdict": "PASS",
+      "coverageState": "Submitted and indexed",
+      "robotsTxtState": "ALLOWED",
+      "indexingState": "INDEXING_ALLOWED",
+      "lastCrawlTime": "2026-07-24T17:17:27Z",
+      "pageFetchState": "SUCCESSFUL",
+      "googleCanonical": "https://bmtechx.in/pinterest.html",
+      "userCanonical": "https://bmtechx.in/pinterest.html",
+      "sitemap": [
+        "https://bmtechx.in/sitemap.xml"
+      ],
+      "referringUrls": [
+        "https://bmtechx.in/custom.html",
+        "https://bmtechx.in/smm.html"
+      ],
+      "crawledAs": "MOBILE"
+    },
+    "mobileUsabilityResult": {
+      "verdict": "VERDICT_UNSPECIFIED"
+    }
+  }
+]

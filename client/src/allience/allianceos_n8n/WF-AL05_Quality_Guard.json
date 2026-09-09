@@ -1,0 +1,269 @@
+{
+  "name": "WF-AL05 Quality Guard",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "a2646815-42ba-486a-aa2c-3cd0f71efa7d",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM alliance_numbers WHERE status IN ('active','paused');",
+        "options": {}
+      },
+      "id": "520c4db2-f6e8-4c80-b718-6302e3b5c7a0",
+      "name": "Get All Numbers",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/v20.0/{{$json.phone_number_id}}?fields=quality_rating",
+        "method": "GET",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b463e9b6-6f03-464e-b4de-c42fc2200ebe",
+      "name": "Fetch Quality Rating",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(i => {\\n  const q = (i.json.quality_rating||'GREEN').toLowerCase();\\n  let action='none';\\n  if (q==='yellow') action='throttle';   // cut cap 50%, pause 48h\\n  if (q==='red')    action='pause';      // full stop\\n  return { json: { id: i.json.id, quality: q, action } };\\n});"
+      },
+      "id": "6c1da5b4-19cf-485d-9f4d-abbf12e3c345",
+      "name": "Evaluate & Decide",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE alliance_numbers SET quality_rating='{{$json.quality}}',\\n  daily_cap = CASE WHEN '{{$json.action}}'='throttle' THEN GREATEST(5, daily_cap/2) ELSE daily_cap END,\\n  paused_until = CASE WHEN '{{$json.action}}'='throttle' THEN NOW() + INTERVAL '48 hours' ELSE paused_until END,\\n  status = CASE WHEN '{{$json.action}}'='pause' THEN 'paused' ELSE status END\\nWHERE id = {{$json.id}};",
+        "options": {}
+      },
+      "id": "72c1709d-5dae-4d09-a017-7bab565fdba0",
+      "name": "Apply Guard",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        880,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{$json.action}}",
+              "rightValue": "none",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "d5a46a48-ebf6-4037-b9e2-0db3d6cd17e6",
+      "name": "Needs Alert?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/v20.0/{{$env.LEADOS_PHONE_ID}}/messages",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\\n  \"messaging_product\":\"whatsapp\",\\n  \"to\":\"919944509441\",\\n  \"type\":\"text\",\\n  \"text\":{\"body\":\"AllianceOS guard: number {{$json.id}} is {{$json.quality}} -> {{$json.action}}\"}\\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer ={{$env.API_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a3a52070-9789-4cd5-a12f-925ad9299d98",
+      "name": "Alert Kamar (WhatsApp)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "content": "WF-AL05 \u2014 QUALITY GUARD (the safety net)\\nChecks each number's Meta quality rating. Yellow -> throttle + 48h pause. Red -> full stop. Alerts Kamar.\\nAlso resets sent_today daily (add a 00:05 cron).",
+        "height": 160,
+        "width": 460,
+        "color": 1
+      },
+      "id": "e740b7c3-78de-41ea-86a5-e1fd1b01871f",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Every 6 Hours": {
+      "main": [
+        [
+          {
+            "node": "Get All Numbers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Numbers": {
+      "main": [
+        [
+          {
+            "node": "Fetch Quality Rating",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Quality Rating": {
+      "main": [
+        [
+          {
+            "node": "Evaluate & Decide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate & Decide": {
+      "main": [
+        [
+          {
+            "node": "Apply Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Guard": {
+      "main": [
+        [
+          {
+            "node": "Needs Alert?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Alert?": {
+      "main": [
+        [
+          {
+            "node": "Alert Kamar (WhatsApp)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "allianceos"
+  },
+  "tags": [
+    {
+      "name": "AllianceOS"
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+[2026-07-14T09:56:39.943Z] {
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "953749850406150",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550269389",
+              "phone_number_id": "1063493870189640"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Charles"
+                },
+                "wa_id": "919403892971"
+              }
+            ],
+            "messages": [
+              {
+                "from": "919403892971",
+                "id": "wamid.MockTestMessageID_1784022999905",
+                "timestamp": "1784022999",
+                "type": "audio",
+                "audio": {
+                  "mime_type": "audio/ogg; codecs=opus",
+                  "sha256": "dummy_sha256",
+                  "id": "2143726486199949",
+                  "voice": true
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
+

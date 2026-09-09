@@ -1,0 +1,176 @@
+{
+  "name": "WF-AL02 Channel Router",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 60
+            }
+          ]
+        }
+      },
+      "id": "fb2615a9-f140-4255-a825-fb492b64742f",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM alliance_prospects\\nWHERE status = 'new' AND suppressed = false\\nLIMIT 200;",
+        "options": {}
+      },
+      "id": "ae08359e-2624-41b5-bd97-1b834c3a9fe0",
+      "name": "Get New Prospects",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rule = { college:'email', hr:'email', smb:'whatsapp', iv:'email' };\\nreturn items.map(i => {\\n  const p = i.json;\\n  p.channel = p.channel_pref || rule[p.audience] || 'email';\\n  return { json: p };\\n});"
+      },
+      "id": "fc48272e-11aa-4df0-8f9a-e5e7adaf0f5c",
+      "name": "Decide Channel",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO alliance_touches (prospect_id, campaign_id, touch_no, channel, status, scheduled_at)\\nVALUES ({{$json.id}}, {{$json.campaign_id}}, 1, '{{$json.channel}}', 'scheduled', NOW());",
+        "options": {}
+      },
+      "id": "253d9011-3994-491e-8cc0-1dfc4f2d0b6e",
+      "name": "Schedule Touch 1",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE alliance_prospects SET status = 'in_sequence' WHERE id = {{$json.id}};",
+        "options": {}
+      },
+      "id": "de4f4b63-60dd-4159-9dc6-7ddb0bde9b60",
+      "name": "Mark In Sequence",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [
+        880,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE",
+          "name": "leados_db (Postgres)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "WF-AL02 \u2014 CHANNEL ROUTER\\nPicks email vs WhatsApp per prospect, then schedules touch 1 (day 0).",
+        "height": 130,
+        "width": 400,
+        "color": 5
+      },
+      "id": "c4a4bf5e-fc16-4946-a20a-bcb5d38f1286",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -20,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [
+        [
+          {
+            "node": "Get New Prospects",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get New Prospects": {
+      "main": [
+        [
+          {
+            "node": "Decide Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide Channel": {
+      "main": [
+        [
+          {
+            "node": "Schedule Touch 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Touch 1": {
+      "main": [
+        [
+          {
+            "node": "Mark In Sequence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateId": "allianceos"
+  },
+  "tags": [
+    {
+      "name": "AllianceOS"
+    }
+  ]
+}
