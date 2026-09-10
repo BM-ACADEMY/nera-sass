@@ -70,9 +70,19 @@ exports.createUserAndTenant = async (req, res) => {
       [newTenantId, name, email, phone, passwordHash, 'tenant_admin']
     );
 
+    // Give every workspace a matching brand/client row so it can configure
+    // its own WhatsApp number through the existing client WhatsApp flow
+    // instead of sharing the platform-wide .env credentials.
+    const clientResult = await db.query(
+      `INSERT INTO clients (name, tenant_id, status, whatsapp_status, created_at)
+       VALUES ($1, $2, 'active', 'not_configured', NOW()) RETURNING id`,
+      [tName, newTenantId]
+    );
+
     res.status(201).json({
       message: 'User and Tenant created successfully',
-      user: userResult.rows[0]
+      user: userResult.rows[0],
+      client_id: clientResult.rows[0].id
     });
   } catch (error) {
     console.error('Create User Error:', error);
@@ -83,13 +93,28 @@ exports.createUserAndTenant = async (req, res) => {
   }
 };
 
+exports.me = async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT u.id, u.name, u.email, u.phone, u.role, u.tenant_id, t.name as tenant_name
+      FROM users u
+      JOIN tenants t ON u.tenant_id = t.id
+      WHERE u.id = $1
+    `, [req.user.id]);
+    if (!result.rows.length) return res.status(404).json({ error: 'User not found' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 exports.getUsers = async (req, res) => {
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Unauthorized' });
   }
   try {
     const result = await db.query(`
-      SELECT u.id, u.name, u.email, u.phone, u.role, t.name as tenant_name
+      SELECT u.id, u.name, u.email, u.phone, u.role, u.tenant_id, t.name as tenant_name
       FROM users u
       JOIN tenants t ON u.tenant_id = t.id
       ORDER BY u.created_at DESC

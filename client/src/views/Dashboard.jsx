@@ -10,6 +10,7 @@ import {
   FileText, ExternalLink, Activity, Plus, CreditCard, Send, Award, ChevronRight
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { Select, Radio, Button } from 'antd';
 import { C } from '../constants/theme.js';
 import { Badge, ScoreBar } from '../components/ui.jsx';
 import { useLeads, useLead } from '../hooks/useLeads.js';
@@ -27,6 +28,12 @@ const MiniSparkline = ({ data, strokeColor }) => {
     </ResponsiveContainer>
   );
 };
+
+// Dummy data for visual widget charts
+const dummySparkline1 = [{v: 10}, {v: 15}, {v: 8}, {v: 25}, {v: 18}, {v: 30}, {v: 22}];
+const dummySparkline2 = [{v: 5}, {v: 20}, {v: 15}, {v: 8}, {v: 12}, {v: 35}, {v: 10}];
+const dummySparkline3 = [{v: 12}, {v: 25}, {v: 15}, {v: 35}, {v: 10}, {v: 30}, {v: 5}];
+const dummyBarData = [{v: 15}, {v: 25}, {v: 10}, {v: 35}, {v: 20}, {v: 15}, {v: 25}, {v: 12}, {v: 30}, {v: 18}];
 
 export const Dashboard = () => {
   const { user } = useAuth();
@@ -247,12 +254,12 @@ export const Dashboard = () => {
       {/* --- HEADER CONTROLS --- */}
       <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, marginBottom: 26 }}>
         <div>
-          <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 22, fontWeight: 800, color: C.text, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <h1 style={{ fontFamily: "'Inter', sans-serif", fontSize: 22, fontWeight: 600, color: C.text, display: 'flex', alignItems: 'center', gap: 8, letterSpacing: '-0.5px' }}>
             Good morning, {user?.name?.split(' ')[0] || 'User'}
             <Activity size={18} color={C.accent} style={{ animation: 'pulse 2s infinite' }} />
           </h1>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
-            {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })} · LeadOS Core Operations Center
+            {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
           </p>
         </div>
 
@@ -262,107 +269,120 @@ export const Dashboard = () => {
           {/* Brand/Client Selector */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Brand</span>
-            <select
+            <Select
               value={selectedBrand}
-              onChange={(e) => setSelectedBrand(e.target.value)}
-              className="custom-select"
-            >
-              <option value="all">All Brands</option>
-              {clients.map(client => (
-                <option key={client.id} value={client.id}>{client.name}</option>
-              ))}
-            </select>
+              onChange={(val) => setSelectedBrand(val)}
+              style={{ width: 140 }}
+              options={[
+                { value: 'all', label: 'All Brands' },
+                ...clients.map(c => ({ value: c.id, label: c.name }))
+              ]}
+            />
           </div>
 
           {/* Time range switcher */}
-          <div style={{ display: 'flex', background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 3 }}>
-            {[
-              { id: '7d', label: '7D' },
-              { id: '30d', label: '30D' },
-              { id: '90d', label: '90D' }
-            ].map(btn => (
-              <button
-                key={btn.id}
-                onClick={() => setTimeRange(btn.id)}
-                className={`filter-btn ${timeRange === btn.id ? 'active' : ''}`}
-              >
-                {btn.label}
-              </button>
-            ))}
-          </div>
+          <Radio.Group 
+            value={timeRange} 
+            onChange={e => setTimeRange(e.target.value)}
+            optionType="button"
+            buttonStyle="solid"
+          >
+            <Radio.Button value="7d">7D</Radio.Button>
+            <Radio.Button value="30d">30D</Radio.Button>
+            <Radio.Button value="90d">90D</Radio.Button>
+          </Radio.Group>
 
           {/* Manual Refresh Trigger */}
-          <button
+          <Button
+            icon={<Clock size={14} />}
             onClick={() => {
               setRefreshTrigger(prev => prev + 1);
               refetchHotLeads();
               toast.success('Metrics updated');
             }}
-            style={{
-              background: C.surface,
-              border: `1px solid ${C.border}`,
-              color: C.text,
-              padding: '9px 12px',
-              borderRadius: 9,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'background 0.2s ease'
-            }}
             title="Refresh statistics"
-          >
-            <Clock size={14} />
-          </button>
+          />
         </div>
       </div>
 
       {/* --- SALESOS LIVE METRICS --- */}
       {salesOsStats && (
-        <div style={{ background: `linear-gradient(to right, ${C.card}, ${C.bg})`, border: `1px solid ${C.border}`, borderRadius: 16, padding: '16px 24px', marginBottom: 24, display: 'flex', flexWrap: 'wrap', gap: 24, alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 200 }}>
-            <div style={{ width: 48, height: 48, borderRadius: 12, background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <TrendingUp size={24} color={C.blue} />
+        <div className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+          {/* Card 1: Today's Revenue (Blue) */}
+          <div style={{ background: '#4285F4', borderRadius: 8, color: '#fff', position: 'relative', overflow: 'hidden', height: 110, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <div style={{ padding: '16px 16px 0' }}>
+              <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1 }}>{formatRevenueValue(salesOsStats.revenueToday)}</div>
+              <div style={{ fontSize: 11, marginTop: 4, opacity: 0.9 }}>Today's Revenue</div>
             </div>
-            <div>
-              <p style={{ margin: 0, fontSize: 13, color: C.muted, fontWeight: 600, textTransform: 'uppercase' }}>Today's Revenue</p>
-              <h3 style={{ margin: '4px 0 0 0', fontSize: 24, fontWeight: 800, color: C.text }}>{formatRevenueValue(salesOsStats.revenueToday)}</h3>
-            </div>
-          </div>
-          
-          <div style={{ width: 1, height: 40, background: C.border, opacity: 0.5 }} className="hide-mobile"></div>
-          
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 200 }}>
-            <div style={{ width: 48, height: 48, borderRadius: 12, background: 'rgba(168, 85, 247, 0.1)', border: '1px solid rgba(168, 85, 247, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <CheckCircle size={24} color={C.purple} />
-            </div>
-            <div>
-              <p style={{ margin: 0, fontSize: 13, color: C.muted, fontWeight: 600, textTransform: 'uppercase' }}>Pending Follow-ups</p>
-              <h3 style={{ margin: '4px 0 0 0', fontSize: 24, fontWeight: 800, color: C.text }}>{salesOsStats.pendingFollowups}</h3>
-            </div>
-          </div>
-
-          <div style={{ width: 1, height: 40, background: C.border, opacity: 0.5 }} className="hide-mobile"></div>
-          
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 200 }}>
-            <div style={{ width: 48, height: 48, borderRadius: 12, background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <AlertCircle size={24} color={C.red} />
-            </div>
-            <div>
-              <p style={{ margin: 0, fontSize: 13, color: C.muted, fontWeight: 600, textTransform: 'uppercase' }}>SLA Breaches</p>
-              <h3 style={{ margin: '4px 0 0 0', fontSize: 24, fontWeight: 800, color: C.text }}>{salesOsStats.slaBreaches}</h3>
+            <div style={{ flex: 1, position: 'relative', marginTop: 10 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={dummySparkline1} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorBlue" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#fff" stopOpacity={0.4}/>
+                      <stop offset="95%" stopColor="#fff" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <Area type="monotone" dataKey="v" stroke="#fff" strokeWidth={1.5} fillOpacity={1} fill="url(#colorBlue)" />
+                </AreaChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
-          <div style={{ width: 1, height: 40, background: C.border, opacity: 0.5 }} className="hide-mobile"></div>
-          
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 200 }}>
-            <div style={{ width: 48, height: 48, borderRadius: 12, background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Activity size={24} color={C.green} />
+          {/* Card 2: Pending Follow-ups (Pink/Red) */}
+          <div style={{ background: '#F86C85', borderRadius: 8, color: '#fff', position: 'relative', overflow: 'hidden', height: 110, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <div style={{ padding: '16px 16px 0' }}>
+              <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1 }}>{salesOsStats.pendingFollowups}</div>
+              <div style={{ fontSize: 11, marginTop: 4, opacity: 0.9 }}>Pending Follow-ups</div>
             </div>
-            <div>
-              <p style={{ margin: 0, fontSize: 13, color: C.muted, fontWeight: 600, textTransform: 'uppercase' }}>AI Confidence (Avg)</p>
-              <h3 style={{ margin: '4px 0 0 0', fontSize: 24, fontWeight: 800, color: C.text }}>{Math.round(salesOsStats.aiPerformance)}%</h3>
+            <div style={{ flex: 1, position: 'relative', marginTop: 10 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={dummySparkline2} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorPink" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#fff" stopOpacity={0.4}/>
+                      <stop offset="95%" stopColor="#fff" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <Area type="monotone" dataKey="v" stroke="#fff" strokeWidth={1.5} fillOpacity={1} fill="url(#colorPink)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Card 3: SLA Breaches (Green) */}
+          <div style={{ background: '#84B955', borderRadius: 8, color: '#fff', position: 'relative', overflow: 'hidden', height: 110, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <div style={{ padding: '16px 16px 0' }}>
+              <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1 }}>{salesOsStats.slaBreaches}</div>
+              <div style={{ fontSize: 11, marginTop: 4, opacity: 0.9 }}>SLA Breaches</div>
+            </div>
+            <div style={{ flex: 1, position: 'relative', marginTop: 10 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={dummySparkline3} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorGreen" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#fff" stopOpacity={0.4}/>
+                      <stop offset="95%" stopColor="#fff" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <Area type="monotone" dataKey="v" stroke="#fff" strokeWidth={1.5} fillOpacity={1} fill="url(#colorGreen)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Card 4: AI Confidence (Orange/Yellow) */}
+          <div style={{ background: '#FDB751', borderRadius: 8, color: '#fff', position: 'relative', overflow: 'hidden', height: 110, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+            <div style={{ padding: '16px 16px 0' }}>
+              <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1 }}>{Math.round(salesOsStats.aiPerformance)}%</div>
+              <div style={{ fontSize: 11, marginTop: 4, opacity: 0.9 }}>AI Confidence (Avg)</div>
+            </div>
+            <div style={{ flex: 1, position: 'relative', marginTop: 10, padding: '0 8px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={dummyBarData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
+                  <Bar dataKey="v" fill="#fff" fillOpacity={0.7} radius={[2, 2, 0, 0]} barSize={12} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
         </div>
@@ -371,106 +391,36 @@ export const Dashboard = () => {
       {/* --- STAT CARDS GRID --- */}
       <div className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 20 }}>
         
-        {/* Total Leads Card */}
-        <div className="dashboard-card kpi-card leads" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 120 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px' }}>Leads Today</span>
-              <h2 style={{ fontSize: 28, fontWeight: 800, color: C.text, margin: '6px 0 2px 0', fontFamily: "'Syne', sans-serif" }}>
-                {loading ? '...' : stats?.leads_today}
-              </h2>
-            </div>
-            <div style={{ width: 34, height: 34, borderRadius: 8, background: `${C.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Users size={16} color={C.accent} />
-            </div>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 12 }}>
-            <span style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 3 }}>
-              {leadsChange >= 0 ? (
-                <span style={{ color: C.green, fontWeight: 600, display: 'inline-flex', alignItems: 'center' }}><TrendingUp size={12} />+{leadsChange}%</span>
-              ) : (
-                <span style={{ color: C.red, fontWeight: 600, display: 'inline-flex', alignItems: 'center' }}><TrendingDown size={12} />{leadsChange}%</span>
-              )}
-              <span style={{ color: C.muted }}>vs yesterday</span>
-            </span>
-            <MiniSparkline data={leadsSparkline} strokeColor={C.accent} />
-          </div>
+        <div style={{ background: '#8b5cf6', borderRadius: 16, padding: 24, color: '#fff', position: 'relative', overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', right: -20, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.1)' }} />
+          <div style={{ position: 'absolute', right: -40, bottom: -20, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
+          <Users size={20} color="#ffffff" style={{ opacity: 0.8, marginBottom: 20 }} />
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', opacity: 0.9 }}>Leads Today</div>
+          <div style={{ fontSize: 36, fontWeight: 800, marginTop: 4 }}>{loading ? '...' : stats?.leads_today}</div>
         </div>
 
-        {/* Hot Pipeline Card */}
-        <div className="dashboard-card kpi-card hot" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 120 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px' }}>Hot Pipelines</span>
-              <h2 style={{ fontSize: 28, fontWeight: 800, color: C.text, margin: '6px 0 2px 0', fontFamily: "'Syne', sans-serif" }}>
-                {loading ? '...' : stats?.hot_leads}
-              </h2>
-            </div>
-            <div style={{ width: 34, height: 34, borderRadius: 8, background: `${C.red}15`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Target size={16} color={C.red} />
-            </div>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 12 }}>
-            <span style={{ fontSize: 11, color: C.muted, display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.red }} />
-              Ready for conversion
-            </span>
-            <div style={{ padding: '2px 8px', borderRadius: 20, background: `${C.red}15`, fontSize: 10, color: C.red, fontWeight: 700 }}>Action Required</div>
-          </div>
+        <div style={{ background: '#f97316', borderRadius: 16, padding: 24, color: '#fff', position: 'relative', overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', right: -20, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.1)' }} />
+          <div style={{ position: 'absolute', right: -40, bottom: -20, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
+          <Target size={20} color="#ffffff" style={{ opacity: 0.8, marginBottom: 20 }} />
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', opacity: 0.9 }}>Hot Pipelines</div>
+          <div style={{ fontSize: 36, fontWeight: 800, marginTop: 4 }}>{loading ? '...' : stats?.hot_leads}</div>
         </div>
 
-        {/* Converted Leads Card */}
-        <div className="dashboard-card kpi-card converted" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 120 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px' }}>Converted Today</span>
-              <h2 style={{ fontSize: 28, fontWeight: 800, color: C.text, margin: '6px 0 2px 0', fontFamily: "'Syne', sans-serif" }}>
-                {loading ? '...' : stats?.converted_today}
-              </h2>
-            </div>
-            <div style={{ width: 34, height: 34, borderRadius: 8, background: `${C.green}15`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <CheckCircle size={16} color={C.green} />
-            </div>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 12 }}>
-            <span style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 3 }}>
-              {convertedChange >= 0 ? (
-                <span style={{ color: C.green, fontWeight: 600, display: 'inline-flex', alignItems: 'center' }}><TrendingUp size={12} />+{convertedChange}%</span>
-              ) : (
-                <span style={{ color: C.red, fontWeight: 600, display: 'inline-flex', alignItems: 'center' }}><TrendingDown size={12} />{convertedChange}%</span>
-              )}
-              <span style={{ color: C.muted }}>vs yesterday</span>
-            </span>
-            <span style={{ fontSize: 10, color: C.green, fontWeight: 700, background: `${C.green}15`, padding: '2px 6px', borderRadius: 4 }}>
-              {leadsConversionRate}% CR
-            </span>
-          </div>
+        <div style={{ background: '#10b981', borderRadius: 16, padding: 24, color: '#fff', position: 'relative', overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', right: -20, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.1)' }} />
+          <div style={{ position: 'absolute', right: -40, bottom: -20, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
+          <CheckCircle size={20} color="#ffffff" style={{ opacity: 0.8, marginBottom: 20 }} />
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', opacity: 0.9 }}>Converted Today</div>
+          <div style={{ fontSize: 36, fontWeight: 800, marginTop: 4 }}>{loading ? '...' : stats?.converted_today}</div>
         </div>
 
-        {/* Revenue Card */}
-        <div className="dashboard-card kpi-card revenue" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 120 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.8px' }}>Revenue MTD</span>
-              <h2 style={{ fontSize: 28, fontWeight: 800, color: C.text, margin: '6px 0 2px 0', fontFamily: "'Syne', sans-serif" }}>
-                {loading ? '...' : formatRevenueValue(stats?.revenue_month)}
-              </h2>
-            </div>
-            <div style={{ width: 34, height: 34, borderRadius: 8, background: `${C.blue}15`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <DollarSign size={16} color={C.blue} />
-            </div>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 12 }}>
-            <span style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 3 }}>
-              {revenueChange >= 0 ? (
-                <span style={{ color: C.green, fontWeight: 600, display: 'inline-flex', alignItems: 'center' }}><TrendingUp size={12} />+{revenueChange}%</span>
-              ) : (
-                <span style={{ color: C.red, fontWeight: 600, display: 'inline-flex', alignItems: 'center' }}><TrendingDown size={12} />{revenueChange}%</span>
-              )}
-              <span style={{ color: C.muted }}>vs last month</span>
-            </span>
-            <div style={{ fontSize: 10, color: C.blue, fontWeight: 700 }}>Captured</div>
-          </div>
+        <div style={{ background: '#ef4444', borderRadius: 16, padding: 24, color: '#fff', position: 'relative', overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', right: -20, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.1)' }} />
+          <div style={{ position: 'absolute', right: -40, bottom: -20, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
+          <DollarSign size={20} color="#ffffff" style={{ opacity: 0.8, marginBottom: 20 }} />
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', opacity: 0.9 }}>Revenue MTD</div>
+          <div style={{ fontSize: 36, fontWeight: 800, marginTop: 4 }}>{loading ? '...' : formatRevenueValue(stats?.revenue_month)}</div>
         </div>
       </div>
 

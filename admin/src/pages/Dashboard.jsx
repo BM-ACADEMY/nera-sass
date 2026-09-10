@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Layout, Menu, Typography, Input, Avatar, Button, Modal } from 'antd';
+import { Layout, Menu, Typography, Input, Button, Modal } from 'antd';
 import { 
   FiSearch,
   FiLogOut,
@@ -7,10 +7,12 @@ import {
   FiChevronRight,
   FiPlus
 } from 'react-icons/fi';
-import { MdOutlineDashboard } from 'react-icons/md';
+import { MdOutlineDashboard, MdOutlineSpaceDashboard } from 'react-icons/md';
 import { useNavigate } from 'react-router-dom';
 import CreateUserForm from '../components/CreateUserForm';
 import UsersList from '../components/UsersList';
+import WhatsAppConfigModal from '../components/WhatsAppConfigModal';
+import UserAvatar from '../components/UserAvatar';
 import axiosClient from '../api/axiosClient';
 
 const { Content, Sider, Header } = Layout;
@@ -21,8 +23,10 @@ const Dashboard = () => {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
-  const [userProfile, setUserProfile] = useState({ name: 'System Admin', email: '' });
+  const [userProfile, setUserProfile] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [whatsAppTarget, setWhatsAppTarget] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const fetchUsers = async () => {
     try {
@@ -36,21 +40,28 @@ const Dashboard = () => {
     }
   };
 
-  useEffect(() => {
-    const token = localStorage.getItem('adminToken');
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        setUserProfile({ 
-          name: payload.name || 'System Admin', 
-          email: payload.email || 'admin@admin.com' 
-        });
-      } catch (e) {
-        console.error("Could not decode token");
-      }
+  const fetchProfile = async () => {
+    try {
+      const res = await axiosClient.get('/auth/me');
+      setUserProfile(res.data);
+    } catch (err) {
+      console.error('Failed to fetch profile', err);
     }
+  };
+
+  useEffect(() => {
+    fetchProfile();
     fetchUsers();
   }, []);
+
+  const filteredUsers = users.filter((user) => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return true;
+    return [user.name, user.email, user.tenant_name, user.role]
+      .some(field => (field || '').toLowerCase().includes(q));
+  });
+
+  const workspaceCount = new Set(users.map(u => u.tenant_id)).size;
 
   const handleLogout = () => {
     localStorage.removeItem('adminToken');
@@ -103,22 +114,37 @@ const Dashboard = () => {
         />
         <div className="sider-content">
           <div className="sider-top">
+            <div className="sider-brand" style={{ padding: collapsed ? '22px 0 14px' : '22px 20px 14px', display: 'flex', alignItems: 'center', gap: 10, justifyContent: collapsed ? 'center' : 'flex-start' }}>
+              <div className="brand-mark">
+                <MdOutlineSpaceDashboard size={18} />
+              </div>
+              {!collapsed && (
+                <div>
+                  <div style={{ fontSize: 14.5, fontWeight: 800, color: '#1e293b', lineHeight: 1.2 }}>LeadOS Admin</div>
+                  <div style={{ fontSize: 10.5, color: '#94a3b8' }}>{workspaceCount} workspace{workspaceCount === 1 ? '' : 's'} · {users.length} users</div>
+                </div>
+              )}
+            </div>
+
             <div className="sider-header">
-              <div className="search-container" style={{ padding: collapsed ? '24px 0' : '24px 20px 16px', display: 'flex', justifyContent: 'center' }}>
+              <div className="search-container" style={{ padding: collapsed ? '4px 0 20px' : '4px 20px 20px', display: 'flex', justifyContent: 'center' }}>
                  {collapsed ? <FiSearch size={22} className="search-icon-collapsed" onClick={() => setCollapsed(false)} style={{ cursor: 'pointer', color: '#94a3b8' }} /> : (
-                   <Input 
-                     prefix={<FiSearch style={{ color: '#bfbfbf', fontSize: '18px' }} />} 
-                     placeholder="Search" 
-                     className="custom-search" 
+                   <Input
+                     prefix={<FiSearch style={{ color: '#bfbfbf', fontSize: '18px' }} />}
+                     placeholder="Search users or workspaces"
+                     className="custom-search"
+                     allowClear
+                     value={searchQuery}
+                     onChange={(e) => setSearchQuery(e.target.value)}
                    />
                  )}
               </div>
             </div>
-            
-            <Menu 
-              theme="light" 
-              defaultSelectedKeys={['1']} 
-              mode="inline" 
+
+            <Menu
+              theme="light"
+              defaultSelectedKeys={['1']}
+              mode="inline"
               className="custom-menu"
             >
               {menuItems.map(item => (
@@ -130,14 +156,14 @@ const Dashboard = () => {
               ))}
             </Menu>
           </div>
-          
+
           <div className="sider-bottom" style={{ transition: 'all 0.3s ease', padding: collapsed ? '20px 0' : '20px', display: 'flex', justifyContent: 'center' }}>
             <div className="user-profile" style={{ display: 'flex', flexDirection: collapsed ? 'column' : 'row', alignItems: 'center', gap: '12px', width: '100%', overflow: 'hidden' }}>
-              <Avatar src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${userProfile.name}`} size={44} style={{ backgroundColor: '#13c2c2', flexShrink: 0 }} />
+              <UserAvatar name={userProfile?.name} role={userProfile?.role} size={44} />
               {!collapsed && (
                 <div className="user-details" style={{ flex: 1, overflow: 'hidden' }}>
-                  <strong style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{userProfile.name}</strong>
-                  <span style={{ display: 'block', fontSize: '12px', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{userProfile.email}</span>
+                  <strong style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{userProfile?.name || 'Loading…'}</strong>
+                  <span style={{ display: 'block', fontSize: '12px', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{userProfile?.email || ''}</span>
                 </div>
               )}
               {collapsed ? (
@@ -166,24 +192,45 @@ const Dashboard = () => {
             </div>
 
             <div className="panel-card" style={{ overflowX: 'auto' }}>
-              <Title level={5} style={{ marginBottom: 24, color: '#1e293b' }}>Active Users & Workspaces</Title>
-              <UsersList users={users} loading={loading} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <Title level={5} style={{ margin: 0, color: '#1e293b' }}>Active Users & Workspaces</Title>
+                {searchQuery && <span style={{ fontSize: 12, color: '#94a3b8' }}>{filteredUsers.length} of {users.length} shown</span>}
+              </div>
+              <UsersList users={filteredUsers} loading={loading} onConfigureWhatsApp={setWhatsAppTarget} />
             </div>
 
           </div>
         </Content>
       </Layout>
 
-      <Modal 
-        title="Add New Client" 
-        open={isModalOpen} 
+      <Modal
+        title={null}
+        open={isModalOpen}
         onCancel={() => setIsModalOpen(false)}
         footer={null}
         destroyOnClose
         centered
-        width={600}
+        width={620}
       >
-        <CreateUserForm onUserCreated={handleUserCreated} />
+        <CreateUserForm onUserCreated={handleUserCreated} onCancel={() => setIsModalOpen(false)} />
+      </Modal>
+
+      <Modal
+        title={whatsAppTarget ? `WhatsApp Config — ${whatsAppTarget.tenant_name}` : 'WhatsApp Config'}
+        open={!!whatsAppTarget}
+        onCancel={() => setWhatsAppTarget(null)}
+        footer={null}
+        destroyOnClose
+        centered
+        width={560}
+      >
+        {whatsAppTarget && (
+          <WhatsAppConfigModal
+            tenantId={whatsAppTarget.tenant_id}
+            tenantName={whatsAppTarget.tenant_name}
+            onClose={() => setWhatsAppTarget(null)}
+          />
+        )}
       </Modal>
 
     </Layout>

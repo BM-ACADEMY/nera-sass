@@ -6,9 +6,9 @@ import { C } from '../../constants/theme.js';
 // Header-scoped palette — matches the sidebar's indigo/purple accent so the
 // two chrome pieces read as one system. Kept local like the sidebar's SB.
 const HB = {
-  accent: '#7c6cf6',
-  card: '#1a1f33',
-  border: '#2a3050',
+  accent: '#1677ff',
+  card: '#ffffff',
+  border: '#e2e8f0',
 };
 
 const LABELS = {
@@ -96,7 +96,7 @@ export const Header = ({user, onMenuClick}) => {
   };
 
   const initial = user?.name ? user.name[0].toUpperCase() : 'K';
-  const roleLabel = user?.role ? (user.role.charAt(0).toUpperCase() + user.role.slice(1)) : 'Super Admin';
+  const roleLabel = 'User';
   const nameLabel = user?.name || 'Kamar';
 
   useEffect(() => {
@@ -137,44 +137,9 @@ export const Header = ({user, onMenuClick}) => {
             <span className="hide-mobile" style={{color:C.dim,fontSize:12,whiteSpace:'nowrap'}}>LeadOS by BM TechX</span>
           </div>
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
-          {/* Data Mode Select */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: HB.card, border: '1px solid ' + HB.border, borderRadius: 8, padding: '6px 10px' }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Mode</span>
-            <select
-              value={dataMode}
-              onChange={(e) => handleDataModeChange(e.target.value)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: dataMode === 'live' ? '#10b981' : '#f59e0b',
-                fontSize: 11,
-                fontWeight: 800,
-                outline: 'none',
-                cursor: 'pointer',
-                padding: 0
-              }}
-            >
-              <option value="live" style={{ background: C.surface, color: '#10b981' }}>🟢 Live API</option>
-              <option value="demo" style={{ background: C.surface, color: '#f59e0b' }}>🧪 Demo Sandbox</option>
-            </select>
-          </div>
+        <div style={{display:'flex',alignItems:'center',gap:20,flexShrink:0}}>
 
-          <div
-            onClick={() => setSearchOpen(true)}
-            className="hide-mobile"
-            style={{display:'flex',alignItems:'center',gap:8,background:HB.card,border:'1px solid '+HB.border,borderRadius:8,padding:'8px 12px', cursor:'pointer', transition: 'border-color 0.2s', width:190}}
-            onMouseEnter={e => e.currentTarget.style.borderColor = HB.accent}
-            onMouseLeave={e => e.currentTarget.style.borderColor = HB.border}
-          >
-            <Search size={14} color={C.muted} />
-            <span style={{color:C.muted,fontSize:11.5,whiteSpace:'nowrap'}}>Quick search...</span>
-            <span style={{marginLeft:'auto',color:C.dim,fontSize:10,fontWeight:600,background:C.surface,border:'1px solid '+HB.border,borderRadius:4,padding:'1px 5px'}}>⌘K</span>
-          </div>
-          <button className="hide-mobile" style={{position:'relative',width:36,height:36,borderRadius:8,background:HB.card,border:'1px solid '+HB.border,display:'flex',alignItems:'center',justifyContent:'center', cursor:'pointer',flexShrink:0}}>
-            <Bell size={15} color={C.muted} />
-            <div style={{position:'absolute',top:8,right:8,width:6,height:6,borderRadius:'50%',background:HB.accent,boxShadow:'0 0 0 2px '+HB.card}} />
-          </button>
+
           <div style={{display:'flex',alignItems:'center',gap:9,background:HB.card,border:'1px solid '+HB.border,borderRadius:8,padding:'6px 12px 6px 6px'}}>
             <div style={{width:28,height:28,borderRadius:'50%',background:HB.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:800,color:'#fff',flexShrink:0}}>{initial}</div>
             <div className="hide-mobile" style={{lineHeight:1.3}}>

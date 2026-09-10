@@ -1,23 +1,18 @@
 import { useState, useEffect } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { io as socketIO } from 'socket.io-client';
-import { Home, Users, LineChart, Inbox, Zap, FileText, Brain, BarChart2, Building2, Settings, LogOut, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Layers, UploadCloud, Columns, Sparkles, List, User, BookOpen, CheckSquare, MonitorPlay, Search, Activity, FileSearch, ShieldAlert, FileOutput, Share2, Eye, FileJson, GitPullRequest, Link as LinkIcon, Target, Shield, UserPlus, Heart, Megaphone, MessageCircle, Globe, ClipboardList, Wand2 } from 'lucide-react';
+import { Layout, Menu, Badge } from 'antd';
+import { 
+  Home, Users, Inbox, Zap, FileText, Brain, BarChart2, Building2, 
+  Settings, LogOut, Activity, Share2, User, Layers, MonitorPlay, Shield,
+  UploadCloud, List, Globe, Megaphone, MessageCircle, BookOpen, Sparkles, Columns,
+  CheckSquare, FileSearch, Target, FileOutput, ShieldAlert, Heart, ClipboardList, UserPlus
+} from 'lucide-react';
 import { C } from '../../constants/theme.js';
-
 import { api } from '../../services/api.js';
+import { useAuth } from '../../hooks/useAuth.js';
 
-// Sidebar-scoped palette (indigo/purple, floating-card look). Kept local so it
-// doesn't affect the app's global orange accent theme used elsewhere (buttons, charts, etc).
-const SB = {
-  bg: '#101c30',
-  card: '#1f1a42',
-  border: '#332a5e',
-  accent: '#7c6cf6',
-  accentSoft: '#7c6cf62a',
-  text: '#efedfb',
-  muted: '#8f88b8',
-  dim: '#635c8f',
-};
+const { Sider } = Layout;
 
 const NAV = [
   { path: '/dashboard', Icon: Home, label: 'Dashboard' },
@@ -35,10 +30,9 @@ const NAV = [
 
 export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }) => {
   const navigate = useNavigate();
-  const [isExpanded, setIsExpanded] = useState(window.innerWidth > 768);
-  const [allianceOpen, setAllianceOpen] = useState(false);
-  const [contentOsOpen, setContentOsOpen] = useState(false);
-  const [mafiyaOpen, setMafiyaOpen] = useState(false);
+  const location = useLocation();
+  const { user } = useAuth();
+  const [collapsed, setCollapsed] = useState(window.innerWidth <= 768);
   const [taskUnreadCount, setTaskUnreadCount] = useState(0);
 
   useEffect(() => {
@@ -64,89 +58,117 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
     return () => socket.disconnect();
   }, [navigate]);
 
-
   useEffect(() => {
     const handleResize = () => {
       if (window.innerWidth <= 768) {
-        setIsExpanded(true); // Auto expand on mobile for better usability in the offcanvas
+        setCollapsed(true);
       }
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const handleNavClick = (item) => {
-    if (item?.path === '/sales-tasks' && 'Notification' in window && Notification.permission === 'default') {
+  const handleMenuClick = ({ key }) => {
+    if (key === 'logout') {
+      onLogout();
+      return;
+    }
+    if (key === '/sales-tasks' && 'Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
     }
+    navigate(key);
     if (window.innerWidth <= 768) {
       setMobileOpen(false);
     }
   };
 
+  const menuItems = [
+    ...NAV.map(item => {
+      const badgeCount = item.taskBadge ? taskUnreadCount : (item.showBadge ? unreadCount : 0);
+      return {
+        key: item.path,
+        icon: <item.Icon size={16} />,
+        label: badgeCount > 0 ? (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{item.label}</span>
+            <Badge count={badgeCount} style={{ backgroundColor: '#1677ff' }} />
+          </div>
+        ) : item.label,
+      };
+    }),
+    { type: 'divider' },
+    
+    // AllianceOS (Commented out per request, using false && to hide)
+    ...(false ? [{
+      key: 'alliance',
+      icon: <Layers size={16} />,
+      label: 'AllianceOS',
+      children: [
+        { key: '/alliance/analytics', icon: <BarChart2 size={14} />, label: 'Analytics' },
+        { key: '/alliance/upload', icon: <UploadCloud size={14} />, label: 'Upload Leads' },
+        { key: '/alliance/prospects', icon: <List size={14} />, label: 'Prospects' },
+        { key: '/alliance/number-health', icon: <Activity size={14} />, label: 'Number Health' },
+        { key: '/alliance/email-setup', icon: <Globe size={14} />, label: 'Email Senders' },
+        { key: '/alliance/email-campaigns/new', icon: <Megaphone size={14} />, label: 'Email Campaigns' },
+        { key: '/alliance/whatsapp-campaigns/new', icon: <MessageCircle size={14} />, label: 'WhatsApp Campaigns' },
+        { key: '/alliance/replies', icon: <Inbox size={14} />, label: 'Replies' },
+        { key: '/alliance/ai-brain', icon: <BookOpen size={14} />, label: 'AI Brain' },
+        { key: '/alliance/prompts', icon: <Sparkles size={14} />, label: 'Prompts' },
+        { key: '/alliance/planner', icon: <Columns size={14} />, label: 'Campaign Planner' },
+        { key: '/alliance-inbox', icon: <Inbox size={14} />, label: 'WhatsApp Inbox' },
+      ]
+    }] : []),
 
+    // Content OS (Commented out)
+    ...(false ? [{
+      key: 'content-os',
+      icon: <MonitorPlay size={16} />,
+      label: 'Content OS',
+      children: [
+        { key: '/admin/content-os/approval', icon: <CheckSquare size={14} />, label: 'Approval Room' },
+        { key: '/admin/content-os/monitors', icon: <FileSearch size={14} />, label: 'Folder Monitors' },
+        { key: '/admin/content-os/scheduler', icon: <Target size={14} />, label: 'Scheduler' },
+        { key: '/admin/content-os/captions', icon: <Sparkles size={14} />, label: 'Caption Studio' },
+        { key: '/admin/content-os/thumbnail-brain', icon: <Brain size={14} />, label: 'Thumbnail Brain' },
+        { key: '/admin/content-os/social-connection', icon: <Share2 size={14} />, label: 'Social Accounts' },
+        { key: '/admin/content-os/tokens', icon: <Shield size={14} />, label: 'Token Health' },
+        { key: '/admin/content-os/logs', icon: <FileText size={14} />, label: 'Publish Logs' },
+        { key: '/admin/content-os/reach', icon: <BarChart2 size={14} />, label: 'Reach Report' },
+        { key: '/admin/content-os/failed', icon: <ShieldAlert size={14} />, label: 'Failed Jobs' },
+      ]
+    }] : []),
 
-  // --- Shared style helpers (rounded-pill / floating-card language) ---
+    // Mafiya OS (Commented out)
+    ...(false ? [{
+      key: 'mafiya-os',
+      icon: <Shield size={16} />,
+      label: 'Mafiya OS',
+      children: [
+        { key: '/mafiya/family', icon: <Users size={14} />, label: 'The Family' },
+        { key: '/mafiya/add-client', icon: <UserPlus size={14} />, label: 'GMB Clients' },
+        { key: '/mafiya/plans', icon: <Layers size={14} />, label: 'Mafiya Plans' },
+        { key: '/mafiya/loyalty', icon: <Heart size={14} />, label: 'Loyalty (Review)' },
+        { key: '/mafiya/street-posts', icon: <Megaphone size={14} />, label: 'Street Posts' },
+        { key: '/mafiya/rivals', icon: <Target size={14} />, label: 'Rival Families' },
+        { key: '/mafiya/gbp-insights', icon: <BarChart2 size={14} />, label: 'GBP Insights' },
+        { key: '/mafiya/citations', icon: <Globe size={14} />, label: 'Citation' },
+        { key: '/mafiya/orders', icon: <ClipboardList size={14} />, label: 'Mafia Orders' },
+        { key: '/mafiya/brain', icon: <Brain size={14} />, label: "Don's Brain" },
+        { key: '/mafiya/usage', icon: <Activity size={14} />, label: 'Usage' },
+      ]
+    }] : []),
 
-  // Top-level primary nav item — solid filled pill when active
-  const navItemStyle = (isActive) => ({
-    width: '100%',
-    height: 40,
-    borderRadius: 12,
-    border: 'none',
-    background: isActive ? SB.accent : 'transparent',
-    boxShadow: isActive ? `0 4px 14px ${SB.accent}55` : 'none',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: isExpanded ? 'flex-start' : 'center',
-    padding: isExpanded ? '0 13px' : '0',
-    cursor: 'pointer',
-    position: 'relative',
-    transition: 'background 0.15s, box-shadow 0.15s',
-    textDecoration: 'none',
-  });
-
-  // Collapsible section header (AllianceOS, Content OS, Thedal OS, Mafiya OS)
-  const sectionHeaderStyle = (open) => ({
-    width: '100%',
-    height: 40,
-    borderRadius: 12,
-    border: 'none',
-    background: open ? SB.card : 'transparent',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: isExpanded ? 'space-between' : 'center',
-    padding: isExpanded ? '0 12px' : '0',
-    cursor: 'pointer',
-    color: open ? SB.text : SB.muted,
-    transition: 'background 0.15s',
-  });
-
-  // Child / nested nav link — rounded pill, solid fill when active
-  const childLinkStyle = (isActive) => {
-    return {
-      width: '100%',
-      height: 32,
-      borderRadius: 9,
-      display: 'flex',
-      alignItems: 'center',
-      padding: '0 10px',
-      fontSize: 12.5,
-      color: isActive ? '#fff' : SB.muted,
-      background: isActive ? SB.accent : 'transparent',
-      textDecoration: 'none',
-      fontWeight: isActive ? 600 : 500,
-      opacity: 1,
-      pointerEvents: 'auto',
-      transition: 'background 0.12s, color 0.12s',
-    };
-  };
-  // Backward-compatible alias used further below
-  const getLinkStyle = childLinkStyle;
-
-  const sectionDividerStyle = { height: 1, background: SB.border, margin: '10px 6px', width: 'calc(100% - 12px)' };
-
-  const sectionLabelStyle = { margin: '14px 0 6px 10px', fontSize: 10.5, fontWeight: 700, color: SB.dim, textTransform: 'uppercase', letterSpacing: 0.8 };
+    {
+      key: '/workflows',
+      icon: <Activity size={16} />,
+      label: 'Workflow Logs',
+    },
+    {
+      key: '/settings',
+      icon: <Settings size={16} />,
+      label: 'Settings',
+    }
+  ];
 
   return (
     <>
@@ -154,335 +176,97 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
         <div
           className="mobile-overlay show-mobile"
           onClick={() => setMobileOpen(false)}
-          style={{ display: 'none' }}
+          style={{ display: 'none' }} // Ensure overlay handles correctly with app CSS
         />
       )}
-      <div
+      <Sider
+        collapsible
+        collapsed={collapsed}
+        onCollapse={(value) => setCollapsed(value)}
+        width={250}
+        theme="light"
+        trigger={null}
         className={`mobile-sidebar ${!mobileOpen ? 'closed' : ''}`}
         style={{
-          width: isExpanded ? 232 : 68,
-          transition: 'width 0.2s, transform 0.3s',
-          position: 'relative',
           height: '100vh',
-          margin: 0,
-          flexShrink: 0,
+          position: 'relative',
+          left: 0,
+          top: 0,
+          bottom: 0,
+          borderRight: `1px solid ${C.border}`,
+          zIndex: 10,
+          display: 'flex',
+          flexDirection: 'column'
         }}
       >
-        {/* Collapse toggle — a fixed handle straddling the right border, independent of expand state */}
-        <button
-          className="hide-mobile"
-          onClick={() => setIsExpanded(!isExpanded)}
-          style={{ position: 'absolute', top: 24, right: -12, background: SB.card, border: '1px solid ' + SB.border, borderRadius: '50%', width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: SB.muted, zIndex: 20, boxShadow: '0 2px 6px rgba(0,0,0,0.35)' }}
-        >
-          {isExpanded ? <ChevronLeft size={13} /> : <ChevronRight size={13} />}
-        </button>
+        {/* Custom Header with Logo and Toggle */}
+        <div style={{ height: 72, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', padding: collapsed ? '0' : '0 20px', transition: 'all 0.2s' }}>
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <div style={{ width: 36, height: 36, flexShrink: 0, background: '#4299e1', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <BarChart2 size={20} color="#fff" />
+            </div>
+          </div>
+          {!collapsed && (
+            <div onClick={() => setCollapsed(true)} style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, opacity: 0.5 }}>
+              <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
+              <div style={{ width: 12, height: 2, background: C.text, borderRadius: 2, alignSelf: 'flex-end' }} />
+            </div>
+          )}
+        </div>
+        {collapsed && (
+          <div onClick={() => setCollapsed(false)} style={{ height: 20, cursor: 'pointer', display: 'flex', justifyContent: 'center', opacity: 0.5, marginBottom: 10 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
+              <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
+            </div>
+          </div>
+        )}
 
-        <div style={{
-          width: '100%',
-          height: '100%',
-          background: SB.bg,
-          borderRight: '1px solid ' + SB.border,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: isExpanded ? 'flex-start' : 'center',
-          padding: '18px 0',
-          overflowY: 'auto',
-          overflowX: 'hidden',
-        }}>
-
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: isExpanded ? 'flex-start' : 'center', width: '100%', padding: isExpanded ? '0 14px' : '0', marginBottom: 10 }}>
-          <div style={{ width: 32, height: 32, flexShrink: 0, background: SB.accent, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Syne',sans-serif", fontSize: 14, fontWeight: 800, color: '#fff' }}>L</div>
-          {isExpanded && <span style={{ marginLeft: 9, fontFamily: "'Syne',sans-serif", fontSize: 16, fontWeight: 800, color: '#fff', letterSpacing: 0.2, whiteSpace: 'nowrap' }}>LeadOS</span>}
+        {/* Menu Area */}
+        <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+          <Menu
+            theme="light"
+            mode="inline"
+            selectedKeys={[location.pathname]}
+            onClick={handleMenuClick}
+            items={menuItems}
+            style={{ borderRight: 0, padding: '0 12px' }}
+          />
         </div>
 
-        <div style={{ ...sectionDividerStyle, margin: '0 6px 10px' }} />
-
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3, width: '100%', padding: isExpanded ? '0 10px' : '0 9px' }}>
-          {NAV.map((item) => {
-            const Icon = item.Icon;
-            const badgeCount = item.taskBadge ? taskUnreadCount : unreadCount;
-            const displayBadge = (item.showBadge || item.taskBadge) && badgeCount > 0;
-            return (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                onClick={() => handleNavClick(item)}
-                title={!isExpanded ? item.label : undefined}
-                style={({ isActive }) => navItemStyle(isActive)}
-              >
-                {({ isActive }) => (
-                  <>
-                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, flexShrink: 0 }}>
-                      <Icon size={16} color={isActive ? '#fff' : SB.muted} strokeWidth={2} />
-                      {displayBadge && (
-                        <div style={{ position: 'absolute', top: -7, left: 9, minWidth: 15, height: 15, padding: '0 3px', borderRadius: 8, background: isActive ? '#fff' : SB.accent, color: isActive ? SB.accent : '#fff', fontSize: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, boxSizing: 'border-box', border: `2px solid ${isActive ? SB.accent : SB.bg}` }}>
-                          {badgeCount > 99 ? '99+' : badgeCount}
-                        </div>
-                      )}
-                    </div>
-                    {isExpanded && <span style={{ marginLeft: 11, fontSize: 12.5, fontWeight: isActive ? 600 : 500, color: isActive ? '#fff' : SB.text }}>{item.label}</span>}
-                  </>
-                )}
-              </NavLink>
-            );
-          })}
-
-          <div style={sectionDividerStyle} />
-
-          {/* Alliance Parent Link with Nested Children */}
-          <div style={{ width: '100%' }}>
-            <button
-              onClick={() => {
-                setAllianceOpen(!allianceOpen);
-                if (!isExpanded) setIsExpanded(true); // Auto-expand sidebar if collapsed
-              }}
-              title={!isExpanded ? "AllianceOS" : undefined}
-              style={sectionHeaderStyle(allianceOpen)}
-            >
-              <div style={{ display: 'flex', alignItems: 'center' }}>
-                <Layers size={16} color={allianceOpen ? SB.text : SB.muted} strokeWidth={2} />
-                {isExpanded && <span style={{ marginLeft: 11, fontSize: 12.5, fontWeight: allianceOpen ? 600 : 500 }}>AllianceOS</span>}
+        {/* Custom Footer (User Profile) */}
+        <div style={{ padding: collapsed ? '20px 0' : '20px', borderTop: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', background: '#f8fafc', margin: collapsed ? '0' : '0 12px 12px 12px', borderRadius: collapsed ? 0 : 12, cursor: 'pointer' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ position: 'relative' }}>
+              <div style={{ width: 36, height: 36, borderRadius: '50%', background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 600, fontSize: 14 }}>
+                {user?.name ? user.name[0].toUpperCase() : 'U'}
               </div>
-              {isExpanded && (
-                allianceOpen ? <ChevronUp size={13} color={SB.muted} /> : <ChevronDown size={13} color={SB.muted} />
-              )}
-            </button>
-
-            {/* Child Links */}
-            {isExpanded && allianceOpen && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 10, marginTop: 4, marginBottom: 6 }}>
-                <NavLink to="/alliance/analytics" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <BarChart2 size={13} style={{ marginRight: 8 }} /> Analytics
-                </NavLink>
-
-                <NavLink to="/alliance/upload" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <UploadCloud size={13} style={{ marginRight: 8 }} /> Upload Leads
-                </NavLink>
-
-                <NavLink to="/alliance/prospects" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <List size={13} style={{ marginRight: 8 }} /> Prospects
-                </NavLink>
-
-                <NavLink to="/alliance/number-health" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Activity size={13} style={{ marginRight: 8 }} /> Number Health
-                </NavLink>
-
-                <NavLink to="/alliance/email-setup" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Globe size={13} style={{ marginRight: 8 }} /> Email Senders
-                </NavLink>
-
-                <NavLink to="/alliance/email-campaigns/new" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Megaphone size={13} style={{ marginRight: 8 }} /> Email Campaigns
-                </NavLink>
-
-                <NavLink to="/alliance/whatsapp-campaigns/new" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <MessageCircle size={13} style={{ marginRight: 8 }} /> WhatsApp Campaigns
-                </NavLink>
-
-                <NavLink to="/alliance/replies" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Inbox size={13} style={{ marginRight: 8 }} /> Replies
-                </NavLink>
-
-                <NavLink to="/alliance/ai-brain" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <BookOpen size={13} style={{ marginRight: 8 }} /> AI Brain
-                </NavLink>
-
-                <NavLink to="/alliance/prompts" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Sparkles size={13} style={{ marginRight: 8 }} /> Prompts
-                </NavLink>
-
-                <NavLink to="/alliance/planner" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Columns size={13} style={{ marginRight: 8 }} /> Campaign Planner
-                </NavLink>
-
-                <NavLink to="/alliance-inbox" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Inbox size={13} style={{ marginRight: 8 }} /> WhatsApp Inbox
-                </NavLink>
-
+              <div style={{ position: 'absolute', bottom: 0, right: -2, width: 10, height: 10, borderRadius: '50%', background: '#48bb78', border: '2px solid #fff' }} />
+            </div>
+            {!collapsed && (
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{user?.name || 'User'}</span>
+                <span style={{ fontSize: 11, color: C.muted }}>{user?.role === 'admin' ? 'Administrator' : 'Product Manager'}</span>
               </div>
             )}
           </div>
-
-          {/* Content OS Parent Link */}
-          <div style={{ width: '100%' }}>
-            <button
-              onClick={() => {
-                setContentOsOpen(!contentOsOpen);
-                if (!isExpanded) setIsExpanded(true);
-              }}
-              title={!isExpanded ? "Content OS" : undefined}
-              style={sectionHeaderStyle(contentOsOpen)}
-            >
-              <div style={{ display: 'flex', alignItems: 'center' }}>
-                <MonitorPlay size={16} color={contentOsOpen ? SB.text : SB.muted} strokeWidth={2} />
-                {isExpanded && <span style={{ marginLeft: 11, fontSize: 12.5, fontWeight: contentOsOpen ? 600 : 500 }}>Content OS</span>}
-              </div>
-              {isExpanded && (
-                contentOsOpen ? <ChevronUp size={13} color={SB.muted} /> : <ChevronDown size={13} color={SB.muted} />
-              )}
-            </button>
-
-            {/* Child Links */}
-            {isExpanded && contentOsOpen && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 10, marginTop: 4, marginBottom: 6 }}>
-                <NavLink to="/admin/content-os/approval" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <CheckSquare size={13} style={{ marginRight: 8 }} /> Approval Room
-                </NavLink>
-
-                <NavLink to="/admin/content-os/monitors" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <FileSearch size={13} style={{ marginRight: 8 }} /> Folder Monitors
-                </NavLink>
-
-                <NavLink to="/admin/content-os/scheduler" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Target size={13} style={{ marginRight: 8 }} /> Scheduler
-                </NavLink>
-
-                <NavLink to="/admin/content-os/captions" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Sparkles size={13} style={{ marginRight: 8 }} /> Caption Studio
-                </NavLink>
-
-                <NavLink to="/admin/content-os/thumbnail-brain" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Brain size={13} style={{ marginRight: 8 }} /> Thumbnail Brain
-                </NavLink>
-
-                <NavLink to="/admin/content-os/social-connection" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Share2 size={13} style={{ marginRight: 8 }} /> Social Accounts
-                </NavLink>
-
-                <NavLink to="/admin/content-os/tokens" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <Shield size={13} style={{ marginRight: 8 }} /> Token Health
-                </NavLink>
-
-                <NavLink to="/admin/content-os/logs" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <FileText size={13} style={{ marginRight: 8 }} /> Publish Logs
-                </NavLink>
-
-                <NavLink to="/admin/content-os/reach" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <BarChart2 size={13} style={{ marginRight: 8 }} /> Reach Report
-                </NavLink>
-
-                <NavLink to="/admin/content-os/failed" onClick={handleNavClick} style={({ isActive }) => childLinkStyle(isActive)}>
-                  <ShieldAlert size={13} style={{ marginRight: 8 }} /> Failed Jobs
-                </NavLink>
-              </div>
-            )}
-          </div>
-
-
-
-          {/* Mafiya OS Section */}
-          <div style={{ width: '100%' }}>
-            <button
-              onClick={() => {
-                setMafiyaOpen(!mafiyaOpen);
-                if (!isExpanded) setIsExpanded(true);
-              }}
-              title={!isExpanded ? "Mafiya OS" : undefined}
-              style={sectionHeaderStyle(mafiyaOpen)}
-            >
-              <div style={{ display: 'flex', alignItems: 'center' }}>
-                <Shield size={16} color={mafiyaOpen ? SB.text : SB.muted} strokeWidth={2} />
-                {isExpanded && <span style={{ marginLeft: 11, fontSize: 12.5, fontWeight: mafiyaOpen ? 600 : 500 }}>Mafiya OS</span>}
-              </div>
-              {isExpanded && (
-                mafiyaOpen ? <ChevronUp size={13} color={SB.muted} /> : <ChevronDown size={13} color={SB.muted} />
-              )}
-            </button>
-
-            {/* Child Links */}
-            {isExpanded && mafiyaOpen && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 10, marginTop: 4, marginBottom: 6 }}>
-                <NavLink to="/mafiya/family" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'The Family')}>
-                  <Users size={13} style={{ marginRight: 8 }} /> The Family
-                </NavLink>
-
-                <NavLink to="/mafiya/add-client" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'GMB Clients')}>
-                  <UserPlus size={13} style={{ marginRight: 8 }} /> GMB Clients
-                </NavLink>
-
-                <NavLink to="/mafiya/plans" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Mafiya Plans')}>
-                  <Layers size={13} style={{ marginRight: 8 }} /> Mafiya Plans
-                </NavLink>
-
-
-
-                <NavLink to="/mafiya/loyalty" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Loyalty (Review)')}>
-                  <Heart size={13} style={{ marginRight: 8 }} /> Loyalty (Review)
-                </NavLink>
-
-                <NavLink to="/mafiya/street-posts" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Street Posts')}>
-                  <Megaphone size={13} style={{ marginRight: 8 }} /> Street Posts
-                </NavLink>
-
-                <NavLink to="/mafiya/rivals" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Rival Families')}>
-                  <Target size={13} style={{ marginRight: 8 }} /> Rival Families
-                </NavLink>
-
-                <NavLink to="/mafiya/gbp-insights" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'GBP Insights')}>
-                  <BarChart2 size={13} style={{ marginRight: 8 }} /> GBP Insights
-                </NavLink>
-
-                <NavLink to="/mafiya/citations" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Citation')}>
-                  <Globe size={13} style={{ marginRight: 8 }} /> Citation
-                </NavLink>
-
-                <NavLink to="/mafiya/orders" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Mafia Orders')}>
-                  <ClipboardList size={13} style={{ marginRight: 8 }} /> Mafia Orders
-                </NavLink>
-
-                <NavLink to="/mafiya/brain" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, "Don's Brain")}>
-                  <Brain size={13} style={{ marginRight: 8 }} /> Don's Brain
-                </NavLink>
-
-                <NavLink to="/mafiya/usage" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Usage')}>
-                  <Activity size={13} style={{ marginRight: 8 }} /> Usage
-                </NavLink>
-
-              </div>
-            )}
-          </div>
+          {!collapsed && (
+            <div onClick={(e) => { e.stopPropagation(); onLogout(); }} title="Sign Out" style={{ padding: 4, opacity: 0.5 }}>
+              <LogOut size={16} />
+            </div>
+          )}
         </div>
-
-        <div style={sectionDividerStyle} />
-
-        <div style={{ padding: isExpanded ? '0 10px' : '0 9px', display: 'flex', flexDirection: 'column', gap: 3, width: '100%' }}>
-          <NavLink
-            to="/workflows"
-            onClick={handleNavClick}
-            title={!isExpanded ? "Workflow Logs" : undefined}
-            style={({ isActive }) => navItemStyle(isActive)}
-          >
-            {({ isActive }) => (
-              <>
-                <Activity size={16} color={isActive ? '#fff' : SB.muted} strokeWidth={2} />
-                {isExpanded && <span style={{ marginLeft: 11, fontSize: 12.5, fontWeight: isActive ? 600 : 500, color: isActive ? '#fff' : SB.text }}>Workflow Logs</span>}
-              </>
-            )}
-          </NavLink>
-          <NavLink
-            to="/settings"
-            onClick={handleNavClick}
-            title={!isExpanded ? "Settings" : undefined}
-            style={({ isActive }) => navItemStyle(isActive)}
-          >
-            {({ isActive }) => (
-              <>
-                <Settings size={16} color={isActive ? '#fff' : SB.muted} strokeWidth={2} />
-                {isExpanded && <span style={{ marginLeft: 11, fontSize: 12.5, fontWeight: isActive ? 600 : 500, color: isActive ? '#fff' : SB.text }}>Settings</span>}
-              </>
-            )}
-          </NavLink>
-          <button
-            onClick={onLogout}
-            title={!isExpanded ? "Logout" : undefined}
-            style={{ width: '100%', height: 40, borderRadius: 12, border: 'none', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: isExpanded ? 'flex-start' : 'center', padding: isExpanded ? '0 13px' : '0', cursor: 'pointer' }}
-          >
-            <LogOut size={16} color={SB.muted} strokeWidth={2} />
-            {isExpanded && <span style={{ marginLeft: 11, fontSize: 12.5, fontWeight: 500, color: SB.text }}>Logout</span>}
-          </button>
-        </div>
-        </div>
-      </div>
+      </Sider>
+      <style>{`
+        .ant-menu-light .ant-menu-item-selected {
+          background-color: #ebf4ff !important;
+          color: #3182ce !important;
+          font-weight: 600;
+        }
+        .ant-menu-light .ant-menu-item-selected .lucide {
+          color: #3182ce !important;
+        }
+      `}</style>
     </>
   );
 };

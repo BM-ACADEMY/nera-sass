@@ -1136,9 +1136,20 @@ app.get('/api/auth/google/callback', handleGoogleCallback); // Map the standard 
 app.get('/api/whatsapp-media/:mediaId', async (req, res) => {
   try {
     const { mediaId } = req.params;
-    // Graph API endpoints accept the page access token for media download
-    const waToken = process.env.META_PAGE_ACCESS_TOKEN; 
-    
+    const { leadId } = req.query;
+
+    // Resolve the token for the LeadOS client that owns this media, same
+    // fallback pattern used everywhere else (client's own token first,
+    // the shared env token only as a default for clients without one).
+    let waToken = process.env.META_PAGE_ACCESS_TOKEN;
+    if (leadId) {
+      const leadRes = await pool.query(
+        `SELECT c.wa_access_token FROM leads l LEFT JOIN clients c ON l.client_id = c.id WHERE l.id = $1`,
+        [leadId]
+      );
+      waToken = leadRes.rows[0]?.wa_access_token || waToken;
+    }
+
     // 1. Get the actual download URL from Meta
     const metaRes = await axios.get(`https://graph.facebook.com/v18.0/${mediaId}`, {
       headers: { Authorization: `Bearer ${waToken}` }
@@ -4094,6 +4105,7 @@ app.patch('/api/meta/whatsapp/phone-numbers/:phoneId/map', auth, async (req, res
 app.get('/api/clients', auth, async (req, res) => {
   try {
     await Promise.all([clientsWhatsAppStatusReady, metaInventoryReady]);
+    const { tenant_id } = req.query;
     const { rows } = await pool.query(`
       SELECT c.*,
         meta_phone.profile_picture_url AS meta_profile_picture_url,
@@ -4110,8 +4122,9 @@ app.get('/api/clients', auth, async (req, res) => {
         (SELECT COUNT(*) FROM leads l WHERE l.client_id = c.id AND l.status = 'converted') as converted_count
       FROM clients c
       LEFT JOIN meta_whatsapp_phone_numbers meta_phone ON meta_phone.client_id = c.id
+      ${tenant_id ? 'WHERE c.tenant_id = $1' : ''}
       ORDER BY c.created_at DESC
-    `);
+    `, tenant_id ? [tenant_id] : []);
     res.json({ clients: rows });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -4121,15 +4134,16 @@ app.get('/api/clients', auth, async (req, res) => {
 app.post('/api/clients', auth, async (req, res) => {
   try {
     await clientsWhatsAppStatusReady;
-    const { name, wa_category, wa_description, wa_address, wa_email, wa_website } = req.body;
+    const { name, wa_category, wa_description, wa_address, wa_email, wa_website, tenant_id } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Business name is required' });
     const { rows } = await pool.query(`
-      INSERT INTO clients (name, wa_category, wa_description, wa_address, wa_email, wa_website, status, whatsapp_status, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, 'active', 'not_configured', NOW())
+      INSERT INTO clients (name, wa_category, wa_description, wa_address, wa_email, wa_website, status, whatsapp_status, tenant_id, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, 'active', 'not_configured', $7, NOW())
       RETURNING *
-    `, [name.trim(), wa_category || 'OTHER', wa_description || null, wa_address || null, wa_email || null, wa_website || null]);
+    `, [name.trim(), wa_category || 'OTHER', wa_description || null, wa_address || null, wa_email || null, wa_website || null, tenant_id || DEFAULT_TENANT_ID]);
     res.status(201).json({ client: rows[0] });
   } catch (err) {
+    console.error('[Clients] POST /api/clients failed:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });

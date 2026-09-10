@@ -1452,10 +1452,12 @@ return (
                       {m.media_url && (() => {
                         let fullMediaUrl = m.media_url.startsWith('http') ? m.media_url : `${SOCKET_URL}${m.media_url}`;
 
-                        // Proxy WhatsApp Graph API media URLs
+                        // Proxy WhatsApp Graph API media URLs, passing the LeadOS
+                        // lead so the server can use that client's own WhatsApp
+                        // token instead of always falling back to the shared one.
                         if (fullMediaUrl.includes('graph.facebook.com')) {
                           const mediaId = fullMediaUrl.split('/').pop();
-                          fullMediaUrl = `${SOCKET_URL}/api/whatsapp-media/${mediaId}`;
+                          fullMediaUrl = `${SOCKET_URL}/api/whatsapp-media/${mediaId}${!alliance && activeLeadId ? `?leadId=${activeLeadId}` : ''}`;
                         }
 
                         return (

@@ -65,17 +65,6 @@ function LoginPage({ login, authLoading, authError }) {
   };
 
   return (
-    <ConfigProvider 
-      theme={{ 
-        token: { 
-          colorPrimary: '#2563eb',
-          fontFamily: "'Inter', system-ui, sans-serif",
-          borderRadius: 8,
-          controlHeight: 44,
-          fontSize: 14,
-        } 
-      }}
-    >
       <div style={{
         minHeight: '100vh',
         width: '100%',
@@ -174,7 +163,6 @@ function LoginPage({ login, authLoading, authError }) {
           </div>
         </Card>
       </div>
-    </ConfigProvider>
   );
 }
 
@@ -276,36 +264,48 @@ export default function App() {
   const [leadRefresh, setLeadRefresh] = useState(0);
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-        <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
-        <Route
-          path="/login"
-          element={
-            user ? (
-              <Navigate to="/dashboard" replace />
-            ) : (
-              <LoginPage login={login} authLoading={authLoading} authError={authError} />
-            )
-          }
-        />
-        <Route
-          path="*"
-          element={
-            user ? (
-              <AppLayout
-                user={user}
-                logout={logout}
-                leadRefresh={leadRefresh}
-                setLeadRefresh={setLeadRefresh}
-              />
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
-        />
-      </Routes>
-    </BrowserRouter>
+    <ConfigProvider 
+      theme={{ 
+        token: { 
+          colorPrimary: '#1677ff',
+          fontFamily: "'Inter', system-ui, sans-serif",
+          borderRadius: 8,
+          controlHeight: 40,
+          fontSize: 14,
+        } 
+      }}
+    >
+      <BrowserRouter>
+        <Routes>
+          <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+          <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
+          <Route
+            path="/login"
+            element={
+              user ? (
+                <Navigate to="/dashboard" replace />
+              ) : (
+                <LoginPage login={login} authLoading={authLoading} authError={authError} />
+              )
+            }
+          />
+          <Route
+            path="*"
+            element={
+              user ? (
+                <AppLayout
+                  user={user}
+                  logout={logout}
+                  leadRefresh={leadRefresh}
+                  setLeadRefresh={setLeadRefresh}
+                />
+              ) : (
+                <Navigate to="/login" replace />
+              )
+            }
+          />
+        </Routes>
+      </BrowserRouter>
+    </ConfigProvider>
   );
 }

@@ -6,6 +6,7 @@ const { requireAuth } = require('../middleware/authMiddleware');
 router.post('/login', authController.login);
 
 // Protected Admin Routes
+router.get('/me', requireAuth, authController.me);
 router.post('/users', requireAuth, authController.createUserAndTenant);
 router.get('/users', requireAuth, authController.getUsers);
 
