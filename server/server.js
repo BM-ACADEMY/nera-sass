@@ -1055,6 +1055,7 @@ const integrationsRoutes = require('./routes/integrationsRoutes');
 
 const salesosRoutes = require('./routes/salesos');
 
+app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api', salesosRoutes);
 app.use('/api/knowledge', knowledgeRoutes); // We should use auth but let's check auth middleware later
 app.use('/api/upload', uploadRoutes);
