@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { io as socketIO } from 'socket.io-client';
 import { Home, Users, LineChart, Inbox, Zap, FileText, Brain, BarChart2, Building2, Settings, LogOut, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Layers, UploadCloud, Columns, Sparkles, List, User, BookOpen, CheckSquare, MonitorPlay, Search, Activity, FileSearch, ShieldAlert, FileOutput, Share2, Eye, FileJson, GitPullRequest, Link as LinkIcon, Target, Shield, UserPlus, Heart, Megaphone, MessageCircle, Globe, ClipboardList, Wand2 } from 'lucide-react';
 import { C } from '../../constants/theme.js';
-import { useClient } from '../../contexts/ClientContext.jsx';
+
 import { api } from '../../services/api.js';
 
 // Sidebar-scoped palette (indigo/purple, floating-card look). Kept local so it
@@ -38,12 +38,8 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
   const [isExpanded, setIsExpanded] = useState(window.innerWidth > 768);
   const [allianceOpen, setAllianceOpen] = useState(false);
   const [contentOsOpen, setContentOsOpen] = useState(false);
-  const [thedalOsOpen, setThedalOsOpen] = useState(false);
   const [mafiyaOpen, setMafiyaOpen] = useState(false);
-  const [rankDropCount, setRankDropCount] = useState(0);
   const [taskUnreadCount, setTaskUnreadCount] = useState(0);
-
-  const { clients, plans, activeClient, setActiveClient } = useClient();
 
   useEffect(() => {
     const loadUnread = () => api.get('/sales-tasks/unread-count')
@@ -68,30 +64,6 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
     return () => socket.disconnect();
   }, [navigate]);
 
-  // Fetch unread rank drop alert count
-  useEffect(() => {
-    const fetchRankDropCount = async () => {
-      try {
-        const token = localStorage.getItem('leados_token');
-        const API_URL = import.meta.env.VITE_API_URL || '';
-        const url = activeClient
-          ? `${API_URL}/api/thedal/rankdropalert/count?client=${encodeURIComponent(activeClient.business_name || activeClient.client_name)}`
-          : `${API_URL}/api/thedal/rankdropalert/count`;
-        const res = await fetch(url, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setRankDropCount(data.count || 0);
-        }
-      } catch (e) {
-        console.error('Error fetching rank drop count:', e);
-       }
-    };
-    fetchRankDropCount();
-    const interval = setInterval(fetchRankDropCount, 5 * 60 * 1000); // every 5 mins
-    return () => clearInterval(interval);
-  }, [activeClient]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -112,14 +84,7 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
     }
   };
 
-  const isFeatureEnabled = (featureName) => {
-    if (!activeClient) return true; // Enable all if no client selected
 
-    const plan = plans.find(p => p.name === activeClient.plan);
-    if (!plan || !plan.features) return false;
-
-    return plan.features.some(f => f.feature_name === featureName);
-  };
 
   // --- Shared style helpers (rounded-pill / floating-card language) ---
 
@@ -158,8 +123,7 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
   });
 
   // Child / nested nav link — rounded pill, solid fill when active
-  const childLinkStyle = (isActive, featureName = null) => {
-    const enabled = featureName ? isFeatureEnabled(featureName) : true;
+  const childLinkStyle = (isActive) => {
     return {
       width: '100%',
       height: 32,
@@ -172,8 +136,8 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
       background: isActive ? SB.accent : 'transparent',
       textDecoration: 'none',
       fontWeight: isActive ? 600 : 500,
-      opacity: enabled ? 1 : 0.3,
-      pointerEvents: enabled ? 'auto' : 'none',
+      opacity: 1,
+      pointerEvents: 'auto',
       transition: 'background 0.12s, color 0.12s',
     };
   };
@@ -404,116 +368,7 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
             )}
           </div>
 
-          {/* Thedal OS Parent Link */}
-          <div style={{ width: '100%' }}>
-            <button
-              onClick={() => {
-                setThedalOsOpen(!thedalOsOpen);
-                if (!isExpanded) setIsExpanded(true);
-              }}
-              title={!isExpanded ? "Thedal OS" : undefined}
-              style={sectionHeaderStyle(thedalOsOpen)}
-            >
-              <div style={{ display: 'flex', alignItems: 'center' }}>
-                <Search size={16} color={thedalOsOpen ? SB.text : SB.muted} strokeWidth={2} />
-                {isExpanded && <span style={{ marginLeft: 11, fontSize: 12.5, fontWeight: thedalOsOpen ? 600 : 500 }}>Thedal OS</span>}
-              </div>
-              {isExpanded && (
-                thedalOsOpen ? <ChevronUp size={13} color={SB.muted} /> : <ChevronDown size={13} color={SB.muted} />
-              )}
-            </button>
 
-            {/* Child Links */}
-            {isExpanded && thedalOsOpen && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 10, marginTop: 4, marginBottom: 6 }}>
-                {/* Client Selector Dropdown */}
-                <div style={{ padding: '2px 0 10px' }}>
-                  <select
-                    value={activeClient ? activeClient.id : ''}
-                    onChange={(e) => {
-                      const client = clients.find(c => c.id === parseInt(e.target.value));
-                      setActiveClient(client || null);
-                    }}
-                    style={{ width: '100%', background: SB.card, border: `1px solid ${SB.border}`, borderRadius: 8, padding: '7px 10px', color: SB.text, fontSize: 11.5, outline: 'none', cursor: 'pointer', appearance: 'none' }}
-                  >
-                    <option value="" style={{ background: SB.card, color: '#fff' }}>All Clients (No Selection)</option>
-                    {clients.map(c => (
-                      <option key={c.id} value={c.id} style={{ background: SB.card, color: '#fff' }}>
-                        {c.business_name && c.client_name && c.business_name !== c.client_name
-                          ? `${c.business_name} (${c.client_name})`
-                          : c.business_name || c.client_name} - {c.plan}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <NavLink to="/thedal/keyword-tracking" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Keyword Tracking Limit')}>
-                  <Activity size={13} style={{ marginRight: 8 }} /> Keyword Tracking
-                </NavLink>
-
-                <NavLink to="/thedal/gsc-intel" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'GSC Intel Access')}>
-                  <LineChart size={13} style={{ marginRight: 8 }} /> GSC Intel
-                </NavLink>
-
-                <NavLink to="/thedal/on-page-audit" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'On-Page Audit Scans/mo')}>
-                  <FileSearch size={13} style={{ marginRight: 8 }} /> On-Page Audit
-                </NavLink>
-
-                <NavLink to="/thedal/content-factory" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Content Factory Drafts/mo')}>
-                  <Brain size={13} style={{ marginRight: 8 }} /> Content Factory
-                </NavLink>
-
-                <NavLink to="/thedal/monthly-report" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Monthly PDF Report')}>
-                  <FileOutput size={13} style={{ marginRight: 8 }} /> Monthly PDF Report
-                </NavLink>
-
-                <NavLink to="/thedal/rank-drop-alert" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Rank Drop Alert')}>
-                  <ShieldAlert size={13} style={{ marginRight: 8 }} /> Rank Drop Alert
-                  {rankDropCount > 0 && (
-                    <span style={{ marginLeft: 'auto', background: C.red, color: '#fff', fontSize: 9.5, fontWeight: 800, padding: '2px 6px', borderRadius: 20, minWidth: 17, textAlign: 'center', lineHeight: '15px' }}>
-                      {rankDropCount}
-                    </span>
-                  )}
-                </NavLink>
-
-                <div style={sectionLabelStyle}>Manage</div>
-
-                <NavLink to="/thedal/clients" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive)}>
-                  <Target size={13} style={{ marginRight: 8 }} /> Clients
-                </NavLink>
-
-                <NavLink to="/thedal/plan-subscription" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive)}>
-                  <Activity size={13} style={{ marginRight: 8 }} /> Plan Subscription
-                </NavLink>
-
-                <NavLink to="/thedal/plans" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive)}>
-                  <Activity size={13} style={{ marginRight: 8 }} /> Plans & Pricing
-                </NavLink>
-
-                <div style={sectionLabelStyle}>Intelligence</div>
-
-                <NavLink to="/thedal/serp-radar" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'SERP Radar Access')}>
-                  <Eye size={13} style={{ marginRight: 8 }} /> SERP Radar
-                </NavLink>
-
-                <NavLink to="/thedal/gap-hunter" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Gap Hunter Access')}>
-                  <Target size={13} style={{ marginRight: 8 }} /> Gap Hunter
-                </NavLink>
-
-                <NavLink to="/thedal/schema-library" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Schema Library Builder')}>
-                  <FileJson size={13} style={{ marginRight: 8 }} /> Schema Library
-                </NavLink>
-
-                <NavLink to="/thedal/competitor-spy" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Competitor Spy Limit')}>
-                  <GitPullRequest size={13} style={{ marginRight: 8 }} /> Competitor Spy
-                </NavLink>
-
-                <NavLink to="/thedal/backlink-tracker" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Backlink Tracker CRM')}>
-                  <LinkIcon size={13} style={{ marginRight: 8 }} /> Backlink Tracker
-                </NavLink>
-              </div>
-            )}
-          </div>
 
           {/* Mafiya OS Section */}
           <div style={{ width: '100%' }}>
@@ -549,9 +404,7 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
                   <Layers size={13} style={{ marginRight: 8 }} /> Mafiya Plans
                 </NavLink>
 
-                <NavLink to="/thedal/keyword-tracking" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Turf Control')}>
-                  <Target size={13} style={{ marginRight: 8 }} /> Turf Control
-                </NavLink>
+
 
                 <NavLink to="/mafiya/loyalty" onClick={handleNavClick} style={({ isActive }) => getLinkStyle(isActive, 'Loyalty (Review)')}>
                   <Heart size={13} style={{ marginRight: 8 }} /> Loyalty (Review)

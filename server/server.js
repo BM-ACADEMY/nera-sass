@@ -1034,22 +1034,7 @@ const pipelineRoutes = require('./routes/pipeline');
 const analyzeRoutes = require('./routes/analyze');
 const contentOsRoutes = require('./routes/contentos');
 const chatbotRoutes = require('./routes/chatbot');
-const thedalRoutes = require('./routes/thedal');
-const thedalClientsRoutes = require('./routes/thedal-clients');
-const thedalPlansRoutes = require('./routes/thedal-plans');
-const thedalAuditRoutes = require('./routes/thedal-audit');
-const thedalSeoAuditRoutes = require('./routes/thedal-seo-audit');
-const thedalKeywordTrackingRoutes = require('./routes/thedal-keywordtracking');
-const thedalGscIntelRoutes = require('./routes/thedal-gsc-intel');
-const thedalSerpRadarRoutes = require('./routes/thedal-serp-radar');
-const thedalGapHunterRoutes = require('./routes/thedal-gap-hunter');
-const thedalSchemaLibraryRoutes = require('./routes/thedal-schema-library');
-const thedalCompetitorSpyRoutes = require('./routes/thedal-competitor-spy');
-const thedalBacklinksRoutes = require('./routes/thedal-backlinks');
-const thedalCitationsRoutes = require('./routes/thedal-citations');
-const thedalLocalSeoBridgeRoutes = require('./routes/thedal-localseobridge');
-const thedalRankDropAlertRoutes = require('./routes/thedal-rank-drop-alert');
-const thedalContentRoutes = require('./routes/thedal-content');
+
 const contentRoutes = require('./routes/contentRoutes');
 const integrationsRoutes = require('./routes/integrationsRoutes');
 
@@ -1111,23 +1096,7 @@ app.use('/api/content', internalAuth, contentRoutes);
 app.use('/api/integrations', internalAuth, integrationsRoutes);
 app.use('/api/content-os', internalAuth, contentOsRoutes);
 
-// Thedal OS Routes
-app.use('/api/thedal/audit', auth, thedalAuditRoutes);
-app.use('/api/thedal/plans', auth, thedalPlansRoutes);
-app.use('/api/thedal/seo-audit', auth, thedalSeoAuditRoutes);
-app.use('/api/thedal/keywordtracking', auth, thedalKeywordTrackingRoutes);
-app.use('/api/thedal/gscintel', thedalGscIntelRoutes); // Removed auth so OAuth browser redirects work
-app.use('/api/thedal/serpradar', auth, thedalSerpRadarRoutes);
-app.use('/api/thedal/gaphunter', auth, thedalGapHunterRoutes);
-app.use('/api/thedal/schemalibrary', auth, thedalSchemaLibraryRoutes);
-app.use('/api/thedal/competitorspy', auth, thedalCompetitorSpyRoutes);
-app.use('/api/thedal/rankdropalert', auth, thedalRankDropAlertRoutes);
-app.use('/api/thedal/backlinks', auth, thedalBacklinksRoutes);
-app.use('/api/thedal/citations', auth, thedalCitationsRoutes);
-app.use('/api/thedal/localseobridge', auth, thedalLocalSeoBridgeRoutes);
-app.use('/api/thedal/clients', auth, thedalClientsRoutes);
-app.use('/api/thedal/content', auth, thedalContentRoutes);
-app.use('/api/thedal', auth, thedalRoutes);
+
 
 // ── MAFIYA OS ROUTES ──────────────────────────────────────
 const mafiyaClientsRoutes = require('./routes/mafiya-clients');

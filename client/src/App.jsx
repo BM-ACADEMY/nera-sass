@@ -40,24 +40,7 @@ import { EmailCampaignBuilder } from './views/alliance/EmailCampaignBuilder.jsx'
 import { WhatsAppCampaignBuilder } from './views/alliance/WhatsAppCampaignBuilder.jsx';
 import ContentOSDashboard from './contentos/ContentOSDashboard.jsx';
 
-import KeywordTracking from './views/thedal/KeywordTracking.jsx';
-import ThedalHQ from './views/thedal/ThedalHQ.jsx';
-import GscIntel from './views/thedal/GscIntel.jsx';
-import OnPageAudit from './views/thedal/OnPageAudit.jsx';
-import ContentFactory from './views/thedal/ContentFactory.jsx';
-import MonthlyReport from './views/thedal/MonthlyReport.jsx';
-import RankDropAlert from './views/thedal/RankDropAlert.jsx';
-import ClientOnboard from './views/thedal/ClientOnboard.jsx';
-import SerpRadar from './views/thedal/SerpRadar.jsx';
-import GapHunter from './views/thedal/GapHunter.jsx';
-import SchemaLibrary from './views/thedal/SchemaLibrary.jsx';
-import CompetitorSpy from './views/thedal/CompetitorSpy.jsx';
-import BacklinkTracker from './views/thedal/BacklinkTracker.jsx';
-import LocalCitations from './views/thedal/LocalCitations.jsx';
-import LocalSeoBridge from './views/thedal/LocalSeoBridge.jsx';
-import PlanManagement from './views/thedal/PlanManagement.jsx';
-import PlanSubscription from './views/thedal/PlanSubscription.jsx';
-import { ClientProvider } from './contexts/ClientContext.jsx';
+
 import AddClientMafiya from './views/mafiya/AddClient.jsx';
 import LoyaltyMafiya from './views/mafiya/Loyalty.jsx';
 import GmbBrain from './views/mafiya/GmbBrain.jsx';
@@ -261,23 +244,7 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
               <Route path="/admin/content-os/failed" element={<ContentOSDashboard defaultPage="failed" />} />
               <Route path="/admin/content-os/thumbnail-brain" element={<ContentOSDashboard defaultPage="thumbnail-brain" />} />
 
-              <Route path="/thedal/clients" element={<ClientOnboard />} />
-              <Route path="/thedal/plan-subscription" element={<PlanSubscription />} />
-              <Route path="/thedal/plans" element={<PlanManagement />} />
-              <Route path="/thedal" element={<ThedalHQ />} />
-              <Route path="/thedal/keyword-tracking" element={<KeywordTracking />} />
-              <Route path="/thedal/gsc-intel" element={<GscIntel />} />
-              <Route path="/thedal/on-page-audit" element={<OnPageAudit />} />
-              <Route path="/thedal/content-factory" element={<ContentFactory />} />
-              <Route path="/thedal/monthly-report" element={<MonthlyReport />} />
-              <Route path="/thedal/rank-drop-alert" element={<RankDropAlert />} />
-              <Route path="/thedal/serp-radar" element={<SerpRadar />} />
-              <Route path="/thedal/gap-hunter" element={<GapHunter />} />
-              <Route path="/thedal/schema-library" element={<SchemaLibrary />} />
-              <Route path="/thedal/competitor-spy" element={<CompetitorSpy />} />
-              <Route path="/thedal/backlink-tracker" element={<BacklinkTracker />} />
-              <Route path="/thedal/local-citations" element={<LocalCitations />} />
-              <Route path="/thedal/local-seo-bridge" element={<LocalSeoBridge />} />
+
 
               <Route path="/mafiya/orders" element={<MafiyaOrders />} />
               <Route path="/mafiya/plans" element={<PlanManagementMafiya />} />
@@ -327,14 +294,12 @@ export default function App() {
           path="*"
           element={
             user ? (
-              <ClientProvider>
-                <AppLayout
-                  user={user}
-                  logout={logout}
-                  leadRefresh={leadRefresh}
-                  setLeadRefresh={setLeadRefresh}
-                />
-              </ClientProvider>
+              <AppLayout
+                user={user}
+                logout={logout}
+                leadRefresh={leadRefresh}
+                setLeadRefresh={setLeadRefresh}
+              />
             ) : (
               <Navigate to="/login" replace />
             )

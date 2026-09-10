@@ -63,23 +63,6 @@ const SEARCH_PAGES = [
   { path: '/admin/content-os/reach', label: 'Reach Report', desc: 'Content OS - Analytics' },
   { path: '/admin/content-os/failed', label: 'Failed Jobs', desc: 'Content OS - Error logs' },
 
-  // Thedal OS
-  { path: '/thedal/keyword-tracking', label: 'Keyword Tracking', desc: 'Thedal OS - SEO keywords' },
-  { path: '/thedal/gsc-intel', label: 'GSC Intel', desc: 'Thedal OS - Google Search Console' },
-  { path: '/thedal/on-page-audit', label: 'On-Page Audit', desc: 'Thedal OS - Site scanning' },
-  { path: '/thedal/content-factory', label: 'Content Factory', desc: 'Thedal OS - Create content' },
-  { path: '/thedal/monthly-report', label: 'Monthly Report', desc: 'Thedal OS - PDF reports' },
-  { path: '/thedal/rank-drop-alert', label: 'Rank Drop Alert', desc: 'Thedal OS - SEO alerts' },
-  { path: '/thedal/clients', label: 'Thedal Clients', desc: 'Thedal OS - Manage clients' },
-  { path: '/thedal/plan-subscription', label: 'Plan Subscription', desc: 'Thedal OS - Subscriptions' },
-  { path: '/thedal/plans', label: 'Thedal Plans', desc: 'Thedal OS - Pricing and plans' },
-  { path: '/thedal/serp-radar', label: 'SERP Radar', desc: 'Thedal OS - Search rankings' },
-  { path: '/thedal/gap-hunter', label: 'Gap Hunter', desc: 'Thedal OS - Keyword gaps' },
-  { path: '/thedal/schema-library', label: 'Schema Library', desc: 'Thedal OS - Structured data' },
-  { path: '/thedal/competitor-spy', label: 'Competitor Spy', desc: 'Thedal OS - Competitor analysis' },
-  { path: '/thedal/backlink-tracker', label: 'Backlink Tracker', desc: 'Thedal OS - Backlink CRM' },
-  { path: '/thedal/local-citations', label: 'Local Citations', desc: 'Thedal OS - Local listings' },
-  { path: '/thedal/local-seo-bridge', label: 'Local SEO Bridge', desc: 'Thedal OS - GMB integration' },
 
   // Mafiya OS
   { path: '/mafiya/family', label: 'The Family', desc: 'Mafiya OS - Users' },

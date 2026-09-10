@@ -149,7 +149,7 @@ export const SOP_CONTENT = {
       'Never add schema for content that doesn\'t exist on the page.',
     ],
   },
-  '/thedal/seo-audit': {
+  '/seo-audit': {
     title: 'All-in-One SEO Audit',
     icon: '🔬',
     overview: 'Run a comprehensive automated SEO audit on any website. Covers On-Page, Technical, Off-Page, and Local SEO signals with an overall health score.',
@@ -167,7 +167,7 @@ export const SOP_CONTENT = {
       'Prioritise "failed" and "warning" items from the On-Page checks first — they have the most impact.',
     ],
   },
-  '/thedal/content-factory#blog-drafts': {
+  '/content-factory#blog-drafts': {
     title: 'Content Factory — Blog Drafts',
     icon: '✍️',
     overview: 'Generates a complete, publication-ready SEO blog post from a single target keyword — tag pill, lead paragraph, sub-sectioned blocks, an optional comparison table, a callout, an FAQ accordion and a closing CTA, all in one AI call.',
@@ -184,7 +184,7 @@ export const SOP_CONTENT = {
       'Use Gap Hunter or Keyword Tracking keywords as the target keyword here for maximum strategic value.',
     ],
   },
-  '/thedal/content-factory#meta-rewriter': {
+  '/content-factory#meta-rewriter': {
     title: 'Content Factory — Meta Rewriter',
     icon: '🪄',
     overview: 'Fixes an EXISTING page\'s search-result snippet — not a blog generator. Rewrites a page\'s title and meta description to be more click-worthy and keyword-optimized, with length checks so nothing gets cut off in Google.',
@@ -199,7 +199,7 @@ export const SOP_CONTENT = {
       'Use it on pages that already rank but have a weak or generic snippet in search results, not brand-new pages.',
     ],
   },
-  '/thedal/content-factory#topic-ideas': {
+  '/content-factory#topic-ideas': {
     title: 'Content Factory — Topic Ideas',
     icon: '💡',
     overview: 'A content-planning brainstorm tool, not a writer. Live-crawls the selected client\'s actual website (homepage + a few internal pages) and returns blog title ideas grounded in what the business genuinely offers — feed these into Blog Drafts next.',
@@ -215,7 +215,7 @@ export const SOP_CONTENT = {
       'Ideas referencing "Based on" a page not actually relevant to a blog post are still worth a manual read before discarding.',
     ],
   },
-  '/thedal/content-factory#schema-library': {
+  '/content-factory#schema-library': {
     title: 'Content Factory — Schema Library',
     icon: '</>',
     overview: 'Generates JSON-LD structured data — the invisible markup search engines use for rich results (star ratings, FAQ dropdowns, business info in Search). This produces SEO markup, not visible page content.',
@@ -230,29 +230,29 @@ export const SOP_CONTENT = {
       'Validate the output in Google\'s Rich Results Test before deploying to production.',
     ],
   },
-  '/thedal': {
-    title: 'Thedal HQ',
+  '/': {
+    title: 'HQ',
     icon: '🏁',
-    overview: 'Thedal HQ is your command center for SEO operations — review high-level health metrics, run scans, and jump into any specialized module.',
+    overview: 'HQ is your command center for SEO operations — review high-level health metrics, run scans, and jump into any specialized module.',
     steps: [
       { step: 1, title: 'Review Key Metrics', desc: 'Scan the dashboard for overall keyword tracking, client health, and performance trends at a glance.' },
       { step: 2, title: 'Run Global Scan', desc: 'Use the global scan action to refresh primary SEO snapshots and surface potential issues across clients.' },
-      { step: 3, title: 'Open Specialized Modules', desc: 'Use the menu to navigate to keyword tracking, backlink analysis, local SEO, and other Thedal tools.' },
+      { step: 3, title: 'Open Specialized Modules', desc: 'Use the menu to navigate to keyword tracking, backlink analysis, local SEO, and other tools.' },
       { step: 4, title: 'Validate Client Insights', desc: 'Check the recent rank movements and client health cards to prioritise the next strategic actions.' },
       { step: 5, title: 'Share Findings', desc: 'Use the summary view to communicate key wins and opportunities with stakeholders.' },
     ],
     tips: [
-      'Use Thedal HQ as the first stop for daily SEO reviews.',
+      'Use HQ as the first stop for daily SEO reviews.',
       'Look for any sudden drops or spikes in rank change before drilling into specific modules.',
     ],
   },
-  '/thedal/clients': {
+  '/clients': {
     title: 'Client Onboard',
     icon: '🤝',
-    overview: 'Manage client onboarding and profiles for Thedal services. Add new clients, assign plans, and update contact and billing details.',
+    overview: 'Manage client onboarding and profiles for services. Add new clients, assign plans, and update contact and billing details.',
     steps: [
       { step: 1, title: 'Collect Client Details', desc: 'Enter the client name, business details, domain, and contact information into the onboarding form.' },
-      { step: 2, title: 'Assign a Plan', desc: 'Select a Thedal plan or package for the client based on their SEO needs.' },
+      { step: 2, title: 'Assign a Plan', desc: 'Select a plan or package for the client based on their SEO needs.' },
       { step: 3, title: 'Save the Client Profile', desc: 'Submit the form to save the client record and make it available across the platform.' },
       { step: 4, title: 'Review Client List', desc: 'Use the client list to edit existing clients, view plan details, or remove outdated records.' },
       { step: 5, title: 'Re-run Client Refresh', desc: 'Reload the client data to confirm that the new profile and plan are linked correctly.' },
@@ -262,10 +262,10 @@ export const SOP_CONTENT = {
       'Keep the client business category consistent for reporting and filtering.',
     ],
   },
-  '/thedal/plans': {
+  '/plans': {
     title: 'Plan Management',
     icon: '📦',
-    overview: 'Create and manage Thedal service plans, package features, and pricing tiers for SEO clients.',
+    overview: 'Create and manage service plans, package features, and pricing tiers for SEO clients.',
     steps: [
       { step: 1, title: 'Review Existing Plans', desc: 'Check the current plan catalog to see what services and pricing are already available.' },
       { step: 2, title: 'Add or Edit Plans', desc: 'Create a new plan or modify an existing one to reflect updated offerings or features.' },
@@ -278,10 +278,10 @@ export const SOP_CONTENT = {
       'Use consistent feature naming across plans to avoid confusion during client onboarding.',
     ],
   },
-  '/thedal/plan-subscription': {
+  '/plan-subscription': {
     title: 'Plan Subscription',
     icon: '🧾',
-    overview: 'Manage client subscriptions, billing status, and plan renewals for Thedal SEO services.',
+    overview: 'Manage client subscriptions, billing status, and plan renewals for SEO services.',
     steps: [
       { step: 1, title: 'Select the Client', desc: 'Choose the client whose subscription details you want to review or update.' },
       { step: 2, title: 'Review Plan Details', desc: 'Confirm the current plan, pricing, and subscription cycle for the selected client.' },
