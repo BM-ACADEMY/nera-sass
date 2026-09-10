@@ -51,9 +51,12 @@ exports.createUserAndTenant = async (req, res) => {
 
   try {
     // 1. Create Tenant
+    const tName = tenantName || `${name}'s Workspace`;
+    const tSlug = tName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '') + '-' + Date.now().toString().slice(-4);
+    
     const tenantResult = await db.query(
-      'INSERT INTO tenants (name, status) VALUES ($1, $2) RETURNING id',
-      [tenantName || `${name}'s Workspace`, 'active']
+      'INSERT INTO tenants (name, slug) VALUES ($1, $2) RETURNING id',
+      [tName, tSlug]
     );
     const newTenantId = tenantResult.rows[0].id;
 
