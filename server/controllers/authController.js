@@ -40,49 +40,28 @@ exports.login = async (req, res) => {
   }
 };
 
-exports.createUserAndTenant = async (req, res) => {
-  // Only super-admins should be able to create new tenants
-  // But for the sake of simplicity, we just enforce admin role
+exports.createUser = async (req, res) => {
+  // Only admins can create users
   if (req.user.role !== 'admin') {
     return res.status(403).json({ error: 'Unauthorized' });
   }
 
-  const { name, email, password, phone, tenantName } = req.body;
+  const { name, email, password, phone } = req.body;
 
   try {
-    // 1. Create Tenant
-    const tName = tenantName || `${name}'s Workspace`;
-    const tSlug = tName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '') + '-' + Date.now().toString().slice(-4);
-    
-    const tenantResult = await db.query(
-      'INSERT INTO tenants (name, slug) VALUES ($1, $2) RETURNING id',
-      [tName, tSlug]
-    );
-    const newTenantId = tenantResult.rows[0].id;
-
-    // 2. Hash Password
+    // Hash Password
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
-    // 3. Create User
+    // Create User (no tenant, 'user' role)
     const userResult = await db.query(
-      'INSERT INTO users (tenant_id, name, email, phone, password_hash, role) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role',
-      [newTenantId, name, email, phone, passwordHash, 'tenant_admin']
-    );
-
-    // Give every workspace a matching brand/client row so it can configure
-    // its own WhatsApp number through the existing client WhatsApp flow
-    // instead of sharing the platform-wide .env credentials.
-    const clientResult = await db.query(
-      `INSERT INTO clients (name, tenant_id, status, whatsapp_status, created_at)
-       VALUES ($1, $2, 'active', 'not_configured', NOW()) RETURNING id`,
-      [tName, newTenantId]
+      'INSERT INTO users (name, email, phone, password_hash, role, tenant_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role',
+      [name, email, phone, passwordHash, 'user', null]
     );
 
     res.status(201).json({
-      message: 'User and Tenant created successfully',
-      user: userResult.rows[0],
-      client_id: clientResult.rows[0].id
+      message: 'User created successfully',
+      user: userResult.rows[0]
     });
   } catch (error) {
     console.error('Create User Error:', error);
@@ -116,7 +95,7 @@ exports.getUsers = async (req, res) => {
     const result = await db.query(`
       SELECT u.id, u.name, u.email, u.phone, u.role, u.tenant_id, t.name as tenant_name
       FROM users u
-      JOIN tenants t ON u.tenant_id = t.id
+      LEFT JOIN tenants t ON u.tenant_id = t.id
       ORDER BY u.created_at DESC
     `);
     res.json(result.rows);

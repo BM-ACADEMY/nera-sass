@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Form, Input, Button, Alert, Typography } from 'antd';
+import { Form, Input, Button, Typography, message } from 'antd';
 import { MailOutlined, LockOutlined, ApiOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
@@ -8,12 +8,11 @@ const { Title, Text } = Typography;
 
 const Login = () => {
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+
   const navigate = useNavigate();
 
   const onFinish = async (values) => {
     setLoading(true);
-    setError(null);
     try {
       const res = await axiosClient.post('/auth/login', values);
       if (res.data.token) {
@@ -21,7 +20,7 @@ const Login = () => {
         navigate('/dashboard');
       }
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to sign in');
+      message.error(err.response?.data?.error || 'Failed to sign in');
     } finally {
       setLoading(false);
     }
@@ -51,7 +50,7 @@ const Login = () => {
           <Text style={{ color: '#64748b' }}>Welcome back! Please enter your details.</Text>
         </div>
         
-        {error && <Alert message={error} type="error" showIcon style={{ marginBottom: 24, textAlign: 'left' }} />}
+
         
         <Form name="login" onFinish={onFinish} layout="vertical" style={{ textAlign: 'left' }}>
           <Form.Item 

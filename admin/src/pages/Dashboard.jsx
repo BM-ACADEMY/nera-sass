@@ -13,6 +13,8 @@ import CreateUserForm from '../components/CreateUserForm';
 import UsersList from '../components/UsersList';
 import WhatsAppConfigModal from '../components/WhatsAppConfigModal';
 import UserAvatar from '../components/UserAvatar';
+import StatsCards from '../components/StatsCards';
+import RoleFilter from '../components/RoleFilter';
 import axiosClient from '../api/axiosClient';
 
 const { Content, Sider, Header } = Layout;
@@ -27,6 +29,7 @@ const Dashboard = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [whatsAppTarget, setWhatsAppTarget] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
 
   const fetchUsers = async () => {
     try {
@@ -54,12 +57,14 @@ const Dashboard = () => {
     fetchUsers();
   }, []);
 
-  const filteredUsers = users.filter((user) => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return true;
-    return [user.name, user.email, user.tenant_name, user.role]
-      .some(field => (field || '').toLowerCase().includes(q));
-  });
+  const filteredUsers = users
+    .filter((user) => roleFilter === 'all' || user.role === roleFilter)
+    .filter((user) => {
+      const q = searchQuery.trim().toLowerCase();
+      if (!q) return true;
+      return [user.name, user.email, user.tenant_name, user.role]
+        .some(field => (field || '').toLowerCase().includes(q));
+    });
 
   const workspaceCount = new Set(users.map(u => u.tenant_id)).size;
 
@@ -182,19 +187,26 @@ const Dashboard = () => {
         </Header>
 
         <Content style={{ padding: '32px', overflowY: 'auto' }}>
-          
+
           <div className="dashboard-content" style={{ display: 'block' }}>
-            
+
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '24px' }}>
               <Button type="primary" size="large" icon={<FiPlus />} onClick={() => setIsModalOpen(true)} style={{ borderRadius: '8px', fontWeight: 500 }}>
                 Add Client
               </Button>
             </div>
 
+            <StatsCards users={users} />
+
             <div className="panel-card" style={{ overflowX: 'auto' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                <Title level={5} style={{ margin: 0, color: '#1e293b' }}>Active Users & Workspaces</Title>
-                {searchQuery && <span style={{ fontSize: 12, color: '#94a3b8' }}>{filteredUsers.length} of {users.length} shown</span>}
+              <div className="panel-card-header">
+                <div>
+                  <Title level={5} style={{ margin: 0, color: '#1e293b' }}>Active Users & Workspaces</Title>
+                  <span style={{ fontSize: 12.5, color: '#94a3b8' }}>
+                    {filteredUsers.length} of {users.length} account{users.length === 1 ? '' : 's'} shown
+                  </span>
+                </div>
+                <RoleFilter users={users} value={roleFilter} onChange={setRoleFilter} />
               </div>
               <UsersList users={filteredUsers} loading={loading} onConfigureWhatsApp={setWhatsAppTarget} />
             </div>

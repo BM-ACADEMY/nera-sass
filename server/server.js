@@ -5446,7 +5446,7 @@ app.post('/api/users', auth, async (req, res) => {
       INSERT INTO users (name, email, password_hash, role, is_active, created_at)
       VALUES ($1, $2, $3, $4, true, NOW())
       RETURNING id, name, email, role
-    `, [name, email.toLowerCase(), hash, role || 'agent']);
+    `, [name, email.toLowerCase(), hash, role || 'user']);
     res.status(201).json({ user: rows[0] });
   } catch (err) {
     if (err.code === '23505') return res.status(400).json({ error: 'Email already exists' });

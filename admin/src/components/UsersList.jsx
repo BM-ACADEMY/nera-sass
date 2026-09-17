@@ -31,8 +31,6 @@ const UsersList = ({ users, loading, onConfigureWhatsApp }) => {
       title: 'Role',
       dataIndex: 'role',
       key: 'role',
-      filters: [...new Set(users.map(u => u.role))].map(role => ({ text: role.replace('_', ' '), value: role })),
-      onFilter: (value, user) => user.role === value,
       render: (role) => (
         <Tag style={{ background: roleStyle(role).bg, color: roleStyle(role).color, border: 'none', borderRadius: 20, fontWeight: 700, fontSize: 11, textTransform: 'capitalize', padding: '2px 12px' }}>
           {role.replace('_', ' ')}

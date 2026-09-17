@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link } from 'react-router-dom';
-import { ConfigProvider, Card, Form, Input, Button, Typography, Alert, theme } from 'antd';
+import { ConfigProvider, Card, Form, Input, Button, Typography, Alert, theme, message } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import leadosLogo from './assets/leadoslogo.png';
 import { Building2, Globe, Mail, Phone, MapPin, FileText, ShieldCheck, ArrowRight, Lock } from 'lucide-react';
@@ -57,10 +57,9 @@ function LoginPage({ login, authLoading, authError }) {
   const [loginError, setLoginError] = useState('');
 
   const onFinish = async (values) => {
-    setLoginError('');
     const success = await login(values.email, values.password);
     if (!success) {
-      setLoginError('Invalid email or password');
+      message.error('Invalid email or password');
     }
   };
 
@@ -102,14 +101,7 @@ function LoginPage({ login, authLoading, authError }) {
             </Typography.Text>
           </div>
 
-          {(loginError || authError) && (
-            <Alert 
-              message={loginError || authError} 
-              type="error" 
-              showIcon 
-              style={{ marginBottom: 24 }} 
-            />
-          )}
+
 
           <Form
             name="login_form"

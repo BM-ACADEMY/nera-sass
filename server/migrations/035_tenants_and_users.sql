@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
   email VARCHAR(255) NOT NULL UNIQUE,
   phone VARCHAR(30),
   password_hash VARCHAR(255) NOT NULL,
-  role VARCHAR(20) NOT NULL DEFAULT 'user' CHECK (role IN ('admin','tenant_admin','user')),
+  role VARCHAR(20) NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user')),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

@@ -194,67 +194,67 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
           top: 0,
           bottom: 0,
           borderRight: `1px solid ${C.border}`,
-          zIndex: 10,
-          display: 'flex',
-          flexDirection: 'column'
+          zIndex: 10
         }}
       >
-        {/* Custom Header with Logo and Toggle */}
-        <div style={{ height: 72, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', padding: collapsed ? '0' : '0 20px', transition: 'all 0.2s' }}>
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <div style={{ width: 36, height: 36, flexShrink: 0, background: '#4299e1', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <BarChart2 size={20} color="#fff" />
-            </div>
-          </div>
-          {!collapsed && (
-            <div onClick={() => setCollapsed(true)} style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, opacity: 0.5 }}>
-              <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
-              <div style={{ width: 12, height: 2, background: C.text, borderRadius: 2, alignSelf: 'flex-end' }} />
-            </div>
-          )}
-        </div>
-        {collapsed && (
-          <div onClick={() => setCollapsed(false)} style={{ height: 20, cursor: 'pointer', display: 'flex', justifyContent: 'center', opacity: 0.5, marginBottom: 10 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
-              <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
-            </div>
-          </div>
-        )}
-
-        {/* Menu Area */}
-        <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
-          <Menu
-            theme="light"
-            mode="inline"
-            selectedKeys={[location.pathname]}
-            onClick={handleMenuClick}
-            items={menuItems}
-            style={{ borderRight: 0, padding: '0 12px' }}
-          />
-        </div>
-
-        {/* Custom Footer (User Profile) */}
-        <div style={{ padding: collapsed ? '20px 0' : '20px', borderTop: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', background: '#f8fafc', margin: collapsed ? '0' : '0 12px 12px 12px', borderRadius: collapsed ? 0 : 12, cursor: 'pointer' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ position: 'relative' }}>
-              <div style={{ width: 36, height: 36, borderRadius: '50%', background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 600, fontSize: 14 }}>
-                {user?.name ? user.name[0].toUpperCase() : 'U'}
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+          {/* Custom Header with Logo and Toggle */}
+          <div style={{ height: 72, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', padding: collapsed ? '0' : '0 20px', transition: 'all 0.2s' }}>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <div style={{ width: 36, height: 36, flexShrink: 0, background: '#4299e1', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <BarChart2 size={20} color="#fff" />
               </div>
-              <div style={{ position: 'absolute', bottom: 0, right: -2, width: 10, height: 10, borderRadius: '50%', background: '#48bb78', border: '2px solid #fff' }} />
             </div>
             {!collapsed && (
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{user?.name || 'User'}</span>
-                <span style={{ fontSize: 11, color: C.muted }}>{user?.role === 'admin' ? 'Administrator' : 'Product Manager'}</span>
+              <div onClick={() => setCollapsed(true)} style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, opacity: 0.5 }}>
+                <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
+                <div style={{ width: 12, height: 2, background: C.text, borderRadius: 2, alignSelf: 'flex-end' }} />
               </div>
             )}
           </div>
-          {!collapsed && (
-            <div onClick={(e) => { e.stopPropagation(); onLogout(); }} title="Sign Out" style={{ padding: 4, opacity: 0.5 }}>
-              <LogOut size={16} />
+          {collapsed && (
+            <div onClick={() => setCollapsed(false)} style={{ height: 20, cursor: 'pointer', display: 'flex', justifyContent: 'center', opacity: 0.5, marginBottom: 10 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
+                <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
+              </div>
             </div>
           )}
+
+          {/* Menu Area */}
+          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+            <Menu
+              theme="light"
+              mode="inline"
+              selectedKeys={[location.pathname]}
+              onClick={handleMenuClick}
+              items={menuItems}
+              style={{ borderRight: 0, padding: '0 12px' }}
+            />
+          </div>
+
+          {/* Custom Footer (User Profile) */}
+          <div style={{ padding: collapsed ? '20px 0' : '20px', borderTop: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', background: '#f8fafc', margin: collapsed ? '0' : '0 12px 12px 12px', borderRadius: collapsed ? 0 : 12, cursor: 'pointer' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ position: 'relative' }}>
+                <div style={{ width: 36, height: 36, borderRadius: '50%', background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 600, fontSize: 14 }}>
+                  {user?.name ? user.name[0].toUpperCase() : 'U'}
+                </div>
+                <div style={{ position: 'absolute', bottom: 0, right: -2, width: 10, height: 10, borderRadius: '50%', background: '#48bb78', border: '2px solid #fff' }} />
+              </div>
+              {!collapsed && (
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{user?.name || 'User'}</span>
+                  <span style={{ fontSize: 11, color: C.muted }}>{user?.role === 'admin' ? 'Administrator' : 'Product Manager'}</span>
+                </div>
+              )}
+            </div>
+            {!collapsed && (
+              <div onClick={(e) => { e.stopPropagation(); onLogout(); }} title="Sign Out" style={{ padding: 4, opacity: 0.5 }}>
+                <LogOut size={16} />
+              </div>
+            )}
+          </div>
         </div>
       </Sider>
       <style>{`

@@ -43,7 +43,9 @@ class LeadOSAPI {
 
     if (response.status === 401) {
       this.clearToken();
-      window.location.href = '/login';
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
     }
 
     const text = await response.text();

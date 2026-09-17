@@ -7,7 +7,7 @@ router.post('/login', authController.login);
 
 // Protected Admin Routes
 router.get('/me', requireAuth, authController.me);
-router.post('/users', requireAuth, authController.createUserAndTenant);
+router.post('/users', requireAuth, authController.createUser);
 router.get('/users', requireAuth, authController.getUsers);
 
 module.exports = router;
