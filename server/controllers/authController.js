@@ -19,7 +19,7 @@ exports.login = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, tenant_id: user.tenant_id, role: user.role },
+      { id: user.id, role: user.role },
       JWT_SECRET,
       { expiresIn: '1d' }
     );
@@ -30,8 +30,7 @@ exports.login = async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        role: user.role,
-        tenant_id: user.tenant_id,
+        role: user.role
       }
     });
   } catch (error) {
@@ -55,8 +54,8 @@ exports.createUser = async (req, res) => {
 
     // Create User (no tenant, 'user' role)
     const userResult = await db.query(
-      'INSERT INTO users (name, email, phone, password_hash, role, tenant_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role',
-      [name, email, phone, passwordHash, 'user', null]
+      'INSERT INTO users (name, email, phone, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role',
+      [name, email, phone, passwordHash, 'user']
     );
 
     res.status(201).json({
@@ -75,9 +74,8 @@ exports.createUser = async (req, res) => {
 exports.me = async (req, res) => {
   try {
     const result = await db.query(`
-      SELECT u.id, u.name, u.email, u.phone, u.role, u.tenant_id, t.name as tenant_name
+      SELECT u.id, u.name, u.email, u.phone, u.role
       FROM users u
-      JOIN tenants t ON u.tenant_id = t.id
       WHERE u.id = $1
     `, [req.user.id]);
     if (!result.rows.length) return res.status(404).json({ error: 'User not found' });
@@ -93,9 +91,8 @@ exports.getUsers = async (req, res) => {
   }
   try {
     const result = await db.query(`
-      SELECT u.id, u.name, u.email, u.phone, u.role, u.tenant_id, t.name as tenant_name
+      SELECT u.id, u.name, u.email, u.phone, u.role
       FROM users u
-      LEFT JOIN tenants t ON u.tenant_id = t.id
       ORDER BY u.created_at DESC
     `);
     res.json(result.rows);

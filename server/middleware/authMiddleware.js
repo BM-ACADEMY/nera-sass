@@ -10,8 +10,7 @@ exports.requireAuth = (req, res, next) => {
   const token = authHeader.split(' ')[1];
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload; // { id, tenant_id, role }
-    req.tenant_id = payload.tenant_id;
+    req.user = payload; // { id, role }
     next();
   } catch (error) {
     return res.status(401).json({ error: 'Invalid token' });

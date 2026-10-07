@@ -36,13 +36,6 @@ const UsersList = ({ users, loading, onConfigureWhatsApp }) => {
           {role.replace('_', ' ')}
         </Tag>
       ),
-    },
-    {
-      title: 'Workspace',
-      dataIndex: 'tenant_name',
-      key: 'tenant_name',
-      sorter: (a, b) => a.tenant_name.localeCompare(b.tenant_name),
-      render: (tenant) => <span style={{ color: '#475569', fontSize: 13 }}>{tenant}</span>,
     }
   ];
 

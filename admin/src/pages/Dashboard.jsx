@@ -11,7 +11,6 @@ import { MdOutlineDashboard, MdOutlineSpaceDashboard } from 'react-icons/md';
 import { useNavigate } from 'react-router-dom';
 import CreateUserForm from '../components/CreateUserForm';
 import UsersList from '../components/UsersList';
-import WhatsAppConfigModal from '../components/WhatsAppConfigModal';
 import UserAvatar from '../components/UserAvatar';
 import StatsCards from '../components/StatsCards';
 import RoleFilter from '../components/RoleFilter';
@@ -27,7 +26,6 @@ const Dashboard = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [userProfile, setUserProfile] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [whatsAppTarget, setWhatsAppTarget] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
 
@@ -62,11 +60,9 @@ const Dashboard = () => {
     .filter((user) => {
       const q = searchQuery.trim().toLowerCase();
       if (!q) return true;
-      return [user.name, user.email, user.tenant_name, user.role]
+      return [user.name, user.email, user.role]
         .some(field => (field || '').toLowerCase().includes(q));
     });
-
-  const workspaceCount = new Set(users.map(u => u.tenant_id)).size;
 
   const handleLogout = () => {
     localStorage.removeItem('adminToken');
@@ -126,7 +122,7 @@ const Dashboard = () => {
               {!collapsed && (
                 <div>
                   <div style={{ fontSize: 14.5, fontWeight: 800, color: '#1e293b', lineHeight: 1.2 }}>LeadOS Admin</div>
-                  <div style={{ fontSize: 10.5, color: '#94a3b8' }}>{workspaceCount} workspace{workspaceCount === 1 ? '' : 's'} · {users.length} users</div>
+                  <div style={{ fontSize: 10.5, color: '#94a3b8' }}>{users.length} users</div>
                 </div>
               )}
             </div>
@@ -136,7 +132,7 @@ const Dashboard = () => {
                  {collapsed ? <FiSearch size={22} className="search-icon-collapsed" onClick={() => setCollapsed(false)} style={{ cursor: 'pointer', color: '#94a3b8' }} /> : (
                    <Input
                      prefix={<FiSearch style={{ color: '#bfbfbf', fontSize: '18px' }} />}
-                     placeholder="Search users or workspaces"
+                     placeholder="Search users"
                      className="custom-search"
                      allowClear
                      value={searchQuery}
@@ -183,7 +179,7 @@ const Dashboard = () => {
 
       <Layout className="main-layout" style={{ background: 'transparent' }}>
         <Header style={{ background: '#fff', padding: '0 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
-          <Title level={4} style={{ margin: 0, color: '#1e293b' }}>Users & Workspaces</Title>
+          <Title level={4} style={{ margin: 0, color: '#1e293b' }}>Users</Title>
         </Header>
 
         <Content style={{ padding: '32px', overflowY: 'auto' }}>
@@ -201,14 +197,14 @@ const Dashboard = () => {
             <div className="panel-card" style={{ overflowX: 'auto' }}>
               <div className="panel-card-header">
                 <div>
-                  <Title level={5} style={{ margin: 0, color: '#1e293b' }}>Active Users & Workspaces</Title>
+                  <Title level={5} style={{ margin: 0, color: '#1e293b' }}>Active Users</Title>
                   <span style={{ fontSize: 12.5, color: '#94a3b8' }}>
                     {filteredUsers.length} of {users.length} account{users.length === 1 ? '' : 's'} shown
                   </span>
                 </div>
                 <RoleFilter users={users} value={roleFilter} onChange={setRoleFilter} />
               </div>
-              <UsersList users={filteredUsers} loading={loading} onConfigureWhatsApp={setWhatsAppTarget} />
+              <UsersList users={filteredUsers} loading={loading} />
             </div>
 
           </div>
@@ -227,22 +223,6 @@ const Dashboard = () => {
         <CreateUserForm onUserCreated={handleUserCreated} onCancel={() => setIsModalOpen(false)} />
       </Modal>
 
-      <Modal
-        title={whatsAppTarget ? `WhatsApp Config — ${whatsAppTarget.tenant_name}` : 'WhatsApp Config'}
-        open={!!whatsAppTarget}
-        onCancel={() => setWhatsAppTarget(null)}
-        footer={null}
-        destroyOnClose
-        centered
-        width={560}
-      >
-        {whatsAppTarget && (
-          <WhatsAppConfigModal
-            tenantId={whatsAppTarget.tenant_id}
-            tenantName={whatsAppTarget.tenant_name}
-            onClose={() => setWhatsAppTarget(null)}
-          />
-        )}
       </Modal>
 
     </Layout>
