@@ -43,21 +43,7 @@ const UsersList = ({ users, loading, onConfigureWhatsApp }) => {
       key: 'tenant_name',
       sorter: (a, b) => a.tenant_name.localeCompare(b.tenant_name),
       render: (tenant) => <span style={{ color: '#475569', fontSize: 13 }}>{tenant}</span>,
-    },
-    {
-      title: '',
-      key: 'actions',
-      width: 150,
-      render: (_, user) => (
-        <Button
-          className="whatsapp-config-btn"
-          icon={<FaWhatsapp size={15} />}
-          onClick={() => onConfigureWhatsApp(user)}
-        >
-          WhatsApp
-        </Button>
-      ),
-    },
+    }
   ];
 
   return (
