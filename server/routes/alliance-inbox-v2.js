@@ -6,7 +6,23 @@ const axios = require('axios');
 const ffmpeg = require('fluent-ffmpeg');
 ffmpeg.setFfmpegPath(require('@ffmpeg-installer/ffmpeg').path);
 const { convertToWhatsAppVoiceNote } = require('../services/voice-note-encoder');
-const db = require('../db/connection');
+const {
+  AllianceInboxSettings,
+  AllianceInboxContacts,
+  AllianceInboxConversations,
+  AllianceInboxMessages,
+  AllianceInboxMedia,
+  AllianceInboxTags,
+  AllianceContactTags,
+  AllianceProspects,
+  AllianceAudiences,
+  AllianceTemplates,
+  AllianceWhatsappCampaignRecipients,
+  AllianceWhatsappFollowupJobs,
+  Templates,
+} = require('../models');
+const { NO_ID, escapeRegex, upsertOne, insertIgnore } = require('../db/mongo');
+const { deleteCascade, assertReferenceExists } = require('../db/cascade');
 const ensureAllianceSchema = require('../db/alliance-schema');
 const openRouter = require('../services/openrouter');
 const { processQueuedAllianceWelcomes } = require('../services/alliance-welcome');
@@ -29,8 +45,8 @@ function createAllianceInboxRouter({ auth, io }) {
   });
 
   const configuredPhoneId = async () => {
-    const result = await db.query(`SELECT * FROM alliance_inbox_settings WHERE active = TRUE ORDER BY id LIMIT 1`);
-    return result.rows[0] || (process.env.ALLIANCE_WA_PHONE_NUMBER_ID ? {
+    const settings = await AllianceInboxSettings.findOne({ active: true }, NO_ID).sort({ id: 1 }).lean();
+    return settings || (process.env.ALLIANCE_WA_PHONE_NUMBER_ID ? {
       phone_number_id: process.env.ALLIANCE_WA_PHONE_NUMBER_ID,
       access_token_env: 'ALLIANCE_WA_ACCESS_TOKEN',
     } : null);
@@ -41,138 +57,187 @@ function createAllianceInboxRouter({ auth, io }) {
     const expected = String(process.env.INTERNAL_API_KEY || '');
     return !expected || String(req.get('x-internal-key') || '') === expected;
   };
+  // Keeps the inbox contacts/conversations in step with imported prospects and
+  // queues the welcome template for newly eligible conversations.
   const syncImportedProspects = async () => {
     const settings = await configuredPhoneId();
     const phoneNumberId = settings?.phone_number_id || process.env.ALLIANCE_WA_PHONE_NUMBER_ID || 'unconfigured';
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(
-        `UPDATE alliance_inbox_contacts c
-         SET name = COALESCE(p.name, p.business_name, c.name),
-             profile_name = COALESCE(p.name, p.business_name, c.profile_name),
-             phone = CASE WHEN NOT EXISTS (
-               SELECT 1 FROM alliance_inbox_contacts other
-               WHERE other.id <> c.id AND other.phone = p.phone
-             ) THEN p.phone ELSE c.phone END,
-             wa_id = CASE WHEN NOT EXISTS (
-               SELECT 1 FROM alliance_inbox_contacts other
-               WHERE other.id <> c.id AND other.wa_id = p.phone
-             ) THEN p.phone ELSE c.wa_id END,
-             source = COALESCE(p.source, c.source, 'file_upload'),
-             custom_fields = c.custom_fields || jsonb_build_object(
-               'business_name', p.business_name, 'audience', p.audience,
-               'email', p.email, 'industry', p.industry, 'location', p.location
-             ),
-             updated_at = NOW()
-         FROM alliance_prospects p
-         WHERE c.prospect_id = p.id`
-      );
-      await client.query(
-        `UPDATE alliance_inbox_contacts c
-         SET prospect_id = p.id, name = COALESCE(p.name, p.business_name, c.name),
-             source = COALESCE(c.source, p.source, 'file_upload'),
-             custom_fields = c.custom_fields || jsonb_build_object(
-               'business_name', p.business_name, 'audience', p.audience, 'email', p.email
-             ), updated_at = NOW()
-         FROM alliance_prospects p
-         WHERE c.prospect_id IS NULL AND c.phone IS NOT NULL AND p.phone = c.phone
-           AND NOT EXISTS (SELECT 1 FROM alliance_inbox_contacts linked WHERE linked.prospect_id = p.id)`
-      );
-      await client.query(
-        `INSERT INTO alliance_inbox_contacts
-          (prospect_id, wa_id, phone, name, profile_name, source, custom_fields)
-         SELECT p.id, p.phone, p.phone, COALESCE(p.name, p.business_name),
-                COALESCE(p.name, p.business_name), COALESCE(p.source, 'file_upload'),
-                jsonb_build_object('business_name', p.business_name, 'audience', p.audience, 'email', p.email)
-         FROM alliance_prospects p
-         WHERE NOT EXISTS (SELECT 1 FROM alliance_inbox_contacts c WHERE c.prospect_id = p.id)
-           AND NOT EXISTS (SELECT 1 FROM alliance_inbox_contacts c WHERE p.phone IS NOT NULL AND c.phone = p.phone)`
-      );
-      await client.query(
-        `INSERT INTO alliance_inbox_conversations (contact_id, phone_number_id, welcome_status)
-         SELECT c.id, $1,
-                CASE WHEN p.phone IS NOT NULL AND p.consent = TRUE THEN 'not_queued' ELSE 'not_eligible' END
-         FROM alliance_inbox_contacts c
-         LEFT JOIN alliance_prospects p ON p.id = c.prospect_id
-         WHERE NOT EXISTS (SELECT 1 FROM alliance_inbox_conversations cv WHERE cv.contact_id = c.id)`,
-        [phoneNumberId]
-      );
-      await client.query(
-        `INSERT INTO alliance_inbox_messages
-          (conversation_id, contact_id, direction, msg_type, content, status, raw_payload)
-         SELECT cv.id, c.id, 'outbound', 'template', t.body, 'queued',
-                jsonb_build_object(
-                  'purpose', 'welcome', 'template_name', t.template_name,
-                  'language', COALESCE(t.language, 'en'), 'prospect_id', p.id
-                )
-         FROM alliance_inbox_contacts c
-         JOIN alliance_prospects p ON p.id = c.prospect_id
-         JOIN alliance_inbox_conversations cv ON cv.contact_id = c.id
-         JOIN alliance_templates t ON t.audience = p.audience
-           AND t.channel = 'whatsapp' AND t.touch_no = 1 AND t.active = TRUE
-           AND t.template_name IS NOT NULL
-           AND LOWER(COALESCE(t.provider_status, 'approved')) = 'approved'
-         WHERE cv.welcome_status = 'not_queued'
-           AND NOT EXISTS (
-             SELECT 1 FROM alliance_inbox_messages m
-             WHERE m.conversation_id = cv.id AND m.msg_type = 'template'
-               AND m.raw_payload->>'purpose' = 'welcome'
-           )`
-      );
-      await client.query(
-        `UPDATE alliance_inbox_conversations cv
-         SET welcome_status = 'queued', welcome_template_name = t.template_name,
-             welcome_error = NULL, updated_at = NOW()
-         FROM alliance_inbox_contacts c
-         JOIN alliance_prospects p ON p.id = c.prospect_id
-         JOIN alliance_templates t ON t.audience = p.audience
-           AND t.channel = 'whatsapp' AND t.touch_no = 1 AND t.active = TRUE
-           AND t.template_name IS NOT NULL
-           AND LOWER(COALESCE(t.provider_status, 'approved')) = 'approved'
-         WHERE cv.contact_id = c.id AND cv.welcome_status = 'not_queued'`
-      );
-      await client.query(
-        `UPDATE alliance_inbox_conversations cv
-         SET welcome_status = 'missing_template',
-             welcome_error = 'No approved WhatsApp touch-1 template is configured for this audience.',
-             updated_at = NOW()
-         FROM alliance_inbox_contacts c
-         WHERE cv.contact_id = c.id AND cv.welcome_status = 'not_queued'
-           AND NOT EXISTS (
-             SELECT 1 FROM alliance_prospects p
-             JOIN alliance_templates t ON t.audience = p.audience
-               AND t.channel = 'whatsapp' AND t.touch_no = 1 AND t.active = TRUE
-               AND t.template_name IS NOT NULL
-               AND LOWER(COALESCE(t.provider_status, 'approved')) = 'approved'
-             WHERE p.id = c.prospect_id
-           )`
-      );
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+    const prospects = await AllianceProspects.find({}, {
+      id: 1, name: 1, business_name: 1, phone: 1, source: 1, audience: 1, email: 1, industry: 1, location: 1, consent: 1,
+    }).lean();
+    const prospectById = new Map(prospects.map((p) => [p.id, p]));
+    let contacts = await AllianceInboxContacts.find({}).lean();
+    const sameJson = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+    // 1. Refresh contacts already linked to a prospect
+    const refreshOps = [];
+    for (const c of contacts) {
+      const p = c.prospect_id != null ? prospectById.get(c.prospect_id) : null;
+      if (!p) continue;
+      const phoneTaken = contacts.some((other) => other.id !== c.id && other.phone === p.phone && p.phone != null);
+      const waIdTaken = contacts.some((other) => other.id !== c.id && other.wa_id === p.phone && p.phone != null);
+      const next = {
+        name: p.name ?? p.business_name ?? c.name ?? null,
+        profile_name: p.name ?? p.business_name ?? c.profile_name ?? null,
+        phone: phoneTaken ? c.phone : (p.phone ?? null),
+        wa_id: waIdTaken ? c.wa_id : (p.phone ?? null),
+        source: p.source ?? c.source ?? 'file_upload',
+        custom_fields: {
+          ...(c.custom_fields || {}),
+          business_name: p.business_name ?? null, audience: p.audience ?? null,
+          email: p.email ?? null, industry: p.industry ?? null, location: p.location ?? null,
+        },
+      };
+      if (Object.keys(next).every((key) => sameJson(next[key], c[key]))) continue;
+      refreshOps.push({ updateOne: { filter: { _id: c._id }, update: { $set: { ...next, updated_at: new Date() } } } });
+    }
+    if (refreshOps.length) await AllianceInboxContacts.bulkWrite(refreshOps);
+
+    // 2. Link unlinked contacts to the prospect that has the same phone
+    contacts = await AllianceInboxContacts.find({}).lean();
+    const linkedProspects = new Set(contacts.filter((c) => c.prospect_id != null).map((c) => c.prospect_id));
+    for (const c of contacts) {
+      if (c.prospect_id != null || c.phone == null) continue;
+      const p = prospects.find((candidate) => candidate.phone === c.phone && !linkedProspects.has(candidate.id));
+      if (!p) continue;
+      await AllianceInboxContacts.updateOne({ _id: c._id }, { $set: {
+        prospect_id: p.id,
+        name: p.name ?? p.business_name ?? c.name ?? null,
+        source: c.source ?? p.source ?? 'file_upload',
+        custom_fields: { ...(c.custom_fields || {}), business_name: p.business_name ?? null, audience: p.audience ?? null, email: p.email ?? null },
+        updated_at: new Date(),
+      } });
+      linkedProspects.add(p.id);
+    }
+
+    // 3. Create contacts for prospects that have none
+    contacts = await AllianceInboxContacts.find({}, { id: 1, prospect_id: 1, phone: 1 }).lean();
+    const contactPhones = new Set(contacts.map((c) => c.phone).filter((phone) => phone != null));
+    const contactProspects = new Set(contacts.map((c) => c.prospect_id).filter((id) => id != null));
+    for (const p of prospects) {
+      if (contactProspects.has(p.id) || (p.phone != null && contactPhones.has(p.phone))) continue;
+      await AllianceInboxContacts.create({
+        prospect_id: p.id, wa_id: p.phone ?? null, phone: p.phone ?? null,
+        name: p.name ?? p.business_name ?? null, profile_name: p.name ?? p.business_name ?? null,
+        source: p.source ?? 'file_upload',
+        custom_fields: { business_name: p.business_name ?? null, audience: p.audience ?? null, email: p.email ?? null },
+      });
+      if (p.phone != null) contactPhones.add(p.phone);
+      contactProspects.add(p.id);
+    }
+
+    // 4. Create a conversation for every contact without one
+    contacts = await AllianceInboxContacts.find({}, { id: 1, prospect_id: 1 }).lean();
+    const withConversation = new Set(await AllianceInboxConversations.distinct('contact_id'));
+    for (const c of contacts) {
+      if (withConversation.has(c.id)) continue;
+      const p = c.prospect_id != null ? prospectById.get(c.prospect_id) : null;
+      await AllianceInboxConversations.create({
+        contact_id: c.id,
+        phone_number_id: phoneNumberId,
+        welcome_status: p && p.phone != null && p.consent === true ? 'not_queued' : 'not_eligible',
+      }).catch((error) => { if (error.code !== 11000) throw error; });
+    }
+
+    // 5-7. Queue the welcome template (or flag a missing template) for not_queued conversations
+    const pending = await AllianceInboxConversations.find({ welcome_status: 'not_queued' }, { id: 1, contact_id: 1 }).lean();
+    if (pending.length) {
+      const pendingContacts = new Map((await AllianceInboxContacts.find(
+        { id: { $in: pending.map((cv) => cv.contact_id) } },
+        { id: 1, prospect_id: 1 }
+      ).lean()).map((c) => [c.id, c]));
+      const welcomeTemplates = (await AllianceTemplates.find({
+        channel: 'whatsapp', touch_no: 1, active: true, template_name: { $ne: null },
+      }).lean()).filter((t) => String(t.provider_status ?? 'approved').toLowerCase() === 'approved');
+      for (const cv of pending) {
+        const c = pendingContacts.get(cv.contact_id);
+        if (!c) continue;
+        const p = c.prospect_id != null ? prospectById.get(c.prospect_id) : null;
+        const template = p ? welcomeTemplates.find((t) => t.audience === p.audience) : null;
+        if (!template) {
+          await AllianceInboxConversations.updateOne({ id: cv.id }, { $set: {
+            welcome_status: 'missing_template',
+            welcome_error: 'No approved WhatsApp touch-1 template is configured for this audience.',
+            updated_at: new Date(),
+          } });
+          continue;
+        }
+        const alreadyQueued = await AllianceInboxMessages.exists({
+          conversation_id: cv.id, msg_type: 'template', 'raw_payload.purpose': 'welcome',
+        });
+        if (!alreadyQueued) {
+          await AllianceInboxMessages.create({
+            conversation_id: cv.id, contact_id: c.id, direction: 'outbound', msg_type: 'template',
+            content: template.body, status: 'queued',
+            raw_payload: { purpose: 'welcome', template_name: template.template_name, language: template.language ?? 'en', prospect_id: p.id },
+          });
+        }
+        await AllianceInboxConversations.updateOne({ id: cv.id }, { $set: {
+          welcome_status: 'queued', welcome_template_name: template.template_name, welcome_error: null, updated_at: new Date(),
+        } });
+      }
     }
   };
-  const messageSelect = `
-    SELECT m.id, m.wa_msg_id, m.direction, m.msg_type, m.msg_type AS type,
-           CASE WHEN m.msg_type='unsupported' AND m.content='[unsupported]'
-             THEN 'This WhatsApp message type is not available through Meta. Ask the sender to resend it as text, image, audio, or document.'
-             ELSE m.content END AS content,
-           m.media_id, m.media_url, m.mime_type, m.filename, m.status, m.reactions,
-           m.is_starred, m.is_deleted, m.pinned_until, m.sent_at, m.sent_at AS timestamp,
-           COALESCE(m.raw_payload->'buttons',template.buttons,'[]'::jsonb) AS template_buttons,
-           (m.raw_payload->>'sender_type' = 'ai') AS is_ai,
-           COALESCE(m.raw_payload->>'sender_type', CASE WHEN m.raw_payload->>'purpose'='automated_followup' THEN 'automation' END) AS sender_type,
-           CASE WHEN parent.id IS NULL THEN NULL ELSE json_build_object(
-             'id', parent.id, 'wa_msg_id', parent.wa_msg_id, 'content', parent.content,
-             'media_url', parent.media_url, 'type', parent.msg_type
-           ) END AS reply_to
-    FROM alliance_inbox_messages m
-    LEFT JOIN templates template ON template.name=m.raw_payload->>'template_name'
-    LEFT JOIN alliance_inbox_messages parent ON parent.wa_msg_id = m.reply_to_wa_msg_id`;
+
+  // Tags of each contact: Map(contact_id -> [{ id, name, color }])
+  const loadContactTags = async (contactIds) => {
+    const links = await AllianceContactTags.find({ contact_id: { $in: contactIds } }, { contact_id: 1, tag_id: 1 }).lean();
+    const tags = new Map((await AllianceInboxTags.find(
+      { id: { $in: [...new Set(links.map((l) => l.tag_id))] } },
+      { _id: 0, id: 1, name: 1, color: 1 }
+    ).lean()).map((t) => [t.id, t]));
+    const byContact = new Map();
+    for (const link of links) {
+      const tag = tags.get(link.tag_id);
+      if (!tag) continue;
+      if (!byContact.has(link.contact_id)) byContact.set(link.contact_id, []);
+      byContact.get(link.contact_id).push({ id: tag.id, name: tag.name, color: tag.color });
+    }
+    return byContact;
+  };
+
+  // Messages shaped for the inbox UI (newest first), with reply previews and template buttons.
+  const loadMessages = async (filter, skip, limit) => {
+    const rows = await AllianceInboxMessages.find(filter).sort({ sent_at: -1 }).skip(skip).limit(limit).lean();
+    const parentIds = [...new Set(rows.map((m) => m.reply_to_wa_msg_id).filter(Boolean))];
+    const parents = new Map((parentIds.length ? await AllianceInboxMessages.find(
+      { wa_msg_id: { $in: parentIds } },
+      { id: 1, wa_msg_id: 1, content: 1, media_url: 1, msg_type: 1 }
+    ).lean() : []).map((p) => [p.wa_msg_id, p]));
+    const templateNames = [...new Set(rows.map((m) => m.raw_payload?.template_name).filter(Boolean))];
+    const templates = new Map((templateNames.length ? await Templates.find({ name: { $in: templateNames } }, { name: 1, buttons: 1 }).lean() : [])
+      .map((t) => [t.name, t]));
+    return rows.map((m) => {
+      const payload = m.raw_payload || {};
+      const parent = m.reply_to_wa_msg_id ? parents.get(m.reply_to_wa_msg_id) : null;
+      const senderType = payload.sender_type ?? (payload.purpose === 'automated_followup' ? 'automation' : null);
+      return {
+        id: m.id,
+        wa_msg_id: m.wa_msg_id,
+        direction: m.direction,
+        msg_type: m.msg_type,
+        type: m.msg_type,
+        content: m.msg_type === 'unsupported' && m.content === '[unsupported]'
+          ? 'This WhatsApp message type is not available through Meta. Ask the sender to resend it as text, image, audio, or document.'
+          : m.content,
+        media_id: m.media_id,
+        media_url: m.media_url,
+        mime_type: m.mime_type,
+        filename: m.filename,
+        status: m.status,
+        reactions: m.reactions,
+        is_starred: m.is_starred,
+        is_deleted: m.is_deleted,
+        pinned_until: m.pinned_until,
+        sent_at: m.sent_at,
+        timestamp: m.sent_at,
+        template_buttons: payload.buttons ?? templates.get(payload.template_name)?.buttons ?? [],
+        is_ai: payload.sender_type == null ? null : payload.sender_type === 'ai',
+        sender_type: senderType,
+        reply_to: parent ? { id: parent.id, wa_msg_id: parent.wa_msg_id, content: parent.content, media_url: parent.media_url, type: parent.msg_type } : null,
+      };
+    });
+  };
 
   router.use(async (_req, res, next) => {
     try { await ensureAllianceSchema(); next(); }
@@ -207,48 +272,46 @@ function createAllianceInboxRouter({ auth, io }) {
               error.error_data?.details,
             ].filter(Boolean).join(': ')).filter(Boolean).join(' | ')
               || (statusEvent.status === 'failed' ? 'Meta reported message delivery failed without additional details.' : null);
-            const updated = await db.query(
-              `UPDATE alliance_inbox_messages SET status = $1, raw_payload = raw_payload || $2::jsonb WHERE wa_msg_id = $3 RETURNING *`,
-              [statusEvent.status, JSON.stringify({ status_event: statusEvent }), statusEvent.id]
+            const updated = await AllianceInboxMessages.updateMany(
+              { wa_msg_id: statusEvent.id },
+              { $set: { status: statusEvent.status, 'raw_payload.status_event': statusEvent } }
             );
-            if (updated.rowCount) io.emit('alliance_message_status', { wa_message_id: statusEvent.id, status: statusEvent.status });
-            await db.query(
-              `UPDATE alliance_whatsapp_campaign_recipients
-               SET status=$1,error_message=CASE WHEN $1='failed' THEN $3 ELSE error_message END
-               WHERE wa_msg_id=$2 AND status IN ('sent','delivered','read','failed')`,
-              [statusEvent.status, statusEvent.id, failureReason]
+            if (updated.matchedCount) io.emit('alliance_message_status', { wa_message_id: statusEvent.id, status: statusEvent.status });
+            await AllianceWhatsappCampaignRecipients.updateMany(
+              { wa_msg_id: statusEvent.id, status: { $in: ['sent', 'delivered', 'read', 'failed'] } },
+              { $set: statusEvent.status === 'failed'
+                ? { status: statusEvent.status, error_message: failureReason }
+                : { status: statusEvent.status } }
             ).catch(() => {});
             if (statusEvent.status === 'failed') {
-              await db.query(
-                `UPDATE alliance_whatsapp_followup_jobs job
-                 SET status='cancelled',error_message=$2
-                 FROM alliance_whatsapp_campaign_recipients recipient
-                 WHERE recipient.campaign_id=job.campaign_id AND recipient.prospect_id=job.prospect_id
-                   AND recipient.wa_msg_id=$1 AND job.status IN ('pending','claimed')`,
-                [statusEvent.id, `Initial WhatsApp delivery failed: ${failureReason}`.slice(0, 2000)]
-              ).catch(() => {});
+              try {
+                const failedRecipients = await AllianceWhatsappCampaignRecipients.find({ wa_msg_id: statusEvent.id }, { campaign_id: 1, prospect_id: 1 }).lean();
+                for (const recipient of failedRecipients) {
+                  await AllianceWhatsappFollowupJobs.updateMany(
+                    { campaign_id: recipient.campaign_id, prospect_id: recipient.prospect_id, status: { $in: ['pending', 'claimed'] } },
+                    { $set: { status: 'cancelled', error_message: `Initial WhatsApp delivery failed: ${failureReason}`.slice(0, 2000) } }
+                  );
+                }
+              } catch (_error) { /* best effort, as before */ }
             }
           }
 
           for (const incoming of value.messages || []) {
             const phone = normalizePhone(incoming.from);
             const profileName = value.contacts?.find((item) => normalizePhone(item.wa_id) === phone)?.profile?.name || phone;
-            const client = await db.connect();
             try {
-              await client.query('BEGIN');
-              const contactResult = await client.query(
-                `INSERT INTO alliance_inbox_contacts (wa_id, phone, name, profile_name)
-                 VALUES ($1,$1,$2,$2)
-                 ON CONFLICT (wa_id) DO UPDATE SET profile_name = EXCLUDED.profile_name, updated_at = NOW()
-                 RETURNING *`, [phone, profileName]
+              const contact = await upsertOne(
+                AllianceInboxContacts,
+                { wa_id: phone },
+                { $set: { profile_name: profileName, updated_at: new Date() } },
+                { phone, name: profileName, profile_name: profileName }
               );
-              const contact = contactResult.rows[0];
-              const conversationResult = await client.query(
-                `INSERT INTO alliance_inbox_conversations (contact_id, phone_number_id)
-                 VALUES ($1,$2) ON CONFLICT (contact_id) DO UPDATE SET updated_at = NOW() RETURNING *`,
-                [contact.id, settings.phone_number_id]
+              const conversation = await upsertOne(
+                AllianceInboxConversations,
+                { contact_id: contact.id },
+                { $set: { updated_at: new Date() } },
+                { phone_number_id: settings.phone_number_id }
               );
-              const conversation = conversationResult.rows[0];
               const type = incoming.type || 'text';
               const typedPayload = incoming[type] || {};
               const interactiveReply = incoming.interactive?.button_reply || incoming.interactive?.list_reply;
@@ -276,45 +339,51 @@ function createAllianceInboxRouter({ auth, io }) {
               const mediaId = ['image', 'video', 'audio', 'document', 'sticker'].includes(type) ? typedPayload.id : null;
               const mediaUrl = mediaId ? `/api/alliance-inbox/media/${mediaId}` : null;
               const replyToId = incoming.context?.id || null;
-              const saved = await client.query(
-                `INSERT INTO alliance_inbox_messages
-                  (conversation_id, contact_id, wa_msg_id, direction, msg_type, content, media_id, media_url, mime_type, filename, status, reply_to_wa_msg_id, raw_payload, sent_at)
-                 VALUES ($1,$2,$3,'inbound',$4,$5,$6,$7,$8,$9,'received',$10,$11,to_timestamp($12))
-                 ON CONFLICT (wa_msg_id) DO NOTHING RETURNING *`,
-                [conversation.id, contact.id, incoming.id, type, content, mediaId, mediaUrl, typedPayload.mime_type || null,
-                  typedPayload.filename || null, replyToId, JSON.stringify(incoming), Number(incoming.timestamp || Math.floor(Date.now() / 1000))]
-              );
-              if (saved.rowCount) {
-                await client.query(
-                  `UPDATE alliance_inbox_conversations SET unread_count = unread_count + 1, last_message = $1,
-                   last_message_at = $2, last_inbound_at = $2, ai_nudge_count = 0, updated_at = NOW() WHERE id = $3`,
-                  [content, saved.rows[0].sent_at, conversation.id]
+              const saved = await AllianceInboxMessages.exists({ wa_msg_id: incoming.id }) ? null : await insertIgnore(AllianceInboxMessages, {
+                conversation_id: conversation.id,
+                contact_id: contact.id,
+                wa_msg_id: incoming.id,
+                direction: 'inbound',
+                msg_type: type,
+                content,
+                media_id: mediaId,
+                media_url: mediaUrl,
+                mime_type: typedPayload.mime_type || null,
+                filename: typedPayload.filename || null,
+                status: 'received',
+                reply_to_wa_msg_id: replyToId,
+                raw_payload: incoming,
+                sent_at: new Date(Number(incoming.timestamp || Math.floor(Date.now() / 1000)) * 1000),
+              });
+              if (saved) {
+                await AllianceInboxConversations.updateOne(
+                  { id: conversation.id },
+                  { $inc: { unread_count: 1 }, $set: { last_message: content, last_message_at: saved.sent_at, last_inbound_at: saved.sent_at, ai_nudge_count: 0, updated_at: new Date() } }
                 );
                 if (contact.prospect_id) {
-                  await client.query(`UPDATE alliance_prospects SET status='replied',updated_at=NOW() WHERE id=$1 AND status NOT IN ('converted','closed','not_interested','unsubscribed')`,[contact.prospect_id]);
-                  await client.query(
-                    `UPDATE alliance_whatsapp_campaign_recipients SET status='cancelled',error_message='Recipient replied.'
-                     WHERE prospect_id=$1 AND status='queued'`,
-                    [contact.prospect_id]
+                  await AllianceProspects.updateOne(
+                    { id: contact.prospect_id, status: { $nin: ['converted', 'closed', 'not_interested', 'unsubscribed', null] } },
+                    { $set: { status: 'replied', updated_at: new Date() } }
                   );
-                  await client.query(
-                    `UPDATE alliance_whatsapp_followup_jobs SET status='cancelled',error_message='Recipient replied.'
-                     WHERE prospect_id=$1 AND status IN ('pending','claimed')`,
-                    [contact.prospect_id]
+                  await AllianceWhatsappCampaignRecipients.updateMany(
+                    { prospect_id: contact.prospect_id, status: 'queued' },
+                    { $set: { status: 'cancelled', error_message: 'Recipient replied.' } }
+                  );
+                  await AllianceWhatsappFollowupJobs.updateMany(
+                    { prospect_id: contact.prospect_id, status: { $in: ['pending', 'claimed'] } },
+                    { $set: { status: 'cancelled', error_message: 'Recipient replied.' } }
                   );
                   await scoreAllianceProspect(contact.prospect_id, {
                     message: content,
                     channel: 'whatsapp',
                     eventKey: incoming.id,
-                  }, client);
+                  });
                 }
               }
-              await client.query('COMMIT');
-              if (saved.rowCount) io.emit('alliance_incoming_message', { lead_id: String(contact.id), message: { ...saved.rows[0], type, timestamp: saved.rows[0].sent_at } });
+              if (saved) io.emit('alliance_incoming_message', { lead_id: String(contact.id), message: { ...saved, type, timestamp: saved.sent_at } });
             } catch (error) {
-              await client.query('ROLLBACK');
               console.error('Alliance inbound message failed:', error);
-            } finally { client.release(); }
+            }
           }
         }
       }
@@ -323,8 +392,8 @@ function createAllianceInboxRouter({ auth, io }) {
 
   router.get('/media/:mediaId', async (req, res) => {
     try {
-      const referenced = await db.query(`SELECT 1 FROM alliance_inbox_messages WHERE media_id = $1 LIMIT 1`, [req.params.mediaId]);
-      if (!referenced.rowCount) return res.sendStatus(404);
+      const referenced = await AllianceInboxMessages.exists({ media_id: req.params.mediaId });
+      if (!referenced) return res.sendStatus(404);
       const settings = await configuredPhoneId();
       const token = accessToken(settings);
       if (!token) return res.status(503).json({ error: 'Alliance WhatsApp token is not configured.' });
@@ -340,8 +409,8 @@ function createAllianceInboxRouter({ auth, io }) {
 
   router.get('/tags', async (req, res) => {
     try {
-      const result = await db.query(`SELECT id, name, color FROM alliance_inbox_tags ORDER BY name ASC`);
-      res.json(result.rows);
+      const tags = await AllianceInboxTags.find({}, { _id: 0, id: 1, name: 1, color: 1 }).sort({ name: 1 }).lean();
+      res.json(tags);
     } catch (e) {
       res.status(500).json({ error: 'Failed to fetch tags' });
     }
@@ -351,11 +420,8 @@ function createAllianceInboxRouter({ auth, io }) {
     try {
       const { name, color } = req.body;
       if (!name) return res.status(400).json({ error: 'Tag name is required.' });
-      const result = await db.query(
-        `INSERT INTO alliance_inbox_tags (name, color) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET color = EXCLUDED.color RETURNING *`,
-        [name.trim(), color || '#00a884']
-      );
-      res.json(result.rows[0]);
+      const tag = await upsertOne(AllianceInboxTags, { name: name.trim() }, { $set: { color: color || '#00a884' } }, { color: color || '#00a884' });
+      res.json(tag);
     } catch (e) {
       res.status(500).json({ error: 'Failed to create tag' });
     }
@@ -363,7 +429,7 @@ function createAllianceInboxRouter({ auth, io }) {
 
   router.delete('/tags/:id', async (req, res) => {
     try {
-      await db.query(`DELETE FROM alliance_inbox_tags WHERE id = $1`, [req.params.id]);
+      await deleteCascade('alliance_inbox_tags', { id: req.params.id });
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: 'Failed to delete tag' });
@@ -373,7 +439,9 @@ function createAllianceInboxRouter({ auth, io }) {
   router.post('/contacts/:id/tags', async (req, res) => {
     try {
       const { tagId } = req.body;
-      await db.query(`INSERT INTO alliance_contact_tags (contact_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [req.params.id, tagId]);
+      await assertReferenceExists('alliance_inbox_contacts', 'id', req.params.id, 'alliance_contact_tags');
+      await assertReferenceExists('alliance_inbox_tags', 'id', tagId, 'alliance_contact_tags');
+      await insertIgnore(AllianceContactTags, { contact_id: req.params.id, tag_id: tagId, created_at: new Date() });
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: 'Failed to assign tag' });
@@ -382,7 +450,7 @@ function createAllianceInboxRouter({ auth, io }) {
 
   router.delete('/contacts/:id/tags/:tagId', async (req, res) => {
     try {
-      await db.query(`DELETE FROM alliance_contact_tags WHERE contact_id = $1 AND tag_id = $2`, [req.params.id, req.params.tagId]);
+      await AllianceContactTags.deleteMany({ contact_id: req.params.id, tag_id: req.params.tagId });
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: 'Failed to remove tag' });
@@ -397,97 +465,105 @@ function createAllianceInboxRouter({ auth, io }) {
     const limit = Math.min(Number(req.query.limit) || 20, 100);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
     const search = String(req.query.search || '').trim();
-    const result = await db.query(
-      `SELECT c.id, c.name, c.profile_name, c.phone, c.status, c.interest, c.source, c.prospect_id,
-              COALESCE(p.ai_score,10) AS score,
-              cv.last_message AS last, cv.last_message AS last_msg, cv.last_message_at AS time,
-              cv.unread_count AS unread, cv.last_inbound_at, cv.welcome_status,
-              cv.welcome_template_name, cv.welcome_wa_msg_id, cv.welcome_sent_at, cv.welcome_error,
-              (
-                SELECT COALESCE(json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color)), '[]')
-                FROM alliance_contact_tags ct
-                JOIN alliance_inbox_tags t ON t.id = ct.tag_id
-                WHERE ct.contact_id = c.id
-              ) AS tags
-       FROM alliance_inbox_contacts c
-       JOIN alliance_inbox_conversations cv ON cv.contact_id = c.id
-       LEFT JOIN alliance_prospects p ON p.id = c.prospect_id
-       WHERE ($1 = '' OR c.name ILIKE '%' || $1 || '%' OR c.phone ILIKE '%' || $1 || '%')
-       ORDER BY cv.last_message_at DESC NULLS LAST LIMIT $2 OFFSET $3`,
-      [search, limit, offset]
-    );
-    const count = await db.query(`SELECT COUNT(*)::int AS total FROM alliance_inbox_contacts`);
-    res.json({ leads: result.rows, total: count.rows[0].total });
+    const searchPattern = search ? new RegExp(escapeRegex(search), 'i') : null;
+    const page = await AllianceInboxConversations.aggregate([
+      { $lookup: { from: 'alliance_inbox_contacts', localField: 'contact_id', foreignField: 'id', as: 'c' } },
+      { $unwind: '$c' },
+      ...(searchPattern ? [{ $match: { $or: [{ 'c.name': searchPattern }, { 'c.phone': searchPattern }] } }] : []),
+      { $sort: { last_message_at: -1, id: -1 } },
+      { $skip: offset },
+      { $limit: limit },
+    ]);
+    const prospects = await AllianceProspects.find(
+      { id: { $in: page.map((row) => row.c.prospect_id).filter((id) => id != null) } },
+      { id: 1, ai_score: 1 }
+    ).lean();
+    const scoreByProspect = new Map(prospects.map((p) => [p.id, p.ai_score]));
+    const tagsByContact = await loadContactTags(page.map((row) => row.c.id));
+    const leads = page.map(({ c, ...cv }) => ({
+      id: c.id, name: c.name, profile_name: c.profile_name, phone: c.phone, status: c.status, interest: c.interest,
+      source: c.source, prospect_id: c.prospect_id,
+      score: scoreByProspect.get(c.prospect_id) ?? 10,
+      last: cv.last_message, last_msg: cv.last_message, time: cv.last_message_at,
+      unread: cv.unread_count, last_inbound_at: cv.last_inbound_at, welcome_status: cv.welcome_status,
+      welcome_template_name: cv.welcome_template_name, welcome_wa_msg_id: cv.welcome_wa_msg_id,
+      welcome_sent_at: cv.welcome_sent_at, welcome_error: cv.welcome_error,
+      tags: tagsByContact.get(c.id) || [],
+    }));
+    const total = await AllianceInboxContacts.countDocuments();
+    res.json({ leads, total });
   });
 
   router.get('/contacts/:id', async (req, res) => {
-    const result = await db.query(
-      `SELECT c.*, COALESCE(p.ai_score,10) AS score, cv.last_inbound_at, cv.welcome_status, cv.welcome_template_name,
-              cv.welcome_wa_msg_id, cv.welcome_sent_at, cv.welcome_error,
-              (
-                SELECT COALESCE(json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color)), '[]')
-                FROM alliance_contact_tags ct
-                JOIN alliance_inbox_tags t ON t.id = ct.tag_id
-                WHERE ct.contact_id = c.id
-              ) AS tags
-       FROM alliance_inbox_contacts c
-       JOIN alliance_inbox_conversations cv ON cv.contact_id = c.id
-       LEFT JOIN alliance_prospects p ON p.id = c.prospect_id
-       WHERE c.id = $1`,
-      [req.params.id]
-    );
-    if (!result.rowCount) return res.status(404).json({ error: 'Alliance contact not found.' });
-    res.json({ lead: result.rows[0] });
+    const contact = await AllianceInboxContacts.findOne({ id: req.params.id }, NO_ID).lean();
+    const cv = contact ? await AllianceInboxConversations.findOne({ contact_id: contact.id }).lean() : null;
+    if (!contact || !cv) return res.status(404).json({ error: 'Alliance contact not found.' });
+    const prospect = contact.prospect_id != null ? await AllianceProspects.findOne({ id: contact.prospect_id }, { ai_score: 1 }).lean() : null;
+    const tagsByContact = await loadContactTags([contact.id]);
+    res.json({ lead: {
+      ...contact,
+      score: prospect?.ai_score ?? 10,
+      last_inbound_at: cv.last_inbound_at, welcome_status: cv.welcome_status, welcome_template_name: cv.welcome_template_name,
+      welcome_wa_msg_id: cv.welcome_wa_msg_id, welcome_sent_at: cv.welcome_sent_at, welcome_error: cv.welcome_error,
+      tags: tagsByContact.get(contact.id) || [],
+    } });
   });
 
   router.patch('/contacts/:id', async (req, res) => {
-    const result = await db.query(
-      `UPDATE alliance_inbox_contacts SET name = COALESCE($1,name), status = COALESCE($2,status),
-       interest = COALESCE($3,interest), updated_at = NOW() WHERE id = $4 RETURNING *`,
-      [req.body.name || null, req.body.status || null, req.body.interest || null, req.params.id]
-    );
-    if (!result.rowCount) return res.status(404).json({ error: 'Alliance contact not found.' });
-    if (result.rows[0].prospect_id && req.body.status) {
+    const changes = { updated_at: new Date() };
+    if (req.body.name) changes.name = req.body.name;
+    if (req.body.status) changes.status = req.body.status;
+    if (req.body.interest) changes.interest = req.body.interest;
+    const updated = await AllianceInboxContacts.findOneAndUpdate({ id: req.params.id }, { $set: changes }, { new: true, projection: NO_ID }).lean();
+    if (!updated) return res.status(404).json({ error: 'Alliance contact not found.' });
+    if (updated.prospect_id && req.body.status) {
       const status = String(req.body.status).toLowerCase();
       const allowed = ['pending','in_process','interested','converted','closed','complete','completed','not_interested','unsubscribed'];
-      if (allowed.includes(status)) await db.query(`UPDATE alliance_prospects SET status=$1,updated_at=NOW() WHERE id=$2`,[status,result.rows[0].prospect_id]);
+      if (allowed.includes(status)) await AllianceProspects.updateOne({ id: updated.prospect_id }, { $set: { status, updated_at: new Date() } });
       if (['converted','closed','complete','completed','not_interested','unsubscribed'].includes(status)) {
-        await db.query(`UPDATE alliance_whatsapp_followup_jobs SET status='cancelled',error_message=$1 WHERE prospect_id=$2 AND status IN ('pending','claimed')`,[`Prospect ${status}.`,result.rows[0].prospect_id]);
+        await AllianceWhatsappFollowupJobs.updateMany(
+          { prospect_id: updated.prospect_id, status: { $in: ['pending', 'claimed'] } },
+          { $set: { status: 'cancelled', error_message: `Prospect ${status}.` } }
+        );
       }
     }
-    res.json({ lead: result.rows[0] });
+    res.json({ lead: updated });
   });
 
   router.get('/contacts/:id/messages', async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 100, 200);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
-    const result = await db.query(
-      `${messageSelect} WHERE m.contact_id = $1 ORDER BY m.sent_at DESC LIMIT $2 OFFSET $3`,
-      [req.params.id, limit, offset]
-    );
-    res.json({ messages: result.rows.reverse() });
+    const messages = await loadMessages({ contact_id: req.params.id }, offset, limit);
+    res.json({ messages: messages.reverse() });
   });
 
   router.put('/conversations/:contactId/read', async (req, res) => {
-    await db.query(`UPDATE alliance_inbox_conversations SET unread_count = 0 WHERE contact_id = $1`, [req.params.contactId]);
+    await AllianceInboxConversations.updateMany({ contact_id: req.params.contactId }, { $set: { unread_count: 0 } });
     res.json({ success: true });
   });
 
   router.post('/contacts/:id/ai-suggestion', async (req, res) => {
     try {
       if (!openRouter.isConfigured) return res.status(503).json({ error: 'OpenRouter is not configured on the API server.' });
-      const contact = await db.query(
-        `SELECT c.id,c.name,c.phone,c.prospect_id,p.business_name,p.audience,p.industry,p.location,p.status,a.brand
-         FROM alliance_inbox_contacts c
-         LEFT JOIN alliance_prospects p ON p.id=c.prospect_id
-         LEFT JOIN alliance_audiences a ON a.code=p.audience
-         WHERE c.id=$1`, [req.params.id]
-      );
-      if (!contact.rowCount) return res.status(404).json({ error: 'Alliance contact not found.' });
-      const history = await db.query(
-        `SELECT direction,content,msg_type,sent_at FROM alliance_inbox_messages
-         WHERE contact_id=$1 AND is_deleted=FALSE ORDER BY sent_at DESC LIMIT 30`, [req.params.id]
-      );
+      const contactRow = await AllianceInboxContacts.findOne({ id: req.params.id }, { _id: 0, id: 1, name: 1, phone: 1, prospect_id: 1 }).lean();
+      if (!contactRow) return res.status(404).json({ error: 'Alliance contact not found.' });
+      const prospectRow = contactRow.prospect_id != null
+        ? await AllianceProspects.findOne({ id: contactRow.prospect_id }, { business_name: 1, audience: 1, industry: 1, location: 1, status: 1 }).lean()
+        : null;
+      const audienceRow = prospectRow?.audience ? await AllianceAudiences.findOne({ code: prospectRow.audience }, { brand: 1 }).lean() : null;
+      const contact = { rows: [{
+        ...contactRow,
+        business_name: prospectRow?.business_name ?? null,
+        audience: prospectRow?.audience ?? null,
+        industry: prospectRow?.industry ?? null,
+        location: prospectRow?.location ?? null,
+        status: prospectRow?.status ?? null,
+        brand: audienceRow?.brand ?? null,
+      }] };
+      const history = { rows: await AllianceInboxMessages.find(
+        { contact_id: req.params.id, is_deleted: false },
+        { _id: 0, direction: 1, content: 1, msg_type: 1, sent_at: 1 }
+      ).sort({ sent_at: -1 }).limit(30).lean() };
       const latestInbound = history.rows.find((message) => message.direction === 'inbound');
       const brain = await getAllianceBrainContext(contact.rows[0].audience, latestInbound?.content);
       const durableLeadMemory = contact.rows[0].prospect_id ? await getAllianceLeadMemory(contact.rows[0].prospect_id) : null;
@@ -555,11 +631,10 @@ Merge the latest exchange into durable memory while preserving relevant prior fa
       }
     }
     const fileUrl = `/uploads/alliance-media/${uploaded.filename}`;
-    await db.query(
-      `INSERT INTO alliance_inbox_media (storage_path, public_url, mime_type, filename, file_size, direction)
-       VALUES ($1,$2,$3,$4,$5,'outbound')`,
-      [uploaded.path, fileUrl, uploaded.mimetype, req.file.originalname, req.file.size]
-    );
+    await AllianceInboxMedia.create({
+      storage_path: uploaded.path, public_url: fileUrl, mime_type: uploaded.mimetype,
+      filename: req.file.originalname, file_size: req.file.size, direction: 'outbound',
+    });
 
     // Upload the file directly to Meta's media API so the send step can use
     // a stable media_id instead of a URL. This works even when the server is
@@ -602,36 +677,30 @@ Merge the latest exchange into durable memory while preserving relevant prior fa
   });
 
   router.post('/contacts/:id/messages', async (req, res) => {
-    const contactResult = await db.query(
-      `SELECT c.*, cv.id AS conversation_id, cv.last_inbound_at FROM alliance_inbox_contacts c
-       JOIN alliance_inbox_conversations cv ON cv.contact_id = c.id WHERE c.id = $1`, [req.params.id]
-    );
-    if (!contactResult.rowCount) return res.status(404).json({ error: 'Alliance contact not found.' });
-    const contact = contactResult.rows[0];
+    const contactRow = await AllianceInboxContacts.findOne({ id: req.params.id }, NO_ID).lean();
+    const contactConversation = contactRow ? await AllianceInboxConversations.findOne({ contact_id: contactRow.id }, { id: 1, last_inbound_at: 1 }).lean() : null;
+    if (!contactRow || !contactConversation) return res.status(404).json({ error: 'Alliance contact not found.' });
+    const contact = { ...contactRow, conversation_id: contactConversation.id, last_inbound_at: contactConversation.last_inbound_at };
     const settings = await configuredPhoneId();
     const token = accessToken(settings);
     if (!settings?.phone_number_id || !token) return res.status(503).json({ error: 'Alliance WhatsApp Phone Number ID or access token is not configured.' });
     if (!contact.last_inbound_at || Date.now() - new Date(contact.last_inbound_at).getTime() > 24 * 60 * 60 * 1000) {
       try {
-        const recent = await db.query(
-          `SELECT id FROM alliance_inbox_messages
-           WHERE contact_id=$1 AND direction='outbound' AND msg_type='template'
-             AND raw_payload->>'purpose'='window_reopen'
-             AND sent_at>NOW()-INTERVAL '6 hours' LIMIT 1`,
-          [contact.id]
-        );
-        if (recent.rowCount) return res.json({
+        const recent = await AllianceInboxMessages.exists({
+          contact_id: contact.id, direction: 'outbound', msg_type: 'template',
+          'raw_payload.purpose': 'window_reopen', sent_at: { $gt: new Date(Date.now() - 6 * 60 * 60 * 1000) },
+        });
+        if (recent) return res.json({
           success: true, window_closed: true, template_sent: false,
           message: 'The service window is closed. A reopen template was already sent recently; wait for the recipient to reply.',
         });
         const preferred = String(process.env.ALLIANCE_WA_REOPEN_TEMPLATE || 'common_welcome_message');
-        const templateResult = await db.query(
-          `SELECT id,name,language,body,status FROM templates
-           WHERE LOWER(status)='approved' AND name=ANY($1::text[])
-           ORDER BY CASE WHEN name=$2 THEN 0 WHEN name='common_welcome_message' THEN 1 ELSE 2 END`,
-          [[preferred,'common_welcome_message','new_lead_welcome'],preferred]
-        );
-        const reopenTemplate = templateResult.rows.find((item) => !/\{\{\d+\}\}/.test(String(item.body || '')));
+        const rank = (name) => (name === preferred ? 0 : name === 'common_welcome_message' ? 1 : 2);
+        const templateRows = (await Templates.find(
+          { status: /^approved$/i, name: { $in: [preferred, 'common_welcome_message', 'new_lead_welcome'] } },
+          { _id: 0, id: 1, name: 1, language: 1, body: 1, status: 1 }
+        ).lean()).sort((a, b) => rank(a.name) - rank(b.name));
+        const reopenTemplate = templateRows.find((item) => !/\{\{\d+\}\}/.test(String(item.body || '')));
         if (!reopenTemplate) return res.status(409).json({
           error: 'The 24-hour window is closed and no approved zero-variable reopen template is configured.',
           reason: 'window_closed', template_sent: false,
@@ -641,14 +710,17 @@ Merge the latest exchange into durable memory while preserving relevant prior fa
           template: { name: reopenTemplate.name, language: { code: reopenTemplate.language || 'en' } },
         }, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 20000 });
         const waMessageId = meta.data?.messages?.[0]?.id || null;
-        const saved = await db.query(
-          `INSERT INTO alliance_inbox_messages
-            (conversation_id,contact_id,wa_msg_id,direction,msg_type,content,status,raw_payload,sent_at)
-           VALUES($1,$2,$3,'outbound','template',$4,'sent',$5::jsonb,NOW()) RETURNING *`,
-          [contact.conversation_id,contact.id,waMessageId,reopenTemplate.body,JSON.stringify({ purpose:'window_reopen',template_name:reopenTemplate.name,attempted_message:String(req.body.message||'') })]
+        const saved = (await AllianceInboxMessages.create({
+          conversation_id: contact.conversation_id, contact_id: contact.id, wa_msg_id: waMessageId,
+          direction: 'outbound', msg_type: 'template', content: reopenTemplate.body, status: 'sent',
+          raw_payload: { purpose: 'window_reopen', template_name: reopenTemplate.name, attempted_message: String(req.body.message || '') },
+          sent_at: new Date(),
+        })).toObject();
+        await AllianceInboxConversations.updateOne(
+          { id: contact.conversation_id },
+          { $set: { last_message: reopenTemplate.body, last_message_at: new Date(), updated_at: new Date() } }
         );
-        await db.query(`UPDATE alliance_inbox_conversations SET last_message=$1,last_message_at=NOW(),updated_at=NOW() WHERE id=$2`,[reopenTemplate.body,contact.conversation_id]);
-        const message = { ...saved.rows[0], type: 'template', timestamp: saved.rows[0].sent_at };
+        const message = { ...saved, type: 'template', timestamp: saved.sent_at };
         io.emit('alliance_outgoing_message',{lead_id:String(contact.id),message});
         return res.json({
           success: true, window_closed: true, template_sent: true, message,
@@ -693,21 +765,23 @@ Merge the latest exchange into durable memory while preserving relevant prior fa
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       });
       const waMessageId = meta.data.messages?.[0]?.id;
-      const saved = await db.query(
-        `INSERT INTO alliance_inbox_messages
-          (conversation_id, contact_id, wa_msg_id, direction, msg_type, content, media_url, status, reply_to_wa_msg_id, raw_payload)
-         VALUES ($1,$2,$3,'outbound',$4,$5,$6,'sent',$7,$8) RETURNING *`,
-        [contact.conversation_id, contact.id, waMessageId, type, content, req.body.mediaUrl || null,
-          req.body.replyToMessageId || null, JSON.stringify({ ...meta.data, sender_type: req.body.senderType === 'ai' ? 'ai' : 'human' })]
+      const saved = (await AllianceInboxMessages.create({
+        conversation_id: contact.conversation_id, contact_id: contact.id, wa_msg_id: waMessageId,
+        direction: 'outbound', msg_type: type, content, media_url: req.body.mediaUrl || null, status: 'sent',
+        reply_to_wa_msg_id: req.body.replyToMessageId || null,
+        raw_payload: { ...meta.data, sender_type: req.body.senderType === 'ai' ? 'ai' : 'human' },
+      })).toObject();
+      await AllianceInboxConversations.updateOne(
+        { id: contact.conversation_id },
+        { $set: { last_message: content || `[${type}]`, last_message_at: new Date(), updated_at: new Date() } }
       );
-      await db.query(`UPDATE alliance_inbox_conversations SET last_message = $1, last_message_at = NOW(), updated_at = NOW() WHERE id = $2`, [content || `[${type}]`, contact.conversation_id]);
       if (contact.prospect_id) {
-        scheduleAllianceInactivityReminder(contact.prospect_id, saved.rows[0].sent_at).catch((error) => {
+        scheduleAllianceInactivityReminder(contact.prospect_id, saved.sent_at).catch((error) => {
           console.error('Alliance inactivity reminder scheduling failed:', error.message);
         });
       }
       const senderType = req.body.senderType === 'ai' ? 'ai' : 'human';
-      const message = { ...saved.rows[0], type, timestamp: saved.rows[0].sent_at, sender_type: senderType, is_ai: senderType === 'ai' };
+      const message = { ...saved, type, timestamp: saved.sent_at, sender_type: senderType, is_ai: senderType === 'ai' };
       io.emit('alliance_outgoing_message', { lead_id: String(contact.id), message });
       res.json({ success: true, message });
     } catch (error) {
@@ -717,24 +791,20 @@ Merge the latest exchange into durable memory while preserving relevant prior fa
   });
 
   const updateMessage = (suffix, build) => router.put(`/messages/:id/${suffix}`, async (req, res) => {
-    const { sql, params } = build(req);
-    const result = await db.query(`${sql} RETURNING *`, params);
-    if (!result.rowCount) return res.status(404).json({ error: 'Message not found.' });
-    io.emit('alliance_message_edited', result.rows[0]);
-    res.json({ success: true, message: result.rows[0] });
+    const updated = await AllianceInboxMessages.findOneAndUpdate({ id: req.params.id }, build(req), { new: true, projection: NO_ID }).lean();
+    if (!updated) return res.status(404).json({ error: 'Message not found.' });
+    io.emit('alliance_message_edited', updated);
+    res.json({ success: true, message: updated });
   });
-  updateMessage('edit', (req) => ({ sql: `UPDATE alliance_inbox_messages SET content = $1 WHERE id = $2`, params: [req.body.content, req.params.id] }));
-  updateMessage('delete', (req) => ({ sql: `UPDATE alliance_inbox_messages SET is_deleted = TRUE WHERE id = $1`, params: [req.params.id] }));
-  updateMessage('star', (req) => ({ sql: `UPDATE alliance_inbox_messages SET is_starred = $1 WHERE id = $2`, params: [Boolean(req.body.is_starred), req.params.id] }));
+  updateMessage('edit', (req) => ({ $set: { content: req.body.content } }));
+  updateMessage('delete', () => ({ $set: { is_deleted: true } }));
+  updateMessage('star', (req) => ({ $set: { is_starred: Boolean(req.body.is_starred) } }));
   updateMessage('pin', (req) => req.body.unpin
-    ? ({ sql: `UPDATE alliance_inbox_messages SET pinned_until = NULL WHERE id = $1`, params: [req.params.id] })
-    : ({ sql: `UPDATE alliance_inbox_messages SET pinned_until = NOW() + ($1 * INTERVAL '1 hour') WHERE id = $2`, params: [Number(req.body.duration) || 24, req.params.id] }));
-  updateMessage('react', (req) => ({
-    sql: req.body.action === 'remove'
-      ? `UPDATE alliance_inbox_messages SET reactions = reactions - $1 WHERE id = $2`
-      : `UPDATE alliance_inbox_messages SET reactions = jsonb_set(reactions, ARRAY[$1], to_jsonb(COALESCE((reactions->>$1)::int,0)+1)) WHERE id = $2`,
-    params: [req.body.emoji, req.params.id],
-  }));
+    ? ({ $set: { pinned_until: null } })
+    : ({ $set: { pinned_until: new Date(Date.now() + (Number(req.body.duration) || 24) * 60 * 60 * 1000) } }));
+  updateMessage('react', (req) => (req.body.action === 'remove'
+    ? { $unset: { [`reactions.${req.body.emoji}`]: '' } }
+    : { $inc: { [`reactions.${req.body.emoji}`]: 1 } }));
 
   return router;
 }

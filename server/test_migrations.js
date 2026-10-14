@@ -1,12 +1,12 @@
 require('dotenv').config();
-const db = require('./db/connection');
+const { connectMongo } = require('./db/mongo');
+const { Users, Tenants } = require('./models');
 
 async function testDB() {
   try {
-    const res = await db.query('SELECT * FROM users');
-    console.log('Users:', res.rows);
-    const tenants = await db.query('SELECT * FROM tenants');
-    console.log('Tenants:', tenants.rows);
+    await connectMongo();
+    console.log('Users:', await Users.find().lean());
+    console.log('Tenants:', await Tenants.find().lean());
     process.exit(0);
   } catch (error) {
     console.error('Error:', error.message);

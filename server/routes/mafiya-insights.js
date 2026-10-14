@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../db/connection');
+const { MafiyaGmbTokens, MafiyaGmbClients, MafiyaPlans, MafiyaGbpInsightsCache } = require('../models');
 const axios = require('axios');
 const { google } = require('googleapis');
 
@@ -10,33 +10,19 @@ const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CALLBACK_URL
 );
 
-// Ensure insights cache table exists
-pool.query(`
-  CREATE TABLE IF NOT EXISTS mafiya_gbp_insights_cache (
-    id           SERIAL PRIMARY KEY,
-    client_id    INTEGER REFERENCES mafiya_gmb_clients(id) ON DELETE CASCADE UNIQUE,
-    insights_data TEXT,
-    location_name VARCHAR(500),
-    updated_at   TIMESTAMP DEFAULT NOW()
-  );
-`).catch(err => console.error('[Mafiya Insights] Schema migration failed:', err));
-
 // ── TOKEN HELPERS ──────────────────────────────────────────
 
 async function refreshClientToken(clientId) {
   try {
-    const tokenRes = await pool.query(
-      'SELECT refresh_token FROM mafiya_gmb_tokens WHERE client_id = $1',
-      [clientId]
-    );
-    if (tokenRes.rowCount === 0 || !tokenRes.rows[0].refresh_token) return null;
-    const { refresh_token } = tokenRes.rows[0];
+    const tokenRow = await MafiyaGmbTokens.findOne({ client_id: clientId }, { refresh_token: 1 }).lean();
+    if (!tokenRow || !tokenRow.refresh_token) return null;
+    const { refresh_token } = tokenRow;
     oauth2Client.setCredentials({ refresh_token });
     const { credentials } = await oauth2Client.refreshAccessToken();
     const newExpiresAt = credentials.expiry_date ? new Date(credentials.expiry_date) : null;
-    await pool.query(
-      `UPDATE mafiya_gmb_tokens SET access_token = $1, expires_at = $2 WHERE client_id = $3`,
-      [credentials.access_token, newExpiresAt, clientId]
+    await MafiyaGmbTokens.updateMany(
+      { client_id: clientId },
+      { $set: { access_token: credentials.access_token, expires_at: newExpiresAt } }
     );
     return credentials.access_token;
   } catch (err) {
@@ -46,12 +32,9 @@ async function refreshClientToken(clientId) {
 }
 
 async function getClientGoogleToken(clientId, forceRefresh = false) {
-  const tokenRes = await pool.query(
-    'SELECT access_token, refresh_token, expires_at FROM mafiya_gmb_tokens WHERE client_id = $1',
-    [clientId]
-  );
-  if (tokenRes.rowCount === 0) return null;
-  const { access_token, refresh_token, expires_at } = tokenRes.rows[0];
+  const tokenRow = await MafiyaGmbTokens.findOne({ client_id: clientId }, { access_token: 1, refresh_token: 1, expires_at: 1 }).lean();
+  if (!tokenRow) return null;
+  const { access_token, refresh_token, expires_at } = tokenRow;
 
   // If forced, or expires_at is past/close to expiry (within 10 mins)
   const isExpired = expires_at && new Date(expires_at).getTime() < Date.now() + 10 * 60 * 1000;
@@ -423,17 +406,16 @@ router.get('/:clientId', async (req, res) => {
 
   try {
     // Check client exists
-    const clientRes = await pool.query(
-      'SELECT id, business_name, gmb_verified, client_type, plan_id FROM mafiya_gmb_clients WHERE id = $1',
-      [clientId]
-    );
-    if (clientRes.rowCount === 0) return res.status(404).json({ error: 'Client not found' });
-    const client = clientRes.rows[0];
+    const client = await MafiyaGmbClients.findOne(
+      { id: clientId },
+      { _id: 0, id: 1, business_name: 1, gmb_verified: 1, client_type: 1, plan_id: 1 }
+    ).lean();
+    if (!client) return res.status(404).json({ error: 'Client not found' });
 
     // Enforce Starter plan date restriction
     if (startDate && endDate && client.client_type === 'paid' && client.plan_id) {
-      const planRes = await pool.query('SELECT name FROM mafiya_plans WHERE id = $1', [client.plan_id]);
-      if (planRes.rows.length > 0 && planRes.rows[0].name.toLowerCase().includes('starter')) {
+      const plan = await MafiyaPlans.findOne({ id: client.plan_id }, { name: 1 }).lean();
+      if (plan && plan.name.toLowerCase().includes('starter')) {
         return res.status(403).json({ 
           error: 'Forbidden', 
           message: 'Custom date range filtering is not available on the Starter plan. Please upgrade to Growth or Pro Agency.' 
@@ -448,16 +430,13 @@ router.get('/:clientId', async (req, res) => {
     // Check cache (only for standard 30 days fetch, bypass if custom dates or refresh)
     const isCustomDateRange = !!(startDate && endDate);
     if (refresh !== 'true' && daysInt === 30 && !isCustomDateRange) {
-      const cacheRes = await pool.query(
-        'SELECT insights_data, updated_at FROM mafiya_gbp_insights_cache WHERE client_id = $1',
-        [clientId]
-      );
-      if (cacheRes.rowCount > 0 && cacheRes.rows[0].insights_data) {
-        const cacheAge = Date.now() - new Date(cacheRes.rows[0].updated_at).getTime();
+      const cacheRow = await MafiyaGbpInsightsCache.findOne({ client_id: clientId }, { insights_data: 1, updated_at: 1 }).lean();
+      if (cacheRow && cacheRow.insights_data) {
+        const cacheAge = Date.now() - new Date(cacheRow.updated_at).getTime();
         if (cacheAge < 30 * 60 * 1000) {
           try {
             console.log(`[Mafiya Insights] Returning cached data for client ${clientId}`);
-            return res.json(JSON.parse(cacheRes.rows[0].insights_data));
+            return res.json(JSON.parse(cacheRow.insights_data));
           } catch (e) { /* cache parse error, continue */ }
         }
       }
@@ -549,12 +528,9 @@ router.get('/:clientId', async (req, res) => {
 
     // Save to cache (only for standard 30-day default)
     if (daysInt === 30 && !isCustomDateRange) {
-      await pool.query(
-        `INSERT INTO mafiya_gbp_insights_cache (client_id, insights_data, location_name, updated_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT (client_id) DO UPDATE SET insights_data = $2, location_name = $3, updated_at = NOW()`,
-        [clientId, JSON.stringify(result), locationName]
-      );
+      const cacheFields = { insights_data: JSON.stringify(result), location_name: locationName, updated_at: new Date() };
+      const updated = await MafiyaGbpInsightsCache.updateOne({ client_id: clientId }, { $set: cacheFields });
+      if (!updated.matchedCount) await MafiyaGbpInsightsCache.create({ client_id: clientId, ...cacheFields });
     }
 
     res.json(result);

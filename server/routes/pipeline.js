@@ -1,5 +1,5 @@
 const express = require('express');
-const db = require('../db/connection');
+const { Organisations, AiAnalysis } = require('../models');
 const router = express.Router();
 
 // GET /api/pipeline?type=college
@@ -7,14 +7,21 @@ router.get('/', async (req, res) => {
   const { type } = req.query;
   const orgType = type || 'college';
   try {
-    const { rows } = await db.query(`
-      SELECT o.id, o.name, o.district, o.status, a.score
-      FROM organisations o
-      LEFT JOIN ai_analysis a ON a.org_id = o.id
-      WHERE o.type = $1
-      ORDER BY COALESCE(a.score, 0) DESC, o.created_at DESC
-    `, [orgType]);
-    
+    const orgs = await Organisations.find({ type: orgType }, { _id: 0, id: 1, name: 1, district: 1, status: 1, created_at: 1 }).lean();
+    const analyses = await AiAnalysis.find({ org_id: { $in: orgs.map((o) => o.id) } }, { _id: 0, org_id: 1, score: 1 }).lean();
+    // LEFT JOIN ai_analysis — one output row per (organisation, analysis) pair
+    const analysesByOrg = new Map();
+    for (const a of analyses) {
+      if (!analysesByOrg.has(a.org_id)) analysesByOrg.set(a.org_id, []);
+      analysesByOrg.get(a.org_id).push(a);
+    }
+    const rows = orgs.flatMap((o) => (analysesByOrg.get(o.id) || [{ score: null }]).map((a) => ({
+      id: o.id, name: o.name, district: o.district, status: o.status, score: a.score ?? null, created_at: o.created_at,
+    })));
+    rows.sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0)
+      || (new Date(b.created_at || 0) - new Date(a.created_at || 0)));
+    rows.forEach((r) => delete r.created_at);
+
     // Group by status (new, analysed, contacted, meeting, negotiation, closed)
     const pipeline = {
       new: [], analysed: [], contacted: [], meeting: [], negotiation: [], closed: []
@@ -39,7 +46,7 @@ router.get('/', async (req, res) => {
 router.patch('/:id/stage', async (req, res) => {
   const { status } = req.body;
   try {
-    await db.query(`UPDATE organisations SET status=$1, updated_at=NOW() WHERE id=$2`, [status, req.params.id]);
+    await Organisations.updateOne({ id: req.params.id }, { $set: { status, updated_at: new Date() } });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

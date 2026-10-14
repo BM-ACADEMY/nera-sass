@@ -1,4 +1,4 @@
-const db = require('../db/connection');
+const { AlliancePromptRules } = require('../models');
 
 const CONDITION_STOPWORDS = new Set([
   'the','a','an','lead','recipient','customer','user','message','reply','email','whatsapp',
@@ -22,15 +22,16 @@ function conditionMatches(condition, contextText) {
 }
 
 async function getAlliancePromptRules(job, channel, audience, contextText = '') {
-  const result = await db.query(
-    `SELECT id,name,job,channel,audience,condition_text,instruction_text,priority
-     FROM alliance_prompt_rules
-     WHERE active=TRUE AND job IN ('all',$1) AND channel IN ('all',$2)
-       AND (audience IS NULL OR audience=$3)
-     ORDER BY priority,id`,
-    [job, channel, audience || null]
-  );
-  const applicable = result.rows.filter((rule) => conditionMatches(rule.condition_text, contextText));
+  const rules = await AlliancePromptRules.find(
+    {
+      active: true,
+      job: { $in: ['all', job] },
+      channel: { $in: ['all', channel] },
+      audience: { $in: [null, audience || null] },
+    },
+    { _id: 0, id: 1, name: 1, job: 1, channel: 1, audience: 1, condition_text: 1, instruction_text: 1, priority: 1 }
+  ).sort({ priority: 1, id: 1 }).lean();
+  const applicable = rules.filter((rule) => conditionMatches(rule.condition_text, contextText));
   if (!applicable.length) return 'No administrator rules matched the current message or campaign context.';
   return applicable.map((rule, index) => {
     const matchedBecause = rule.condition_text ? ` Matched condition: ${rule.condition_text}` : ' General rule.';

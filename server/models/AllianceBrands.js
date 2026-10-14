@@ -1,0 +1,26 @@
+const { defineModel, Mixed } = require('../db/mongo');
+
+module.exports = defineModel('alliance_brands', {
+  id: { type: Number },
+  code: { type: String },
+  audience: { type: String },
+  name: { type: String },
+  description: { type: String },
+  phone: { type: String },
+  whatsapp: { type: String },
+  email: { type: String },
+  website: { type: String },
+  address: { type: String },
+  business_hours: { type: String },
+  languages: { type: String },
+  target_customers: { type: String },
+  primary_contact: { type: String },
+  escalation_contact: { type: String },
+  escalation_phone: { type: String },
+  policies: { type: Mixed, default: () => ({}) },
+  verified_by: { type: String },
+  last_verified_date: { type: Date },
+  active: { type: Boolean, default: true },
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now },
+}, { autoId: true, unique: [['code']] });

@@ -1,5 +1,9 @@
-const pool = require('../../db/connection');
 const axios = require('axios');
+const { MafiyaGmbClients, ApiUsageLogs, UsageSettings, CitationScans } = require('../../models');
+const { escapeRegex } = require('../../db/mongo');
+
+const startOfUtcDay = () => { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d; };
+const startOfUtcMonth = () => { const d = startOfUtcDay(); d.setUTCDate(1); return d; };
 
 /**
  * Log an individual API request (ValueSERP, DataForSEO, etc.)
@@ -19,21 +23,26 @@ async function logApiRequest({
     // If clientName is missing but clientId exists, look up client name
     let resolvedName = clientName;
     if (!resolvedName && clientId) {
-      const cRes = await pool.query('SELECT business_name, display_name FROM mafiya_gmb_clients WHERE id = $1', [clientId]);
-      if (cRes.rowCount > 0) {
-        resolvedName = cRes.rows[0].display_name || cRes.rows[0].business_name;
+      const client = await MafiyaGmbClients.findOne({ id: clientId }, { business_name: 1, display_name: 1 }).lean();
+      if (client) {
+        resolvedName = client.display_name || client.business_name;
       }
     }
 
-    const res = await pool.query(
-      `INSERT INTO api_usage_logs 
-        (provider, client_id, client_name, search_query, directory, credits_consumed, response_status, scan_duration_ms, is_cached, request_time)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-       RETURNING *`,
-      [provider, clientId, resolvedName || 'System', searchQuery, directory, isCached ? 0 : creditsConsumed, String(responseStatus), scanDurationMs, isCached]
-    );
+    const log = await ApiUsageLogs.create({
+      provider,
+      client_id: clientId,
+      client_name: resolvedName || 'System',
+      search_query: searchQuery,
+      directory,
+      credits_consumed: isCached ? 0 : creditsConsumed,
+      response_status: String(responseStatus),
+      scan_duration_ms: scanDurationMs,
+      is_cached: isCached,
+      request_time: new Date(),
+    });
 
-    return res.rows[0];
+    return log.toObject();
   } catch (err) {
     console.error('[Usage Service] Failed to log API request:', err.message);
     return null;
@@ -62,22 +71,24 @@ async function getAccountUsageSummary(provider = 'valueserp') {
   }
 
   // Database metrics
-  const statsRes = await pool.query(`
-    SELECT 
-      COALESCE(SUM(credits_consumed), 0) as total_credits_used,
-      COUNT(*) as total_requests,
-      COUNT(*) FILTER (WHERE request_time >= CURRENT_DATE) as today_requests,
-      COUNT(*) FILTER (WHERE DATE_TRUNC('month', request_time) = DATE_TRUNC('month', CURRENT_DATE)) as month_requests,
-      MAX(request_time) as last_call_time
-    FROM api_usage_logs
-    WHERE provider = $1
-  `, [provider]);
-
-  const dbStats = statsRes.rows[0];
+  const [stats] = await ApiUsageLogs.aggregate([
+    { $match: { provider } },
+    {
+      $group: {
+        _id: null,
+        total_credits_used: { $sum: { $ifNull: ['$credits_consumed', 0] } },
+        total_requests: { $sum: 1 },
+        today_requests: { $sum: { $cond: [{ $gte: ['$request_time', startOfUtcDay()] }, 1, 0] } },
+        month_requests: { $sum: { $cond: [{ $gte: ['$request_time', startOfUtcMonth()] }, 1, 0] } },
+        last_call_time: { $max: '$request_time' },
+      },
+    },
+  ]);
+  const dbStats = stats || { total_credits_used: 0, total_requests: 0, today_requests: 0, month_requests: 0, last_call_time: null };
 
   // Get warning threshold setting from DB
-  const thresholdRes = await pool.query(`SELECT value FROM usage_settings WHERE key = 'warning_threshold_pct'`);
-  const warningThresholdPct = parseFloat(thresholdRes.rows[0]?.value || '20');
+  const thresholdSetting = await UsageSettings.findOne({ key: 'warning_threshold_pct' }, { value: 1 }).lean();
+  const warningThresholdPct = parseFloat(thresholdSetting?.value || '20');
 
   // Estimate or parse credits
   let totalAvailableCredits = 15000; // default estimated monthly quota
@@ -119,6 +130,13 @@ async function getAccountUsageSummary(provider = 'valueserp') {
   };
 }
 
+const scanStatusOf = (scan) => {
+  if (scan.mismatched > 0) return 'Mismatch';
+  if (scan.matched > 0 && scan.mismatched === 0) return 'Verified';
+  if (scan.missing > 0) return 'Missing';
+  return 'Completed';
+};
+
 /**
  * Get Client Usage Table (With Search, Filter, Sort, Pagination)
  */
@@ -133,111 +151,98 @@ async function getClientUsageList({
 }) {
   const offset = (page - 1) * limit;
 
-  let query = `
-    SELECT 
-      c.id as client_id,
-      c.contact_person,
-      c.business_name,
-      c.display_name,
-      c.business_category,
-      COALESCE(u.total_searches, 0) as total_searches,
-      COALESCE(u.credits_used, 0) as credits_used,
-      u.last_scan_time,
-      s.last_scan_status,
-      CASE 
-        WHEN COALESCE(u.total_searches, 0) > 0 THEN ROUND(COALESCE(u.credits_used, 0)::numeric / COALESCE(u.total_searches, 1), 2)
-        ELSE 0 
-      END as avg_credits_per_scan
-    FROM mafiya_gmb_clients c
-    LEFT JOIN (
-      SELECT 
-        client_id,
-        COUNT(*) as total_searches,
-        SUM(credits_consumed) as credits_used,
-        MAX(request_time) as last_scan_time
-      FROM api_usage_logs
-      WHERE provider = $1
-      GROUP BY client_id
-    ) u ON c.id = u.client_id
-    LEFT JOIN (
-      SELECT DISTINCT ON ("businessId")
-        "businessId",
-        score,
-        matched,
-        mismatched,
-        missing,
-        "lastScan",
-        CASE 
-          WHEN mismatched > 0 THEN 'Mismatch'
-          WHEN matched > 0 AND mismatched = 0 THEN 'Verified'
-          WHEN missing > 0 THEN 'Missing'
-          ELSE 'Completed'
-        END as last_scan_status
-      FROM citation_scans
-      ORDER BY "businessId", id DESC
-    ) s ON c.id = s."businessId"
-    WHERE 1=1
-  `;
-
-  const params = [provider];
-  let paramIdx = 2;
-
-  // Search filter
+  const clientFilter = {};
   if (search && search.trim() !== '') {
-    query += ` AND (c.business_name ILIKE $${paramIdx} OR c.display_name ILIKE $${paramIdx} OR c.contact_person ILIKE $${paramIdx})`;
-    params.push(`%${search.trim()}%`);
-    paramIdx++;
+    const pattern = new RegExp(escapeRegex(search.trim()), 'i');
+    clientFilter.$or = [{ business_name: pattern }, { display_name: pattern }, { contact_person: pattern }];
   }
+  const clients = await MafiyaGmbClients.find(clientFilter, {
+    _id: 0, id: 1, contact_person: 1, business_name: 1, display_name: 1, business_category: 1,
+  }).lean();
 
-  // Status filter
-  if (filter && filter !== 'all') {
-    query += ` AND COALESCE(s.last_scan_status, 'Completed') ILIKE $${paramIdx}`;
-    params.push(`%${filter.trim()}%`);
-    paramIdx++;
-  }
+  // Per-client API usage
+  const usage = await ApiUsageLogs.aggregate([
+    { $match: { provider } },
+    {
+      $group: {
+        _id: '$client_id',
+        total_searches: { $sum: 1 },
+        credits_used: { $sum: { $ifNull: ['$credits_consumed', 0] } },
+        last_scan_time: { $max: '$request_time' },
+      },
+    },
+  ]);
+  const usageByClient = new Map(usage.map((u) => [u._id, u]));
 
-  // Sort direction
-  const dir = order.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
-  let orderByClause = 'ORDER BY COALESCE(u.credits_used, 0) DESC';
+  // Latest citation scan per client (DISTINCT ON "businessId" ORDER BY id DESC)
+  const latestScans = await CitationScans.aggregate([
+    { $sort: { businessId: 1, id: -1 } },
+    { $group: { _id: '$businessId', matched: { $first: '$matched' }, mismatched: { $first: '$mismatched' }, missing: { $first: '$missing' } } },
+  ]);
+  const scanByClient = new Map(latestScans.map((s) => [s._id, s]));
 
-  if (sort === 'searches') orderByClause = `ORDER BY COALESCE(u.total_searches, 0) ${dir}`;
-  else if (sort === 'credits') orderByClause = `ORDER BY COALESCE(u.credits_used, 0) ${dir}`;
-  else if (sort === 'last_scan') orderByClause = `ORDER BY u.last_scan_time ${dir} NULLS LAST`;
-  else if (sort === 'business_name') orderByClause = `ORDER BY c.business_name ${dir}`;
-  else if (sort === 'client_name') orderByClause = `ORDER BY c.contact_person ${dir}`;
-
-  query += ` ${orderByClause}`;
-
-  // Count total matching items
-  const countResult = await pool.query(`SELECT COUNT(*) FROM (${query}) count_tbl`, params);
-  const totalCount = parseInt(countResult.rows[0].count, 10);
-
-  // Apply pagination
-  query += ` LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`;
-  params.push(limit, offset);
-
-  const result = await pool.query(query, params);
-
-  const rows = result.rows.map(row => {
-    const lastScanDate = row.last_scan_time ? new Date(row.last_scan_time).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
-    const lastScanTimeStr = row.last_scan_time ? new Date(row.last_scan_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—';
-
+  let rows = clients.map((c) => {
+    const u = usageByClient.get(c.id);
+    const s = scanByClient.get(c.id);
+    const totalSearches = u?.total_searches || 0;
+    const creditsUsed = u?.credits_used || 0;
     return {
-      clientId: row.client_id,
-      clientName: row.contact_person || 'Client',
-      businessName: row.display_name || row.business_name,
-      totalSearches: parseInt(row.total_searches, 10),
-      creditsUsed: parseInt(row.credits_used, 10),
-      lastScanDate,
-      lastScanTime: lastScanTimeStr,
-      lastScanTimestamp: row.last_scan_time,
-      scanStatus: row.last_scan_status || 'Completed',
-      avgCreditsPerScan: parseFloat(row.avg_credits_per_scan) || 0
+      client_id: c.id,
+      contact_person: c.contact_person,
+      business_name: c.business_name,
+      display_name: c.display_name,
+      business_category: c.business_category,
+      total_searches: totalSearches,
+      credits_used: creditsUsed,
+      last_scan_time: u?.last_scan_time || null,
+      last_scan_status: s ? scanStatusOf(s) : null,
+      avg_credits_per_scan: totalSearches > 0 ? Math.round((creditsUsed / totalSearches) * 100) / 100 : 0,
     };
   });
 
+  // Status filter
+  if (filter && filter !== 'all') {
+    const pattern = new RegExp(escapeRegex(filter.trim()), 'i');
+    rows = rows.filter((row) => pattern.test(row.last_scan_status || 'Completed'));
+  }
+
+  // Sort
+  const dir = order.toLowerCase() === 'asc' ? 1 : -1;
+  const compareText = (a, b) => (a == null ? 1 : b == null ? -1 : String(a).localeCompare(String(b)) * dir);
+  if (sort === 'searches') rows.sort((a, b) => (a.total_searches - b.total_searches) * dir);
+  else if (sort === 'credits') rows.sort((a, b) => (a.credits_used - b.credits_used) * dir);
+  else if (sort === 'last_scan') {
+    rows.sort((a, b) => {
+      if (!a.last_scan_time && !b.last_scan_time) return 0;
+      if (!a.last_scan_time) return 1; // NULLS LAST
+      if (!b.last_scan_time) return -1;
+      return (new Date(a.last_scan_time) - new Date(b.last_scan_time)) * dir;
+    });
+  } else if (sort === 'business_name') rows.sort((a, b) => compareText(a.business_name, b.business_name));
+  else if (sort === 'client_name') rows.sort((a, b) => compareText(a.contact_person, b.contact_person));
+  else rows.sort((a, b) => b.credits_used - a.credits_used);
+
+  const totalCount = rows.length;
+  const pageRows = rows.slice(offset, offset + Number(limit));
+
   return {
-    rows,
+    rows: pageRows.map(row => {
+      const lastScanDate = row.last_scan_time ? new Date(row.last_scan_time).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+      const lastScanTimeStr = row.last_scan_time ? new Date(row.last_scan_time).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—';
+
+      return {
+        clientId: row.client_id,
+        clientName: row.contact_person || 'Client',
+        businessName: row.display_name || row.business_name,
+        totalSearches: parseInt(row.total_searches, 10),
+        creditsUsed: parseInt(row.credits_used, 10),
+        lastScanDate,
+        lastScanTime: lastScanTimeStr,
+        lastScanTimestamp: row.last_scan_time,
+        scanStatus: row.last_scan_status || 'Completed',
+        avgCreditsPerScan: parseFloat(row.avg_credits_per_scan) || 0
+      };
+    }),
     pagination: {
       totalCount,
       page,
@@ -252,65 +257,44 @@ async function getClientUsageList({
  */
 async function getClientUsageDetails(clientId, provider = 'valueserp') {
   // Client info
-  const clientRes = await pool.query('SELECT * FROM mafiya_gmb_clients WHERE id = $1', [clientId]);
-  if (clientRes.rowCount === 0) {
+  const client = await MafiyaGmbClients.findOne({ id: clientId }).lean();
+  if (!client) {
     throw new Error('Client not found');
   }
-  const client = clientRes.rows[0];
 
   // Scan stats from citation_scans
-  const scansRes = await pool.query(`
-    SELECT 
-      COUNT(*) as total_scans,
-      MIN("lastScan") as first_scan_date,
-      MAX("lastScan") as last_scan_date
-    FROM citation_scans
-    WHERE "businessId" = $1
-  `, [clientId]);
+  const [scanStats = { total_scans: 0, first_scan_date: null, last_scan_date: null }] = await CitationScans.aggregate([
+    { $match: { businessId: Number(clientId) } },
+    { $group: { _id: null, total_scans: { $sum: 1 }, first_scan_date: { $min: '$lastScan' }, last_scan_date: { $max: '$lastScan' } } },
+  ]);
 
-  const scanStats = scansRes.rows[0];
+  const logMatch = { client_id: Number(clientId), provider };
 
   // API logs stats
-  const logStatsRes = await pool.query(`
-    SELECT 
-      COUNT(*) as total_requests,
-      COALESCE(SUM(credits_consumed), 0) as total_credits,
-      AVG(scan_duration_ms) as avg_duration_ms,
-      MAX(scan_duration_ms) as last_duration_ms
-    FROM api_usage_logs
-    WHERE client_id = $1 AND provider = $2
-  `, [clientId, provider]);
-
-  const logStats = logStatsRes.rows[0];
+  const [logStats = { total_requests: 0, total_credits: 0, avg_duration_ms: null, last_duration_ms: null }] = await ApiUsageLogs.aggregate([
+    { $match: logMatch },
+    {
+      $group: {
+        _id: null,
+        total_requests: { $sum: 1 },
+        total_credits: { $sum: { $ifNull: ['$credits_consumed', 0] } },
+        avg_duration_ms: { $avg: '$scan_duration_ms' },
+        last_duration_ms: { $max: '$scan_duration_ms' },
+      },
+    },
+  ]);
 
   // Directory breakdown
-  const directoryRes = await pool.query(`
-    SELECT 
-      directory,
-      COUNT(*) as request_count,
-      COALESCE(SUM(credits_consumed), 0) as credits_consumed
-    FROM api_usage_logs
-    WHERE client_id = $1 AND provider = $2
-    GROUP BY directory
-    ORDER BY credits_consumed DESC
-  `, [clientId, provider]);
+  const directoryRows = await ApiUsageLogs.aggregate([
+    { $match: logMatch },
+    { $group: { _id: '$directory', request_count: { $sum: 1 }, credits_consumed: { $sum: { $ifNull: ['$credits_consumed', 0] } } } },
+    { $sort: { credits_consumed: -1 } },
+  ]);
 
   // Scan history logs (last 30 requests)
-  const historyRes = await pool.query(`
-    SELECT 
-      id,
-      directory,
-      search_query,
-      credits_consumed,
-      response_status,
-      scan_duration_ms,
-      is_cached,
-      request_time
-    FROM api_usage_logs
-    WHERE client_id = $1 AND provider = $2
-    ORDER BY id DESC
-    LIMIT 30
-  `, [clientId, provider]);
+  const historyRows = await ApiUsageLogs.find(logMatch, {
+    _id: 0, id: 1, directory: 1, search_query: 1, credits_consumed: 1, response_status: 1, scan_duration_ms: 1, is_cached: 1, request_time: 1,
+  }).sort({ id: -1 }).limit(30).lean();
 
   return {
     client: {
@@ -330,12 +314,12 @@ async function getClientUsageDetails(clientId, provider = 'valueserp') {
       lastScanDurationMs: parseInt(logStats.last_duration_ms || 0, 10),
       avgScanDurationMs: Math.round(parseFloat(logStats.avg_duration_ms || 0))
     },
-    directoryUsage: directoryRes.rows.map(d => ({
-      directory: d.directory || 'General',
+    directoryUsage: directoryRows.map(d => ({
+      directory: d._id || 'General',
       requestCount: parseInt(d.request_count, 10),
       creditsConsumed: parseInt(d.credits_consumed, 10)
     })),
-    scanHistory: historyRes.rows.map(h => ({
+    scanHistory: historyRows.map(h => ({
       id: h.id,
       directory: h.directory,
       searchQuery: h.search_query,
@@ -353,18 +337,15 @@ async function getClientUsageDetails(clientId, provider = 'valueserp') {
  */
 async function checkScanCache(clientId, maxAgeMinutes = 60) {
   try {
-    const res = await pool.query(`
-      SELECT * FROM citation_scans
-      WHERE "businessId" = $1
-        AND "lastScan" >= NOW() - INTERVAL '1 minute' * $2
-      ORDER BY id DESC
-      LIMIT 1
-    `, [clientId, maxAgeMinutes]);
+    const latestScan = await CitationScans.findOne(
+      { businessId: clientId, lastScan: { $gte: new Date(Date.now() - maxAgeMinutes * 60 * 1000) } },
+      { _id: 0 }
+    ).sort({ id: -1 }).lean();
 
-    if (res.rowCount > 0) {
+    if (latestScan) {
       return {
         hasRecentScan: true,
-        latestScan: res.rows[0]
+        latestScan
       };
     }
   } catch (err) {
@@ -378,11 +359,11 @@ async function checkScanCache(clientId, maxAgeMinutes = 60) {
  * Update warning threshold setting
  */
 async function updateSettings(key, value) {
-  await pool.query(`
-    INSERT INTO usage_settings (key, value, updated_at)
-    VALUES ($1, $2, NOW())
-    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
-  `, [key, String(value)]);
+  await UsageSettings.updateOne(
+    { key },
+    { $set: { value: String(value), updated_at: new Date() } },
+    { upsert: true }
+  );
   return { key, value };
 }
 

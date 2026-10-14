@@ -1,6 +1,18 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../db/connection');
+const {
+  MafiyaGmbClients,
+  MafiyaGmbTokens,
+  MafiyaReviewReplies,
+  MafiyaGmbBrain,
+  MafiyaGmbPosts,
+  MafiyaBrainAiLog,
+  MafiyaAiSuggestionsLog,
+} = require('../models');
+const { NO_ID, upsertOne } = require('../db/mongo');
+
+const startOfUtcDay = () => { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d; };
+const BRAIN_ORDER = { tone: 1, review_rules: 2, offer: 3, keyword: 4, qa: 5, blacklist: 6, seasonal: 7, creative_brief: 8 };
 const axios = require('axios');
 const { google } = require('googleapis');
 const { GoogleGenAI } = require('@google/genai');
@@ -14,77 +26,21 @@ const oauth2Client = new google.auth.OAuth2(
 
 const dataForSeoAuth = Buffer.from(`${process.env.DATAFORSEO_LOGIN}:${process.env.DATAFORSEO_PASSWORD}`).toString('base64');
 
-// Ensure the local review replies table exists and GMB clients table has cache columns
-pool.query(`
-  CREATE TABLE IF NOT EXISTS mafiya_review_replies (
-    id           SERIAL PRIMARY KEY,
-    client_id    INTEGER REFERENCES mafiya_gmb_clients(id) ON DELETE CASCADE,
-    review_id    VARCHAR(255) NOT NULL UNIQUE,
-    reply_text   TEXT NOT NULL,
-    created_at   TIMESTAMP DEFAULT NOW()
-  );
-  ALTER TABLE mafiya_gmb_clients ADD COLUMN IF NOT EXISTS reviews_cache TEXT;
-  ALTER TABLE mafiya_gmb_clients ADD COLUMN IF NOT EXISTS reviews_updated_at TIMESTAMP;
-  ALTER TABLE mafiya_gmb_clients ADD COLUMN IF NOT EXISTS logo_url TEXT;
-
-  CREATE TABLE IF NOT EXISTS mafiya_gmb_brain (
-    id           SERIAL PRIMARY KEY,
-    client_id    INTEGER REFERENCES mafiya_gmb_clients(id) ON DELETE CASCADE,
-    entry_type   VARCHAR(50) NOT NULL,
-    content      TEXT NOT NULL,
-    created_at   TIMESTAMP DEFAULT NOW(),
-    updated_at   TIMESTAMP DEFAULT NOW()
-  );
-
-  CREATE TABLE IF NOT EXISTS mafiya_gmb_posts (
-    id             SERIAL PRIMARY KEY,
-    client_id      INTEGER REFERENCES mafiya_gmb_clients(id) ON DELETE CASCADE,
-    post_type      VARCHAR(50) NOT NULL,
-    caption        TEXT NOT NULL,
-    poster_title   VARCHAR(255),
-    poster_subtitle VARCHAR(255),
-    bg_theme       VARCHAR(50) DEFAULT 'orange',
-    status         VARCHAR(50) DEFAULT 'draft',
-    image_url      TEXT,
-    created_at     TIMESTAMP DEFAULT NOW()
-  );
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS image_url TEXT;
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS post_title VARCHAR(255);
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS start_date DATE;
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS end_date DATE;
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS start_time TIME;
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS end_time TIME;
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS coupon_code VARCHAR(100);
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS redeem_link TEXT;
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS terms TEXT;
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS repeats VARCHAR(50) DEFAULT 'Does not repeat';
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS custom_days TEXT;
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS repeat_end_date DATE;
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMP;
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS gmb_post_name VARCHAR(500);
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS views INTEGER DEFAULT 0;
-  ALTER TABLE mafiya_gmb_posts ADD COLUMN IF NOT EXISTS clicks INTEGER DEFAULT 0;
-`).catch(err => console.error('[Mafiya Reviews] Schema migration failed:', err));
 
 // Helper to refresh client token
 async function refreshClientToken(clientId) {
   try {
-    const tokenRes = await pool.query(
-      'SELECT refresh_token FROM mafiya_gmb_tokens WHERE client_id = $1',
-      [clientId]
-    );
-    if (tokenRes.rowCount === 0 || !tokenRes.rows[0].refresh_token) return null;
+    const tokenRow = await MafiyaGmbTokens.findOne({ client_id: clientId }, { refresh_token: 1 }).lean();
+    if (!tokenRow || !tokenRow.refresh_token) return null;
 
-    const { refresh_token } = tokenRes.rows[0];
+    const { refresh_token } = tokenRow;
     oauth2Client.setCredentials({ refresh_token });
     const { credentials } = await oauth2Client.refreshAccessToken();
     const newExpiresAt = credentials.expiry_date ? new Date(credentials.expiry_date) : null;
 
-    await pool.query(
-      `UPDATE mafiya_gmb_tokens
-       SET access_token = $1, expires_at = $2
-       WHERE client_id = $3`,
-      [credentials.access_token, newExpiresAt, clientId]
+    await MafiyaGmbTokens.updateMany(
+      { client_id: clientId },
+      { $set: { access_token: credentials.access_token, expires_at: newExpiresAt } }
     );
     return credentials.access_token;
   } catch (err) {
@@ -95,13 +51,10 @@ async function refreshClientToken(clientId) {
 
 // Helper to get client token (and refresh if expired)
 async function getClientGoogleToken(clientId) {
-  const tokenRes = await pool.query(
-    'SELECT access_token, refresh_token, expires_at FROM mafiya_gmb_tokens WHERE client_id = $1',
-    [clientId]
-  );
-  if (tokenRes.rowCount === 0) return null;
+  const tokenRow = await MafiyaGmbTokens.findOne({ client_id: clientId }, { access_token: 1, refresh_token: 1, expires_at: 1 }).lean();
+  if (!tokenRow) return null;
 
-  const { access_token, refresh_token, expires_at } = tokenRes.rows[0];
+  const { access_token, refresh_token, expires_at } = tokenRow;
 
   if (expires_at && new Date(expires_at).getTime() < Date.now() + 5 * 60 * 1000) {
     if (refresh_token) {
@@ -115,9 +68,9 @@ async function getClientGoogleToken(clientId) {
 
 // Helper to save reviews data to database cache
 function saveToCache(clientId, data) {
-  pool.query(
-    'UPDATE mafiya_gmb_clients SET reviews_cache = $1, reviews_updated_at = NOW() WHERE id = $2',
-    [JSON.stringify(data), clientId]
+  MafiyaGmbClients.updateOne(
+    { id: clientId },
+    { $set: { reviews_cache: JSON.stringify(data), reviews_updated_at: new Date() } }
   ).catch(err => console.error('[Mafiya Reviews] Cache update failed:', err.message));
 }
 
@@ -127,14 +80,10 @@ router.get('/status', async (req, res) => {
   if (!clientId) return res.status(400).json({ error: 'clientId is required' });
 
   try {
-    const result = await pool.query(
-      'SELECT id, gmb_verified FROM mafiya_gmb_clients WHERE id = $1',
-      [clientId]
-    );
-    if (result.rowCount === 0) {
+    const client = await MafiyaGmbClients.findOne({ id: clientId }, { id: 1, gmb_verified: 1 }).lean();
+    if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
-    const client = result.rows[0];
     res.json({ connected: client.gmb_verified });
   } catch (error) {
     console.error('[Mafiya Reviews] GET /status error:', error);
@@ -148,14 +97,10 @@ router.get('/data', async (req, res) => {
   if (!clientId) return res.status(400).json({ error: 'clientId is required' });
 
   try {
-    const clientRes = await pool.query(
-      'SELECT * FROM mafiya_gmb_clients WHERE id = $1',
-      [clientId]
-    );
-    if (clientRes.rowCount === 0) {
+    const client = await MafiyaGmbClients.findOne({ id: clientId }, NO_ID).lean();
+    if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
-    const client = clientRes.rows[0];
     const businessName = client.business_name || 'Your Business';
 
     // Check Cache first
@@ -174,12 +119,9 @@ router.get('/data', async (req, res) => {
     }
 
     // Load persistent replies from database
-    const localRepliesRes = await pool.query(
-      'SELECT review_id, reply_text FROM mafiya_review_replies WHERE client_id = $1',
-      [clientId]
-    );
+    const localReplies = await MafiyaReviewReplies.find({ client_id: clientId }, { review_id: 1, reply_text: 1 }).lean();
     const localRepliesMap = {};
-    localRepliesRes.rows.forEach(row => {
+    localReplies.forEach(row => {
       localRepliesMap[row.review_id] = row.reply_text;
     });
 
@@ -412,13 +354,13 @@ router.get('/data', async (req, res) => {
             } catch (retryErr) {
               googleApiError = retryErr.response ? retryErr.response.data : retryErr.message;
               console.error('[Mafiya Reviews] Failed to fetch reviews after refreshing token:', googleApiError);
-              await pool.query('DELETE FROM mafiya_gmb_tokens WHERE client_id = $1', [clientId]);
-              await pool.query('UPDATE mafiya_gmb_clients SET gmb_verified = false WHERE id = $1', [clientId]);
+              await MafiyaGmbTokens.deleteMany({ client_id: clientId });
+              await MafiyaGmbClients.updateOne({ id: clientId }, { $set: { gmb_verified: false } });
             }
           } else {
             console.error('[Mafiya Reviews] Failed to refresh token (refresh token might be missing or invalid):', googleApiError);
-            await pool.query('DELETE FROM mafiya_gmb_tokens WHERE client_id = $1', [clientId]);
-            await pool.query('UPDATE mafiya_gmb_clients SET gmb_verified = false WHERE id = $1', [clientId]);
+            await MafiyaGmbTokens.deleteMany({ client_id: clientId });
+            await MafiyaGmbClients.updateOne({ id: clientId }, { $set: { gmb_verified: false } });
           }
         } else if (err.response) {
           console.error(`[Mafiya Reviews] Google API failed with status ${err.response.status}:`, err.response.data);
@@ -598,19 +540,15 @@ router.post('/reply-review', async (req, res) => {
 
   // Save reply persistently to database and clear cache
   try {
-    await pool.query(
-      `INSERT INTO mafiya_review_replies (client_id, review_id, reply_text)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (review_id)
-       DO UPDATE SET reply_text = EXCLUDED.reply_text`,
-      [clientId, reviewId.toString(), replyText]
+    await upsertOne(
+      MafiyaReviewReplies,
+      { review_id: reviewId.toString() },
+      { $set: { reply_text: replyText } },
+      { client_id: clientId, reply_text: replyText }
     );
 
     // Clear reviews cache to force a fresh pull on reload/fetch
-    await pool.query(
-      'UPDATE mafiya_gmb_clients SET reviews_updated_at = NULL WHERE id = $1',
-      [clientId]
-    );
+    await MafiyaGmbClients.updateOne({ id: clientId }, { $set: { reviews_updated_at: null } });
   } catch (dbErr) {
     console.error('[Mafiya Reviews] Failed to save reply / clear cache in DB:', dbErr.message);
   }
@@ -742,11 +680,7 @@ router.post('/generate-ai-reply', async (req, res) => {
 
   try {
     const limitCheck = await checkLimit(clientId, 'mafiya_ai_replies', async () => {
-      const countRes = await pool.query(
-        "SELECT COUNT(*) FROM mafiya_review_replies WHERE client_id = $1 AND created_at >= NOW() - INTERVAL '30 days'",
-        [clientId]
-      );
-      return parseInt(countRes.rows[0].count, 10);
+      return MafiyaReviewReplies.countDocuments({ client_id: clientId, created_at: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } });
     });
 
     if (!limitCheck.allowed) {
@@ -756,11 +690,8 @@ router.post('/generate-ai-reply', async (req, res) => {
       });
     }
 
-    const clientRes = await pool.query(
-      'SELECT business_name FROM mafiya_gmb_clients WHERE id = $1',
-      [clientId]
-    );
-    const businessName = clientRes.rows[0]?.business_name || 'our company';
+    const clientRow = await MafiyaGmbClients.findOne({ id: clientId }, { business_name: 1 }).lean();
+    const businessName = clientRow?.business_name || 'our company';
 
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
@@ -769,10 +700,7 @@ router.post('/generate-ai-reply', async (req, res) => {
     }
 
     // Fetch and incorporate GMB Brain entries for this client
-    const brainRes = await pool.query(
-      'SELECT entry_type, content FROM mafiya_gmb_brain WHERE client_id = $1',
-      [clientId]
-    );
+    const brainRes = { rows: await MafiyaGmbBrain.find({ client_id: clientId }, { _id: 0, entry_type: 1, content: 1 }).lean() };
 
     const brain = {
       tone: [],
@@ -869,25 +797,10 @@ router.get('/brain', async (req, res) => {
   const { clientId } = req.query;
   if (!clientId) return res.status(400).json({ error: 'clientId is required' });
   try {
-    const result = await pool.query(
-      `SELECT * FROM mafiya_gmb_brain
-       WHERE client_id = $1
-       ORDER BY
-         CASE entry_type
-           WHEN 'tone' THEN 1
-           WHEN 'review_rules' THEN 2
-           WHEN 'offer' THEN 3
-           WHEN 'keyword' THEN 4
-           WHEN 'qa' THEN 5
-           WHEN 'blacklist' THEN 6
-           WHEN 'seasonal' THEN 7
-           WHEN 'creative_brief' THEN 8
-           ELSE 9
-         END ASC,
-         created_at DESC`,
-      [clientId]
-    );
-    res.json(result.rows);
+    const entries = (await MafiyaGmbBrain.find({ client_id: clientId }, NO_ID).lean())
+      .sort((a, b) => (BRAIN_ORDER[a.entry_type] || 9) - (BRAIN_ORDER[b.entry_type] || 9)
+        || new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    res.json(entries);
   } catch (err) {
     console.error('[Mafiya Reviews] GET /brain error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -911,11 +824,7 @@ router.post('/brain/polish', async (req, res) => {
   try {
     if (clientId) {
       const limitCheck = await checkLimit(clientId, 'mafiya_brain_ai', async () => {
-        const countRes = await pool.query(
-          "SELECT COUNT(*) FROM mafiya_brain_ai_log WHERE client_id = $1 AND used_at >= NOW() - INTERVAL '30 days'",
-          [clientId]
-        );
-        return parseInt(countRes.rows[0].count, 10);
+        return MafiyaBrainAiLog.countDocuments({ client_id: clientId, used_at: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } });
       });
 
       if (!limitCheck.allowed) {
@@ -925,7 +834,7 @@ router.post('/brain/polish', async (req, res) => {
         });
       }
 
-      await pool.query('INSERT INTO mafiya_brain_ai_log (client_id) VALUES ($1)', [clientId]);
+      await MafiyaBrainAiLog.create({ client_id: clientId });
     }
 
     const prompt = `You are an expert prompt engineer for Google My Business settings optimization.
@@ -965,11 +874,7 @@ router.post('/brain/suggest-config', async (req, res) => {
 
   try {
     const limitCheck = await checkLimit(clientId, 'mafiya_brain_ai', async () => {
-      const countRes = await pool.query(
-        "SELECT COUNT(*) FROM mafiya_brain_ai_log WHERE client_id = $1 AND used_at >= NOW() - INTERVAL '30 days'",
-        [clientId]
-      );
-      return parseInt(countRes.rows[0].count, 10);
+      return MafiyaBrainAiLog.countDocuments({ client_id: clientId, used_at: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } });
     });
 
     if (!limitCheck.allowed) {
@@ -979,17 +884,14 @@ router.post('/brain/suggest-config', async (req, res) => {
       });
     }
 
-    await pool.query('INSERT INTO mafiya_brain_ai_log (client_id) VALUES ($1)', [clientId]);
+    await MafiyaBrainAiLog.create({ client_id: clientId });
 
     // Fetch business profile details
-    const clientRes = await pool.query(
-      'SELECT business_name FROM mafiya_gmb_clients WHERE id = $1',
-      [clientId]
-    );
-    if (clientRes.rowCount === 0) {
+    const profile = await MafiyaGmbClients.findOne({ id: clientId }, { business_name: 1 }).lean();
+    if (!profile) {
       return res.status(404).json({ error: 'Client business profile not found.' });
     }
-    const businessName = clientRes.rows[0].business_name;
+    const businessName = profile.business_name;
 
     let prompt = '';
     const hasCurrent = currentConfig && Object.keys(currentConfig).length > 0 && JSON.stringify(currentConfig) !== '{}' && (
@@ -1176,17 +1078,9 @@ router.post('/brain/suggest-posts', async (req, res) => {
 
   try {
     const limitCheck = await checkLimit(clientId, 'mafiya_ai_suggestions', async () => {
-      const countRes = await pool.query(
-        "SELECT COUNT(*) FROM mafiya_ai_suggestions_log WHERE client_id = $1 AND generated_at >= NOW() - INTERVAL '30 days'",
-        [clientId]
-      );
-      return parseInt(countRes.rows[0].count, 10);
+      return MafiyaAiSuggestionsLog.countDocuments({ client_id: clientId, generated_at: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } });
     }, async () => {
-      const countRes = await pool.query(
-        "SELECT COUNT(*) FROM mafiya_ai_suggestions_log WHERE client_id = $1 AND generated_at >= CURRENT_DATE",
-        [clientId]
-      );
-      return parseInt(countRes.rows[0].count, 10);
+      return MafiyaAiSuggestionsLog.countDocuments({ client_id: clientId, generated_at: { $gte: startOfUtcDay() } });
     });
 
     if (!limitCheck.allowed) {
@@ -1203,24 +1097,23 @@ router.post('/brain/suggest-posts', async (req, res) => {
     }
 
     // Log the suggestion generation
-    await pool.query('INSERT INTO mafiya_ai_suggestions_log (client_id) VALUES ($1)', [clientId]);
+    await MafiyaAiSuggestionsLog.create({ client_id: clientId });
 
     // 1. Fetch business profile details
-    const clientRes = await pool.query(
-      'SELECT business_name, business_category, custom_category, phone_number, business_address FROM mafiya_gmb_clients WHERE id = $1',
-      [clientId]
-    );
-    if (clientRes.rowCount === 0) {
+    const client = await MafiyaGmbClients.findOne(
+      { id: clientId },
+      { business_name: 1, business_category: 1, custom_category: 1, phone_number: 1, business_address: 1 }
+    ).lean();
+    if (!client) {
       return res.status(404).json({ error: 'Client business profile not found.' });
     }
-    const client = clientRes.rows[0];
     const name = client.business_name;
     const phone = client.phone_number || '';
     const address = client.business_address || '';
     const category = client.business_category || client.custom_category || '';
 
     // 2. Fetch GMB Brain settings
-    const brainRes = await pool.query('SELECT entry_type, content FROM mafiya_gmb_brain WHERE client_id = $1', [clientId]);
+    const brainRes = { rows: await MafiyaGmbBrain.find({ client_id: clientId }, { _id: 0, entry_type: 1, content: 1 }).lean() };
 
     let tone = 'Friendly';
     let keywords = [];
@@ -1306,23 +1199,16 @@ router.post('/brain', async (req, res) => {
   }
   try {
     if (id) {
-      const result = await pool.query(
-        `UPDATE mafiya_gmb_brain
-         SET entry_type = $1, content = $2, updated_at = NOW()
-         WHERE id = $3 AND client_id = $4
-         RETURNING *`,
-        [entryType, content, id, clientId]
-      );
-      if (result.rowCount === 0) return res.status(404).json({ error: 'Entry not found' });
-      return res.json(result.rows[0]);
+      const updated = await MafiyaGmbBrain.findOneAndUpdate(
+        { id, client_id: clientId },
+        { $set: { entry_type: entryType, content, updated_at: new Date() } },
+        { new: true, projection: NO_ID }
+      ).lean();
+      if (!updated) return res.status(404).json({ error: 'Entry not found' });
+      return res.json(updated);
     } else {
-      const result = await pool.query(
-        `INSERT INTO mafiya_gmb_brain (client_id, entry_type, content)
-         VALUES ($1, $2, $3)
-         RETURNING *`,
-        [clientId, entryType, content]
-      );
-      return res.status(201).json(result.rows[0]);
+      const created = await MafiyaGmbBrain.create({ client_id: clientId, entry_type: entryType, content });
+      return res.status(201).json(created.toObject());
     }
   } catch (err) {
     console.error('[Mafiya Reviews] POST /brain error:', err);
@@ -1334,11 +1220,8 @@ router.post('/brain', async (req, res) => {
 router.delete('/brain/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await pool.query(
-      'DELETE FROM mafiya_gmb_brain WHERE id = $1 RETURNING *',
-      [id]
-    );
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Entry not found' });
+    const result = await MafiyaGmbBrain.deleteOne({ id });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Entry not found' });
     res.json({ message: 'Entry deleted successfully' });
   } catch (err) {
     console.error('[Mafiya Reviews] DELETE /brain error:', err);
@@ -1351,11 +1234,8 @@ router.get('/posts', async (req, res) => {
   const { clientId } = req.query;
   if (!clientId) return res.status(400).json({ error: 'clientId is required' });
   try {
-    const result = await pool.query(
-      'SELECT * FROM mafiya_gmb_posts WHERE client_id = $1 ORDER BY created_at DESC',
-      [clientId]
-    );
-    res.json(result.rows);
+    const posts = await MafiyaGmbPosts.find({ client_id: clientId }, NO_ID).sort({ created_at: -1 }).lean();
+    res.json(posts);
   } catch (err) {
     console.error('[Mafiya Reviews] GET /posts error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -1436,36 +1316,28 @@ router.post('/posts', async (req, res) => {
     }
 
     // 1. Save to local database
-    const result = await pool.query(
-      `INSERT INTO mafiya_gmb_posts
-        (client_id, post_type, caption, poster_title, poster_subtitle, bg_theme, status, image_url,
-         post_title, start_date, end_date, start_time, end_time, coupon_code, redeem_link, terms, repeats, custom_days, repeat_end_date, scheduled_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-       RETURNING *`,
-      [
-        clientId,
-        postType,
-        caption,
-        posterTitle,
-        posterSubtitle,
-        bgTheme || 'orange',
-        status || 'draft',
-        finalImageUrl,
-        postTitle || null,
-        startDate || null,
-        endDate || null,
-        startTime || null,
-        endTime || null,
-        couponCode || null,
-        redeemLink || null,
-        terms || null,
-        repeats || 'Does not repeat',
-        customDays || null,
-        repeatEndDate || null,
-        finalScheduledAt || null
-      ]
-    );
-    const savedPost = result.rows[0];
+    const savedPost = (await MafiyaGmbPosts.create({
+      client_id: clientId,
+      post_type: postType,
+      caption,
+      poster_title: posterTitle,
+      poster_subtitle: posterSubtitle,
+      bg_theme: bgTheme || 'orange',
+      status: status || 'draft',
+      image_url: finalImageUrl,
+      post_title: postTitle || null,
+      start_date: startDate || null,
+      end_date: endDate || null,
+      start_time: startTime || null,
+      end_time: endTime || null,
+      coupon_code: couponCode || null,
+      redeem_link: redeemLink || null,
+      terms: terms || null,
+      repeats: repeats || 'Does not repeat',
+      custom_days: customDays || null,
+      repeat_end_date: repeatEndDate || null,
+      scheduled_at: finalScheduledAt || null,
+    })).toObject();
 
     // If the post is scheduled for later, we do NOT publish it to GMB immediately
     if (status === 'scheduled') {
@@ -1474,10 +1346,8 @@ router.post('/posts', async (req, res) => {
 
     // 2. Publish to Google My Business API (if credentials exist)
     try {
-      const clientRes = await pool.query('SELECT google_account_id, google_location_id FROM mafiya_gmb_clients WHERE id = $1', [clientId]);
+      const client = await MafiyaGmbClients.findOne({ id: clientId }, { google_account_id: 1, google_location_id: 1 }).lean();
       const tokenString = await getClientGoogleToken(clientId);
-
-      const client = clientRes.rows[0];
 
       if (client && client.google_account_id && client.google_location_id && tokenString) {
         // Prepare Google LocalPost body
@@ -1650,10 +1520,7 @@ router.post('/posts', async (req, res) => {
         }
         console.log('[GMB API] Post successfully published:', gmbResponse.data);
         if (gmbResponse && gmbResponse.data && gmbResponse.data.name) {
-          await pool.query(
-            "UPDATE mafiya_gmb_posts SET gmb_post_name = $1 WHERE id = $2",
-            [gmbResponse.data.name, savedPost.id]
-          );
+          await MafiyaGmbPosts.updateOne({ id: savedPost.id }, { $set: { gmb_post_name: gmbResponse.data.name } });
           savedPost.gmb_post_name = gmbResponse.data.name;
         }
       } else {
@@ -1678,11 +1545,7 @@ router.post('/posts/import', async (req, res) => {
 
   try {
     // 1. Get GMB credentials for client
-    const clientRes = await pool.query(
-      'SELECT google_account_id, google_location_id, gmb_verified FROM mafiya_gmb_clients WHERE id = $1',
-      [clientId]
-    );
-    const client = clientRes.rows[0];
+    const client = await MafiyaGmbClients.findOne({ id: clientId }, { google_account_id: 1, google_location_id: 1, gmb_verified: 1 }).lean();
     if (!client || !client.google_account_id || !client.google_location_id) {
       return res.status(400).json({ error: 'GMB not connected for this client' });
     }
@@ -1732,12 +1595,9 @@ router.post('/posts/import', async (req, res) => {
 
     for (const item of localPosts) {
       // Check if post already exists in database
-      const existingRes = await pool.query(
-        'SELECT id FROM mafiya_gmb_posts WHERE client_id = $1 AND gmb_post_name = $2',
-        [clientId, item.name]
-      );
+      const existingPost = await MafiyaGmbPosts.exists({ client_id: clientId, gmb_post_name: item.name });
 
-      if (existingRes.rowCount === 0) {
+      if (!existingPost) {
         // Extract media URL
         console.log(`[GMB Import Debug] Post name: ${item.name}, media:`, JSON.stringify(item.media, null, 2));
         let imageUrl = null;
@@ -1750,12 +1610,10 @@ router.post('/posts/import', async (req, res) => {
         const caption = item.summary || '';
         const createdAt = item.createTime ? new Date(item.createTime) : new Date();
 
-        await pool.query(
-          `INSERT INTO mafiya_gmb_posts
-            (client_id, post_type, caption, status, image_url, gmb_post_name, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [clientId, postType, caption, 'published', imageUrl, item.name, createdAt]
-        );
+        await MafiyaGmbPosts.create({
+          client_id: clientId, post_type: postType, caption, status: 'published', image_url: imageUrl,
+          gmb_post_name: item.name, created_at: createdAt,
+        });
         importedCount++;
       }
     }
@@ -1773,17 +1631,13 @@ router.get('/posts/sync-metrics', async (req, res) => {
   if (!clientId) return res.status(400).json({ error: 'clientId required' });
 
   try {
-    const postsRes = await pool.query(
-      "SELECT id FROM mafiya_gmb_posts WHERE client_id = $1 AND status = 'published'",
-      [clientId]
-    );
+    const publishedPosts = await MafiyaGmbPosts.find({ client_id: clientId, status: 'published' }, { id: 1 }).lean();
 
-    if (postsRes.rowCount === 0) {
+    if (publishedPosts.length === 0) {
       return res.json({ message: 'No published GMB posts to sync.' });
     }
 
-    const clientRes = await pool.query('SELECT ga4_property_id FROM mafiya_gmb_clients WHERE id = $1', [clientId]);
-    const client = clientRes.rows[0];
+    const client = await MafiyaGmbClients.findOne({ id: clientId }, { ga4_property_id: 1 }).lean();
 
     if (!client || !client.ga4_property_id) {
       return res.json({
@@ -1847,13 +1701,10 @@ router.get('/posts/sync-metrics', async (req, res) => {
     console.log('[GA4 API Sync Debug] Campaign clicks mapping:', JSON.stringify(campaignClicks));
 
     let updatedCount = 0;
-    for (const post of postsRes.rows) {
+    for (const post of publishedPosts) {
       const campaignName = `post_${post.id}`;
       if (campaignClicks[campaignName] !== undefined) {
-        await pool.query(
-          "UPDATE mafiya_gmb_posts SET clicks = $1 WHERE id = $2",
-          [campaignClicks[campaignName], post.id]
-        );
+        await MafiyaGmbPosts.updateOne({ id: post.id }, { $set: { clicks: campaignClicks[campaignName] } });
         updatedCount++;
       }
     }
@@ -1927,40 +1778,33 @@ router.put('/posts/:id', async (req, res) => {
       }
     }
 
-    const result = await pool.query(
-      `UPDATE mafiya_gmb_posts
-       SET post_type = $1, caption = $2, poster_title = $3, poster_subtitle = $4, bg_theme = $5,
-           status = $6, image_url = $7, post_title = $8, start_date = $9, end_date = $10,
-           start_time = $11, end_time = $12, coupon_code = $13, redeem_link = $14, terms = $15,
-           repeats = $16, custom_days = $17, repeat_end_date = $18, scheduled_at = $19
-       WHERE id = $20
-       RETURNING *`,
-      [
-        postType,
+    const updatedPost = await MafiyaGmbPosts.findOneAndUpdate(
+      { id },
+      { $set: {
+        post_type: postType,
         caption,
-        posterTitle,
-        posterSubtitle,
-        bgTheme || 'orange',
-        status || 'draft',
-        finalImageUrl,
-        postTitle || null,
-        startDate || null,
-        endDate || null,
-        startTime || null,
-        endTime || null,
-        couponCode || null,
-        redeemLink || null,
-        terms || null,
-        repeats || 'Does not repeat',
-        customDays || null,
-        repeatEndDate || null,
-        finalScheduledAt || null,
-        id
-      ]
-    );
+        poster_title: posterTitle ?? null,
+        poster_subtitle: posterSubtitle ?? null,
+        bg_theme: bgTheme || 'orange',
+        status: status || 'draft',
+        image_url: finalImageUrl ?? null,
+        post_title: postTitle || null,
+        start_date: startDate || null,
+        end_date: endDate || null,
+        start_time: startTime || null,
+        end_time: endTime || null,
+        coupon_code: couponCode || null,
+        redeem_link: redeemLink || null,
+        terms: terms || null,
+        repeats: repeats || 'Does not repeat',
+        custom_days: customDays || null,
+        repeat_end_date: repeatEndDate || null,
+        scheduled_at: finalScheduledAt || null,
+      } },
+      { new: true, projection: NO_ID }
+    ).lean();
 
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Post not found' });
-    const updatedPost = result.rows[0];
+    if (!updatedPost) return res.status(404).json({ error: 'Post not found' });
 
     // If status is published, trigger GMB publish immediately
     if (status === 'published') {
@@ -2025,10 +1869,7 @@ router.put('/google-locations', async (req, res) => {
     const cleanAccountId = google_account_id.replace('accounts/', '');
     const cleanLocationId = google_location_id.replace('locations/', '');
 
-    await pool.query(
-      'UPDATE mafiya_gmb_clients SET google_account_id = $1, google_location_id = $2 WHERE id = $3',
-      [cleanAccountId, cleanLocationId, clientId]
-    );
+    await MafiyaGmbClients.updateOne({ id: clientId }, { $set: { google_account_id: cleanAccountId, google_location_id: cleanLocationId } });
     res.json({ success: true, google_account_id: cleanAccountId, google_location_id: cleanLocationId });
   } catch (err) {
     console.error('[Mafiya Reviews] PUT /google-locations error:', err.message);
@@ -2042,14 +1883,10 @@ router.delete('/posts/:id', async (req, res) => {
   const fs = require('fs');
   const path = require('path');
   try {
-    const result = await pool.query(
-      'DELETE FROM mafiya_gmb_posts WHERE id = $1 RETURNING *',
-      [id]
-    );
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Post not found' });
+    const deletedPost = await MafiyaGmbPosts.findOneAndDelete({ id }, { projection: NO_ID }).lean();
+    if (!deletedPost) return res.status(404).json({ error: 'Post not found' });
 
     // Delete local image file if it exists
-    const deletedPost = result.rows[0];
     const imageUrl = deletedPost.image_url;
     if (imageUrl && imageUrl.includes('/api/mafiya/reviews/image/')) {
       try {
@@ -2134,17 +1971,9 @@ router.post('/posts/generate-from-image', async (req, res) => {
   try {
     const { checkLimit } = require('../utils/limit-checker');
     const limitCheck = await checkLimit(clientId, 'mafiya_ai_suggestions', async () => {
-      const countRes = await pool.query(
-        "SELECT COUNT(*) FROM mafiya_ai_suggestions_log WHERE client_id = $1 AND generated_at >= NOW() - INTERVAL '30 days'",
-        [clientId]
-      );
-      return parseInt(countRes.rows[0].count, 10);
+      return MafiyaAiSuggestionsLog.countDocuments({ client_id: clientId, generated_at: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } });
     }, async () => {
-      const countRes = await pool.query(
-        "SELECT COUNT(*) FROM mafiya_ai_suggestions_log WHERE client_id = $1 AND generated_at >= CURRENT_DATE",
-        [clientId]
-      );
-      return parseInt(countRes.rows[0].count, 10);
+      return MafiyaAiSuggestionsLog.countDocuments({ client_id: clientId, generated_at: { $gte: startOfUtcDay() } });
     });
 
     if (!limitCheck.allowed) {
@@ -2161,7 +1990,7 @@ router.post('/posts/generate-from-image', async (req, res) => {
     }
 
     // Log the suggestion generation
-    await pool.query('INSERT INTO mafiya_ai_suggestions_log (client_id) VALUES ($1)', [clientId]);
+    await MafiyaAiSuggestionsLog.create({ client_id: clientId });
 
     const matches = imageBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.*)$/);
     if (!matches || matches.length !== 3) {
@@ -2225,18 +2054,12 @@ router.post('/posts/generate', async (req, res) => {
 
   try {
     // 1. Fetch GMB Client details
-    const clientRes = await pool.query(
-      'SELECT business_name, phone_number FROM mafiya_gmb_clients WHERE id = $1',
-      [clientId]
-    );
-    if (clientRes.rowCount === 0) return res.status(404).json({ error: 'Client not found' });
-    const { business_name: businessName, phone_number: phoneNumber } = clientRes.rows[0];
+    const clientRow = await MafiyaGmbClients.findOne({ id: clientId }, { business_name: 1, phone_number: 1 }).lean();
+    if (!clientRow) return res.status(404).json({ error: 'Client not found' });
+    const { business_name: businessName, phone_number: phoneNumber } = clientRow;
 
     // 2. Fetch AI Brain entries
-    const brainRes = await pool.query(
-      'SELECT entry_type, content FROM mafiya_gmb_brain WHERE client_id = $1',
-      [clientId]
-    );
+    const brainRes = { rows: await MafiyaGmbBrain.find({ client_id: clientId }, { _id: 0, entry_type: 1, content: 1 }).lean() };
 
     const brain = {
       tone: [],
@@ -2399,12 +2222,11 @@ Generate a JSON object with exactly these fields:
 // Helper function to publish a post from the database to GMB API
 async function publishPostToGmb(postId) {
   try {
-    const postRes = await pool.query('SELECT * FROM mafiya_gmb_posts WHERE id = $1', [postId]);
-    if (postRes.rowCount === 0) {
+    const post = await MafiyaGmbPosts.findOne({ id: postId }, NO_ID).lean();
+    if (!post) {
       console.error(`[GMB API] Post with ID ${postId} not found for GMB publication.`);
       return;
     }
-    const post = postRes.rows[0];
     const {
       client_id: clientId,
       post_type: postType,
@@ -2422,9 +2244,8 @@ async function publishPostToGmb(postId) {
       terms
     } = post;
 
-    const clientRes = await pool.query('SELECT google_account_id, google_location_id FROM mafiya_gmb_clients WHERE id = $1', [clientId]);
+    const client = await MafiyaGmbClients.findOne({ id: clientId }, { google_account_id: 1, google_location_id: 1 }).lean();
     const tokenString = await getClientGoogleToken(clientId);
-    const client = clientRes.rows[0];
 
     if (client && client.google_account_id && client.google_location_id && tokenString) {
       const gmbPostBody = {
@@ -2573,10 +2394,7 @@ async function publishPostToGmb(postId) {
 
       // Update status and post name in the database
       const gmbPostName = gmbResponse && gmbResponse.data && gmbResponse.data.name ? gmbResponse.data.name : null;
-      await pool.query(
-        "UPDATE mafiya_gmb_posts SET status = 'published', gmb_post_name = $1 WHERE id = $2",
-        [gmbPostName, postId]
-      );
+      await MafiyaGmbPosts.updateOne({ id: postId }, { $set: { status: 'published', gmb_post_name: gmbPostName } });
     } else {
       console.log(`[GMB API] Skipped GMB publish for post ${postId}: Missing client identifiers.`);
     }
@@ -2589,10 +2407,8 @@ async function publishPostToGmb(postId) {
 const cron = require('node-cron');
 cron.schedule('*/5 * * * * *', async () => {
   try {
-    const result = await pool.query(
-      "SELECT id FROM mafiya_gmb_posts WHERE status = 'scheduled' AND scheduled_at <= NOW()"
-    );
-    for (const row of result.rows) {
+    const duePosts = await MafiyaGmbPosts.find({ status: 'scheduled', scheduled_at: { $lte: new Date() } }, { id: 1 }).lean();
+    for (const row of duePosts) {
       console.log(`[Scheduler] Processing scheduled post ID: ${row.id}`);
       await publishPostToGmb(row.id);
     }

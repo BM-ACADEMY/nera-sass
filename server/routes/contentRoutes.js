@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const ctrl = require("../controllers/contentController");
-const pool = require("../db/connection");
+const { ContentQueue, BrandSocialAccounts } = require("../models");
 
 // Stats for the dashboard top cards
 router.get("/stats", ctrl.getStats);
@@ -75,11 +75,9 @@ router.post('/:id/publish-success', async (req, res) => {
   const { id } = req.params;
   const { platform_post_ids } = req.body;
   try {
-    await pool.query(
-      `UPDATE content_queue 
-       SET status = 'PUBLISHED', published_at = NOW(), platform_post_ids = $2 
-       WHERE id = $1`,
-      [id, JSON.stringify(platform_post_ids)]
+    await ContentQueue.updateOne(
+      { id },
+      { $set: { status: 'PUBLISHED', published_at: new Date(), platform_post_ids: platform_post_ids ?? null } }
     );
     res.json({ success: true });
   } catch (err) {
@@ -92,11 +90,9 @@ router.post('/:id/publish-fail', async (req, res) => {
   const { id } = req.params;
   const { error_message, error_response } = req.body;
   try {
-    await pool.query(
-      `UPDATE content_queue 
-       SET status = 'FAILED', failure_reason = $2, failed_at = NOW() 
-       WHERE id = $1`,
-      [id, error_message]
+    await ContentQueue.updateOne(
+      { id },
+      { $set: { status: 'FAILED', failure_reason: error_message, failed_at: new Date() } }
     );
     res.json({ success: true });
   } catch (err) {
@@ -141,11 +137,13 @@ router.post('/fix-instagram-urls', async (req, res) => {
   let fixed = 0, skipped = 0, failed = 0;
   const errors = [];
   try {
-    const { rows: posts } = await pool.query(
-      `SELECT id, brand_id, platform_post_ids FROM content_queue
-       WHERE status IN ('PUBLISHED','PARTIAL','published','partial')
-       AND platform_post_ids IS NOT NULL AND platform_post_ids != '[]'`
-    );
+    const posts = await ContentQueue.find(
+      {
+        status: { $in: ['PUBLISHED', 'PARTIAL', 'published', 'partial'] },
+        platform_post_ids: { $nin: [null, []] },
+      },
+      { _id: 0, id: 1, brand_id: 1, platform_post_ids: 1 }
+    ).lean();
 
     for (const post of posts) {
       let ids = [];
@@ -156,10 +154,10 @@ router.post('/fix-instagram-urls', async (req, res) => {
       if (!igEntry || igEntry.url) { skipped++; continue; }
 
       try {
-        const { rows: accs } = await pool.query(
-          `SELECT access_token FROM brand_social_accounts WHERE LOWER(REPLACE(REPLACE(brand_name, ' ', '_'), '-', '_')) = LOWER($1) AND platform = 'instagram' LIMIT 1`,
-          [post.brand_id]
-        );
+        const brandKey = (value) => String(value ?? '').replace(/[ -]/g, '_').toLowerCase();
+        const accs = (await BrandSocialAccounts.find({ platform: 'instagram' }, { _id: 0, access_token: 1, brand_name: 1 }).lean())
+          .filter((acc) => brandKey(acc.brand_name) === String(post.brand_id ?? '').toLowerCase())
+          .slice(0, 1);
         if (!accs.length) { skipped++; errors.push({ id: post.id, reason: `no instagram account found for brand_id=${post.brand_id}` }); continue; }
 
         const tok = cryptoHelper.decrypt(accs[0].access_token);
@@ -169,10 +167,7 @@ router.post('/fix-instagram-urls', async (req, res) => {
         if (!plRes.data.permalink) { skipped++; errors.push({ id: post.id, reason: `no permalink in API response`, data: plRes.data }); continue; }
 
         igEntry.url = plRes.data.permalink;
-        await pool.query(
-          `UPDATE content_queue SET platform_post_ids = $1 WHERE id = $2`,
-          [JSON.stringify(ids), post.id]
-        );
+        await ContentQueue.updateOne({ id: post.id }, { $set: { platform_post_ids: ids } });
         fixed++;
       } catch(e) {
         const detail = e.response?.data || e.message;

@@ -1,18 +1,18 @@
-const db = require('../db/connection');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { Users } = require('../models');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
+const PUBLIC_USER_FIELDS = { _id: 0, id: 1, name: 1, email: 1, phone: 1, role: 1 };
 
 exports.login = async (req, res) => {
   const { email, password } = req.body;
   try {
-    const userResult = await db.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userResult.rows.length === 0) {
+    const user = await Users.findOne({ email }).lean();
+    if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const user = userResult.rows[0];
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -53,18 +53,15 @@ exports.createUser = async (req, res) => {
     const passwordHash = await bcrypt.hash(password, salt);
 
     // Create User (no tenant, 'user' role)
-    const userResult = await db.query(
-      'INSERT INTO users (name, email, phone, password_hash, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role',
-      [name, email, phone, passwordHash, 'user']
-    );
+    const user = await Users.create({ name, email, phone, password_hash: passwordHash, role: 'user' });
 
     res.status(201).json({
       message: 'User created successfully',
-      user: userResult.rows[0]
+      user: { id: user.id, name: user.name, email: user.email, role: user.role }
     });
   } catch (error) {
     console.error('Create User Error:', error);
-    if (error.code === '23505') { // unique violation in pg
+    if (error.code === 11000) { // duplicate key in MongoDB
        return res.status(400).json({ error: 'Email already exists' });
     }
     res.status(500).json({ error: 'Internal server error' });
@@ -73,13 +70,9 @@ exports.createUser = async (req, res) => {
 
 exports.me = async (req, res) => {
   try {
-    const result = await db.query(`
-      SELECT u.id, u.name, u.email, u.phone, u.role
-      FROM users u
-      WHERE u.id = $1
-    `, [req.user.id]);
-    if (!result.rows.length) return res.status(404).json({ error: 'User not found' });
-    res.json(result.rows[0]);
+    const user = await Users.findOne({ id: req.user.id }, PUBLIC_USER_FIELDS).lean();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json(user);
   } catch (error) {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -90,12 +83,8 @@ exports.getUsers = async (req, res) => {
     return res.status(403).json({ error: 'Unauthorized' });
   }
   try {
-    const result = await db.query(`
-      SELECT u.id, u.name, u.email, u.phone, u.role
-      FROM users u
-      ORDER BY u.created_at DESC
-    `);
-    res.json(result.rows);
+    const users = await Users.find({}, PUBLIC_USER_FIELDS).sort({ created_at: -1 }).lean();
+    res.json(users);
   } catch (error) {
     res.status(500).json({ error: 'Internal server error' });
   }

@@ -1,17 +1,17 @@
-const db = require('../db/connection');
+const { Clients } = require('../models');
 
 const LEADOS_BRAND_NAME = 'ABM Groups';
 let cachedBrand = null;
 
-async function getLeadOSBrand(queryable = db) {
+async function getLeadOSBrand() {
   if (cachedBrand) return cachedBrand;
-  const { rows } = await queryable.query(
-    `SELECT id, name FROM clients
-     WHERE LOWER(REGEXP_REPLACE(name, '[^a-zA-Z0-9]', '', 'g')) = 'abmgroups'
-     ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, id LIMIT 1`
-  );
-  if (!rows[0]) throw new Error(`Required LeadOS brand "${LEADOS_BRAND_NAME}" is not configured`);
-  cachedBrand = rows[0];
+  // Matches "ABM Groups" ignoring case, spaces and punctuation.
+  const candidates = await Clients.find({ name: /a\W*b\W*m\W*g\W*r\W*o\W*u\W*p\W*s/i }, { _id: 0, id: 1, name: 1, status: 1 }).lean();
+  const [brand] = candidates
+    .filter((client) => String(client.name || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === 'abmgroups')
+    .sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1) || a.id - b.id);
+  if (!brand) throw new Error(`Required LeadOS brand "${LEADOS_BRAND_NAME}" is not configured`);
+  cachedBrand = { id: brand.id, name: brand.name };
   return cachedBrand;
 }
 

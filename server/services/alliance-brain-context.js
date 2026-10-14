@@ -1,4 +1,4 @@
-const db = require('../db/connection');
+const { AllianceAudiences, AllianceBrands, AllianceOfferings, AllianceOfferingFaqs } = require('../models');
 
 const STOPWORDS = new Set([
   'the', 'a', 'an', 'is', 'are', 'do', 'does', 'what', 'how', 'can', 'i', 'you',
@@ -32,32 +32,28 @@ const BRAIN_INSTRUCTIONS = 'Only use facts provided in this brand knowledge cont
 // context block (brand info + relevant offerings + their FAQs) for the AI
 // reply-suggestion prompt. Returns null if no brand is configured yet.
 async function getAllianceBrainContext(audience, messageText) {
-  const brandResult = await db.query(
-    `SELECT b.*,
-            (b.audience=$1) AS audience_linked,
-            (b.audience IS NULL AND (
-              REGEXP_REPLACE(LOWER(b.code),'[^a-z0-9]','','g')=REGEXP_REPLACE(LOWER(COALESCE(a.brand,'')),'[^a-z0-9]','','g')
-              OR REGEXP_REPLACE(LOWER(b.name),'[^a-z0-9]','','g')=REGEXP_REPLACE(LOWER(COALESCE(a.brand,'')),'[^a-z0-9]','','g')
-            )) AS audience_brand_match
-     FROM alliance_brands b
-     LEFT JOIN alliance_audiences a ON a.code=$1
-     WHERE b.active=TRUE
-     ORDER BY (b.audience=$1) DESC, audience_brand_match DESC, b.id`,
-    [audience || null]
-  );
-  if (!brandResult.rowCount) return null;
-  const allOfferingsResult = await db.query(
-    `SELECT * FROM alliance_offerings WHERE brand_id=ANY($1::bigint[]) AND status='active' ORDER BY brand_id,name`,
-    [brandResult.rows.map((item) => item.id)]
-  );
+  const squash = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const audienceRow = audience ? await AllianceAudiences.findOne({ code: audience }, { brand: 1 }).lean() : null;
+  const audienceBrand = squash(audienceRow?.brand);
+  const brandRows = (await AllianceBrands.find({ active: true }).lean()).map((b) => ({
+    ...b,
+    audience_linked: audience ? b.audience === audience : null,
+    audience_brand_match: (b.audience === null || b.audience === undefined)
+      && Boolean(audienceRow) && (squash(b.code) === audienceBrand || squash(b.name) === audienceBrand),
+  })).sort((a, b) => Number(Boolean(b.audience_linked)) - Number(Boolean(a.audience_linked))
+    || Number(b.audience_brand_match) - Number(a.audience_brand_match)
+    || a.id - b.id);
+  if (!brandRows.length) return null;
+  const allOfferings = await AllianceOfferings.find({ brand_id: { $in: brandRows.map((item) => item.id) }, status: 'active' })
+    .sort({ brand_id: 1, name: 1 }).lean();
   const keywords = extractKeywords(messageText);
   const messageHaystack = ` ${normalizeSearchText(messageText)} `;
   const offeringsByBrand = new Map();
-  allOfferingsResult.rows.forEach((offering) => {
+  allOfferings.forEach((offering) => {
     if (!offeringsByBrand.has(String(offering.brand_id))) offeringsByBrand.set(String(offering.brand_id), []);
     offeringsByBrand.get(String(offering.brand_id)).push(offering);
   });
-  const scoredBrands = brandResult.rows.map((candidate) => {
+  const scoredBrands = brandRows.map((candidate) => {
     const candidateOfferings = offeringsByBrand.get(String(candidate.id)) || [];
     const brandName = normalizeSearchText(candidate.name);
     const brandCode = normalizeSearchText(candidate.code);
@@ -92,11 +88,9 @@ async function getAllianceBrainContext(audience, messageText) {
 
   let faqsByOffering = {};
   if (relevant.length) {
-    const faqResult = await db.query(
-      `SELECT * FROM alliance_offering_faqs WHERE offering_id = ANY($1::bigint[]) ORDER BY sort_order, id`,
-      [relevant.map((item) => item.id)]
-    );
-    for (const faq of faqResult.rows) {
+    const faqs = await AllianceOfferingFaqs.find({ offering_id: { $in: relevant.map((item) => item.id) } })
+      .sort({ sort_order: 1, id: 1 }).lean();
+    for (const faq of faqs) {
       (faqsByOffering[faq.offering_id] ||= []).push({ question: faq.question, answer: faq.answer });
     }
   }

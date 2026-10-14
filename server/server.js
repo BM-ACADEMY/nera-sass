@@ -12,7 +12,6 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { Pool } = require('pg');
 const axios = require('axios');
 const cron = require('node-cron');
 const multer = require('multer');
@@ -53,56 +52,22 @@ io.on('connection', (socket) => {
 });
 
 // ── DB CONNECTION ─────────────────────────────────────────
-const pool = require('./db/connection');
-const templateParameterDefinitionsReady = pool.query(`
-  ALTER TABLE templates ADD COLUMN IF NOT EXISTS parameter_definitions JSONB NOT NULL DEFAULT '{}'::jsonb;
-  ALTER TABLE templates ADD COLUMN IF NOT EXISTS template_scope VARCHAR(20) NOT NULL DEFAULT 'shared';
-`).catch(err => console.error('[Templates] Parameter definitions migration failed:', err.message));
-const clientsWhatsAppStatusReady = pool.query(`
-  ALTER TABLE clients ADD COLUMN IF NOT EXISTS whatsapp_status VARCHAR(30) NOT NULL DEFAULT 'not_configured';
-  ALTER TABLE clients ADD COLUMN IF NOT EXISTS whatsapp_verified_at TIMESTAMP;
-  ALTER TABLE clients ADD COLUMN IF NOT EXISTS whatsapp_verification_error TEXT;
-  ALTER TABLE clients ADD COLUMN IF NOT EXISTS brand_tag TEXT;
-  ALTER TABLE clients ADD COLUMN IF NOT EXISTS brand_voice TEXT;
-  ALTER TABLE clients ADD COLUMN IF NOT EXISTS industry TEXT;
-  ALTER TABLE clients ADD COLUMN IF NOT EXISTS target_audience TEXT;
-`).catch(err => console.error('[Clients] WhatsApp status migration failed:', err.message));
-const metaInventoryReady = pool.query(`
-  CREATE TABLE IF NOT EXISTS meta_whatsapp_accounts (
-    waba_id VARCHAR(100) PRIMARY KEY, business_id VARCHAR(100), name TEXT,
-    currency VARCHAR(10), timezone_id VARCHAR(30), template_namespace TEXT,
-    ownership_type VARCHAR(20), raw_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-    last_synced_at TIMESTAMP NOT NULL DEFAULT NOW()
-  );
-  CREATE TABLE IF NOT EXISTS meta_whatsapp_phone_numbers (
-    phone_number_id VARCHAR(100) PRIMARY KEY,
-    waba_id VARCHAR(100) REFERENCES meta_whatsapp_accounts(waba_id) ON DELETE CASCADE,
-    client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
-    display_phone_number TEXT, verified_name TEXT, verification_status TEXT,
-    connection_status TEXT, quality_rating TEXT, platform_type TEXT,
-    raw_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-    last_synced_at TIMESTAMP NOT NULL DEFAULT NOW()
-  );
-  CREATE TABLE IF NOT EXISTS meta_whatsapp_templates (
-    template_id VARCHAR(100) PRIMARY KEY, waba_id VARCHAR(100), name TEXT,
-    language VARCHAR(20), status VARCHAR(30), category VARCHAR(30),
-    components JSONB NOT NULL DEFAULT '[]'::jsonb,
-    raw_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-    last_synced_at TIMESTAMP NOT NULL DEFAULT NOW()
-  );
-  CREATE TABLE IF NOT EXISTS meta_whatsapp_sync_runs (
-    id BIGSERIAL PRIMARY KEY, status VARCHAR(20), wabas_count INT DEFAULT 0,
-    phones_count INT DEFAULT 0, templates_count INT DEFAULT 0,
-    error TEXT, started_at TIMESTAMP DEFAULT NOW(), completed_at TIMESTAMP
-  );
-  ALTER TABLE meta_whatsapp_phone_numbers ADD COLUMN IF NOT EXISTS profile_picture_url TEXT;
-  ALTER TABLE meta_whatsapp_phone_numbers ADD COLUMN IF NOT EXISTS profile_about TEXT;
-  ALTER TABLE meta_whatsapp_phone_numbers ADD COLUMN IF NOT EXISTS profile_address TEXT;
-  ALTER TABLE meta_whatsapp_phone_numbers ADD COLUMN IF NOT EXISTS profile_description TEXT;
-  ALTER TABLE meta_whatsapp_phone_numbers ADD COLUMN IF NOT EXISTS profile_email TEXT;
-  ALTER TABLE meta_whatsapp_phone_numbers ADD COLUMN IF NOT EXISTS profile_websites JSONB NOT NULL DEFAULT '[]'::jsonb;
-  ALTER TABLE meta_whatsapp_phone_numbers ADD COLUMN IF NOT EXISTS profile_vertical TEXT;
-`).catch(err => console.error('[Meta Inventory] Migration failed:', err.message));
+const { connectMongo, mongoose } = require('./db/connection');
+const {
+  NO_ID, ieq, escapeRegex, upsertOne, insertIgnore, withLock, phoneTailRegex, allocIds,
+} = require('./db/mongo');
+const { deleteCascade, updateKeyCascade } = require('./db/cascade');
+const models = require('./models');
+const {
+  Users, Clients, Leads, Conversations, Messages, Templates, Campaigns, CampaignLogs, CampaignMessageQueue,
+  CampaignRateStats, CampaignImportRecipients, LeadExportJobs, LeadNotes, LeadTags, Payments, Brands, BrainDocs,
+  MetaWhatsappAccounts, MetaWhatsappPhoneNumbers, MetaWhatsappTemplates, MetaWhatsappSyncRuns, FailedWebhooks,
+  AllianceInboxTags, SalesTasks, WorkflowLogs, AiDecisions, Tenants,
+} = models;
+// Collections need no ALTER/CREATE migrations in MongoDB; these remain for awaiting call sites.
+const templateParameterDefinitionsReady = Promise.resolve();
+const clientsWhatsAppStatusReady = Promise.resolve();
+const metaInventoryReady = Promise.resolve();
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v19.0';
 const profileLogoUpload = multer({
@@ -197,15 +162,14 @@ async function updateWhatsAppBusinessProfile(client) {
   });
   const profileRow = profileResponse.data?.data?.[0] || {};
   const profile = profileRow.business_profile || profileRow;
-  await pool.query(`UPDATE meta_whatsapp_phone_numbers SET
-    profile_picture_url=$1,profile_about=$2,profile_address=$3,profile_description=$4,
-    profile_email=$5,profile_websites=$6,profile_vertical=$7,raw_data=raw_data || $8::jsonb,last_synced_at=NOW()
-    WHERE phone_number_id=$9`, [profile.profile_picture_url || null, profile.about || null,
-    profile.address || null, profile.description || null, profile.email || null,
-    JSON.stringify(profile.websites || []), profile.vertical || null,
-    JSON.stringify({ business_profile: profile }), String(config.phoneId)]);
+  await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: String(config.phoneId) }, { $set: {
+    profile_picture_url: profile.profile_picture_url || null, profile_about: profile.about || null,
+    profile_address: profile.address || null, profile_description: profile.description || null,
+    profile_email: profile.email || null, profile_websites: profile.websites || [], profile_vertical: profile.vertical || null,
+    'raw_data.business_profile': profile, last_synced_at: new Date(),
+  } });
   if (client.id) {
-    await pool.query('UPDATE meta_whatsapp_phone_numbers SET client_id=$1 WHERE phone_number_id=$2', [client.id, config.phoneId]);
+    await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: String(config.phoneId) }, { $set: { client_id: client.id } });
   }
   return { profile, phone: config.phone };
 }
@@ -218,13 +182,12 @@ async function cacheMetaBusinessProfile(phoneId, token) {
   });
   const row = response.data?.data?.[0] || {};
   const profile = row.business_profile || row;
-  await pool.query(`UPDATE meta_whatsapp_phone_numbers SET
-    profile_picture_url=$1,profile_about=$2,profile_address=$3,profile_description=$4,
-    profile_email=$5,profile_websites=$6,profile_vertical=$7,raw_data=raw_data || $8::jsonb,last_synced_at=NOW()
-    WHERE phone_number_id=$9`, [profile.profile_picture_url || null, profile.about || null,
-    profile.address || null, profile.description || null, profile.email || null,
-    JSON.stringify(profile.websites || []), profile.vertical || null,
-    JSON.stringify({ business_profile: profile }), String(phoneId)]);
+  await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: String(phoneId) }, { $set: {
+    profile_picture_url: profile.profile_picture_url || null, profile_about: profile.about || null,
+    profile_address: profile.address || null, profile_description: profile.description || null,
+    profile_email: profile.email || null, profile_websites: profile.websites || [], profile_vertical: profile.vertical || null,
+    'raw_data.business_profile': profile, last_synced_at: new Date(),
+  } });
   return profile;
 }
 
@@ -237,7 +200,8 @@ async function syncMetaWhatsAppInventory() {
     throw new Error('Configure META_BUSINESS_ID for all WABAs, or WA_BUSINESS_ACCOUNT_ID for single-WABA sync');
   }
   if (!token) throw new Error('META_SYSTEM_USER_ACCESS_TOKEN or META_PAGE_ACCESS_TOKEN is required');
-  const run = await pool.query(`INSERT INTO meta_whatsapp_sync_runs (status) VALUES ('running') RETURNING id`);
+  const runDoc = await MetaWhatsappSyncRuns.create({ status: 'running' });
+  const run = { rows: [{ id: runDoc.id }] };
   try {
     const base = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
     let owned;
@@ -264,14 +228,11 @@ async function syncMetaWhatsAppInventory() {
     let phoneCount = 0;
     let templateCount = 0;
     for (const waba of wabaMap.values()) {
-      await pool.query(`INSERT INTO meta_whatsapp_accounts
-        (waba_id, business_id, name, currency, timezone_id, template_namespace, ownership_type, raw_data, last_synced_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW()) ON CONFLICT (waba_id) DO UPDATE SET
-        business_id=EXCLUDED.business_id,name=EXCLUDED.name,currency=EXCLUDED.currency,
-        timezone_id=EXCLUDED.timezone_id,template_namespace=EXCLUDED.template_namespace,
-        ownership_type=EXCLUDED.ownership_type,raw_data=EXCLUDED.raw_data,last_synced_at=NOW()`,
-      [String(waba.id), businessId || null, waba.name, waba.currency, waba.timezone_id,
-        waba.message_template_namespace, waba.ownership_type, JSON.stringify(waba)]);
+      const wabaFields = {
+        business_id: businessId || null, name: waba.name ?? null, currency: waba.currency ?? null, timezone_id: waba.timezone_id ?? null,
+        template_namespace: waba.message_template_namespace ?? null, ownership_type: waba.ownership_type, raw_data: waba, last_synced_at: new Date(),
+      };
+      await upsertOne(MetaWhatsappAccounts, { waba_id: String(waba.id) }, { $set: wabaFields }, wabaFields);
       const [phones, templates] = await Promise.all([
         graphPageData(`${base}/${waba.id}/phone_numbers`, token,
           { fields: 'id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,status,name_status,new_name_status' })
@@ -290,30 +251,23 @@ async function syncMetaWhatsAppInventory() {
         } catch (profileError) {
           console.warn(`[Meta Inventory] Profile unavailable for phone ${phone.id}:`, profileError.response?.data?.error?.message || profileError.message);
         }
-        await pool.query(`INSERT INTO meta_whatsapp_phone_numbers
-          (phone_number_id,waba_id,display_phone_number,verified_name,verification_status,connection_status,quality_rating,platform_type,profile_picture_url,profile_about,profile_address,profile_description,profile_email,profile_websites,profile_vertical,raw_data,last_synced_at)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW()) ON CONFLICT (phone_number_id) DO UPDATE SET
-          waba_id=EXCLUDED.waba_id,display_phone_number=EXCLUDED.display_phone_number,
-          verified_name=EXCLUDED.verified_name,verification_status=EXCLUDED.verification_status,
-          connection_status=EXCLUDED.connection_status,quality_rating=EXCLUDED.quality_rating,
-          platform_type=EXCLUDED.platform_type,profile_picture_url=EXCLUDED.profile_picture_url,
-          profile_about=EXCLUDED.profile_about,profile_address=EXCLUDED.profile_address,
-          profile_description=EXCLUDED.profile_description,profile_email=EXCLUDED.profile_email,
-          profile_websites=EXCLUDED.profile_websites,profile_vertical=EXCLUDED.profile_vertical,
-          raw_data=EXCLUDED.raw_data,last_synced_at=NOW()`,
-        [String(phone.id), String(waba.id), phone.display_phone_number, phone.verified_name,
-          phone.code_verification_status, phone.status, phone.quality_rating, phone.platform_type,
-          profile.profile_picture_url, profile.about, profile.address, profile.description, profile.email,
-          JSON.stringify(profile.websites || []), profile.vertical, JSON.stringify({ ...phone, business_profile: profile })]);
+        const phoneFields = {
+          waba_id: String(waba.id), display_phone_number: phone.display_phone_number ?? null, verified_name: phone.verified_name ?? null,
+          verification_status: phone.code_verification_status ?? null, connection_status: phone.status ?? null,
+          quality_rating: phone.quality_rating ?? null, platform_type: phone.platform_type ?? null,
+          profile_picture_url: profile.profile_picture_url ?? null, profile_about: profile.about ?? null,
+          profile_address: profile.address ?? null, profile_description: profile.description ?? null,
+          profile_email: profile.email ?? null, profile_websites: profile.websites || [], profile_vertical: profile.vertical ?? null,
+          raw_data: { ...phone, business_profile: profile }, last_synced_at: new Date(),
+        };
+        await upsertOne(MetaWhatsappPhoneNumbers, { phone_number_id: String(phone.id) }, { $set: phoneFields }, phoneFields);
       }
       for (const template of templates) {
-        await pool.query(`INSERT INTO meta_whatsapp_templates
-          (template_id,waba_id,name,language,status,category,components,raw_data,last_synced_at)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW()) ON CONFLICT (template_id) DO UPDATE SET
-          waba_id=EXCLUDED.waba_id,name=EXCLUDED.name,language=EXCLUDED.language,status=EXCLUDED.status,
-          category=EXCLUDED.category,components=EXCLUDED.components,raw_data=EXCLUDED.raw_data,last_synced_at=NOW()`,
-        [String(template.id), String(waba.id), template.name, template.language, template.status,
-          template.category, JSON.stringify(template.components || []), JSON.stringify(template)]);
+        const templateFields = {
+          waba_id: String(waba.id), name: template.name ?? null, language: template.language ?? null, status: template.status ?? null,
+          category: template.category ?? null, components: template.components || [], raw_data: template, last_synced_at: new Date(),
+        };
+        await upsertOne(MetaWhatsappTemplates, { template_id: String(template.id) }, { $set: templateFields }, templateFields);
       }
       phoneCount += phones.length;
       templateCount += templates.length;
@@ -324,38 +278,29 @@ async function syncMetaWhatsAppInventory() {
       // Do not do this in single-WABA fallback mode because that response says
       // nothing about the portfolio's other valid WABAs.
       const activeWabaIds = [...wabaMap.keys()];
-      await pool.query(`
-        DELETE FROM meta_whatsapp_templates
-        WHERE waba_id IN (
-          SELECT waba_id
-          FROM meta_whatsapp_accounts
-          WHERE business_id = $1
-            AND NOT (waba_id = ANY($2::text[]))
-        )
-      `, [businessId, activeWabaIds]);
-      await pool.query(`
-        DELETE FROM meta_whatsapp_accounts
-        WHERE business_id = $1
-          AND NOT (waba_id = ANY($2::text[]))
-      `, [businessId, activeWabaIds]);
+      const staleWabaIds = await MetaWhatsappAccounts.distinct('waba_id', { business_id: businessId, waba_id: { $nin: activeWabaIds } });
+      await MetaWhatsappTemplates.deleteMany({ waba_id: { $in: staleWabaIds } });
+      await deleteCascade('meta_whatsapp_accounts', { business_id: businessId, waba_id: { $nin: activeWabaIds } });
     }
-    await pool.query(`UPDATE clients client SET
-      wa_business_id=phone.waba_id, phone_number_id=phone.phone_number_id,
-      whatsapp_number=phone.display_phone_number,
-      whatsapp_status=CASE WHEN UPPER(COALESCE(phone.connection_status,''))='CONNECTED'
-        OR UPPER(COALESCE(phone.verification_status,''))='VERIFIED' THEN 'verified' ELSE 'verification_pending' END,
-      whatsapp_verified_at=CASE WHEN UPPER(COALESCE(phone.connection_status,''))='CONNECTED'
-        OR UPPER(COALESCE(phone.verification_status,''))='VERIFIED'
-        THEN COALESCE(client.whatsapp_verified_at,NOW()) ELSE NULL END,
-      updated_at=NOW()
-      FROM meta_whatsapp_phone_numbers phone WHERE phone.client_id=client.id`);
-    await pool.query(`UPDATE meta_whatsapp_sync_runs SET status='success',wabas_count=$1,
-      phones_count=$2,templates_count=$3,completed_at=NOW() WHERE id=$4`,
-    [wabaMap.size, phoneCount, templateCount, run.rows[0].id]);
+    for (const phone of await MetaWhatsappPhoneNumbers.find({ client_id: { $ne: null } }).lean()) {
+      const verified = String(phone.connection_status ?? '').toUpperCase() === 'CONNECTED'
+        || String(phone.verification_status ?? '').toUpperCase() === 'VERIFIED';
+      const linkedClient = await Clients.findOne({ id: phone.client_id }, { whatsapp_verified_at: 1 }).lean();
+      if (!linkedClient) continue;
+      await Clients.updateOne({ id: phone.client_id }, { $set: {
+        wa_business_id: phone.waba_id, phone_number_id: phone.phone_number_id, whatsapp_number: phone.display_phone_number,
+        whatsapp_status: verified ? 'verified' : 'verification_pending',
+        whatsapp_verified_at: verified ? (linkedClient.whatsapp_verified_at ?? new Date()) : null,
+        updated_at: new Date(),
+      } });
+    }
+    await MetaWhatsappSyncRuns.updateOne({ id: run.rows[0].id }, { $set: {
+      status: 'success', wabas_count: wabaMap.size, phones_count: phoneCount, templates_count: templateCount, completed_at: new Date(),
+    } });
     return { wabas: wabaMap.size, phone_numbers: phoneCount, templates: templateCount };
   } catch (error) {
     const message = error.response?.data?.error?.message || error.message;
-    await pool.query(`UPDATE meta_whatsapp_sync_runs SET status='failed',error=$1,completed_at=NOW() WHERE id=$2`, [message, run.rows[0].id]);
+    await MetaWhatsappSyncRuns.updateOne({ id: run.rows[0].id }, { $set: { status: 'failed', error: message, completed_at: new Date() } });
     throw new Error(message);
   }
 }
@@ -462,103 +407,63 @@ function recordRateLimit() {
   rateLimiter.currentDelayMs = Math.min(rateLimiter.currentDelayMs * 2, 30000);
 }
 
-// Initialize campaign queue table
+// Prepare campaign queue collections (indexes only — MongoDB needs no table DDL)
 async function initCampaignQueue() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS campaign_message_queue (
-      id SERIAL PRIMARY KEY,
-      campaign_id BIGINT NOT NULL,
-      lead_id BIGINT NOT NULL,
-      phone VARCHAR(20) NOT NULL,
-      name VARCHAR(255),
-      template_name VARCHAR(255) NOT NULL,
-      template_language VARCHAR(20) DEFAULT 'en',
-      template_body TEXT,
-      template_header TEXT,
-      template_parameters JSONB NOT NULL DEFAULT '{}'::jsonb,
-      recipient_parameters JSONB NOT NULL DEFAULT '{}'::jsonb,
-      recipient_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-      campaign_name TEXT,
-      brand_name TEXT,
-      wa_token VARCHAR(500),
-      phone_number_id VARCHAR(100),
-      status VARCHAR(20) DEFAULT 'pending',
-      attempts INTEGER DEFAULT 0,
-      last_attempt_at TIMESTAMP,
-      error_message TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      processed_at TIMESTAMP
-    )
-  `);
+  await connectMongo();
+  await Promise.all([CampaignMessageQueue.createIndexes(), CampaignRateStats.createIndexes()]);
+  await CampaignMessageQueue.collection.createIndex({ status: 1 }).catch(() => {});
+  await CampaignMessageQueue.collection.createIndex({ campaign_id: 1, lead_id: 1 }).catch(() => {});
+  console.log('[Campaign Queue] Database collections initialized');
+}
 
-  await pool.query(`
-    ALTER TABLE campaign_message_queue ADD COLUMN IF NOT EXISTS template_language VARCHAR(20) DEFAULT 'en';
-    ALTER TABLE campaign_message_queue ADD COLUMN IF NOT EXISTS template_header TEXT;
-    ALTER TABLE campaign_message_queue ADD COLUMN IF NOT EXISTS template_parameters JSONB NOT NULL DEFAULT '{}'::jsonb;
-    ALTER TABLE campaign_message_queue ADD COLUMN IF NOT EXISTS recipient_parameters JSONB NOT NULL DEFAULT '{}'::jsonb;
-    ALTER TABLE campaign_message_queue ADD COLUMN IF NOT EXISTS recipient_data JSONB NOT NULL DEFAULT '{}'::jsonb;
-    ALTER TABLE campaign_message_queue ADD COLUMN IF NOT EXISTS campaign_name TEXT;
-    ALTER TABLE campaign_message_queue ADD COLUMN IF NOT EXISTS brand_name TEXT;
-    ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS template_parameters JSONB NOT NULL DEFAULT '{}'::jsonb;
-  `);
+const utcToday = () => { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d; };
 
-  // Create indexes separately for PostgreSQL
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_queue_status ON campaign_message_queue(status)`).catch(() => {});
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_queue_campaign ON campaign_message_queue(campaign_id)`).catch(() => {});
-
-  // Create table to track daily/hourly counts
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS campaign_rate_stats (
-      id SERIAL PRIMARY KEY,
-      campaign_id BIGINT,
-      date DATE DEFAULT CURRENT_DATE,
-      messages_sent INTEGER DEFAULT 0,
-      messages_failed INTEGER DEFAULT 0,
-      rate_limited_count INTEGER DEFAULT 0,
-      UNIQUE(campaign_id, date)
-    )
-  `).catch(() => {});
-
-  console.log('[Campaign Queue] Database tables initialized');
+// INSERT INTO campaign_rate_stats ... ON CONFLICT (campaign_id, date) DO UPDATE SET <field> = <field> + 1
+async function bumpCampaignRateStat(campaignId, field) {
+  const key = { campaign_id: campaignId, date: utcToday() };
+  const updated = await CampaignRateStats.updateOne(key, { $inc: { [field]: 1 } });
+  if (updated.matchedCount) return;
+  try {
+    await CampaignRateStats.create({ ...key, [field]: 1 });
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    await CampaignRateStats.updateOne(key, { $inc: { [field]: 1 } });
+  }
 }
 
 // Add messages to queue
 async function addToCampaignQueue(campaign_id, leads, campaign) {
   if (leads.length > 0) {
-    await pool.query(`
-      INSERT INTO campaign_message_queue
-      (campaign_id, lead_id, phone, name, template_name, template_language, template_body,
-       template_header, template_parameters, recipient_parameters, recipient_data, campaign_name, brand_name, wa_token, phone_number_id)
-      SELECT $1, audience.lead_id, audience.phone, audience.name,
-             $2, $3, $4, $5, $6::jsonb, audience.parameters, audience.data, $7, $8, $9, $10
-      FROM UNNEST($11::bigint[], $12::text[], $13::text[], $14::jsonb[], $15::jsonb[])
-        AS audience(lead_id, phone, name, parameters, data)
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM campaign_message_queue queued
-        WHERE queued.campaign_id = $1
-          AND queued.lead_id = audience.lead_id
-      )
-    `, [
+    const alreadyQueued = new Set(await CampaignMessageQueue.distinct('lead_id', { campaign_id, lead_id: { $in: leads.map((lead) => lead.id) } }));
+    const fresh = [];
+    for (const lead of leads) {
+      if (alreadyQueued.has(Number(lead.id))) continue;
+      alreadyQueued.add(Number(lead.id));
+      fresh.push(lead);
+    }
+    if (!fresh.length) return;
+    const ids = await CampaignMessageQueue.allocIds(fresh.length);
+    await CampaignMessageQueue.insertMany(fresh.map((lead, index) => ({
+      id: ids[index],
       campaign_id,
-      campaign.template_name,
-      campaign.template_language || 'en',
-      campaign.template_body || '',
-      campaign.template_header || '',
-      JSON.stringify(campaign.template_parameters || {}),
-      campaign.campaign_name || '',
-      campaign.brand_name || '',
-      campaign.wa_access_token || '',
-      campaign.phone_number_id || '',
-      leads.map((lead) => lead.id),
-      leads.map((lead) => lead.phone),
-      leads.map((lead) => lead.name || ''),
-      leads.map((lead) => JSON.stringify(lead.template_parameters || {})),
-      leads.map((lead) => JSON.stringify({
+      lead_id: lead.id,
+      phone: lead.phone,
+      name: lead.name || '',
+      template_name: campaign.template_name,
+      template_language: campaign.template_language || 'en',
+      template_body: campaign.template_body || '',
+      template_header: campaign.template_header || '',
+      template_parameters: campaign.template_parameters || {},
+      recipient_parameters: lead.template_parameters || {},
+      recipient_data: {
         recipient_email: lead.email || '', lead_status: lead.status || '',
-        lead_source: lead.source || '', lead_interest: lead.interest || '', lead_score: lead.score ?? ''
-      })),
-    ]);
+        lead_source: lead.source || '', lead_interest: lead.interest || '', lead_score: lead.score ?? '',
+      },
+      campaign_name: campaign.campaign_name || '',
+      brand_name: campaign.brand_name || '',
+      wa_token: campaign.wa_access_token || '',
+      phone_number_id: campaign.phone_number_id || '',
+    })));
   }
 }
 
@@ -567,64 +472,52 @@ async function processCampaignQueue() {
   try {
     // Recover jobs abandoned by a crashed/restarted worker. A normal send has
     // a 15-second HTTP timeout, so five minutes safely indicates a stale claim.
-    await pool.query(`
-      UPDATE campaign_message_queue
-      SET status = 'pending'
-      WHERE status = 'processing'
-        AND last_attempt_at < NOW() - INTERVAL '5 minutes'
-    `);
+    await CampaignMessageQueue.updateMany(
+      { status: 'processing', last_attempt_at: { $lt: new Date(Date.now() - 5 * 60 * 1000) } },
+      { $set: { status: 'pending' } }
+    );
 
     // Quarantine duplicate queue rows left by older executions before any
     // recipient is claimed. Keep the oldest row as the canonical send.
-    await pool.query(`
-      WITH ranked AS (
-        SELECT id,
-               ROW_NUMBER() OVER (
-                 PARTITION BY campaign_id, lead_id
-                 ORDER BY id
-               ) AS duplicate_rank
-        FROM campaign_message_queue
-        WHERE status IN ('pending', 'processing')
-      )
-      UPDATE campaign_message_queue queue
-      SET status = 'failed',
-          processed_at = NOW(),
-          error_message = 'Duplicate queue entry skipped before send'
-      FROM ranked
-      WHERE queue.id = ranked.id
-        AND (
-          ranked.duplicate_rank > 1
-          OR EXISTS (
-            SELECT 1
-            FROM campaign_message_queue sent
-            WHERE sent.campaign_id = queue.campaign_id
-              AND sent.lead_id = queue.lead_id
-              AND sent.status = 'sent'
-          )
-        )
-    `);
+    const openRows = await CampaignMessageQueue.find({ status: { $in: ['pending', 'processing'] } }, { id: 1, campaign_id: 1, lead_id: 1 })
+      .sort({ id: 1 }).lean();
+    if (openRows.length) {
+      const sentPairs = new Set((await CampaignMessageQueue.find(
+        { status: 'sent', campaign_id: { $in: [...new Set(openRows.map((row) => row.campaign_id))] } },
+        { campaign_id: 1, lead_id: 1 }
+      ).lean()).map((row) => `${row.campaign_id}:${row.lead_id}`));
+      const seenPairs = new Set();
+      const duplicateIds = [];
+      for (const row of openRows) {
+        const pair = `${row.campaign_id}:${row.lead_id}`;
+        if (seenPairs.has(pair) || sentPairs.has(pair)) duplicateIds.push(row.id);
+        seenPairs.add(pair);
+      }
+      if (duplicateIds.length) {
+        await CampaignMessageQueue.updateMany(
+          { id: { $in: duplicateIds } },
+          { $set: { status: 'failed', processed_at: new Date(), error_message: 'Duplicate queue entry skipped before send' } }
+        );
+      }
+    }
 
     // Atomically claim rows before doing any network work. FOR UPDATE SKIP
     // LOCKED prevents overlapping queue intervals (or multiple API instances)
     // from sending the same recipient at the same time.
-    const { rows: pending } = await pool.query(`
-      WITH claimable AS (
-        SELECT id
-        FROM campaign_message_queue
-        WHERE status = 'pending'
-          AND attempts < ${QUEUE_SETTINGS.MAX_RETRIES}
-        ORDER BY created_at ASC
-        FOR UPDATE SKIP LOCKED
-        LIMIT ${QUEUE_SETTINGS.BATCH_SIZE}
-      )
-      UPDATE campaign_message_queue queue
-      SET status = 'processing',
-          attempts = queue.attempts + 1,
-          last_attempt_at = NOW()
-      FROM claimable
-      WHERE queue.id = claimable.id
-      RETURNING queue.*
-    `);
+    // Atomically claim rows before doing any network work (replaces FOR UPDATE SKIP LOCKED)
+    const claimable = await CampaignMessageQueue.find(
+      { status: 'pending', $or: [{ attempts: null }, { attempts: { $lt: QUEUE_SETTINGS.MAX_RETRIES } }] },
+      { id: 1 }
+    ).sort({ created_at: 1 }).limit(QUEUE_SETTINGS.BATCH_SIZE).lean();
+    const pending = [];
+    for (const row of claimable) {
+      const claimed = await CampaignMessageQueue.findOneAndUpdate(
+        { id: row.id, status: 'pending' },
+        { $set: { status: 'processing', last_attempt_at: new Date() }, $inc: { attempts: 1 } },
+        { new: true, projection: NO_ID }
+      ).lean();
+      if (claimed) pending.push(claimed);
+    }
 
     if (pending.length === 0) return;
 
@@ -648,17 +541,10 @@ async function processCampaignQueue() {
 
         if (result.success) {
           // Mark as sent
-          await pool.query(`
-            UPDATE campaign_message_queue
-            SET status = 'sent', processed_at = NOW(), error_message = NULL
-            WHERE id = $1
-          `, [msg.id]);
+          await CampaignMessageQueue.updateOne({ id: msg.id }, { $set: { status: 'sent', processed_at: new Date(), error_message: null } });
 
           // Update campaign log
-          await pool.query(`
-            INSERT INTO campaign_logs (campaign_id, lead_id, wa_message_id, status, sent_at)
-            VALUES ($1, $2, $3, 'sent', NOW())
-          `, [msg.campaign_id, msg.lead_id, result.messageId]);
+          await CampaignLogs.create({ campaign_id: msg.campaign_id, lead_id: msg.lead_id, wa_message_id: result.messageId, status: 'sent', sent_at: new Date() });
 
           // Mirror the successful WhatsApp send into the LeadOS Inbox. Keep
           // this non-retryable: Meta has already accepted the message, so a CRM
@@ -675,30 +561,27 @@ async function processCampaignQueue() {
               ),
               String(msg.template_body || '')
             );
-            const conversationResult = await pool.query(`
-              INSERT INTO conversations
-                (lead_id, tenant_id, phone, status, last_message, last_message_at, created_at)
-              SELECT $1, campaign.client_id, $2, 'open', $3, NOW(), NOW()
-              FROM campaigns campaign
-              WHERE campaign.id = $4
-              ON CONFLICT (phone, tenant_id) DO UPDATE
-                SET lead_id = EXCLUDED.lead_id,
-                    status = 'open',
-                    last_message = EXCLUDED.last_message,
-                    last_message_at = NOW()
-              RETURNING id
-            `, [msg.lead_id, msg.phone, renderedBody, msg.campaign_id]);
-
-            const conversationId = conversationResult.rows[0]?.id;
+            let conversationId = null;
+            if (await Campaigns.exists({ id: msg.campaign_id })) {
+              // One conversation per phone number (ON CONFLICT (phone) DO UPDATE)
+              const conversation = await upsertOne(
+                Conversations,
+                { phone: msg.phone },
+                { $set: { lead_id: msg.lead_id, status: 'open', last_message: renderedBody, last_message_at: new Date() } },
+                { lead_id: msg.lead_id, status: 'open', last_message: renderedBody, last_message_at: new Date(), created_at: new Date() }
+              );
+              conversationId = conversation?.id;
+            }
             if (conversationId) {
-              const messageResult = await pool.query(`
-                INSERT INTO messages
-                  (conversation_id, direction, content, msg_type, wa_msg_id, status, is_ai, sent_at)
-                VALUES ($1, 'outbound', $2, 'template', $3, 'sent', false, NOW())
-                RETURNING id, conversation_id, direction, content,
-                          msg_type AS type, wa_msg_id, status, is_ai,
-                          sent_at AS timestamp
-              `, [conversationId, renderedBody, result.messageId]);
+              const savedMessage = await Messages.create({
+                conversation_id: conversationId, direction: 'outbound', content: renderedBody, msg_type: 'template',
+                wa_msg_id: result.messageId, status: 'sent', is_ai: false, sent_at: new Date(),
+              });
+              const messageResult = { rows: [{
+                id: savedMessage.id, conversation_id: savedMessage.conversation_id, direction: savedMessage.direction,
+                content: savedMessage.content, type: savedMessage.msg_type, wa_msg_id: savedMessage.wa_msg_id,
+                status: savedMessage.status, is_ai: savedMessage.is_ai, timestamp: savedMessage.sent_at,
+              }] };
 
               io.emit('outgoing_message', {
                 lead_id: Number(msg.lead_id),
@@ -716,54 +599,27 @@ async function processCampaignQueue() {
           }
 
           // Update stats
-          await pool.query(`
-            INSERT INTO campaign_rate_stats (campaign_id, date, messages_sent)
-            VALUES ($1, CURRENT_DATE, 1)
-            ON CONFLICT (campaign_id, date)
-            DO UPDATE SET messages_sent = campaign_rate_stats.messages_sent + 1
-          `, [msg.campaign_id]);
+          await bumpCampaignRateStat(msg.campaign_id, 'messages_sent');
 
           recordSendSuccess();
         } else if (result.rateLimited) {
           // Release the claim so a later queue pass can retry it.
-          await pool.query(`
-            UPDATE campaign_message_queue
-            SET status = 'pending', error_message = $2
-            WHERE id = $1
-          `, [msg.id, result.error]);
+          await CampaignMessageQueue.updateOne({ id: msg.id }, { $set: { status: 'pending', error_message: result.error ?? null } });
           recordRateLimit();
 
           // Update rate limit stat
-          await pool.query(`
-            INSERT INTO campaign_rate_stats (campaign_id, date, rate_limited_count)
-            VALUES ($1, CURRENT_DATE, 1)
-            ON CONFLICT (campaign_id, date)
-            DO UPDATE SET rate_limited_count = campaign_rate_stats.rate_limited_count + 1
-          `, [msg.campaign_id]);
+          await bumpCampaignRateStat(msg.campaign_id, 'rate_limited_count');
 
           console.warn(`[Campaign Queue] Rate limited: ${result.error}`);
         } else {
           // Permanent failure
-          await pool.query(`
-            UPDATE campaign_message_queue
-            SET status = 'failed', processed_at = NOW(),
-                error_message = $2
-            WHERE id = $1
-          `, [msg.id, result.error]);
+          await CampaignMessageQueue.updateOne({ id: msg.id }, { $set: { status: 'failed', processed_at: new Date(), error_message: result.error ?? null } });
 
           // Log failure
-          await pool.query(`
-            INSERT INTO campaign_logs (campaign_id, lead_id, status, error_message, sent_at)
-            VALUES ($1, $2, 'failed', $3, NOW())
-          `, [msg.campaign_id, msg.lead_id, result.error]);
+          await CampaignLogs.create({ campaign_id: msg.campaign_id, lead_id: msg.lead_id, status: 'failed', error_message: result.error ?? null, sent_at: new Date() });
 
           // Update stats
-          await pool.query(`
-            INSERT INTO campaign_rate_stats (campaign_id, date, messages_failed)
-            VALUES ($1, CURRENT_DATE, 1)
-            ON CONFLICT (campaign_id, date)
-            DO UPDATE SET messages_failed = campaign_rate_stats.messages_failed + 1
-          `, [msg.campaign_id]);
+          await bumpCampaignRateStat(msg.campaign_id, 'messages_failed');
         }
 
         // Wait between messages
@@ -775,11 +631,7 @@ async function processCampaignQueue() {
         // The external result is unknown for unexpected errors. Do not
         // immediately release the row and risk a duplicate send; leave it
         // claimed for stale-job review/recovery.
-        await pool.query(`
-          UPDATE campaign_message_queue
-          SET error_message = $2
-          WHERE id = $1
-        `, [msg.id, `Worker error after claim: ${err.message}`]).catch(() => {});
+        await CampaignMessageQueue.updateOne({ id: msg.id }, { $set: { error_message: `Worker error after claim: ${err.message}` } }).catch(() => {});
       }
     }
 
@@ -943,19 +795,15 @@ async function sendWhatsAppMessage(msg) {
 async function checkCampaignCompletion(campaign_id) {
   if (!campaign_id) return;
 
-  const [pending, sent, failed] = await Promise.all([
-    pool.query(`SELECT COUNT(*) FROM campaign_message_queue WHERE campaign_id = $1 AND status IN ('pending', 'processing')`, [campaign_id]),
-    pool.query(`SELECT COUNT(*) FROM campaign_message_queue WHERE campaign_id = $1 AND status = 'sent'`, [campaign_id]),
-    pool.query(`SELECT COUNT(*) FROM campaign_message_queue WHERE campaign_id = $1 AND status = 'failed'`, [campaign_id])
+  const [pendingCount, sentCount, failedCount] = await Promise.all([
+    CampaignMessageQueue.countDocuments({ campaign_id, status: { $in: ['pending', 'processing'] } }),
+    CampaignMessageQueue.countDocuments({ campaign_id, status: 'sent' }),
+    CampaignMessageQueue.countDocuments({ campaign_id, status: 'failed' }),
   ]);
-
-  const pendingCount = parseInt(pending.rows[0].count);
-  const sentCount = parseInt(sent.rows[0].count);
-  const failedCount = parseInt(failed.rows[0].count);
 
   if (pendingCount === 0) {
     const finalStatus = sentCount > 0 ? 'completed' : 'failed';
-    await pool.query(`UPDATE campaigns SET status = $1 WHERE id = $2`, [finalStatus, campaign_id]);
+    await Campaigns.updateOne({ id: campaign_id }, { $set: { status: finalStatus } });
     console.log(`[Campaign ${campaign_id}] Completed: ${sentCount} sent, ${failedCount} failed`);
   }
 }
@@ -1143,11 +991,9 @@ app.get('/api/whatsapp-media/:mediaId', async (req, res) => {
     // the shared env token only as a default for clients without one).
     let waToken = process.env.META_PAGE_ACCESS_TOKEN;
     if (leadId) {
-      const leadRes = await pool.query(
-        `SELECT c.wa_access_token FROM leads l LEFT JOIN clients c ON l.client_id = c.id WHERE l.id = $1`,
-        [leadId]
-      );
-      waToken = leadRes.rows[0]?.wa_access_token || waToken;
+      const tokenLead = await Leads.findOne({ id: leadId }, { client_id: 1 }).lean();
+      const tokenClient = tokenLead?.client_id != null ? await Clients.findOne({ id: tokenLead.client_id }, { wa_access_token: 1 }).lean() : null;
+      waToken = tokenClient?.wa_access_token || waToken;
     }
 
     // 1. Get the actual download URL from Meta
@@ -1195,14 +1041,13 @@ app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
-    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1 AND is_active = true', [email.toLowerCase()]);
-    if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' });
+    const user = await Users.findOne({ email: email.toLowerCase(), is_active: true }, NO_ID).lean();
+    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
 
-    const user = rows[0];
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
 
-    await pool.query('UPDATE users SET last_login = NOW() WHERE id = $1', [user.id]);
+    await Users.updateOne({ id: user.id }, { $set: { last_login: new Date() } });
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, name: user.name },
@@ -1224,11 +1069,11 @@ app.post('/api/auth/login', async (req, res) => {
 app.post('/api/auth/change-password', auth, async (req, res) => {
   try {
     const { current, newPassword } = req.body;
-    const { rows } = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
-    const valid = await bcrypt.compare(current, rows[0].password_hash);
+    const currentUser = await Users.findOne({ id: req.user.id }, { password_hash: 1 }).lean();
+    const valid = await bcrypt.compare(current, currentUser.password_hash);
     if (!valid) return res.status(400).json({ error: 'Current password incorrect' });
     const hash = await bcrypt.hash(newPassword, 12);
-    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.user.id]);
+    await Users.updateOne({ id: req.user.id }, { $set: { password_hash: hash } });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -1243,21 +1088,39 @@ app.post('/api/auth/change-password', auth, async (req, res) => {
 app.get('/api/inbox', auth, async (req, res) => {
   try {
     // Fetch latest message per lead
-    const q = `
-      SELECT 
-        l.id, 
-        l.name, 
-        c.name as brand, 
-        l.status,
-        (SELECT last_message FROM conversations WHERE lead_id = l.id OR (lead_id IS NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = RIGHT(REGEXP_REPLACE(l.phone, '[^0-9]', '', 'g'), 10)) ORDER BY last_message_at DESC NULLS LAST LIMIT 1) as last,
-        (SELECT last_message_at FROM conversations WHERE lead_id = l.id OR (lead_id IS NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = RIGHT(REGEXP_REPLACE(l.phone, '[^0-9]', '', 'g'), 10)) ORDER BY last_message_at DESC NULLS LAST LIMIT 1) as time,
-        COALESCE((SELECT SUM(unread_count) FROM conversations WHERE lead_id = l.id OR (lead_id IS NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = RIGHT(REGEXP_REPLACE(l.phone, '[^0-9]', '', 'g'), 10))), 0) as unread
-      FROM leads l
-      LEFT JOIN clients c ON l.client_id = c.id
-      WHERE EXISTS (SELECT 1 FROM conversations WHERE lead_id = l.id OR (lead_id IS NULL AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = RIGHT(REGEXP_REPLACE(l.phone, '[^0-9]', '', 'g'), 10)))
-      ORDER BY time DESC NULLS LAST
-    `;
-    const { rows } = await pool.query(q);
+    // Latest conversation per lead — matched by lead_id, or by phone (last 10 digits) for unlinked conversations
+    const phoneTail = (value) => (value == null ? null : String(value).replace(/[^0-9]/g, '').slice(-10));
+    const conversations = await Conversations.find({}, { lead_id: 1, phone: 1, last_message: 1, last_message_at: 1, unread_count: 1 }).lean();
+    const byLead = new Map();
+    const byTail = new Map();
+    for (const cv of conversations) {
+      if (cv.lead_id != null) {
+        if (!byLead.has(cv.lead_id)) byLead.set(cv.lead_id, []);
+        byLead.get(cv.lead_id).push(cv);
+      } else if (phoneTail(cv.phone) != null) {
+        if (!byTail.has(phoneTail(cv.phone))) byTail.set(phoneTail(cv.phone), []);
+        byTail.get(phoneTail(cv.phone)).push(cv);
+      }
+    }
+    const leads = await Leads.find({}, { id: 1, name: 1, client_id: 1, status: 1, phone: 1 }).lean();
+    const clientNames = new Map((await Clients.find({}, { id: 1, name: 1 }).lean()).map((c) => [c.id, c.name]));
+    const rows = [];
+    for (const l of leads) {
+      const matched = [...(byLead.get(l.id) || []), ...(phoneTail(l.phone) != null ? byTail.get(phoneTail(l.phone)) || [] : [])];
+      if (!matched.length) continue;
+      const latest = [...matched].sort((a, b) => (b.last_message_at ? new Date(b.last_message_at).getTime() : -Infinity)
+        - (a.last_message_at ? new Date(a.last_message_at).getTime() : -Infinity))[0];
+      rows.push({
+        id: l.id,
+        name: l.name,
+        brand: clientNames.get(l.client_id) ?? null,
+        status: l.status,
+        last: latest.last_message ?? null,
+        time: latest.last_message_at ?? null,
+        unread: matched.reduce((sum, cv) => sum + (Number(cv.unread_count) || 0), 0),
+      });
+    }
+    rows.sort((a, b) => (b.time ? new Date(b.time).getTime() : -Infinity) - (a.time ? new Date(a.time).getTime() : -Infinity));
     res.json(rows);
   } catch (err) {
     console.error('Inbox fetch error:', err);
@@ -1268,12 +1131,10 @@ app.get('/api/inbox', auth, async (req, res) => {
 // PUT /api/conversations/:lead_id/read
 app.put('/api/conversations/:lead_id/read', auth, async (req, res) => {
   try {
-    await pool.query(`
-      UPDATE conversations SET unread_count = 0 
-      WHERE lead_id = $1 OR RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = (
-        SELECT RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) FROM leads WHERE id = $1 LIMIT 1
-      )
-    `, [req.params.lead_id]);
+    const readLead = await Leads.findOne({ id: req.params.lead_id }, { phone: 1 }).lean();
+    const readFilter = [{ lead_id: req.params.lead_id }];
+    if (readLead && readLead.phone != null) readFilter.push({ phone: phoneTailRegex(readLead.phone) });
+    await Conversations.updateMany({ $or: readFilter }, { $set: { unread_count: 0 } });
     res.json({ success: true });
   } catch (err) {
     console.error('Mark read error:', err);
@@ -1294,11 +1155,11 @@ app.put('/api/messages/:id/edit', auth, async (req, res) => {
     if (String(msgId).startsWith('optimistic-')) {
       return res.status(400).json({ error: 'Cannot edit an unsaved message' });
     }
-    const { rows } = await pool.query('UPDATE messages SET content = $1 WHERE id = $2 RETURNING *', [content, msgId]);
-    if (rows.length) {
-      io.emit('message_edited', rows[0]);
+    const edited = await Messages.findOneAndUpdate({ id: msgId }, { $set: { content } }, { new: true, projection: NO_ID }).lean();
+    if (edited) {
+      io.emit('message_edited', edited);
     }
-    res.json({ success: true, message: rows[0] });
+    res.json({ success: true, message: edited || undefined });
   } catch (err) {
     console.error('Edit message error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -1312,11 +1173,11 @@ app.put('/api/messages/:id/delete', auth, async (req, res) => {
     if (String(msgId).startsWith('optimistic-')) {
       return res.status(400).json({ error: 'Cannot delete an unsaved message' });
     }
-    const { rows } = await pool.query('UPDATE messages SET is_deleted = true WHERE id = $1 RETURNING *', [msgId]);
-    if (rows.length) {
-      io.emit('message_deleted', rows[0]);
+    const deletedMessage = await Messages.findOneAndUpdate({ id: msgId }, { $set: { is_deleted: true } }, { new: true, projection: NO_ID }).lean();
+    if (deletedMessage) {
+      io.emit('message_deleted', deletedMessage);
     }
-    res.json({ success: true, message: rows[0] });
+    res.json({ success: true, message: deletedMessage || undefined });
   } catch (err) {
     console.error('Delete message error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -1333,22 +1194,12 @@ app.put('/api/messages/:id/pin', auth, async (req, res) => {
       return res.status(400).json({ error: 'Cannot pin an unsaved message' });
     }
 
-    let query;
-    let params;
-
-    if (unpin) {
-      query = 'UPDATE messages SET pinned_until = NULL WHERE id = $1 RETURNING *';
-      params = [msgId];
-    } else {
-      query = `UPDATE messages SET pinned_until = NOW() + interval '1 hour' * $1 WHERE id = $2 RETURNING *`;
-      params = [duration || 24, msgId];
+    const pinnedUntil = unpin ? null : new Date(Date.now() + (Number(duration) || 24) * 60 * 60 * 1000);
+    const pinned = await Messages.findOneAndUpdate({ id: msgId }, { $set: { pinned_until: pinnedUntil } }, { new: true, projection: NO_ID }).lean();
+    if (pinned) {
+      io.emit('message_edited', pinned); // reuse message_edited or create message_pinned event
     }
-
-    const { rows } = await pool.query(query, params);
-    if (rows.length) {
-      io.emit('message_edited', rows[0]); // reuse message_edited or create message_pinned event
-    }
-    res.json({ success: true, message: rows[0] });
+    res.json({ success: true, message: pinned || undefined });
   } catch (err) {
     console.error('Pin message error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -1365,10 +1216,8 @@ app.put('/api/messages/:id/star', auth, async (req, res) => {
       return res.status(400).json({ error: 'Cannot star an unsaved message' });
     }
 
-    const { rows } = await pool.query(
-      'UPDATE messages SET is_starred = $1 WHERE id = $2 RETURNING *',
-      [is_starred, msgId]
-    );
+    const starred = await Messages.findOneAndUpdate({ id: msgId }, { $set: { is_starred: Boolean(is_starred) } }, { new: true, projection: NO_ID }).lean();
+    const rows = starred ? [starred] : [];
 
     if (rows.length) {
       io.emit('message_edited', rows[0]);
@@ -1393,17 +1242,15 @@ app.put('/api/messages/:id/react', auth, async (req, res) => {
     }
 
     // Get current message details, lead, and client credentials
-    const msgQuery = await pool.query(`
-      SELECT m.reactions, m.wa_msg_id, l.phone, c.phone_number_id, c.wa_access_token
-      FROM messages m
-      JOIN conversations cv ON m.conversation_id = cv.id
-      JOIN leads l ON cv.lead_id = l.id
-      LEFT JOIN clients c ON l.client_id = c.id
-      WHERE m.id = $1
-    `, [msgId]);
-
-    if (!msgQuery.rows.length) return res.status(404).json({ error: 'Message not found' });
-    const msgData = msgQuery.rows[0];
+    const reactMessage = await Messages.findOne({ id: msgId }, { reactions: 1, wa_msg_id: 1, conversation_id: 1 }).lean();
+    const reactConversation = reactMessage ? await Conversations.findOne({ id: reactMessage.conversation_id }, { lead_id: 1 }).lean() : null;
+    const reactLead = reactConversation?.lead_id != null ? await Leads.findOne({ id: reactConversation.lead_id }, { phone: 1, client_id: 1 }).lean() : null;
+    if (!reactMessage || !reactLead) return res.status(404).json({ error: 'Message not found' });
+    const reactClient = reactLead.client_id != null ? await Clients.findOne({ id: reactLead.client_id }, { phone_number_id: 1, wa_access_token: 1 }).lean() : null;
+    const msgData = {
+      reactions: reactMessage.reactions, wa_msg_id: reactMessage.wa_msg_id, phone: reactLead.phone,
+      phone_number_id: reactClient?.phone_number_id ?? null, wa_access_token: reactClient?.wa_access_token ?? null,
+    };
 
     const reactions = msgData.reactions || {};
     if (action === 'remove') {
@@ -1416,10 +1263,8 @@ app.put('/api/messages/:id/react', auth, async (req, res) => {
       reactions[emoji] = (reactions[emoji] || 0) + 1;
     }
 
-    const { rows } = await pool.query(
-      'UPDATE messages SET reactions = $1::jsonb WHERE id = $2 RETURNING *',
-      [JSON.stringify(reactions), msgId]
-    );
+    const reacted = await Messages.findOneAndUpdate({ id: msgId }, { $set: { reactions } }, { new: true, projection: NO_ID }).lean();
+    const rows = reacted ? [reacted] : [];
 
     // Send the reaction to Meta API if we have a WhatsApp message ID (wa_msg_id)
     if (msgData.wa_msg_id) {
@@ -1534,9 +1379,8 @@ app.get('/api/leads/template', (req, res) => {
 app.get('/api/templates/:id/campaign-sheet', async (req, res) => {
   try {
     await templateParameterDefinitionsReady;
-    const result = await pool.query('SELECT name, body, header, parameter_definitions FROM templates WHERE id = $1', [req.params.id]);
-    if (!result.rows.length) return res.status(404).json({ error: 'Template not found' });
-    const template = result.rows[0];
+    const template = await Templates.findOne({ id: req.params.id }, { _id: 0, name: 1, body: 1, header: 1, parameter_definitions: 1 }).lean();
+    if (!template) return res.status(404).json({ error: 'Template not found' });
     let requestedMappings = null;
     try {
       requestedMappings = req.query.mappings ? JSON.parse(req.query.mappings) : null;
@@ -1586,21 +1430,14 @@ app.get('/api/debug/campaign-imports', auth, async (req, res) => {
   try {
     const { batch_id } = req.query;
 
-    let query = `
-      SELECT cir.batch_id, cir.lead_id, cir.created_at, l.name, l.phone, l.client_id, l.status
-      FROM campaign_import_recipients cir
-      JOIN leads l ON cir.lead_id = l.id
-    `;
-    let params = [];
-
-    if (batch_id) {
-      query += ' WHERE cir.batch_id = $1';
-      params.push(batch_id);
-    }
-
-    query += ' ORDER BY cir.created_at DESC LIMIT 50';
-
-    const result = await pool.query(query, params);
+    const importRows = await CampaignImportRecipients.find(batch_id ? { batch_id } : {}, { _id: 0, batch_id: 1, lead_id: 1, created_at: 1 })
+      .sort({ created_at: -1 }).lean();
+    const importLeads = new Map((await Leads.find({ id: { $in: importRows.map((r) => r.lead_id) } }, { id: 1, name: 1, phone: 1, client_id: 1, status: 1 }).lean())
+      .map((l) => [l.id, l]));
+    const result = { rows: importRows.filter((r) => importLeads.has(r.lead_id)).slice(0, 50).map((r) => {
+      const l = importLeads.get(r.lead_id);
+      return { batch_id: r.batch_id, lead_id: r.lead_id, created_at: r.created_at, name: l.name, phone: l.phone, client_id: l.client_id, status: l.status };
+    }) };
 
     res.json({
       count: result.rows.length,
@@ -1613,10 +1450,8 @@ app.get('/api/debug/campaign-imports', auth, async (req, res) => {
 
 app.get('/api/leads/sources', auth, async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT DISTINCT source FROM leads WHERE source IS NOT NULL AND source <> '' ORDER BY source`
-    );
-    
+    const rows = (await Leads.distinct('source', { source: { $nin: [null, ''] } })).sort().map((source) => ({ source }));
+        
     let rawSources = rows.map(r => r.source)
                          .filter(s => !s.startsWith('Csv_') && !s.startsWith('={{') && s.toLowerCase() !== 'test');
     
@@ -1653,26 +1488,16 @@ app.get('/api/leads/sources', auth, async (req, res) => {
 // GET /api/followups/due - Get leads due for follow-up
 app.get('/api/followups/due', auth, async (req, res) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT
-        l.id as lead_id,
-        l.name,
-        l.phone,
-        l.email,
-        l.status as lead_status,
-        l.client_id,
-        l.touch_count,
-        l.next_follow_up,
-        l.last_contact,
-        c.name as brand
-      FROM leads l
-      LEFT JOIN clients c ON l.client_id = c.id
-      WHERE l.next_follow_up IS NOT NULL
-        AND l.next_follow_up <= NOW()
-        AND l.status NOT IN ('lost', 'converted')
-      ORDER BY l.next_follow_up ASC
-      LIMIT 100
-    `);
+    const dueLeads = await Leads.find(
+      { next_follow_up: { $ne: null, $lte: new Date() }, status: { $nin: ['lost', 'converted', null] } },
+      { id: 1, name: 1, phone: 1, email: 1, status: 1, client_id: 1, touch_count: 1, next_follow_up: 1, last_contact: 1 }
+    ).sort({ next_follow_up: 1 }).limit(100).lean();
+    const dueClients = new Map((await Clients.find({ id: { $in: dueLeads.map((l) => l.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c.name]));
+    const rows = dueLeads.map((l) => ({
+      lead_id: l.id, name: l.name, phone: l.phone, email: l.email, lead_status: l.status, client_id: l.client_id,
+      touch_count: l.touch_count, next_follow_up: l.next_follow_up, last_contact: l.last_contact ?? null,
+      brand: dueClients.get(l.client_id) ?? null,
+    }));
     res.json({ followups: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1685,14 +1510,11 @@ app.post('/api/followups/rule', auth, async (req, res) => {
     const { lead_id, brand, stage, touch_count } = req.body;
 
     // Get follow-up rules for this brand and stage
-    const { rows } = await pool.query(`
-      SELECT * FROM followup_rules
-      WHERE client_id = (SELECT client_id FROM leads WHERE id = $1)
-        AND stage = $2
-        AND touch_count <= $3
-      ORDER BY touch_count DESC
-      LIMIT 1
-    `, [lead_id, stage || 'new', touch_count || 0]);
+    const ruleLead = await Leads.findOne({ id: lead_id }, { client_id: 1 }).lean();
+    const rows = ruleLead?.client_id != null ? await models.FollowupRules.find(
+      { client_id: ruleLead.client_id, stage: stage || 'new', touch_count: { $lte: Number(touch_count) || 0 } },
+      NO_ID
+    ).sort({ touch_count: -1 }).limit(1).lean() : [];
 
     if (rows.length === 0) {
       // Return default rule
@@ -1715,14 +1537,12 @@ app.post('/api/whatsapp/check-24h', auth, async (req, res) => {
     const { lead_id } = req.body;
 
     // Get last message time for this lead
-    const { rows } = await pool.query(`
-      SELECT MAX(sent_at) as last_message_at
-      FROM messages m
-      JOIN conversations c ON m.conversation_id = c.id
-      WHERE c.lead_id = $1 AND m.direction = 'outbound'
-    `, [lead_id]);
+    const lastOutbound = await Messages.findOne(
+      { conversation_id: { $in: await Conversations.distinct('id', { lead_id }) }, direction: 'outbound', sent_at: { $ne: null } },
+      { sent_at: 1 }
+    ).sort({ sent_at: -1 }).lean();
 
-    const lastMessageAt = rows[0]?.last_message_at;
+    const lastMessageAt = lastOutbound?.sent_at;
     const canSend = !lastMessageAt || (Date.now() - new Date(lastMessageAt).getTime()) > 24 * 60 * 60 * 1000;
 
     res.json({ can_send: canSend, last_message_at: lastMessageAt });
@@ -1737,18 +1557,17 @@ app.post('/api/communication/send-template', auth, async (req, res) => {
     const { lead_id, template_name, template_params } = req.body;
 
     // Get lead details
-    const leadRes = await pool.query(`
-      SELECT l.*, c.wa_access_token, c.phone_number_id, c.whatsapp_status
-      FROM leads l
-      LEFT JOIN clients c ON l.client_id = c.id
-      WHERE l.id = $1
-    `, [lead_id]);
-
-    if (!leadRes.rows.length) {
+    const leadRow = await Leads.findOne({ id: lead_id }, NO_ID).lean();
+    if (!leadRow) {
       return res.status(404).json({ error: 'Lead not found' });
     }
-
-    const lead = leadRes.rows[0];
+    const leadClient = leadRow.client_id != null ? await Clients.findOne({ id: leadRow.client_id }, { wa_access_token: 1, phone_number_id: 1, whatsapp_status: 1 }).lean() : null;
+    const lead = {
+      ...leadRow,
+      wa_access_token: leadClient?.wa_access_token ?? null,
+      phone_number_id: leadClient?.phone_number_id ?? null,
+      whatsapp_status: leadClient?.whatsapp_status ?? null,
+    };
     if (lead.client_id && lead.whatsapp_status !== 'verified') {
       return res.status(403).json({ error: 'WhatsApp is disabled for this brand until verification succeeds' });
     }
@@ -1796,7 +1615,8 @@ app.post('/api/ai/followup', auth, async (req, res) => {
     const { lead_id, prompt } = req.body;
 
     // Get lead details
-    const leadRes = await pool.query('SELECT * FROM leads WHERE id = $1', [lead_id]);
+    const leadRow = await Leads.findOne({ id: lead_id }, NO_ID).lean();
+    const leadRes = { rows: leadRow ? [leadRow] : [] };
     if (!leadRes.rows.length) {
       return res.status(404).json({ error: 'Lead not found' });
     }
@@ -1847,7 +1667,8 @@ app.post('/api/communication/send-email', auth, async (req, res) => {
     const { lead_id, template_id } = req.body;
 
     // Get lead details
-    const leadRes = await pool.query('SELECT * FROM leads WHERE id = $1', [lead_id]);
+    const leadRow = await Leads.findOne({ id: lead_id }, NO_ID).lean();
+    const leadRes = { rows: leadRow ? [leadRow] : [] };
     if (!leadRes.rows.length) {
       return res.status(404).json({ error: 'Lead not found' });
     }
@@ -1866,10 +1687,7 @@ app.post('/api/leads/internal-note', auth, async (req, res) => {
   try {
     const { lead_id, note } = req.body;
 
-    await pool.query(`
-      INSERT INTO lead_notes (lead_id, user_id, note, created_at)
-      VALUES ($1, $2, $3, NOW())
-    `, [lead_id, req.user.id, note]);
+    await LeadNotes.create({ lead_id, user_id: req.user.id, note, created_at: new Date() });
 
     res.json({ success: true });
   } catch (err) {
@@ -1884,18 +1702,14 @@ app.post('/api/leads/update-followup', auth, async (req, res) => {
 
     // Increment touch count
     if (touch_count_increment) {
-      await pool.query(`
-        UPDATE leads SET touch_count = COALESCE(touch_count, 0) + 1, updated_at = NOW()
-        WHERE id = $1
-      `, [lead_id]);
+      await Leads.updateOne({ id: lead_id }, [{ $set: { touch_count: { $add: [{ $ifNull: ['$touch_count', 0] }, 1] }, updated_at: '$$NOW' } }]);
     }
 
     // Set next follow-up
     if (delay_hours) {
-      await pool.query(`
-        UPDATE leads SET next_follow_up = NOW() + INTERVAL '${delay_hours} hours', last_contact = NOW(), updated_at = NOW()
-        WHERE id = $1
-      `, [lead_id]);
+      await Leads.updateOne({ id: lead_id }, { $set: {
+        next_follow_up: new Date(Date.now() + Number(delay_hours) * 60 * 60 * 1000), last_contact: new Date(), updated_at: new Date(),
+      } });
     }
 
     res.json({ success: true });
@@ -1919,44 +1733,28 @@ app.post('/api/workflows/log', auth, async (req, res) => {
 
 const LEAD_EXPORT_DIR = path.join(__dirname, 'uploads', 'lead-exports');
 const activeLeadExports = new Set();
-const leadExportReady = pool.query(`
-  CREATE TABLE IF NOT EXISTS lead_export_jobs (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT,
-    mode VARCHAR(20) NOT NULL,
-    filters JSONB NOT NULL DEFAULT '{}'::jsonb,
-    status VARCHAR(20) NOT NULL DEFAULT 'queued',
-    total_records INTEGER NOT NULL DEFAULT 0,
-    processed_records INTEGER NOT NULL DEFAULT 0,
-    file_path TEXT,
-    error_message TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    started_at TIMESTAMP,
-    completed_at TIMESTAMP
-  )
-`).then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_lead_export_jobs_user_created ON lead_export_jobs(user_id, created_at DESC)`));
+const leadExportReady = LeadExportJobs.createIndexes();
 
-function addLeadExportFilters(filter, params) {
-  let sql = '';
+const FACEBOOK_SOURCE = /(facebook|instagram|meta[_ ]?ads)/i;
+// Mongo filter for a lead export (source / created_at range)
+function leadExportFilter(filter) {
+  const query = {};
   const source = String(filter.source || '').toLowerCase();
   if (source === 'facebook') {
-    sql += ` AND LOWER(TRIM(COALESCE(l.source, ''))) SIMILAR TO '%(facebook|instagram|meta[_ ]?ads)%'`;
+    query.source = FACEBOOK_SOURCE;
   } else if (source === 'whatsapp') {
-    sql += ` AND LOWER(TRIM(COALESCE(l.source, ''))) LIKE '%whatsapp%'`;
+    query.source = /whatsapp/i;
   } else if (source === 'website') {
-    sql += ` AND LOWER(TRIM(COALESCE(l.source, ''))) SIMILAR TO '%(website|web site)%'`;
+    query.source = /(website|web site)/i;
   } else if (source === 'xls_sheet') {
-    sql += ` AND (LOWER(TRIM(COALESCE(l.source, ''))) IN ('xls sheet', 'xlsx sheet', 'excel sheet', 'csv import') OR LOWER(TRIM(COALESCE(l.source, ''))) LIKE 'csv\\_%' ESCAPE '\\')`;
+    query.source = /^\s*((xls sheet|xlsx sheet|excel sheet|csv import)\s*$|csv_)/i;
   }
-  if (filter.from) {
-    params.push(filter.from);
-    sql += ` AND l.created_at >= $${params.length}`;
+  if (filter.from || filter.to) {
+    query.created_at = {};
+    if (filter.from) query.created_at.$gte = new Date(filter.from);
+    if (filter.to) query.created_at.$lte = new Date(filter.to);
   }
-  if (filter.to) {
-    params.push(filter.to);
-    sql += ` AND l.created_at <= $${params.length}`;
-  }
-  return sql;
+  return query;
 }
 
 function csvCell(value) {
@@ -1986,11 +1784,10 @@ async function processLeadExportJob(jobId) {
   let stream;
   try {
     await leadExportReady;
-    const { rows } = await pool.query('SELECT * FROM lead_export_jobs WHERE id = $1', [jobId]);
-    const job = rows[0];
+    const job = await LeadExportJobs.findOne({ id: jobId }, NO_ID).lean();
     if (!job || job.status !== 'queued') return;
 
-    await pool.query(`UPDATE lead_export_jobs SET status = 'processing', started_at = NOW() WHERE id = $1`, [jobId]);
+    await LeadExportJobs.updateOne({ id: jobId }, { $set: { status: 'processing', started_at: new Date() } });
     fs.mkdirSync(LEAD_EXPORT_DIR, { recursive: true });
     const filePath = path.join(LEAD_EXPORT_DIR, `${jobId}.csv`);
     stream = fs.createWriteStream(filePath, { encoding: 'utf8' });
@@ -2001,19 +1798,16 @@ async function processLeadExportJob(jobId) {
     let processed = 0;
     const batchSize = 2000;
     while (true) {
-      const params = [lastId];
-      const where = addLeadExportFilters(filter, params);
-      params.push(batchSize);
-      const batch = await pool.query(`
-        SELECT l.id, l.name, l.phone, l.source, c.name AS brand_name, l.status,
-               l.score, u.name AS assigned_name, l.interest, l.created_at
-        FROM leads l
-        LEFT JOIN clients c ON c.id = l.client_id
-        LEFT JOIN users u ON u.id = l.assigned_to
-        WHERE l.id > $1 ${where}
-        ORDER BY l.id ASC
-        LIMIT $${params.length}
-      `, params);
+      const batchLeads = await Leads.find(
+        { ...leadExportFilter(filter), id: { $gt: lastId } },
+        { id: 1, name: 1, phone: 1, source: 1, client_id: 1, status: 1, score: 1, assigned_to: 1, interest: 1, created_at: 1 }
+      ).sort({ id: 1 }).limit(batchSize).lean();
+      const batchClients = new Map((await Clients.find({ id: { $in: batchLeads.map((l) => l.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c.name]));
+      const batchUsers = new Map((await Users.find({ id: { $in: batchLeads.map((l) => l.assigned_to).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((u) => [u.id, u.name]));
+      const batch = { rows: batchLeads.map((l) => ({
+        id: l.id, name: l.name, phone: l.phone, source: l.source, brand_name: batchClients.get(l.client_id) ?? null, status: l.status,
+        score: l.score, assigned_name: batchUsers.get(l.assigned_to) ?? null, interest: l.interest, created_at: l.created_at,
+      })) };
       if (!batch.rows.length) break;
 
       for (const lead of batch.rows) {
@@ -2030,7 +1824,7 @@ async function processLeadExportJob(jobId) {
       }
       processed += batch.rows.length;
       lastId = batch.rows[batch.rows.length - 1].id;
-      await pool.query('UPDATE lead_export_jobs SET processed_records = $1 WHERE id = $2', [processed, jobId]);
+      await LeadExportJobs.updateOne({ id: jobId }, { $set: { processed_records: processed } });
       await new Promise(resolve => setImmediate(resolve));
     }
 
@@ -2039,11 +1833,11 @@ async function processLeadExportJob(jobId) {
       stream.end(resolve);
     });
     stream = null;
-    await pool.query(`UPDATE lead_export_jobs SET status = 'completed', processed_records = $1, file_path = $2, completed_at = NOW() WHERE id = $3`, [processed, filePath, jobId]);
+    await LeadExportJobs.updateOne({ id: jobId }, { $set: { status: 'completed', processed_records: processed, file_path: filePath, completed_at: new Date() } });
   } catch (err) {
     if (stream) stream.destroy();
     console.error(`[Lead Export ${jobId}]`, err);
-    await pool.query(`UPDATE lead_export_jobs SET status = 'failed', error_message = $1, completed_at = NOW() WHERE id = $2`, [err.message, jobId]).catch(() => {});
+    await LeadExportJobs.updateOne({ id: jobId }, { $set: { status: 'failed', error_message: err.message, completed_at: new Date() } }).catch(() => {});
   } finally {
     activeLeadExports.delete(jobId);
   }
@@ -2059,16 +1853,10 @@ app.post('/api/leads/exports', auth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid date range' });
     }
     const filters = mode === 'source' ? { source } : mode === 'date' ? { from: new Date(from).toISOString(), to: new Date(to).toISOString() } : {};
-    const countParams = [];
-    const where = addLeadExportFilters(filters, countParams);
-    const countResult = await pool.query(`SELECT COUNT(*)::int AS count FROM leads l WHERE 1=1 ${where}`, countParams);
-    const totalRecords = countResult.rows[0].count;
+    const totalRecords = await Leads.countDocuments(leadExportFilter(filters));
     const userId = req.user.id || req.user.user_id || null;
-    const result = await pool.query(`
-      INSERT INTO lead_export_jobs (user_id, mode, filters, total_records)
-      VALUES ($1, $2, $3::jsonb, $4) RETURNING id, status, total_records
-    `, [userId, mode, JSON.stringify(filters), totalRecords]);
-    const job = result.rows[0];
+    const createdJob = await LeadExportJobs.create({ user_id: userId, mode, filters, total_records: totalRecords });
+    const job = { id: createdJob.id, status: createdJob.status, total_records: createdJob.total_records };
     setImmediate(() => processLeadExportJob(job.id));
     res.status(202).json(job);
   } catch (err) {
@@ -2080,16 +1868,18 @@ app.post('/api/leads/exports', auth, async (req, res) => {
 app.get('/api/leads/exports/:id', auth, async (req, res) => {
   await leadExportReady;
   const userId = req.user.id || req.user.user_id || null;
-  const { rows } = await pool.query(`SELECT id, status, total_records, processed_records, error_message, created_at, completed_at FROM lead_export_jobs WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2`, [req.params.id, userId]);
-  if (!rows.length) return res.status(404).json({ error: 'Export not found' });
-  res.json(rows[0]);
+  const exportJob = await LeadExportJobs.findOne(
+    { id: req.params.id, user_id: userId ?? null },
+    { _id: 0, id: 1, status: 1, total_records: 1, processed_records: 1, error_message: 1, created_at: 1, completed_at: 1 }
+  ).lean();
+  if (!exportJob) return res.status(404).json({ error: 'Export not found' });
+  res.json(exportJob);
 });
 
 app.get('/api/leads/exports/:id/download', auth, async (req, res) => {
   await leadExportReady;
   const userId = req.user.id || req.user.user_id || null;
-  const { rows } = await pool.query(`SELECT status, file_path, mode FROM lead_export_jobs WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2`, [req.params.id, userId]);
-  const job = rows[0];
+  const job = await LeadExportJobs.findOne({ id: req.params.id, user_id: userId ?? null }, { _id: 0, status: 1, file_path: 1, mode: 1 }).lean();
   if (!job) return res.status(404).json({ error: 'Export not found' });
   if (job.status !== 'completed' || !job.file_path || !fs.existsSync(job.file_path)) return res.status(409).json({ error: 'Export is not ready' });
   res.download(job.file_path, `leads_export_${job.mode}_${new Date().toISOString().slice(0, 10)}.csv`);
@@ -2097,20 +1887,21 @@ app.get('/api/leads/exports/:id/download', auth, async (req, res) => {
 
 // Resume interrupted jobs after a server restart.
 leadExportReady.then(async () => {
-  await pool.query(`UPDATE lead_export_jobs SET status = 'queued', error_message = NULL WHERE status = 'processing'`);
-  const { rows } = await pool.query(`SELECT id FROM lead_export_jobs WHERE status = 'queued' ORDER BY created_at ASC`);
-  for (const row of rows) setImmediate(() => processLeadExportJob(row.id));
+  await LeadExportJobs.updateMany({ status: 'processing' }, { $set: { status: 'queued', error_message: null } });
+  const queuedJobs = await LeadExportJobs.find({ status: 'queued' }, { id: 1 }).sort({ created_at: 1 }).lean();
+  for (const row of queuedJobs) setImmediate(() => processLeadExportJob(row.id));
 }).catch(err => console.error('[Lead Export] Startup recovery failed:', err.message));
 
 // Export files are temporary. Clean up completed/failed jobs after 48 hours.
 cron.schedule('17 */6 * * *', async () => {
   try {
     await leadExportReady;
-    const { rows } = await pool.query(`SELECT id, file_path FROM lead_export_jobs WHERE created_at < NOW() - INTERVAL '48 hours'`);
-    for (const job of rows) {
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const oldJobs = await LeadExportJobs.find({ created_at: { $lt: cutoff } }, { id: 1, file_path: 1 }).lean();
+    for (const job of oldJobs) {
       if (job.file_path && fs.existsSync(job.file_path)) fs.unlinkSync(job.file_path);
     }
-    await pool.query(`DELETE FROM lead_export_jobs WHERE created_at < NOW() - INTERVAL '48 hours'`);
+    await LeadExportJobs.deleteMany({ created_at: { $lt: cutoff } });
   } catch (err) {
     console.error('[Lead Export] Cleanup failed:', err.message);
   }
@@ -2119,187 +1910,180 @@ cron.schedule('17 */6 * * *', async () => {
 // GET /api/leads
 app.get('/api/leads/facebook-filter-options', auth, async (req, res) => {
   try {
-    const [leadOptions, pageOptions] = await Promise.all([
-      pool.query(`
-        SELECT DISTINCT campaign_name, ad_name
-        FROM leads
-        WHERE LOWER(TRIM(COALESCE(source, ''))) SIMILAR TO '%(facebook|instagram|meta[_ ]?ads)%'
-          AND (NULLIF(TRIM(campaign_name), '') IS NOT NULL OR NULLIF(TRIM(ad_name), '') IS NOT NULL)
-        ORDER BY campaign_name NULLS LAST, ad_name NULLS LAST
-      `),
-      pool.query(`
-        SELECT DISTINCT platform, account_name AS page_name, brand_name,
-          CASE WHEN LOWER(platform) = 'instagram'
-            THEN COALESCE(NULLIF(instagram_business_id, ''), NULLIF(account_id, ''), NULLIF(facebook_page_id, ''))
-            ELSE COALESCE(NULLIF(facebook_page_id, ''), NULLIF(account_id, ''), NULLIF(instagram_business_id, ''))
-          END AS page_id
-        FROM brand_social_accounts
-        WHERE is_active = TRUE
-          AND LOWER(platform) IN ('facebook', 'instagram')
-          AND NULLIF(TRIM(account_name), '') IS NOT NULL
-        ORDER BY platform, account_name
-      `)
-    ]);
-    res.json({ options: leadOptions.rows, pages: pageOptions.rows.filter(page => page.page_id) });
+    const nullsLast = (a, b) => (a == null ? (b == null ? 0 : 1) : b == null ? -1 : String(a).localeCompare(String(b)));
+    const blank = (value) => value == null || String(value).trim() === '';
+    const fbLeads = await Leads.find({ source: FACEBOOK_SOURCE }, { campaign_name: 1, ad_name: 1 }).lean();
+    const optionKeys = new Map();
+    for (const l of fbLeads) {
+      if (blank(l.campaign_name) && blank(l.ad_name)) continue;
+      const option = { campaign_name: l.campaign_name ?? null, ad_name: l.ad_name ?? null };
+      optionKeys.set(JSON.stringify(option), option);
+    }
+    const options = [...optionKeys.values()].sort((a, b) => nullsLast(a.campaign_name, b.campaign_name) || nullsLast(a.ad_name, b.ad_name));
+    const firstFilled = (...values) => values.find((value) => value != null && value !== '') ?? null;
+    const pageKeys = new Map();
+    for (const account of await models.BrandSocialAccounts.find({ is_active: true, platform: /^(facebook|instagram)$/i }).lean()) {
+      if (blank(account.account_name)) continue;
+      const page = {
+        platform: account.platform,
+        page_name: account.account_name,
+        brand_name: account.brand_name,
+        page_id: String(account.platform).toLowerCase() === 'instagram'
+          ? firstFilled(account.instagram_business_id, account.account_id, account.facebook_page_id)
+          : firstFilled(account.facebook_page_id, account.account_id, account.instagram_business_id),
+      };
+      pageKeys.set(JSON.stringify(page), page);
+    }
+    const pages = [...pageKeys.values()].sort((a, b) => String(a.platform).localeCompare(String(b.platform)) || String(a.page_name).localeCompare(String(b.page_name)));
+    res.json({ options, pages: pages.filter(page => page.page_id) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
+// pg_trgm-compatible trigram similarity (used for fuzzy lead-name search)
+function trigrams(value) {
+  const grams = new Set();
+  for (const word of String(value ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)) {
+    const padded = `  ${word} `;
+    for (let i = 0; i < padded.length - 2; i += 1) grams.add(padded.slice(i, i + 3));
+  }
+  return grams;
+}
+function trigramSimilarity(a, b) {
+  const left = trigrams(a);
+  const right = trigrams(b);
+  if (!left.size || !right.size) return 0;
+  let shared = 0;
+  for (const gram of left) if (right.has(gram)) shared += 1;
+  return shared / (left.size + right.size - shared);
+}
+
+// Page id of a connected Facebook/Instagram account (Instagram prefers its business id)
+const socialPageId = (account) => {
+  const pick = (...values) => values.find((value) => value != null && value !== '') ?? null;
+  return String(account.platform).toLowerCase() === 'instagram'
+    ? pick(account.instagram_business_id, account.account_id, account.facebook_page_id)
+    : pick(account.facebook_page_id, account.account_id, account.instagram_business_id);
+};
+
+// Adds brand/assignee/page/unread/last contact/last message/tags to lead rows
+async function enrichLeadRows(leads) {
+  const ids = leads.map((l) => l.id);
+  const clients = new Map((await Clients.find({ id: { $in: leads.map((l) => l.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c.name]));
+  const users = new Map((await Users.find({ id: { $in: leads.map((l) => l.assigned_to).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((u) => [u.id, u.name]));
+  const facebookPages = await models.BrandSocialAccounts.find({ platform: /^facebook$/i, is_active: true, brand_name: { $in: [...clients.values()] } }, { id: 1, brand_name: 1, account_name: 1 }).sort({ id: 1 }).lean();
+  const conversations = await Conversations.find({ lead_id: { $in: ids } }, { id: 1, lead_id: 1, unread_count: 1, last_message_at: 1 }).lean();
+  const lastMessages = new Map();
+  const latest = await Messages.aggregate([
+    { $match: { conversation_id: { $in: conversations.map((cv) => cv.id) } } },
+    { $sort: { sent_at: -1, id: -1 } },
+    { $group: { _id: '$conversation_id', content: { $first: '$content' }, msg_type: { $first: '$msg_type' }, media_url: { $first: '$media_url' }, is_deleted: { $first: '$is_deleted' }, sent_at: { $first: '$sent_at' }, id: { $first: '$id' } } },
+  ]);
+  const latestByConversation = new Map(latest.map((m) => [m._id, m]));
+  for (const cv of conversations) {
+    const message = latestByConversation.get(cv.id);
+    if (!message) continue;
+    const current = lastMessages.get(cv.lead_id);
+    const newer = !current || new Date(message.sent_at || 0) > new Date(current.sent_at || 0)
+      || (new Date(message.sent_at || 0).getTime() === new Date(current.sent_at || 0).getTime() && message.id > current.id);
+    if (newer) lastMessages.set(cv.lead_id, message);
+  }
+  const tagLinks = await LeadTags.find({ lead_id: { $in: ids } }, { lead_id: 1, tag_id: 1 }).lean();
+  const tags = new Map((await AllianceInboxTags.find({ id: { $in: tagLinks.map((t) => t.tag_id) } }, { id: 1, name: 1, color: 1 }).lean()).map((t) => [t.id, t]));
+  return leads.map((l) => {
+    const brandName = clients.get(l.client_id) ?? null;
+    const own = conversations.filter((cv) => cv.lead_id === l.id);
+    const contactTimes = own.map((cv) => cv.last_message_at).filter(Boolean).map((at) => new Date(at).getTime());
+    const message = lastMessages.get(l.id);
+    return {
+      ...l,
+      brand_name: brandName,
+      assigned_name: users.get(l.assigned_to) ?? null,
+      facebook_page_name: facebookPages.find((page) => page.brand_name === brandName && String(page.account_name ?? '').trim() !== '')?.account_name ?? null,
+      unread: own.reduce((sum, cv) => sum + (Number(cv.unread_count) || 0), 0),
+      last_contact: contactTimes.length ? new Date(Math.max(...contactTimes)) : null,
+      last_msg: message ? { content: message.content ?? null, msg_type: message.msg_type ?? null, media_url: message.media_url ?? null, is_deleted: message.is_deleted ?? null } : null,
+      tags: tagLinks.filter((link) => link.lead_id === l.id && tags.has(link.tag_id))
+        .map((link) => ({ id: link.tag_id, name: tags.get(link.tag_id).name, color: tags.get(link.tag_id).color })),
+    };
+  });
+}
+
 app.get('/api/leads', auth, async (req, res) => {
   try {
     const { status, brand, search, source, campaign_name, ad_name, meta_page_id, from, to, tag_id, limit = 100, offset = 0 } = req.query;
-    let q = `
-      SELECT l.*, COUNT(*) OVER() AS filtered_total, c.name as brand_name, u.name as assigned_name,
-        (
-          SELECT page_account.account_name
-          FROM brand_social_accounts page_account
-          WHERE page_account.brand_name = c.name
-            AND LOWER(page_account.platform) = 'facebook'
-            AND page_account.is_active = TRUE
-            AND NULLIF(TRIM(page_account.account_name), '') IS NOT NULL
-          ORDER BY page_account.id
-          LIMIT 1
-        ) AS facebook_page_name,
-        COALESCE((SELECT SUM(unread_count) FROM conversations WHERE lead_id = l.id), 0) as unread,
-        (SELECT MAX(last_message_at) FROM conversations WHERE lead_id = l.id) as last_contact,
-        (
-          SELECT json_build_object(
-            'content', m.content,
-            'msg_type', m.msg_type,
-            'media_url', m.media_url,
-            'is_deleted', m.is_deleted
-          )
-          FROM messages m
-          JOIN conversations cv ON m.conversation_id = cv.id
-          WHERE cv.lead_id = l.id
-          ORDER BY m.sent_at DESC, m.id DESC
-          LIMIT 1
-        ) as last_msg,
-        lead_tags.tags
-      FROM leads l
-      LEFT JOIN clients c ON l.client_id = c.id
-      LEFT JOIN users u ON l.assigned_to = u.id
-      LEFT JOIN LATERAL (
-        SELECT COALESCE(json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color)), '[]'::json) AS tags
-        FROM lead_tags lt
-        JOIN alliance_inbox_tags t ON lt.tag_id = t.id
-        WHERE lt.lead_id = l.id
-      ) lead_tags ON TRUE
-      WHERE 1=1
-    `;
-    const params = [];
+    const and = [];
 
     if (status && status !== 'all') {
-      params.push(status);
       if (String(status).toLowerCase() === 'cold') {
         // Legacy leads with no status have always been displayed as Cold in the
         // UI, so include them in the Cold tab as well.
-        q += ` AND COALESCE(NULLIF(LOWER(TRIM(l.status)), ''), 'cold') = LOWER($${params.length})`;
+        and.push({ $or: [{ status: null }, { status: /^\s*$/ }, { status: /^\s*cold\s*$/i }] });
       } else {
-        q += ` AND LOWER(TRIM(COALESCE(l.status, ''))) = LOWER($${params.length})`;
+        and.push({ status: new RegExp(`^\\s*${escapeRegex(String(status))}\\s*$`, 'i') });
       }
     }
     if (brand && brand !== 'All Brands') {
-      params.push(`%${brand}%`);
-      q += ` AND c.name ILIKE $${params.length}`;
+      const brandIds = await Clients.distinct('id', { name: new RegExp(escapeRegex(brand), 'i') });
+      and.push({ client_id: { $in: brandIds } });
     }
     if (source && source !== 'all') {
       const normalizedSource = String(source).toLowerCase();
-      if (normalizedSource === 'facebook') {
-        q += ` AND LOWER(TRIM(COALESCE(l.source, ''))) SIMILAR TO '%(facebook|instagram|meta[_ ]?ads)%'`;
-      } else if (normalizedSource === 'whatsapp') {
-        q += ` AND LOWER(TRIM(COALESCE(l.source, ''))) LIKE '%whatsapp%'`;
-      } else if (normalizedSource === 'website') {
-        q += ` AND LOWER(TRIM(COALESCE(l.source, ''))) SIMILAR TO '%(website|web site)%'`;
-      } else if (normalizedSource === 'xls_sheet') {
-        q += ` AND (
-          LOWER(TRIM(COALESCE(l.source, ''))) IN ('xls sheet', 'xlsx sheet', 'excel sheet', 'csv import')
-          OR LOWER(TRIM(COALESCE(l.source, ''))) LIKE 'csv\\_%' ESCAPE '\\'
-        )`;
+      if (['facebook', 'whatsapp', 'website', 'xls_sheet'].includes(normalizedSource)) {
+        and.push(leadExportFilter({ source: normalizedSource }));
       } else {
-        params.push(source);
-        q += ` AND LOWER(TRIM(COALESCE(l.source, ''))) = LOWER(TRIM($${params.length}))`;
+        and.push({ source: new RegExp(`^\\s*${escapeRegex(String(source).trim())}\\s*$`, 'i') });
       }
     }
-    if (campaign_name) {
-      params.push(campaign_name);
-      q += ` AND LOWER(TRIM(COALESCE(l.source, ''))) SIMILAR TO '%(facebook|instagram|meta[_ ]?ads)%'`;
-      q += ` AND l.campaign_name = $${params.length}`;
-    }
-    if (ad_name) {
-      params.push(ad_name);
-      q += ` AND LOWER(TRIM(COALESCE(l.source, ''))) SIMILAR TO '%(facebook|instagram|meta[_ ]?ads)%'`;
-      q += ` AND l.ad_name = $${params.length}`;
-    }
+    if (campaign_name) and.push({ source: FACEBOOK_SOURCE }, { campaign_name });
+    if (ad_name) and.push({ source: FACEBOOK_SOURCE }, { ad_name });
     if (meta_page_id) {
-      params.push(meta_page_id);
-      q += ` AND LOWER(TRIM(COALESCE(l.source, ''))) SIMILAR TO '%(facebook|instagram|meta[_ ]?ads)%'`;
-      q += ` AND EXISTS (
-        SELECT 1
-        FROM brand_social_accounts page_account
-        JOIN clients page_client ON page_client.name = page_account.brand_name
-        WHERE page_client.id = l.client_id
-          AND CASE WHEN LOWER(page_account.platform) = 'instagram'
-            THEN COALESCE(NULLIF(page_account.instagram_business_id, ''), NULLIF(page_account.account_id, ''), NULLIF(page_account.facebook_page_id, ''))
-            ELSE COALESCE(NULLIF(page_account.facebook_page_id, ''), NULLIF(page_account.account_id, ''), NULLIF(page_account.instagram_business_id, ''))
-          END = $${params.length}
-          AND page_account.is_active = TRUE
-      )`;
+      const pageAccounts = (await models.BrandSocialAccounts.find({ is_active: true }).lean())
+        .filter((account) => socialPageId(account) === String(meta_page_id));
+      const pageClientIds = await Clients.distinct('id', { name: { $in: pageAccounts.map((account) => account.brand_name) } });
+      and.push({ source: FACEBOOK_SOURCE }, { client_id: { $in: pageClientIds } });
     }
     if (from) {
       const fromDate = new Date(from);
       if (Number.isNaN(fromDate.getTime())) return res.status(400).json({ error: 'Invalid from date' });
-      params.push(fromDate.toISOString());
-      q += ` AND l.created_at >= $${params.length}`;
+      and.push({ created_at: { $gte: fromDate } });
     }
     if (to) {
       const toDate = new Date(to);
       if (Number.isNaN(toDate.getTime())) return res.status(400).json({ error: 'Invalid to date' });
-      params.push(toDate.toISOString());
-      q += ` AND l.created_at <= $${params.length}`;
+      and.push({ created_at: { $lte: toDate } });
     }
     if (tag_id) {
-      params.push(tag_id);
-      q += ` AND EXISTS (SELECT 1 FROM lead_tags WHERE lead_id = l.id AND tag_id = $${params.length})`;
-    }
-    if (search) {
-      params.push(`%${search}%`);
-      const likeParam = `$${params.length}`;
-      
-      params.push(search);
-      const searchParam = `$${params.length}`;
-      
-      q += ` AND (
-        l.name ILIKE ${likeParam}
-        OR l.phone ILIKE ${likeParam}
-        OR l.name % ${searchParam}
-        OR (
-          REGEXP_REPLACE(${searchParam}, '[^0-9]', '', 'g') <> ''
-          AND REGEXP_REPLACE(COALESCE(l.phone, ''), '[^0-9]', '', 'g')
-            LIKE '%' || REGEXP_REPLACE(${searchParam}, '[^0-9]', '', 'g') || '%'
-        )
-      )`;
+      and.push({ id: { $in: await LeadTags.distinct('lead_id', { tag_id }) } });
     }
 
+    const candidates = await Leads.find(and.length ? { $and: and } : {}, { id: 1, name: 1, phone: 1, created_at: 1 }).lean();
+    let ordered;
     if (search) {
-      const searchParamIndex = params.length; // points to the exact search term param
-      q += ` ORDER BY
-        CASE WHEN REGEXP_REPLACE($${searchParamIndex}, '[^0-9]', '', 'g') <> ''
-          AND REGEXP_REPLACE(COALESCE(l.phone, ''), '[^0-9]', '', 'g')
-            LIKE '%' || REGEXP_REPLACE($${searchParamIndex}, '[^0-9]', '', 'g') || '%'
-          THEN 0 ELSE 1 END,
-        similarity(l.name, $${searchParamIndex}) DESC,
-        similarity(COALESCE(l.phone, ''), $${searchParamIndex}) DESC
-        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      const term = String(search);
+      const pattern = new RegExp(escapeRegex(term), 'i');
+      const digits = term.replace(/[^0-9]/g, '');
+      const phoneMatches = (lead) => digits !== '' && String(lead.phone ?? '').replace(/[^0-9]/g, '').includes(digits);
+      ordered = candidates
+        .map((lead) => ({ lead, nameScore: trigramSimilarity(lead.name, term), phoneScore: trigramSimilarity(lead.phone ?? '', term), phoneHit: phoneMatches(lead) }))
+        .filter(({ lead, nameScore, phoneHit }) => pattern.test(lead.name ?? '') || pattern.test(lead.phone ?? '') || nameScore > 0.3 || phoneHit)
+        .sort((a, b) => Number(b.phoneHit) - Number(a.phoneHit) || b.nameScore - a.nameScore || b.phoneScore - a.phoneScore)
+        .map(({ lead }) => lead);
     } else {
-      q += ` ORDER BY COALESCE((SELECT MAX(last_message_at) FROM conversations WHERE lead_id = l.id), l.created_at) DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      const lastMessageAt = new Map((await Conversations.aggregate([
+        { $match: { lead_id: { $in: candidates.map((l) => l.id) } } },
+        { $group: { _id: '$lead_id', last: { $max: '$last_message_at' } } },
+      ])).map((row) => [row._id, row.last]));
+      const activity = (lead) => new Date(lastMessageAt.get(lead.id) ?? lead.created_at ?? 0).getTime();
+      ordered = [...candidates].sort((a, b) => activity(b) - activity(a));
     }
-    params.push(limit, offset);
-
-    const { rows } = await pool.query(q, params);
-    const filteredTotal = rows.length ? parseInt(rows[0].filtered_total, 10) : 0;
+    const pageIds = ordered.slice(Number(offset) || 0, (Number(offset) || 0) + (Number(limit) || 100)).map((lead) => lead.id);
+    const pageLeads = new Map((await Leads.find({ id: { $in: pageIds } }, NO_ID).lean()).map((lead) => [lead.id, lead]));
+    const filteredTotal = pageIds.length ? ordered.length : 0;
+    const rows = (await enrichLeadRows(pageIds.map((id) => pageLeads.get(id)).filter(Boolean)))
+      .map((row) => ({ ...row, filtered_total: filteredTotal }));
     res.json({ leads: rows, total: filteredTotal });
   } catch (err) {
     console.error(err);
@@ -2307,41 +2091,45 @@ app.get('/api/leads', auth, async (req, res) => {
   }
 });
 
+// Lead conversation messages shaped for the CRM inbox (with reply previews)
+async function leadInboxMessages(conversationIds, { sort = { sent_at: 1 }, skip = 0, limit = 0 } = {}) {
+  let query = Messages.find({ conversation_id: { $in: conversationIds } }, NO_ID).sort(sort).skip(skip);
+  if (limit) query = query.limit(limit);
+  const rows = await query.lean();
+  const replyIds = [...new Set(rows.map((m) => m.reply_to_wa_id).filter(Boolean))];
+  const replies = new Map((replyIds.length ? await Messages.find({ wa_msg_id: { $in: replyIds } }, { wa_msg_id: 1, direction: 1, media_url: 1, content: 1, msg_type: 1 }).lean() : [])
+    .map((r) => [r.wa_msg_id, r]));
+  return rows.map((m) => {
+    const reply = m.reply_to_wa_id ? replies.get(m.reply_to_wa_id) : null;
+    return {
+      id: m.id, direction: m.direction, content: m.content, type: m.msg_type, media_url: m.media_url, wa_msg_id: m.wa_msg_id,
+      status: m.status, is_ai: m.is_ai, timestamp: m.sent_at, read_at: m.read_at, is_deleted: m.is_deleted, is_forwarded: m.is_forwarded,
+      pinned_until: m.pinned_until, is_starred: m.is_starred, reactions: m.reactions,
+      reply_to: reply ? { direction: reply.direction, media_url: reply.media_url, content: reply.content, msg_type: reply.msg_type } : null,
+    };
+  });
+}
+
 // GET /api/leads/:id
 app.get('/api/leads/:id', auth, async (req, res) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT l.*, c.name as brand_name, c.phone_number_id, c.wa_access_token,
-             u.name as assigned_name, lead_tags.tags
-      FROM leads l
-      LEFT JOIN clients c ON l.client_id = c.id
-      LEFT JOIN users u ON l.assigned_to = u.id
-      LEFT JOIN LATERAL (
-        SELECT COALESCE(json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color)), '[]'::json) AS tags
-        FROM lead_tags lt
-        JOIN alliance_inbox_tags t ON lt.tag_id = t.id
-        WHERE lt.lead_id = l.id
-      ) lead_tags ON TRUE
-      WHERE l.id = $1
-    `, [req.params.id]);
-
-    if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
+    const leadRow = await Leads.findOne({ id: req.params.id }, NO_ID).lean();
+    if (!leadRow) return res.status(404).json({ error: 'Lead not found' });
+    const leadClient = leadRow.client_id != null ? await Clients.findOne({ id: leadRow.client_id }, { name: 1, phone_number_id: 1, wa_access_token: 1 }).lean() : null;
+    const [enriched] = await enrichLeadRows([leadRow]);
+    const lead = {
+      ...leadRow,
+      brand_name: leadClient?.name ?? null,
+      phone_number_id: leadClient?.phone_number_id ?? null,
+      wa_access_token: leadClient?.wa_access_token ?? null,
+      assigned_name: enriched.assigned_name,
+      tags: enriched.tags,
+    };
 
     // Join conversations (thread) → messages (individual) for this lead
-    const conversations = await pool.query(`
-      SELECT m.id, m.direction, m.content, m.msg_type as type, m.media_url, m.wa_msg_id,
-             m.status, m.is_ai, m.sent_at as timestamp, m.read_at, m.is_deleted, m.is_forwarded, m.pinned_until, m.is_starred, m.reactions,
-             CASE WHEN m.reply_to_wa_id IS NOT NULL THEN (
-               SELECT json_build_object('direction', r.direction, 'media_url', r.media_url, 'content', r.content, 'msg_type', r.msg_type)
-               FROM messages r WHERE r.wa_msg_id = m.reply_to_wa_id LIMIT 1
-             ) ELSE NULL END as reply_to
-      FROM messages m
-      JOIN conversations cv ON m.conversation_id = cv.id
-      WHERE cv.lead_id = $1
-      ORDER BY m.sent_at ASC
-    `, [req.params.id]);
+    const conversations = await leadInboxMessages(await Conversations.distinct('id', { lead_id: leadRow.id }));
 
-    res.json({ lead: rows[0], conversations: conversations.rows });
+    res.json({ lead, conversations });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -2351,24 +2139,13 @@ app.get('/api/leads/:id', auth, async (req, res) => {
 app.get('/api/leads/:id/messages', auth, async (req, res) => {
   try {
     const { limit = 100, offset = 0 } = req.query;
-    const conversations = await pool.query(`
-      SELECT m.id, m.direction, m.content, m.msg_type as type, m.media_url, m.wa_msg_id,
-             m.status, m.is_ai, m.sent_at as timestamp, m.read_at, m.is_deleted, m.is_forwarded, m.pinned_until, m.is_starred, m.reactions,
-             CASE WHEN m.reply_to_wa_id IS NOT NULL THEN (
-               SELECT json_build_object('direction', r.direction, 'media_url', r.media_url, 'content', r.content, 'msg_type', r.msg_type)
-               FROM messages r WHERE r.wa_msg_id = m.reply_to_wa_id LIMIT 1
-             ) ELSE NULL END as reply_to
-      FROM messages m
-      JOIN conversations cv ON m.conversation_id = cv.id
-      WHERE cv.lead_id = $1
-         OR (cv.lead_id IS NULL AND RIGHT(REGEXP_REPLACE(cv.phone, '[^0-9]', '', 'g'), 10) = (
-              SELECT RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) FROM leads WHERE id = $1 LIMIT 1
-            ))
-      ORDER BY m.sent_at DESC
-      LIMIT $2 OFFSET $3
-    `, [req.params.id, parseInt(limit), parseInt(offset)]);
+    const messageLead = await Leads.findOne({ id: req.params.id }, { phone: 1 }).lean();
+    const conversationFilter = [{ lead_id: req.params.id }];
+    if (messageLead && messageLead.phone != null) conversationFilter.push({ lead_id: null, phone: phoneTailRegex(messageLead.phone) });
+    const conversationIds = await Conversations.distinct('id', { $or: conversationFilter });
+    const messages = await leadInboxMessages(conversationIds, { sort: { sent_at: -1 }, skip: parseInt(offset) || 0, limit: parseInt(limit) || 100 });
 
-    res.json({ messages: conversations.rows.reverse() });
+    res.json({ messages: messages.reverse() });
   } catch (err) {
     console.error('Messages fetch error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -2379,28 +2156,28 @@ app.get('/api/leads/:id/messages', auth, async (req, res) => {
 app.post('/api/leads', auth, async (req, res) => {
   try {
     const { name, phone, source, interest, assigned_to } = req.body;
-    const leadOSBrand = await getLeadOSBrand(pool);
+    const leadOSBrand = await getLeadOSBrand();
     if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
     // Strip formatting (spaces/dashes/parens) so this matches the digits-only format
     // every phone-matching query in the app expects. Does not add/assume a country code.
     const normalizedPhone = String(phone).replace(/\D/g, '');
     if (!normalizedPhone) return res.status(400).json({ error: 'Enter a valid phone number' });
 
-    const { rows } = await pool.query(`
-      INSERT INTO leads (name, phone, source, client_id, interest, assigned_to, status, score, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, 'new', 0, NOW())
-      RETURNING *
-    `, [name, normalizedPhone, source || 'Manual', leadOSBrand.id, interest || '', assigned_to || null]);
+    const createdLead = await Leads.create({
+      name, phone: normalizedPhone, source: source || 'Manual', client_id: leadOSBrand.id, interest: interest || '',
+      assigned_to: assigned_to || null, status: 'new', score: 0, created_at: new Date(),
+    });
+    const rows = [createdLead.toObject()];
 
     // Trigger n8n webhook for new leads to send welcome template.
     // Prefer this brand's own WhatsApp credentials (kept current via the
     // integrations/reconnect flow) over the static .env pair, which can go
     // stale — matches the lookup already done for bulk import (see /api/leads/import).
     if (process.env.N8N_NEW_LEAD_WEBHOOK_URL) {
-      pool.query('SELECT phone_number_id, wa_access_token FROM clients WHERE id = $1', [rows[0].client_id])
-        .then(clientRes => {
-          const phoneNumberId = clientRes.rows[0]?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-          const waAccessToken = clientRes.rows[0]?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
+      Clients.findOne({ id: rows[0].client_id }, { phone_number_id: 1, wa_access_token: 1 }).lean()
+        .then(webhookClient => {
+          const phoneNumberId = webhookClient?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
+          const waAccessToken = webhookClient?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
           return axios.post(process.env.N8N_NEW_LEAD_WEBHOOK_URL, {
             lead_id: rows[0].id,
             name: rows[0].name,
@@ -2426,26 +2203,21 @@ app.post('/api/leads', auth, async (req, res) => {
 app.patch('/api/leads/:id', auth, async (req, res) => {
   try {
     const { name, phone, email, status, score, assigned_to, interest, notes } = req.body;
-    const updates = [];
-    const params = [];
+    const updates = {};
 
-    if (name !== undefined) { params.push(name); updates.push(`name = $${params.length}`); }
-    if (phone !== undefined) { params.push(String(phone).replace(/\D/g, '')); updates.push(`phone = $${params.length}`); }
-    if (email !== undefined) { params.push(email); updates.push(`email = $${params.length}`); }
-    if (status !== undefined) { params.push(status); updates.push(`status = $${params.length}`); }
-    if (score !== undefined) { params.push(score); updates.push(`score = $${params.length}`); }
-    if (assigned_to !== undefined) { params.push(assigned_to); updates.push(`assigned_to = $${params.length}`); }
-    if (interest !== undefined) { params.push(interest); updates.push(`interest = $${params.length}`); }
-    if (notes !== undefined) { params.push(notes); updates.push(`notes = $${params.length}`); }
+    if (name !== undefined) updates.name = name;
+    if (phone !== undefined) updates.phone = String(phone).replace(/\D/g, '');
+    if (email !== undefined) updates.email = email;
+    if (status !== undefined) updates.status = status;
+    if (score !== undefined) updates.score = score;
+    if (assigned_to !== undefined) updates.assigned_to = assigned_to;
+    if (interest !== undefined) updates.interest = interest;
+    if (notes !== undefined) updates.notes = notes;
 
-    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
+    if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
 
-    params.push(req.params.id);
-    const { rows } = await pool.query(
-      `UPDATE leads SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${params.length} RETURNING *`,
-      params
-    );
-    res.json({ lead: rows[0] });
+    const lead = await Leads.findOneAndUpdate({ id: req.params.id }, { $set: { ...updates, updated_at: new Date() } }, { new: true, projection: NO_ID }).lean();
+    res.json({ lead: lead || undefined });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -2455,15 +2227,15 @@ app.patch('/api/leads/:id', auth, async (req, res) => {
 app.delete('/api/leads/:id', auth, async (req, res) => {
   try {
     const { id } = req.params;
-    await pool.query('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE lead_id = $1)', [id]);
-    await pool.query('DELETE FROM conversations WHERE lead_id = $1', [id]);
-    await pool.query('DELETE FROM payments WHERE lead_id = $1', [id]);
+    await Messages.deleteMany({ conversation_id: { $in: await Conversations.distinct('id', { lead_id: id }) } });
+    await Conversations.deleteMany({ lead_id: id });
+    await Payments.deleteMany({ lead_id: id });
     // sales_tasks has no ON DELETE CASCADE (unlike every other lead_id FK), so it
-    // silently blocks the delete below with a 23503 violation if left out.
-    await pool.query('DELETE FROM sales_tasks WHERE lead_id = $1', [id]);
+    // would block the delete below if left out.
+    await SalesTasks.deleteMany({ lead_id: id });
 
-    const { rowCount } = await pool.query('DELETE FROM leads WHERE id = $1', [id]);
-    if (rowCount === 0) return res.status(404).json({ error: 'Lead not found' });
+    const deleted = await deleteCascade('leads', { id });
+    if (deleted.length === 0) return res.status(404).json({ error: 'Lead not found' });
 
     res.json({ success: true, message: 'Lead deleted successfully' });
   } catch (err) {
@@ -2476,10 +2248,7 @@ app.post('/api/leads/:id/tags', auth, async (req, res) => {
   try {
     const { id } = req.params;
     const { tagId } = req.body;
-    await pool.query(
-      `INSERT INTO lead_tags (lead_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-      [id, tagId]
-    );
+    await insertIgnore(LeadTags, { lead_id: id, tag_id: tagId, assigned_at: new Date() });
     res.json({ success: true });
   } catch (err) {
     console.error('Add lead tag error:', err);
@@ -2490,10 +2259,7 @@ app.post('/api/leads/:id/tags', auth, async (req, res) => {
 app.delete('/api/leads/:id/tags/:tagId', auth, async (req, res) => {
   try {
     const { id, tagId } = req.params;
-    await pool.query(
-      `DELETE FROM lead_tags WHERE lead_id = $1 AND tag_id = $2`,
-      [id, tagId]
-    );
+    await LeadTags.deleteMany({ lead_id: id, tag_id: tagId });
     res.json({ success: true });
   } catch (err) {
     console.error('Remove lead tag error:', err);
@@ -2505,11 +2271,9 @@ app.delete('/api/leads/:id/tags/:tagId', auth, async (req, res) => {
 app.post('/api/leads/migrate-flow-step', auth, async (req, res) => {
   try {
     // 1. Add flow_step to leads
-    await pool.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS flow_step VARCHAR(100) DEFAULT 'welcome'`);
-    await pool.query(`UPDATE leads SET flow_step = 'welcome' WHERE flow_step IS NULL`);
-    
-    // 2. Fix brain_docs constraint to allow 'training' and 'welcome_template'
-    await pool.query(`ALTER TABLE brain_docs DROP CONSTRAINT IF EXISTS brain_docs_doc_type_check`);
+    await Leads.updateMany({ flow_step: null }, { $set: { flow_step: 'welcome' } });
+
+    // 2. brain_docs has no doc_type constraint in MongoDB, so nothing else to migrate
     
     res.json({ success: true, message: 'DB migration successful! flow_step added and constraints updated.' });
   } catch (err) {
@@ -2535,15 +2299,15 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
       console.log(`[AI Queue] Cancelled AI reply for lead ${lead_id} due to manual admin message.`);
     }
 
-    const leadRes = await pool.query(`
-      SELECT l.*, c.phone_number_id, c.wa_access_token, c.whatsapp_status
-      FROM leads l
-      LEFT JOIN clients c ON l.client_id = c.id
-      WHERE l.id = $1
-    `, [lead_id]);
-
-    if (!leadRes.rows.length) return res.status(404).json({ error: 'Lead not found.' });
-    const lead = leadRes.rows[0];
+    const sendLead = await Leads.findOne({ id: lead_id }, NO_ID).lean();
+    if (!sendLead) return res.status(404).json({ error: 'Lead not found.' });
+    const sendClient = sendLead.client_id != null ? await Clients.findOne({ id: sendLead.client_id }, { phone_number_id: 1, wa_access_token: 1, whatsapp_status: 1 }).lean() : null;
+    const lead = {
+      ...sendLead,
+      phone_number_id: sendClient?.phone_number_id ?? null,
+      wa_access_token: sendClient?.wa_access_token ?? null,
+      whatsapp_status: sendClient?.whatsapp_status ?? null,
+    };
 
     if (lead.client_id && lead.whatsapp_status !== 'verified') {
       return res.status(403).json({ error: 'WhatsApp is disabled for this brand until verification succeeds' });
@@ -2557,31 +2321,21 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
     }
 
     // --- Check 24-hour window ---
-    const windowRes = await pool.query(`
-      SELECT 1 FROM messages m
-      JOIN conversations c ON m.conversation_id = c.id
-      WHERE (c.lead_id = $1 
-         OR RIGHT(REGEXP_REPLACE(c.phone, '[^0-9]', '', 'g'), 10) = (
-              SELECT RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) FROM leads WHERE id = $1 LIMIT 1
-            )
-      )
-      AND m.direction = 'inbound' AND m.sent_at > NOW() - INTERVAL '24 HOURS'
-      LIMIT 1
-    `, [lead_id]);
-
-    const isWindowOpen = windowRes.rows.length > 0;
+    const windowConversationFilter = [{ lead_id }];
+    if (lead.phone != null) windowConversationFilter.push({ phone: phoneTailRegex(lead.phone) });
+    const windowConversationIds = await Conversations.distinct('id', { $or: windowConversationFilter });
+    const isWindowOpen = Boolean(await Messages.exists({
+      conversation_id: { $in: windowConversationIds }, direction: 'inbound', sent_at: { $gt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+    }));
 
     if (!isWindowOpen) {
       // Check if we already sent a wakeup template in the last 30 minutes to avoid spamming
-      const recentTemplate = await pool.query(`
-        SELECT 1 FROM messages m
-        JOIN conversations c ON m.conversation_id = c.id
-        WHERE c.lead_id = $1 AND m.direction = 'outbound' AND m.msg_type = 'template'
-          AND m.sent_at > NOW() - INTERVAL '30 MINUTES'
-        LIMIT 1
-      `, [lead_id]);
+      const recentTemplate = await Messages.exists({
+        conversation_id: { $in: await Conversations.distinct('id', { lead_id }) },
+        direction: 'outbound', msg_type: 'template', sent_at: { $gt: new Date(Date.now() - 30 * 60 * 1000) },
+      });
 
-      if (recentTemplate.rows.length === 0) {
+      if (!recentTemplate) {
         // Send the common_welcome_message template to reopen the 24-hour window
         try {
           const templateRes = await axios.post(
@@ -2601,17 +2355,15 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
           console.log('[Template Wakeup] Sent common_welcome_message to', lead.phone, waMsgId);
 
           // Save template message to DB so it appears in inbox
-          const convCheck = await pool.query(
-            `SELECT id FROM conversations WHERE lead_id = $1 LIMIT 1`, [lead_id]
-          );
-          if (convCheck.rows.length > 0) {
-            const convId = convCheck.rows[0].id;
-            const existingTemplateMsg = waMsgId ? await pool.query('SELECT id FROM messages WHERE wa_msg_id = $1', [waMsgId]) : { rows: [] };
-            if (existingTemplateMsg.rows.length === 0) {
-              await pool.query(`
-                INSERT INTO messages (conversation_id, direction, content, msg_type, wa_msg_id, status, is_ai, sent_at)
-                VALUES ($1, 'outbound', 'common_welcome_message', 'template', $2, 'sent', false, NOW())
-              `, [convId, waMsgId]);
+          const convCheck = await Conversations.findOne({ lead_id }, { id: 1 }).lean();
+          if (convCheck) {
+            const convId = convCheck.id;
+            const existingTemplateMsg = waMsgId ? await Messages.exists({ wa_msg_id: waMsgId }) : null;
+            if (!existingTemplateMsg) {
+              await Messages.create({
+                conversation_id: convId, direction: 'outbound', content: 'common_welcome_message', msg_type: 'template',
+                wa_msg_id: waMsgId, status: 'sent', is_ai: false, sent_at: new Date(),
+              });
             }
             // Push to inbox in real-time
             io.emit('outgoing_message', { lead_id: String(lead.id), message: { direction: 'outbound', content: '[Template] common_welcome_message', msg_type: 'template', sent_at: new Date() } });
@@ -2704,23 +2456,24 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
     const phone = lead.phone?.replace(/\D/g, '').slice(-10);
 
     // Upsert the conversation thread (unique per phone+tenant)
-    const convRes = await pool.query(`
-      INSERT INTO conversations (lead_id, tenant_id, phone, status, last_message, last_message_at, created_at)
-      VALUES ($1, $2, $3, 'open', $4, NOW(), NOW())
-      ON CONFLICT (phone, tenant_id) DO UPDATE
-        SET lead_id = EXCLUDED.lead_id,
-            last_message = EXCLUDED.last_message,
-            last_message_at = NOW()
-      RETURNING id
-    `, [lead_id, DEFAULT_TENANT_ID, phone, message]);
-    const conversationId = convRes.rows[0].id;
+    const conversation = await upsertOne(
+      Conversations,
+      { phone },
+      { $set: { lead_id, last_message: message, last_message_at: new Date() } },
+      { lead_id, status: 'open', last_message: message, last_message_at: new Date(), created_at: new Date() }
+    );
+    const conversationId = conversation.id;
 
     // Insert message into messages table
-    const { rows: savedRows } = await pool.query(`
-      INSERT INTO messages (conversation_id, direction, content, msg_type, media_url, wa_msg_id, status, sent_at, reply_to_wa_id, is_forwarded)
-      VALUES ($1, 'outbound', $2, $3, $4, $5, 'sent', NOW(), $6, $7)
-      RETURNING id, direction, content, msg_type as type, media_url, wa_msg_id, status, sent_at as timestamp, is_deleted, reply_to_wa_id, is_forwarded
-    `, [conversationId, message, type, media_url || null, waMessageId, reply_to_wa_id || null, is_forwarded || false]);
+    const sentMessage = await Messages.create({
+      conversation_id: conversationId, direction: 'outbound', content: message, msg_type: type, media_url: media_url || null,
+      wa_msg_id: waMessageId, status: 'sent', sent_at: new Date(), reply_to_wa_id: reply_to_wa_id || null, is_forwarded: is_forwarded || false,
+    });
+    const savedRows = [{
+      id: sentMessage.id, direction: sentMessage.direction, content: sentMessage.content, type: sentMessage.msg_type,
+      media_url: sentMessage.media_url, wa_msg_id: sentMessage.wa_msg_id, status: sentMessage.status, timestamp: sentMessage.sent_at,
+      is_deleted: sentMessage.is_deleted, reply_to_wa_id: sentMessage.reply_to_wa_id, is_forwarded: sentMessage.is_forwarded,
+    }];
 
     // Emit real-time event to all CRM clients
     io.emit('outgoing_message', { lead_id: Number(lead_id), message: savedRows[0] });
@@ -2798,8 +2551,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
             if (phoneNumberId === process.env.WA_PHONE_NUMBER_ID) {
               hasValidPhoneNumber = true;
             } else {
-              const clientRes = await pool.query('SELECT id FROM clients WHERE phone_number_id = $1 LIMIT 1', [phoneNumberId]);
-              if (clientRes.rows.length > 0) {
+              if (await Clients.exists({ phone_number_id: phoneNumberId })) {
                 hasValidPhoneNumber = true;
               }
             }
@@ -2842,15 +2594,14 @@ app.post('/webhook/whatsapp', async (req, res) => {
           else if (event === 'PENDING_DELETION') newStatus = 'draft';
 
           if (newStatus) {
-            const updateResult = await pool.query(`
-              UPDATE templates
-              SET status = $1,
-                  approved_at = CASE WHEN $1 = 'approved' THEN NOW() ELSE approved_at END
-              WHERE meta_template_id = $2 OR name = $3
-              RETURNING id, name, status
-            `, [newStatus, String(message_template_id), message_template_name]);
+            const templateStatusUpdate = { status: newStatus };
+            if (newStatus === 'approved') templateStatusUpdate.approved_at = new Date();
+            const updateResult = await Templates.updateMany(
+              { $or: [{ meta_template_id: String(message_template_id) }, { name: message_template_name }] },
+              { $set: templateStatusUpdate }
+            );
 
-            if (updateResult.rows.length) {
+            if (updateResult.matchedCount) {
               console.log(`✅ Template "${message_template_name}" updated to ${newStatus}`);
             } else {
               console.warn(`⚠️  Could not find template: ${message_template_name} (id: ${message_template_id})`);
@@ -2872,11 +2623,11 @@ app.post('/webhook/whatsapp', async (req, res) => {
             if (!wamid) continue;
 
                       // Update status in messages table (using wa_msg_id)
-            await pool.query(`UPDATE messages SET status = $1 WHERE wa_msg_id = $2`, [newStatus, wamid]);
+            await Messages.updateMany({ wa_msg_id: wamid }, { $set: { status: newStatus } });
             if (newStatus === 'failed' && errorMsg) {
-              await pool.query(`UPDATE campaign_logs SET status = $1, error_message = $3 WHERE wa_message_id = $2`, [newStatus, wamid, errorMsg]);
+              await CampaignLogs.updateMany({ wa_message_id: wamid }, { $set: { status: newStatus, error_message: errorMsg } });
             } else {
-              await pool.query(`UPDATE campaign_logs SET status = $1 WHERE wa_message_id = $2`, [newStatus, wamid]);
+              await CampaignLogs.updateMany({ wa_message_id: wamid }, { $set: { status: newStatus } });
             }
 
             // Emit real-time status update to CRM
@@ -2901,13 +2652,9 @@ app.post('/webhook/whatsapp', async (req, res) => {
           // Click-to-WhatsApp ads include the originating ad in msg.referral.
           // Reuse campaign metadata already learned from Meta lead-form sync for that ad.
           if (referralAdId) {
-            referralCampaign = (await pool.query(`
-              SELECT campaign_id, campaign_name, ad_id, ad_name, client_id
-              FROM leads
-              WHERE ad_id = $1
-              ORDER BY campaign_name IS NULL, updated_at DESC
-              LIMIT 1
-            `, [referralAdId])).rows[0] || null;
+            referralCampaign = (await Leads.find({ ad_id: referralAdId }, { _id: 0, campaign_id: 1, campaign_name: 1, ad_id: 1, ad_name: 1, client_id: 1, updated_at: 1 }).lean())
+              .sort((a, b) => Number(a.campaign_name == null) - Number(b.campaign_name == null) || new Date(b.updated_at || 0) - new Date(a.updated_at || 0))
+              .map(({ updated_at, ...row }) => row)[0] || null;
           }
 
           // Extract text and media info based on message type
@@ -2939,69 +2686,46 @@ app.post('/webhook/whatsapp', async (req, res) => {
           }
 
           // Find matching client by phone_number_id
-          const client = (await pool.query(
-            'SELECT * FROM clients WHERE phone_number_id = $1', [phoneNumberId]
-          )).rows[0];
+          const client = await Clients.findOne({ phone_number_id: phoneNumberId }, NO_ID).lean();
 
           // Find or auto-create lead by phone number
           const phoneDigits = phone.replace(/\D/g, '');
-          let lead = (await pool.query(
-            `SELECT l.*, c.wa_access_token as client_wa_token, c.phone_number_id as client_phone_number_id
-             FROM leads l
-             LEFT JOIN clients c ON l.client_id = c.id
-             WHERE RIGHT(REGEXP_REPLACE(l.phone, '[^0-9]', '', 'g'), 10) = RIGHT($1, 10)
-             ORDER BY l.created_at DESC LIMIT 1`,
-            [phoneDigits]
-          )).rows[0];
+          let lead = await Leads.findOne({ phone: phoneTailRegex(phoneDigits) }, NO_ID).sort({ created_at: -1 }).lean();
+          if (lead) {
+            const leadClient = lead.client_id != null ? await Clients.findOne({ id: lead.client_id }, { wa_access_token: 1, phone_number_id: 1 }).lean() : null;
+            lead = { ...lead, client_wa_token: leadClient?.wa_access_token ?? null, client_phone_number_id: leadClient?.phone_number_id ?? null };
+          }
 
           if (!lead) {
-            const newLead = await pool.query(`
-              INSERT INTO leads (
-                name, phone, source, client_id, status, score, flow_step, created_at,
-                campaign_id, campaign_name, ad_id, ad_name
-              )
-              VALUES ($1, $2, $3, $4, 'new', 10, 'welcome', NOW(), $5, $6, $7, $8)
-              RETURNING *
-            `, [
-              value.contacts?.[0]?.profile?.name || phone,
+            const newLead = await Leads.create({
+              name: value.contacts?.[0]?.profile?.name || phone,
               phone,
-              referralAdId ? 'facebook' : 'WhatsApp',
-              (await getLeadOSBrand(pool)).id,
-              referralCampaign?.campaign_id || null,
-              referralCampaign?.campaign_name || null,
-              referralAdId,
-              referralCampaign?.ad_name || msg.referral?.headline || null,
-            ]);
-            lead = newLead.rows[0];
+              source: referralAdId ? 'facebook' : 'WhatsApp',
+              client_id: (await getLeadOSBrand()).id,
+              status: 'new', score: 10, flow_step: 'welcome', created_at: new Date(),
+              campaign_id: referralCampaign?.campaign_id || null,
+              campaign_name: referralCampaign?.campaign_name || null,
+              ad_id: referralAdId,
+              ad_name: referralCampaign?.ad_name || msg.referral?.headline || null,
+            });
+            lead = newLead.toObject();
             lead.client_wa_token = client?.wa_access_token;
             lead.client_phone_number_id = client?.phone_number_id;
             console.log(`[Webhook] Auto-created lead for phone: ${phone}`);
           } else {
             if (lead.phone !== phone) {
-              await pool.query('UPDATE leads SET phone = $1 WHERE id = $2', [phone, lead.id]);
+              await Leads.updateOne({ id: lead.id }, { $set: { phone } });
               lead.phone = phone;
             }
             if (referralAdId) {
-              const updatedLead = await pool.query(`
-                UPDATE leads SET
-                  source = 'facebook',
-                  client_id = COALESCE($1, client_id),
-                  campaign_id = COALESCE($2, campaign_id),
-                  campaign_name = COALESCE($3, campaign_name),
-                  ad_id = $4,
-                  ad_name = COALESCE($5, ad_name),
-                  updated_at = NOW()
-                WHERE id = $6
-                RETURNING *
-              `, [
-                (await getLeadOSBrand(pool)).id,
-                referralCampaign?.campaign_id || null,
-                referralCampaign?.campaign_name || null,
-                referralAdId,
-                referralCampaign?.ad_name || msg.referral?.headline || null,
-                lead.id,
-              ]);
-              lead = { ...lead, ...updatedLead.rows[0] };
+              const referralUpdate = { source: 'facebook', ad_id: referralAdId, updated_at: new Date() };
+              const leadOSBrandId = (await getLeadOSBrand()).id;
+              if (leadOSBrandId != null) referralUpdate.client_id = leadOSBrandId;
+              if (referralCampaign?.campaign_id) referralUpdate.campaign_id = referralCampaign.campaign_id;
+              if (referralCampaign?.campaign_name) referralUpdate.campaign_name = referralCampaign.campaign_name;
+              if (referralCampaign?.ad_name || msg.referral?.headline) referralUpdate.ad_name = referralCampaign?.ad_name || msg.referral?.headline;
+              const updatedLead = await Leads.findOneAndUpdate({ id: lead.id }, { $set: referralUpdate }, { new: true, projection: NO_ID }).lean();
+              lead = { ...lead, ...(updatedLead || {}) };
             }
           }
 
@@ -3061,37 +2785,32 @@ app.post('/webhook/whatsapp', async (req, res) => {
           const normalizedPhone = phoneDigits.slice(-10);
 
           // Upsert conversation thread
-          const tenantId = DEFAULT_TENANT_ID;
-          const convRes = await pool.query(`
-            INSERT INTO conversations (lead_id, tenant_id, phone, status, last_message, last_message_at, created_at)
-            VALUES ($1, $2, $3, 'open', $4, NOW(), NOW())
-            ON CONFLICT (phone, tenant_id) DO UPDATE
-              SET lead_id = EXCLUDED.lead_id,
-                  last_message = EXCLUDED.last_message,
-                  last_message_at = NOW()
-            RETURNING id
-          `, [lead.id, tenantId, normalizedPhone, text]);
-          const conversationId = convRes.rows[0].id;
+          const conversation = await upsertOne(
+            Conversations,
+            { phone: normalizedPhone },
+            { $set: { lead_id: lead.id, last_message: text, last_message_at: new Date() } },
+            { lead_id: lead.id, status: 'open', last_message: text, last_message_at: new Date(), created_at: new Date() }
+          );
+          const conversationId = conversation.id;
 
           // Save incoming message to messages table (avoid duplicate wa_msg_id from retried webhooks)
-          const existingMsg = waMessageId ? await pool.query('SELECT id FROM messages WHERE wa_msg_id = $1', [waMessageId]) : { rows: [] };
-          
-          if (existingMsg.rows.length > 0) {
+          const existingMsg = waMessageId ? await Messages.exists({ wa_msg_id: waMessageId }) : null;
+
+          if (existingMsg) {
             console.log(`[Webhook] Duplicate message skipped (wa_msg_id: ${waMessageId})`);
           } else {
-            const { rows: savedRows } = await pool.query(`
-              INSERT INTO messages (conversation_id, direction, content, msg_type, media_url, wa_msg_id, status, is_ai, sent_at, is_forwarded)
-              VALUES ($1, 'inbound', $2, $3, $4, $5, 'delivered', false, NOW(), $6)
-              RETURNING id, direction, content, msg_type as type, media_url, wa_msg_id, status, sent_at as timestamp, is_forwarded
-            `, [conversationId, text, msgType, mediaUrl, waMessageId, isForwarded]);
+            const inbound = await Messages.create({
+              conversation_id: conversationId, direction: 'inbound', content: text, msg_type: msgType, media_url: mediaUrl,
+              wa_msg_id: waMessageId, status: 'delivered', is_ai: false, sent_at: new Date(), is_forwarded: isForwarded,
+            });
+            const savedRows = [{
+              id: inbound.id, direction: inbound.direction, content: inbound.content, type: inbound.msg_type, media_url: inbound.media_url,
+              wa_msg_id: inbound.wa_msg_id, status: inbound.status, timestamp: inbound.sent_at, is_forwarded: inbound.is_forwarded,
+            }];
 
             // ── REAL-TIME: push to CRM Inbox immediately ─────────
             // Count only messages that passed the duplicate webhook check.
-            await pool.query(`
-              UPDATE conversations
-              SET unread_count = COALESCE(unread_count, 0) + 1
-              WHERE id = $1
-            `, [conversationId]);
+            await Conversations.updateOne({ id: conversationId }, [{ $set: { unread_count: { $add: [{ $ifNull: ['$unread_count', 0] }, 1] } } }]);
 
             io.emit('incoming_message', { lead_id: String(lead.id), message: savedRows[0] });
             console.log(`[Webhook] ✅ Saved inbound ${msgType} from ${phone} → lead ${lead.id}, msg_id ${savedRows[0].id}`);
@@ -3155,21 +2874,15 @@ app.post('/webhook/meta-leads', async (req, res) => {
         const pageId = change.value.page_id;
 
         // 1. Lookup dynamic access token and client mapping
-        const { rows: accountRows } = await pool.query(
-          `SELECT bsa.access_token, c.id as client_id 
-           FROM brand_social_accounts bsa 
-           JOIN clients c ON bsa.brand_name = c.name 
-           WHERE bsa.facebook_page_id = $1 OR bsa.account_id = $1 
-           LIMIT 1`,
-          [pageId]
-        );
+        const accountRows = [];
+        for (const account of await models.BrandSocialAccounts.find({ $or: [{ facebook_page_id: pageId }, { account_id: pageId }] }, { access_token: 1, brand_name: 1 }).lean()) {
+          const pageClient = await Clients.findOne({ name: account.brand_name }, { id: 1 }).lean();
+          if (pageClient) { accountRows.push({ access_token: account.access_token, client_id: pageClient.id }); break; }
+        }
 
         if (!accountRows.length || !accountRows[0].access_token) {
           console.error(`[Meta Leads] No access token found for page_id: ${pageId}. Cannot fetch leadgen_id: ${leadgenId}`);
-          await pool.query(
-            `INSERT INTO failed_webhooks (page_id, leadgen_id, payload, error_message) VALUES ($1, $2, $3, $4)`,
-            [pageId, leadgenId, change.value, 'No access token found for this page in database.']
-          );
+          await FailedWebhooks.create({ page_id: pageId, leadgen_id: leadgenId, payload: change.value, error_message: 'No access token found for this page in database.' });
           continue;
         }
 
@@ -3192,10 +2905,10 @@ app.post('/webhook/meta-leads', async (req, res) => {
           );
         } catch (apiErr) {
           console.error(`[Meta Leads] Graph API Error for leadgen_id ${leadgenId}:`, apiErr.response?.data || apiErr.message);
-          await pool.query(
-            `INSERT INTO failed_webhooks (page_id, leadgen_id, payload, error_message) VALUES ($1, $2, $3, $4)`,
-            [pageId, leadgenId, change.value, apiErr.response?.data ? JSON.stringify(apiErr.response.data) : apiErr.message]
-          );
+          await FailedWebhooks.create({
+            page_id: pageId, leadgen_id: leadgenId, payload: change.value,
+            error_message: apiErr.response?.data ? JSON.stringify(apiErr.response.data) : apiErr.message,
+          });
           continue;
         }
 
@@ -3211,11 +2924,8 @@ app.post('/webhook/meta-leads', async (req, res) => {
         if (!phone) continue;
 
         // 3. Deduplicate using leadgen_id
-        const existing = await pool.query(
-          `SELECT id FROM leads WHERE leadgen_id = $1`,
-          [leadgenId]
-        );
-        if (existing.rows.length) {
+        const existing = await Leads.exists({ leadgen_id: leadgenId });
+        if (existing) {
           console.log(`[Meta Leads] Lead ${leadgenId} already exists. Skipping.`);
           continue;
         }
@@ -3223,25 +2933,18 @@ app.post('/webhook/meta-leads', async (req, res) => {
         // 4. Insert lead properly assigned to client
         let newLead;
         try {
-          const newLeadRes = await pool.query(`
-            INSERT INTO leads (name, phone, email, source, status, score, client_id, leadgen_id, created_at)
-            VALUES ($1, $2, $3, 'Meta Ads', 'new', 20, $4, $5, NOW())
-            RETURNING *
-          `, [name, phone, email, (await getLeadOSBrand(pool)).id, leadgenId]);
-          newLead = newLeadRes.rows[0];
+          newLead = (await Leads.create({
+            name, phone, email, source: 'Meta Ads', status: 'new', score: 20, client_id: (await getLeadOSBrand()).id,
+            leadgen_id: leadgenId, created_at: new Date(),
+          })).toObject();
         } catch (insertErr) {
           console.error(`[Meta Leads] Error inserting lead: ${insertErr.message}. Attempting update on conflict.`);
           // Fallback if there is a conflict on (phone, client_id)
-          const fallbackRes = await pool.query(`
-            UPDATE leads SET 
-              leadgen_id = $1, 
-              name = $2, 
-              email = $3, 
-              source = 'Meta Ads'
-            WHERE phone = $4 AND client_id = $5
-            RETURNING *
-          `, [leadgenId, name, email, phone, (await getLeadOSBrand(pool)).id]);
-          newLead = fallbackRes.rows[0];
+          newLead = await Leads.findOneAndUpdate(
+            { phone, client_id: (await getLeadOSBrand()).id },
+            { $set: { leadgen_id: leadgenId, name, email, source: 'Meta Ads' } },
+            { new: true, projection: NO_ID }
+          ).lean();
           if (!newLead) continue;
         }
 
@@ -3269,12 +2972,10 @@ app.post('/api/meta/pages/:page_id/subscribe', auth, async (req, res) => {
     const { page_id } = req.params;
     
     // 1. Lookup dynamic access token
-    const { rows: accountRows } = await pool.query(
-      `SELECT access_token FROM brand_social_accounts 
-       WHERE (facebook_page_id = $1 OR account_id = $1) AND access_token IS NOT NULL 
-       LIMIT 1`,
-      [page_id]
-    );
+    const accountRows = await models.BrandSocialAccounts.find(
+      { $or: [{ facebook_page_id: page_id }, { account_id: page_id }], access_token: { $ne: null } },
+      { _id: 0, access_token: 1 }
+    ).limit(1).lean();
 
     if (!accountRows.length) {
       return res.status(404).json({ error: 'Page access token not found in database. Please reconnect the page.' });
@@ -3337,23 +3038,16 @@ app.post('/webhook/razorpay', async (req, res) => {
       const leadId = notes?.lead_id;
       const paymentId = event.payload.payment.entity.id;
       if (leadId) {
-        await pool.query(`
-          INSERT INTO payments (lead_id, amount, status, razorpay_payment_id, created_at)
-          VALUES ($1, $2, 'captured', $3, NOW())
-        `, [leadId, amount / 100, paymentId]);
-        await pool.query(
-          "UPDATE leads SET status = 'converted', score = 100 WHERE id = $1", [leadId]
-        );
+        await Payments.create({ lead_id: leadId, amount: amount / 100, status: 'captured', razorpay_payment_id: paymentId, created_at: new Date() });
+        await Leads.updateOne({ id: leadId }, { $set: { status: 'converted', score: 100 } });
 
         // Hand off to n8n's WF04 (Customer Journey) - same forwarding pattern as the WhatsApp webhook.
         try {
           // Fetch lead data to pass full context to WF04
-          const leadRow = await pool.query('SELECT id, name, phone, client_id FROM leads WHERE id = $1', [leadId]);
-          const leadData = leadRow.rows[0] || {};
-          const clientRow = leadData.client_id
-            ? await pool.query('SELECT id, name FROM clients WHERE id = $1', [leadData.client_id])
-            : { rows: [] };
-          const clientData = clientRow.rows[0] || {};
+          const leadData = await Leads.findOne({ id: leadId }, { _id: 0, id: 1, name: 1, phone: 1, client_id: 1 }).lean() || {};
+          const clientData = leadData.client_id
+            ? await Clients.findOne({ id: leadData.client_id }, { _id: 0, id: 1, name: 1 }).lean() || {}
+            : {};
 
           await axios.post('https://leados-n8n.abmgroups.org/webhook/payment-success', {
             invoice_id:  paymentId,
@@ -3381,9 +3075,8 @@ app.post('/webhook/razorpay', async (req, res) => {
 app.post('/api/payments/create-link', auth, async (req, res) => {
   try {
     const { lead_id, amount, description } = req.body;
-    const leadRes = await pool.query('SELECT * FROM leads WHERE id = $1', [lead_id]);
-    if (!leadRes.rows.length) return res.status(404).json({ error: 'Lead not found' });
-    const lead = leadRes.rows[0];
+    const lead = await Leads.findOne({ id: lead_id }, NO_ID).lean();
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
     const rzpRes = await axios.post(
       'https://api.razorpay.com/v1/payment_links',
@@ -3401,10 +3094,7 @@ app.post('/api/payments/create-link', auth, async (req, res) => {
       }
     );
 
-    await pool.query(`
-      INSERT INTO payments (lead_id, amount, status, razorpay_link_id, payment_link, created_at)
-      VALUES ($1, $2, 'pending', $3, $4, NOW())
-    `, [lead_id, amount, rzpRes.data.id, rzpRes.data.short_url]);
+    await Payments.create({ lead_id, amount, status: 'pending', razorpay_link_id: rzpRes.data.id, payment_link: rzpRes.data.short_url, created_at: new Date() });
 
     res.json({ payment_link: rzpRes.data.short_url, link_id: rzpRes.data.id });
   } catch (err) {
@@ -3416,11 +3106,9 @@ app.post('/api/payments/create-link', auth, async (req, res) => {
 app.get('/api/payments', auth, async (req, res) => {
   try {
     const { lead_id } = req.query;
-    let q = 'SELECT p.*, l.name as lead_name FROM payments p JOIN leads l ON p.lead_id = l.id WHERE 1=1';
-    const params = [];
-    if (lead_id) { params.push(lead_id); q += ` AND p.lead_id = $${params.length}`; }
-    q += ' ORDER BY p.created_at DESC';
-    const { rows } = await pool.query(q, params);
+    const paymentRows = await Payments.find(lead_id ? { lead_id } : {}, NO_ID).sort({ created_at: -1 }).lean();
+    const paymentLeads = new Map((await Leads.find({ id: { $in: paymentRows.map((p) => p.lead_id) } }, { id: 1, name: 1 }).lean()).map((l) => [l.id, l.name]));
+    const rows = paymentRows.filter((p) => paymentLeads.has(p.lead_id)).map((p) => ({ ...p, lead_name: paymentLeads.get(p.lead_id) }));
     res.json({ payments: rows });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -3433,13 +3121,9 @@ app.get('/api/payments', auth, async (req, res) => {
 app.get('/api/templates', auth, async (req, res) => {
   try {
     await templateParameterDefinitionsReady;
-    const { rows } = await pool.query(`
-      SELECT t.*, c.name as brand_name
-      FROM templates t
-      LEFT JOIN clients c ON t.client_id = c.id
-      ORDER BY t.created_at DESC
-    `);
-    res.json({ templates: rows });
+    const templateRows = await Templates.find({}, NO_ID).sort({ created_at: -1 }).lean();
+    const templateClients = new Map((await Clients.find({ id: { $in: templateRows.map((t) => t.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c.name]));
+    res.json({ templates: templateRows.map((t) => ({ ...t, brand_name: templateClients.get(t.client_id) ?? null })) });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -3454,11 +3138,8 @@ app.post('/api/templates/bulk-scope', auth, async (req, res) => {
     if (!['leados', 'alliance', 'shared'].includes(scope)) {
       return res.status(400).json({ error: 'Workspace must be LeadOS, AllianceOS, or Shared.' });
     }
-    const result = await pool.query(
-      `UPDATE templates SET template_scope = $1, updated_at = NOW() WHERE id = ANY($2::int[]) RETURNING id`,
-      [scope, ids]
-    );
-    res.json({ success: true, updated: result.rowCount, template_scope: scope });
+    const result = await Templates.updateMany({ id: { $in: ids } }, { $set: { template_scope: scope, updated_at: new Date() } });
+    res.json({ success: true, updated: result.matchedCount, template_scope: scope });
   } catch (error) {
     console.error('Bulk template workspace update error:', error);
     res.status(500).json({ error: 'Unable to update selected templates.' });
@@ -3468,7 +3149,7 @@ app.post('/api/templates/bulk-scope', auth, async (req, res) => {
 app.post('/api/templates/sync-all', auth, async (req, res) => {
   try {
     const { client_id } = req.body;
-    const client = client_id ? (await pool.query('SELECT * FROM clients WHERE id = $1', [client_id])).rows[0] : null;
+    const client = client_id ? await Clients.findOne({ id: client_id }, NO_ID).lean() : null;
     const waToken = client?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
     const waBusinessId = client?.wa_business_id || process.env.WA_BUSINESS_ACCOUNT_ID;
 
@@ -3504,30 +3185,22 @@ app.post('/api/templates/sync-all', auth, async (req, res) => {
       const metaId = String(t.id);
 
       // Check if template exists locally by name and language
-      const existing = await pool.query(
-        'SELECT id, status, meta_template_id FROM templates WHERE name = $1 AND language = $2',
-        [t.name, t.language]
-      );
+      const localTpl = await Templates.findOne({ name: t.name, language: t.language }, { id: 1, status: 1, meta_template_id: 1 }).lean();
 
-      if (existing.rows.length > 0) {
-        const localTpl = existing.rows[0];
+      if (localTpl) {
         const approvedAt = (status === 'approved' && !localTpl.approved_at) ? new Date() : localTpl.approved_at;
-        await pool.query(
-          `UPDATE templates
-           SET status=$1, meta_template_id=$2, approved_at=$3, category=$4,
-               header_format=$5, header=$6, body=$7, footer=$8, buttons=$9::jsonb,
-               updated_at=NOW()
-           WHERE id=$10`,
-          [status, metaId, approvedAt, t.category, headerFormat, headerText, bodyText, footerText, buttonsVal, localTpl.id]
-        );
+        await Templates.updateOne({ id: localTpl.id }, { $set: {
+          status, meta_template_id: metaId, approved_at: approvedAt ?? null, category: t.category, header_format: headerFormat,
+          header: headerText, body: bodyText, footer: footerText, buttons: JSON.parse(buttonsVal), updated_at: new Date(),
+        } });
         updated++;
       } else {
         const approvedAt = status === 'approved' ? new Date() : null;
-        await pool.query(
-          `INSERT INTO templates (name, category, language, header_format, header, body, footer, buttons, client_id, status, meta_template_id, approved_at, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())`,
-          [t.name, t.category, t.language, headerFormat, headerText, bodyText, footerText, buttonsVal, client_id || null, status, metaId, approvedAt]
-        );
+        await Templates.create({
+          name: t.name, category: t.category, language: t.language, header_format: headerFormat, header: headerText, body: bodyText,
+          footer: footerText, buttons: JSON.parse(buttonsVal), client_id: client_id || null, status, meta_template_id: metaId,
+          approved_at: approvedAt, created_at: new Date(),
+        });
         imported++;
       }
     }
@@ -3543,12 +3216,13 @@ app.post('/api/templates', auth, async (req, res) => {
   try {
     await templateParameterDefinitionsReady;
     const { name, category, language, header_format, header, body, footer, buttons, client_id, samples, parameter_definitions = {}, template_scope = 'leados' } = req.body;
-    const { rows } = await pool.query(`
-      INSERT INTO templates (name, category, language, header_format, header, body, footer, buttons, client_id, status, created_at, samples, parameter_definitions, template_scope)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', NOW(), $10, $11::jsonb, $12)
-      RETURNING *
-    `, [name, category, language || 'en', header_format || 'TEXT', header || null, body, footer || null, JSON.stringify(buttons || []), client_id || null, samples ? JSON.stringify(samples) : '[]', JSON.stringify(parameter_definitions), ['leados', 'alliance', 'shared'].includes(template_scope) ? template_scope : 'leados']);
-    res.status(201).json({ template: rows[0] });
+    const created = await Templates.create({
+      name, category, language: language || 'en', header_format: header_format || 'TEXT', header: header || null, body,
+      footer: footer || null, buttons: buttons || [], client_id: client_id || null, status: 'draft', created_at: new Date(),
+      samples: samples || [], parameter_definitions,
+      template_scope: ['leados', 'alliance', 'shared'].includes(template_scope) ? template_scope : 'leados',
+    });
+    res.status(201).json({ template: created.toObject() });
   } catch (err) {
     console.error('Create template err:', err);
     res.status(500).json({ error: 'Server error' });
@@ -3558,12 +3232,11 @@ app.post('/api/templates', auth, async (req, res) => {
 // POST /api/templates/:id/submit — submit to Meta for approval
 app.post('/api/templates/:id/submit', auth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM templates WHERE id = $1', [req.params.id]);
-    if (!rows.length) return res.status(404).json({ error: 'Template not found' });
-    const tpl = rows[0];
+    const tpl = await Templates.findOne({ id: req.params.id }, NO_ID).lean();
+    if (!tpl) return res.status(404).json({ error: 'Template not found' });
 
     const client = tpl.client_id
-      ? (await pool.query('SELECT * FROM clients WHERE id = $1', [tpl.client_id])).rows[0]
+      ? await Clients.findOne({ id: tpl.client_id }, NO_ID).lean()
       : null;
 
     const waToken = client?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
@@ -3601,9 +3274,7 @@ app.post('/api/templates/:id/submit', auth, async (req, res) => {
       { headers: { Authorization: `Bearer ${waToken}` } }
     );
 
-    await pool.query(`
-      UPDATE templates SET status = 'pending', submitted_at = NOW(), meta_template_id = $1 WHERE id = $2
-    `, [metaRes.data.id, req.params.id]);
+    await Templates.updateOne({ id: req.params.id }, { $set: { status: 'pending', submitted_at: new Date(), meta_template_id: metaRes.data.id } });
 
     res.json({ success: true, meta_id: metaRes.data.id });
   } catch (err) {
@@ -3625,8 +3296,8 @@ app.post('/api/templates/upload-media', auth, templateMediaMulter.single('file')
   
   try {
     if (client_id && client_id !== 'null' && client_id !== 'undefined') {
-      const { rows } = await pool.query('SELECT wa_access_token FROM clients WHERE id = $1', [client_id]);
-      if (rows[0] && rows[0].wa_access_token) waToken = rows[0].wa_access_token;
+      const tokenClient = await Clients.findOne({ id: client_id }, { wa_access_token: 1 }).lean();
+      if (tokenClient && tokenClient.wa_access_token) waToken = tokenClient.wa_access_token;
     }
 
     // 1. Get App ID from the token
@@ -3676,11 +3347,10 @@ app.post('/api/templates/upload-media', auth, templateMediaMulter.single('file')
 // GET /api/templates/:id/sync — sync status from Meta
 app.get('/api/templates/:id/sync', auth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM templates WHERE id = $1', [req.params.id]);
-    if (!rows.length) return res.status(404).json({ error: 'Template not found' });
-    const tpl = rows[0];
+    const tpl = await Templates.findOne({ id: req.params.id }, NO_ID).lean();
+    if (!tpl) return res.status(404).json({ error: 'Template not found' });
 
-    const client = tpl.client_id ? (await pool.query('SELECT * FROM clients WHERE id = $1', [tpl.client_id])).rows[0] : null;
+    const client = tpl.client_id ? await Clients.findOne({ id: tpl.client_id }, NO_ID).lean() : null;
     const sharedWaToken = process.env.META_SYSTEM_USER_ACCESS_TOKEN || process.env.META_PAGE_ACCESS_TOKEN;
     const isAllianceTemplate = ['alliance', 'shared'].includes(String(tpl.template_scope || '').toLowerCase());
     const waToken = isAllianceTemplate ? (sharedWaToken || client?.wa_access_token) : (client?.wa_access_token || sharedWaToken);
@@ -3725,14 +3395,18 @@ app.get('/api/templates/:id/sync', auth, async (req, res) => {
       const headerComp = metaTpl.components?.find((component) => component.type === 'HEADER');
       const footerComp = metaTpl.components?.find((component) => component.type === 'FOOTER');
       const buttonsComp = metaTpl.components?.find((component) => component.type === 'BUTTONS');
-      const { rows: updatedRows } = await pool.query(
-        `UPDATE templates SET status=$1,meta_template_id=$2,approved_at=CASE WHEN $9 THEN COALESCE(approved_at,NOW()) ELSE approved_at END,
-          category=$3,header_format=$4,header=$5,body=$6,footer=$7,buttons=$8::jsonb,updated_at=NOW()
-         WHERE id=$10 RETURNING *`,
-        [status, metaTpl.id, metaTpl.category, headerComp?.format || 'NONE', headerComp?.text || headerComp?.example?.header_handle?.[0] || null,
-          bodyComp.text || '', footerComp?.text || null, JSON.stringify(buttonsComp?.buttons || []), status === 'approved', tpl.id]
-      );
-      return res.json({ template: updatedRows[0] });
+      const syncedTemplate = await Templates.findOneAndUpdate(
+        { id: tpl.id },
+        [{ $set: {
+          status, meta_template_id: metaTpl.id,
+          approved_at: status === 'approved' ? { $ifNull: ['$approved_at', '$$NOW'] } : '$approved_at',
+          category: metaTpl.category ?? null, header_format: headerComp?.format || 'NONE',
+          header: headerComp?.text || headerComp?.example?.header_handle?.[0] || null,
+          body: bodyComp.text || '', footer: footerComp?.text || null, buttons: { $literal: buttonsComp?.buttons || [] }, updated_at: '$$NOW',
+        } }],
+        { new: true, projection: NO_ID }
+      ).lean();
+      return res.json({ template: syncedTemplate });
     }
 
     return res.status(404).json({
@@ -3761,9 +3435,8 @@ app.put('/api/templates/:id', auth, async (req, res) => {
     const { name, category, language, header_format, header, body, footer, buttons, client_id, samples, parameter_definitions, template_scope } = req.body;
     const { id } = req.params;
 
-    const { rows: currentRows } = await pool.query('SELECT * FROM templates WHERE id = $1', [id]);
-    if (!currentRows.length) return res.status(404).json({ error: 'Template not found' });
-    const current = currentRows[0];
+    const current = await Templates.findOne({ id }, NO_ID).lean();
+    if (!current) return res.status(404).json({ error: 'Template not found' });
 
     // Build components for Meta
     const components = [];
@@ -3792,7 +3465,7 @@ app.put('/api/templates/:id', auth, async (req, res) => {
     }
 
     if (current.status !== 'draft' && current.meta_template_id) {
-      const client = current.client_id ? (await pool.query('SELECT * FROM clients WHERE id = $1', [current.client_id])).rows[0] : null;
+      const client = current.client_id ? await Clients.findOne({ id: current.client_id }, NO_ID).lean() : null;
       const waToken = client?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
 
       await axios.post(
@@ -3802,39 +3475,25 @@ app.put('/api/templates/:id', auth, async (req, res) => {
       );
     }
 
-    const { rows } = await pool.query(`
-      UPDATE templates 
-      SET name = COALESCE($1, name), 
-          category = COALESCE($2, category), 
-          language = COALESCE($3, language),
-          header_format = COALESCE($4, header_format),
-          header = $5, 
-          body = COALESCE($6, body), 
-          footer = $7, 
-          buttons = COALESCE($8, buttons),
-          client_id = COALESCE($9, client_id),
-          samples = COALESCE($10, samples),
-          parameter_definitions = COALESCE($11::jsonb, parameter_definitions),
-          template_scope = COALESCE($12, template_scope),
-          status = CASE WHEN status != 'draft' THEN 'pending' ELSE status END,
-          updated_at = NOW()
-      WHERE id = $13
-      RETURNING *
-    `, [
-      name, category, language,
-      header_format,
-      header !== undefined ? header : current.header,
-      body,
-      footer !== undefined ? footer : current.footer,
-      buttons ? JSON.stringify(buttons) : null,
-      client_id || null,
-      samples ? JSON.stringify(samples) : null,
-      parameter_definitions ? JSON.stringify(parameter_definitions) : null,
-      ['leados', 'alliance', 'shared'].includes(template_scope) ? template_scope : null,
-      id
-    ]);
+    const changes = {
+      header: header !== undefined ? header : (current.header ?? null),
+      footer: footer !== undefined ? footer : (current.footer ?? null),
+      status: current.status !== 'draft' && current.status != null ? 'pending' : current.status,
+      updated_at: new Date(),
+    };
+    if (name != null) changes.name = name;
+    if (category != null) changes.category = category;
+    if (language != null) changes.language = language;
+    if (header_format != null) changes.header_format = header_format;
+    if (body != null) changes.body = body;
+    if (buttons) changes.buttons = buttons;
+    if (client_id) changes.client_id = client_id;
+    if (samples) changes.samples = samples;
+    if (parameter_definitions) changes.parameter_definitions = parameter_definitions;
+    if (['leados', 'alliance', 'shared'].includes(template_scope)) changes.template_scope = template_scope;
+    const updatedTemplate = await Templates.findOneAndUpdate({ id }, { $set: changes }, { new: true, projection: NO_ID }).lean();
 
-    res.json({ template: rows[0] });
+    res.json({ template: updatedTemplate || undefined });
   } catch (err) {
     console.error('Template update error:', err.response?.data || err.message);
     const metaErr = err.response?.data?.error;
@@ -3849,12 +3508,11 @@ app.put('/api/templates/:id', auth, async (req, res) => {
 app.delete('/api/templates/:id', auth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { rows } = await pool.query('SELECT * FROM templates WHERE id = $1', [id]);
-    if (!rows.length) return res.status(404).json({ error: 'Template not found' });
-    const tpl = rows[0];
+    const tpl = await Templates.findOne({ id }, NO_ID).lean();
+    if (!tpl) return res.status(404).json({ error: 'Template not found' });
 
     if (tpl.status !== 'draft') {
-      const client = tpl.client_id ? (await pool.query('SELECT * FROM clients WHERE id = $1', [tpl.client_id])).rows[0] : null;
+      const client = tpl.client_id ? await Clients.findOne({ id: tpl.client_id }, NO_ID).lean() : null;
       const waToken = client?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
       const waBusinessId = client?.wa_business_id || process.env.WA_BUSINESS_ACCOUNT_ID;
 
@@ -3871,7 +3529,7 @@ app.delete('/api/templates/:id', auth, async (req, res) => {
       }
     }
 
-    await pool.query('DELETE FROM templates WHERE id = $1', [id]);
+    await deleteCascade('templates', { id });
     res.json({ success: true });
   } catch (err) {
     console.error('Template delete error:', err);
@@ -3910,17 +3568,22 @@ app.post('/api/clients/:id/meta-embedded-signup/complete', auth, async (req, res
     if (expectedNumber && normalizedPhoneDigits(phone.display_phone_number) !== normalizedPhoneDigits(expectedNumber)) {
       return res.status(400).json({ error: 'The number verified in Meta does not match the number entered in LeadOS' });
     }
-    const duplicate = await pool.query('SELECT id,name FROM clients WHERE phone_number_id=$1 AND id<>$2 LIMIT 1', [phoneId, req.params.id]);
-    if (duplicate.rows.length) return res.status(409).json({ error: `This phone is already assigned to ${duplicate.rows[0].name}` });
+    const duplicate = await Clients.findOne({ phone_number_id: phoneId, id: { $ne: Number(req.params.id) } }, { id: 1, name: 1 }).lean();
+    if (duplicate) return res.status(409).json({ error: `This phone is already assigned to ${duplicate.name}` });
     const connected = String(phone.status || '').toUpperCase() === 'CONNECTED';
-    const updated = await pool.query(`UPDATE clients SET wa_business_id=$1,phone_number_id=$2,
-      whatsapp_number=$3,whatsapp_status=$4,whatsapp_verified_at=$5,
-      name=COALESCE(NULLIF(TRIM($6::text),''),name),wa_category=COALESCE($7,wa_category),
-      wa_description=$8,whatsapp_verification_error=NULL,updated_at=NOW() WHERE id=$9 RETURNING *`,
-    [wabaId, phoneId, normalizedPhoneDigits(phone.display_phone_number), connected ? 'verified' : 'verification_pending',
-      connected ? new Date() : null, name || null, waCategory || null, waDescription || null, req.params.id]);
+    const previousClient = await Clients.findOne({ id: req.params.id }, { name: 1 }).lean();
+    const clientChanges = {
+      wa_business_id: wabaId, phone_number_id: phoneId, whatsapp_number: normalizedPhoneDigits(phone.display_phone_number),
+      whatsapp_status: connected ? 'verified' : 'verification_pending', whatsapp_verified_at: connected ? new Date() : null,
+      wa_description: waDescription || null, whatsapp_verification_error: null, updated_at: new Date(),
+    };
+    if (String(name ?? '').trim()) clientChanges.name = name;
+    if (waCategory) clientChanges.wa_category = waCategory;
+    const updatedClient = await Clients.findOneAndUpdate({ id: req.params.id }, { $set: clientChanges }, { new: true, projection: NO_ID }).lean();
+    const updated = { rows: updatedClient ? [updatedClient] : [] };
     if (!updated.rows.length) return res.status(404).json({ error: 'Client not found' });
-    await pool.query('UPDATE meta_whatsapp_phone_numbers SET client_id=$1 WHERE phone_number_id=$2', [req.params.id, phoneId]);
+    if (previousClient && clientChanges.name) await updateKeyCascade('clients', 'name', previousClient.name, clientChanges.name);
+    await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: phoneId }, { $set: { client_id: Number(req.params.id) } });
     let profileSynced = false;
     try {
       await updateWhatsAppBusinessProfile(updated.rows[0]);
@@ -3943,19 +3606,15 @@ app.post('/api/clients/:id/meta-profile-logo', auth, profileLogoUpload.single('l
     if (!process.env.META_APP_ID) {
       return res.status(503).json({ error: 'META_APP_ID is required in server/.env to upload a Meta profile logo' });
     }
-    const clientResult = await pool.query('SELECT * FROM clients WHERE id=$1', [req.params.id]);
-    const client = clientResult.rows[0];
+    const client = await Clients.findOne({ id: req.params.id }, NO_ID).lean();
     if (!client) return res.status(404).json({ error: 'Client not found' });
     if (!client.phone_number_id) {
       return res.status(400).json({ error: 'Add this brand’s real Meta Phone Number ID before uploading its profile logo' });
     }
     const config = await assertPhoneBelongsToWaba(client);
-    const duplicatePhone = await pool.query(
-      'SELECT id, name FROM clients WHERE phone_number_id=$1 AND id<>$2 LIMIT 1',
-      [config.phoneId, client.id]
-    );
-    if (duplicatePhone.rows.length) {
-      return res.status(409).json({ error: `This Meta Phone Number ID is already assigned to ${duplicatePhone.rows[0].name}` });
+    const duplicatePhone = await Clients.findOne({ phone_number_id: config.phoneId, id: { $ne: client.id } }, { id: 1, name: 1 }).lean();
+    if (duplicatePhone) {
+      return res.status(409).json({ error: `This Meta Phone Number ID is already assigned to ${duplicatePhone.name}` });
     }
 
     const image = await Jimp.read(req.file.buffer);
@@ -3976,7 +3635,7 @@ app.post('/api/clients/:id/meta-profile-logo', auth, profileLogoUpload.single('l
     await axios.post(`${base}/${config.phoneId}/whatsapp_business_profile`, {
       messaging_product: 'whatsapp', profile_picture_handle: handle
     }, { headers: { Authorization: `Bearer ${config.token}` } });
-    await pool.query('UPDATE meta_whatsapp_phone_numbers SET client_id=$1 WHERE phone_number_id=$2', [client.id, config.phoneId]);
+    await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: config.phoneId }, { $set: { client_id: client.id } });
     const profile = await cacheMetaBusinessProfile(config.phoneId, config.token);
     res.json({ success: true, profile_picture_url: profile.profile_picture_url || null });
   } catch (error) {
@@ -3989,14 +3648,30 @@ app.post('/api/clients/:id/meta-profile-logo', auth, profileLogoUpload.single('l
 app.get('/api/meta/whatsapp/inventory', auth, async (req, res) => {
   try {
     await metaInventoryReady;
-    const [wabas, phones, templates, templateSummary, lastRun] = await Promise.all([
-      pool.query(`SELECT account.*, COUNT(phone.phone_number_id)::int AS phone_count FROM meta_whatsapp_accounts account LEFT JOIN meta_whatsapp_phone_numbers phone ON phone.waba_id=account.waba_id GROUP BY account.waba_id ORDER BY account.name`),
-      pool.query(`SELECT phone.*, account.name AS waba_name, client.name AS client_name FROM meta_whatsapp_phone_numbers phone JOIN meta_whatsapp_accounts account ON account.waba_id=phone.waba_id LEFT JOIN clients client ON client.id=phone.client_id ORDER BY phone.client_id NULLS FIRST, phone.verified_name`),
-      pool.query(`SELECT template_id,waba_id,name,language,status,category,components,last_synced_at FROM meta_whatsapp_templates ORDER BY name,language`),
-      pool.query(`SELECT waba_id,COUNT(*)::int AS total,COUNT(*) FILTER (WHERE status='APPROVED')::int AS approved,COUNT(*) FILTER (WHERE status<>'APPROVED')::int AS other FROM meta_whatsapp_templates GROUP BY waba_id`),
-      pool.query(`SELECT * FROM meta_whatsapp_sync_runs ORDER BY id DESC LIMIT 1`),
+    const [accounts, phoneRows, templates, lastRun, inventoryClients] = await Promise.all([
+      MetaWhatsappAccounts.find({}, NO_ID).sort({ name: 1 }).lean(),
+      MetaWhatsappPhoneNumbers.find({}, NO_ID).lean(),
+      MetaWhatsappTemplates.find({}, { _id: 0, template_id: 1, waba_id: 1, name: 1, language: 1, status: 1, category: 1, components: 1, last_synced_at: 1 }).sort({ name: 1, language: 1 }).lean(),
+      MetaWhatsappSyncRuns.findOne({}, NO_ID).sort({ id: -1 }).lean(),
+      Clients.find({}, { id: 1, name: 1 }).lean(),
     ]);
-    res.json({ wabas: wabas.rows, phone_numbers: phones.rows, templates: templates.rows, template_summary: templateSummary.rows, last_sync: lastRun.rows[0] || null });
+    const accountNames = new Map(accounts.map((a) => [a.waba_id, a.name]));
+    const clientNames = new Map(inventoryClients.map((c) => [c.id, c.name]));
+    const wabas = accounts.map((a) => ({ ...a, phone_count: phoneRows.filter((p) => p.waba_id === a.waba_id).length }));
+    const phones = phoneRows
+      .filter((p) => accountNames.has(p.waba_id))
+      .map((p) => ({ ...p, waba_name: accountNames.get(p.waba_id), client_name: clientNames.get(p.client_id) ?? null }))
+      .sort((a, b) => (a.client_id == null ? -1 : 0) - (b.client_id == null ? -1 : 0)
+        || (a.client_id ?? 0) - (b.client_id ?? 0)
+        || String(a.verified_name || '').localeCompare(String(b.verified_name || '')));
+    const summary = new Map();
+    for (const t of templates) {
+      const s = summary.get(t.waba_id) || { waba_id: t.waba_id, total: 0, approved: 0, other: 0 };
+      s.total++;
+      if (t.status === 'APPROVED') s.approved++; else if (t.status != null) s.other++;
+      summary.set(t.waba_id, s);
+    }
+    res.json({ wabas, phone_numbers: phones, templates, template_summary: [...summary.values()], last_sync: lastRun || null });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -4006,41 +3681,26 @@ app.post('/api/meta/whatsapp/sync', auth, async (req, res) => {
 });
 
 app.delete('/api/meta/whatsapp/cache/wabas/:wabaId', auth, async (req, res) => {
-  const db = await pool.connect();
   try {
     await metaInventoryReady;
-    await db.query('BEGIN');
-    const account = await db.query(
-      'SELECT waba_id,name FROM meta_whatsapp_accounts WHERE waba_id=$1 FOR UPDATE',
-      [req.params.wabaId]
-    );
-    if (!account.rows.length) {
-      await db.query('ROLLBACK');
+    const account = await MetaWhatsappAccounts.findOne({ waba_id: req.params.wabaId }, { _id: 0, waba_id: 1, name: 1 }).lean();
+    if (!account) {
       return res.status(404).json({ error: 'Cached WABA not found' });
     }
-    const mapped = await db.query(
-      `SELECT phone.phone_number_id,client.name AS client_name
-       FROM meta_whatsapp_phone_numbers phone
-       JOIN clients client ON client.id=phone.client_id
-       WHERE phone.waba_id=$1
-       LIMIT 1`,
-      [req.params.wabaId]
-    );
-    if (mapped.rows.length) {
-      await db.query('ROLLBACK');
+    const mappedPhones = await MetaWhatsappPhoneNumbers.find({ waba_id: req.params.wabaId, client_id: { $ne: null } }, { client_id: 1 }).lean();
+    const mappedClient = mappedPhones.length
+      ? await Clients.findOne({ id: { $in: mappedPhones.map((p) => p.client_id) } }, { name: 1 }).lean()
+      : null;
+    if (mappedClient) {
       return res.status(409).json({
-        error: `Cannot clear this cache because a phone number is mapped to ${mapped.rows[0].client_name}`
+        error: `Cannot clear this cache because a phone number is mapped to ${mappedClient.name}`
       });
     }
-    await db.query('DELETE FROM meta_whatsapp_templates WHERE waba_id=$1', [req.params.wabaId]);
-    await db.query('DELETE FROM meta_whatsapp_accounts WHERE waba_id=$1', [req.params.wabaId]);
-    await db.query('COMMIT');
-    res.json({ success: true, waba_id: account.rows[0].waba_id, name: account.rows[0].name });
+    await deleteCascade('meta_whatsapp_templates', { waba_id: req.params.wabaId });
+    await deleteCascade('meta_whatsapp_accounts', { waba_id: req.params.wabaId });
+    res.json({ success: true, waba_id: account.waba_id, name: account.name });
   } catch (err) {
-    await db.query('ROLLBACK');
     res.status(500).json({ error: err.message });
-  } finally {
-    db.release();
   }
 });
 
@@ -4049,12 +3709,8 @@ app.post('/api/meta/whatsapp/phone-numbers/:phoneId/register', auth, async (req,
     await metaInventoryReady;
     const pin = String(req.body?.pin || '').trim();
     if (!/^\d{6}$/.test(pin)) return res.status(400).json({ error: 'Enter a valid 6-digit two-step verification PIN' });
-    const phoneResult = await pool.query(
-      `SELECT phone.phone_number_id,phone.waba_id FROM meta_whatsapp_phone_numbers phone
-       WHERE phone.phone_number_id=$1`, [req.params.phoneId]
-    );
-    if (!phoneResult.rows.length) return res.status(404).json({ error: 'Meta phone number not found in inventory' });
-    const phone = phoneResult.rows[0];
+    const phone = await MetaWhatsappPhoneNumbers.findOne({ phone_number_id: req.params.phoneId }, { _id: 0, phone_number_id: 1, waba_id: 1 }).lean();
+    if (!phone) return res.status(404).json({ error: 'Meta phone number not found in inventory' });
     const token = process.env.META_SYSTEM_USER_ACCESS_TOKEN || process.env.META_PAGE_ACCESS_TOKEN;
     if (!token) return res.status(503).json({ error: 'Meta system-user access token is not configured' });
     const base = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
@@ -4078,53 +3734,64 @@ app.post('/api/meta/whatsapp/phone-numbers/:phoneId/register', auth, async (req,
 });
 
 app.patch('/api/meta/whatsapp/phone-numbers/:phoneId/map', auth, async (req, res) => {
-  const db = await pool.connect();
   try {
     await Promise.all([clientsWhatsAppStatusReady, metaInventoryReady]);
     const { client_id } = req.body;
-    await db.query('BEGIN');
-    const phoneResult = await db.query(`SELECT * FROM meta_whatsapp_phone_numbers WHERE phone_number_id=$1 FOR UPDATE`, [req.params.phoneId]);
-    if (!phoneResult.rows.length) { await db.query('ROLLBACK'); return res.status(404).json({ error: 'Meta phone number not found' }); }
+    const phone = await MetaWhatsappPhoneNumbers.findOne({ phone_number_id: req.params.phoneId }, NO_ID).lean();
+    if (!phone) return res.status(404).json({ error: 'Meta phone number not found' });
     if (client_id === null || client_id === undefined || client_id === '') {
-      await db.query(`UPDATE meta_whatsapp_phone_numbers SET client_id=NULL WHERE phone_number_id=$1`, [req.params.phoneId]);
-      await db.query('COMMIT'); return res.json({ success: true });
+      await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: req.params.phoneId }, { $set: { client_id: null } });
+      return res.json({ success: true });
     }
-    const clientResult = await db.query('SELECT id FROM clients WHERE id=$1 FOR UPDATE', [client_id]);
-    if (!clientResult.rows.length) { await db.query('ROLLBACK'); return res.status(404).json({ error: 'Brand not found' }); }
-    const phone = phoneResult.rows[0];
-    await db.query(`UPDATE meta_whatsapp_phone_numbers SET client_id=NULL WHERE client_id=$1`, [client_id]);
-    await db.query(`UPDATE meta_whatsapp_phone_numbers SET client_id=$1 WHERE phone_number_id=$2`, [client_id, phone.phone_number_id]);
+    const clientId = Number(client_id);
+    if (!(await Clients.exists({ id: clientId }))) return res.status(404).json({ error: 'Brand not found' });
+    await MetaWhatsappPhoneNumbers.updateMany({ client_id: clientId }, { $set: { client_id: null } });
+    await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: phone.phone_number_id }, { $set: { client_id: clientId } });
     const metaVerified = String(phone.connection_status || '').toUpperCase() === 'CONNECTED' || String(phone.verification_status || '').toUpperCase() === 'VERIFIED';
-    await db.query(`UPDATE clients SET wa_business_id=$1,phone_number_id=$2,whatsapp_number=$3,whatsapp_status=$4,whatsapp_verified_at=$5,whatsapp_verification_error=NULL,updated_at=NOW() WHERE id=$6`,
-      [phone.waba_id, phone.phone_number_id, phone.display_phone_number, metaVerified ? 'verified' : 'verification_pending', metaVerified ? new Date() : null, client_id]);
-    await db.query('COMMIT'); res.json({ success: true });
-  } catch (err) { await db.query('ROLLBACK'); res.status(500).json({ error: err.message }); }
-  finally { db.release(); }
+    await Clients.updateOne({ id: clientId }, { $set: {
+      wa_business_id: phone.waba_id, phone_number_id: phone.phone_number_id, whatsapp_number: phone.display_phone_number,
+      whatsapp_status: metaVerified ? 'verified' : 'verification_pending', whatsapp_verified_at: metaVerified ? new Date() : null,
+      whatsapp_verification_error: null, updated_at: new Date(),
+    } });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/clients', auth, async (req, res) => {
   try {
     await Promise.all([clientsWhatsAppStatusReady, metaInventoryReady]);
     const { tenant_id } = req.query;
-    const { rows } = await pool.query(`
-      SELECT c.*,
-        meta_phone.profile_picture_url AS meta_profile_picture_url,
-        meta_phone.verified_name AS meta_verified_name,
-        meta_phone.profile_about AS meta_profile_about,
-        COALESCE(meta_phone.profile_address, c.wa_address) AS meta_profile_address,
-        COALESCE(meta_phone.profile_description, c.wa_description) AS meta_profile_description,
-        COALESCE(meta_phone.profile_email, c.wa_email) AS meta_profile_email,
-        COALESCE(meta_phone.profile_websites, CASE WHEN c.wa_website IS NOT NULL THEN jsonb_build_array(c.wa_website) END) AS meta_profile_websites,
-        COALESCE(meta_phone.profile_vertical, c.wa_category) AS meta_profile_vertical,
-        meta_phone.quality_rating AS meta_quality_rating,
-        meta_phone.connection_status AS meta_connection_status,
-        (SELECT COUNT(*) FROM leads l WHERE l.client_id = c.id) as lead_count,
-        (SELECT COUNT(*) FROM leads l WHERE l.client_id = c.id AND l.status = 'converted') as converted_count
-      FROM clients c
-      LEFT JOIN meta_whatsapp_phone_numbers meta_phone ON meta_phone.client_id = c.id
-      ${tenant_id ? 'WHERE c.tenant_id = $1' : ''}
-      ORDER BY c.created_at DESC
-    `, tenant_id ? [tenant_id] : []);
+    const clientRows = await Clients.find(tenant_id ? { tenant_id: Number(tenant_id) } : {}, NO_ID).sort({ created_at: -1 }).lean();
+    const clientIds = clientRows.map((c) => c.id);
+    const [metaPhones, leadCounts] = await Promise.all([
+      MetaWhatsappPhoneNumbers.find({ client_id: { $in: clientIds } }, NO_ID).lean(),
+      Leads.aggregate([
+        { $match: { client_id: { $in: clientIds } } },
+        { $group: { _id: '$client_id', lead_count: { $sum: 1 }, converted_count: { $sum: { $cond: [{ $eq: ['$status', 'converted'] }, 1, 0] } } } },
+      ]),
+    ]);
+    const countsByClient = new Map(leadCounts.map((c) => [c._id, c]));
+    const rows = [];
+    for (const c of clientRows) {
+      const phonesForClient = metaPhones.filter((p) => p.client_id === c.id);
+      for (const metaPhone of phonesForClient.length ? phonesForClient : [null]) {
+        rows.push({
+          ...c,
+          meta_profile_picture_url: metaPhone?.profile_picture_url ?? null,
+          meta_verified_name: metaPhone?.verified_name ?? null,
+          meta_profile_about: metaPhone?.profile_about ?? null,
+          meta_profile_address: metaPhone?.profile_address ?? c.wa_address ?? null,
+          meta_profile_description: metaPhone?.profile_description ?? c.wa_description ?? null,
+          meta_profile_email: metaPhone?.profile_email ?? c.wa_email ?? null,
+          meta_profile_websites: metaPhone?.profile_websites ?? (c.wa_website != null ? [c.wa_website] : null),
+          meta_profile_vertical: metaPhone?.profile_vertical ?? c.wa_category ?? null,
+          meta_quality_rating: metaPhone?.quality_rating ?? null,
+          meta_connection_status: metaPhone?.connection_status ?? null,
+          lead_count: countsByClient.get(c.id)?.lead_count || 0,
+          converted_count: countsByClient.get(c.id)?.converted_count || 0,
+        });
+      }
+    }
     res.json({ clients: rows });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -4136,12 +3803,12 @@ app.post('/api/clients', auth, async (req, res) => {
     await clientsWhatsAppStatusReady;
     const { name, wa_category, wa_description, wa_address, wa_email, wa_website, tenant_id } = req.body;
     if (!name?.trim()) return res.status(400).json({ error: 'Business name is required' });
-    const { rows } = await pool.query(`
-      INSERT INTO clients (name, wa_category, wa_description, wa_address, wa_email, wa_website, status, whatsapp_status, tenant_id, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, 'active', 'not_configured', $7, NOW())
-      RETURNING *
-    `, [name.trim(), wa_category || 'OTHER', wa_description || null, wa_address || null, wa_email || null, wa_website || null, tenant_id || DEFAULT_TENANT_ID]);
-    res.status(201).json({ client: rows[0] });
+    const created = await Clients.create({
+      name: name.trim(), wa_category: wa_category || 'OTHER', wa_description: wa_description || null, wa_address: wa_address || null,
+      wa_email: wa_email || null, wa_website: wa_website || null, status: 'active', whatsapp_status: 'not_configured',
+      tenant_id: tenant_id || DEFAULT_TENANT_ID, created_at: new Date(),
+    });
+    res.status(201).json({ client: created.toObject() });
   } catch (err) {
     console.error('[Clients] POST /api/clients failed:', err.message);
     res.status(500).json({ error: 'Server error' });
@@ -4159,8 +3826,7 @@ app.patch('/api/clients/:id', auth, async (req, res) => {
       }
       req.body.whatsapp_number = parsedPhone.number.slice(1);
     }
-    const existingResult = await pool.query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
-    const existing = existingResult.rows[0];
+    const existing = await Clients.findOne({ id: req.params.id }, NO_ID).lean();
     if (!existing) return res.status(404).json({ error: 'Client not found' });
 
     const allowed = ['name', 'phone_number_id', 'wa_access_token',
@@ -4184,12 +3850,9 @@ app.patch('/api/clients/:id', auth, async (req, res) => {
     let metaProfile = null;
     if (metaProfileChanged && nextMetaConfig.phoneId) {
       try {
-        const duplicatePhone = await pool.query(
-          'SELECT id, name FROM clients WHERE phone_number_id = $1 AND id <> $2 LIMIT 1',
-          [nextMetaConfig.phoneId, req.params.id]
-        );
-        if (duplicatePhone.rows.length) {
-          return res.status(409).json({ error: `This Meta Phone Number ID is already assigned to ${duplicatePhone.rows[0].name}` });
+        const duplicatePhone = await Clients.findOne({ phone_number_id: nextMetaConfig.phoneId, id: { $ne: Number(req.params.id) } }, { id: 1, name: 1 }).lean();
+        if (duplicatePhone) {
+          return res.status(409).json({ error: `This Meta Phone Number ID is already assigned to ${duplicatePhone.name}` });
         }
         const metaResult = await updateWhatsAppBusinessProfile(next);
         metaProfile = metaResult.profile;
@@ -4205,13 +3868,18 @@ app.patch('/api/clients/:id', auth, async (req, res) => {
       entries.push(['whatsapp_verified_at', null]);
       entries.push(['whatsapp_verification_error', null]);
     }
-    const assignments = entries.map(([field], index) => `${field} = $${index + 1}`);
-    const values = entries.map(([, value]) => value === '' ? null : value);
-    const result = await pool.query(`UPDATE clients SET ${assignments.join(', ')}, updated_at = NOW()
-      WHERE id = $${values.length + 1} RETURNING *`, [...values, req.params.id]);
+    const clientChanges = Object.fromEntries(entries.map(([field, value]) => [field, value === '' ? null : value]));
+    const updatedClient = await Clients.findOneAndUpdate(
+      { id: req.params.id },
+      { $set: { ...clientChanges, updated_at: new Date() } },
+      { new: true, projection: NO_ID }
+    ).lean();
+    if (clientChanges.name !== undefined && clientChanges.name !== existing.name) {
+      await updateKeyCascade('clients', 'name', existing.name, clientChanges.name);
+    }
     res.json({
       success: true,
-      client: result.rows[0],
+      client: updatedClient,
       meta_profile_synced: Boolean(metaProfile),
       meta_profile_pending: metaProfileChanged && !nextMetaConfig.phoneId,
       meta_profile: metaProfile
@@ -4223,18 +3891,13 @@ app.patch('/api/clients/:id', auth, async (req, res) => {
 });
 
 app.delete('/api/clients/:id', auth, async (req, res) => {
-  const clientDb = await pool.connect();
   try {
-    await clientDb.query('BEGIN');
     const { id } = req.params;
 
-    // Use FOR UPDATE to lock the row during transaction
-    const { rows } = await clientDb.query('SELECT * FROM clients WHERE id = $1 FOR UPDATE', [id]);
-    if (!rows.length) {
-      await clientDb.query('ROLLBACK');
+    const client = await Clients.findOne({ id }, NO_ID).lean();
+    if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
-    const client = rows[0];
 
     // Deregister from Meta WhatsApp Cloud API
     if (client.phone_number_id && client.wa_access_token) {
@@ -4251,16 +3914,12 @@ app.delete('/api/clients/:id', auth, async (req, res) => {
       }
     }
 
-    await clientDb.query('DELETE FROM clients WHERE id = $1', [id]);
-    await clientDb.query('COMMIT');
+    await deleteCascade('clients', { id: client.id });
 
     res.json({ success: true, message: 'Client deleted and deregistered successfully' });
   } catch (err) {
-    await clientDb.query('ROLLBACK');
     console.error(`[Delete Client API] Error deleting client ${req.params.id}:`, err);
     res.status(500).json({ error: 'Server error during deletion' });
-  } finally {
-    clientDb.release();
   }
 });
 
@@ -4268,8 +3927,7 @@ app.delete('/api/clients/:id', auth, async (req, res) => {
 app.post('/api/clients/:id/whatsapp-setup', auth, async (req, res) => {
   try {
     await clientsWhatsAppStatusReady;
-    const { rows } = await pool.query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
-    const client = rows[0];
+    const client = await Clients.findOne({ id: req.params.id }, NO_ID).lean();
     if (!client) return res.status(404).json({ error: 'Client not found' });
 
     const metaConfig = resolveClientMetaConfig(client);
@@ -4277,8 +3935,7 @@ app.post('/api/clients/:id/whatsapp-setup', auth, async (req, res) => {
       return res.status(400).json({ error: 'Real WhatsApp number and its Meta Phone Number ID are required before verification' });
     }
 
-    await pool.query(`UPDATE clients SET whatsapp_status = 'verification_pending',
-      whatsapp_verified_at = NULL, whatsapp_verification_error = NULL WHERE id = $1`, [client.id]);
+    await Clients.updateOne({ id: client.id }, { $set: { whatsapp_status: 'verification_pending', whatsapp_verified_at: null, whatsapp_verification_error: null } });
 
     const ownership = await assertPhoneBelongsToWaba(client);
     const phoneResponse = { data: ownership.phone };
@@ -4308,15 +3965,18 @@ app.post('/api/clients/:id/whatsapp-setup', auth, async (req, res) => {
       );
     }
 
-    const verified = await pool.query(`UPDATE clients SET whatsapp_status = 'verified',
-      whatsapp_verified_at = NOW(), whatsapp_verification_error = NULL, updated_at = NOW()
-      WHERE id = $1 RETURNING *`, [client.id]);
-    res.json({ success: true, message: 'WhatsApp verified and enabled successfully', client: verified.rows[0] });
+    const verified = await Clients.findOneAndUpdate(
+      { id: client.id },
+      { $set: { whatsapp_status: 'verified', whatsapp_verified_at: new Date(), whatsapp_verification_error: null, updated_at: new Date() } },
+      { new: true, projection: NO_ID }
+    ).lean();
+    res.json({ success: true, message: 'WhatsApp verified and enabled successfully', client: verified });
   } catch (err) {
     const message = err.response?.data?.error?.message || err.message || 'WhatsApp verification failed';
-    await pool.query(`UPDATE clients SET whatsapp_status = 'verification_failed',
-      whatsapp_verified_at = NULL, whatsapp_verification_error = $1, updated_at = NOW()
-      WHERE id = $2`, [message, req.params.id]).catch(() => {});
+    await Clients.updateOne(
+      { id: req.params.id },
+      { $set: { whatsapp_status: 'verification_failed', whatsapp_verified_at: null, whatsapp_verification_error: message, updated_at: new Date() } }
+    ).catch(() => {});
     console.error('[WhatsApp Verification]', err.response?.data || err);
     res.status(400).json({ error: message });
   }
@@ -4328,10 +3988,9 @@ app.post('/api/clients/:id/whatsapp-setup', auth, async (req, res) => {
 app.get('/api/brain', auth, async (req, res) => {
   try {
     const { client_id } = req.query;
-    const q = client_id
-      ? 'SELECT * FROM brain_docs WHERE client_id = $1 ORDER BY doc_type'
-      : 'SELECT * FROM brain_docs ORDER BY client_id, doc_type';
-    const { rows } = await pool.query(q, client_id ? [client_id] : []);
+    const rows = client_id
+      ? await BrainDocs.find({ client_id }, NO_ID).sort({ doc_type: 1 }).lean()
+      : await BrainDocs.find({}, NO_ID).sort({ client_id: 1, doc_type: 1 }).lean();
     res.json({ docs: rows });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -4341,14 +4000,13 @@ app.get('/api/brain', auth, async (req, res) => {
 app.post('/api/brain', auth, async (req, res) => {
   try {
     const { client_id, doc_type, content } = req.body;
-    const { rows } = await pool.query(`
-      INSERT INTO brain_docs (client_id, doc_type, content, updated_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT (client_id, doc_type)
-      DO UPDATE SET content = $3, updated_at = NOW()
-      RETURNING *
-    `, [client_id, doc_type, content]);
-    res.json({ doc: rows[0] });
+    const doc = await upsertOne(
+      BrainDocs,
+      { client_id, doc_type },
+      { $set: { content, updated_at: new Date() } },
+      { client_id, doc_type, content, updated_at: new Date() }
+    );
+    res.json({ doc });
   } catch (err) {
     console.error('Brain Doc Save Error:', err.message);
     res.status(500).json({ error: 'Server error' });
@@ -4361,7 +4019,7 @@ const upload = multer({ dest: 'uploads/' });
 app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
   try {
     const { client_id } = req.body;
-    const leadOSBrand = await getLeadOSBrand(pool);
+    const leadOSBrand = await getLeadOSBrand();
     if (!req.file) {
       return res.status(400).json({ error: 'File is required' });
     }
@@ -4372,7 +4030,8 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
     const isCampaignBatch = String(req.body.force_source || '').startsWith('csv_');
 
     if (isCampaignBatch && req.body.template_id) {
-      const templateResult = await pool.query('SELECT body, header FROM templates WHERE id = $1', [req.body.template_id]);
+      const importTemplate = await Templates.findOne({ id: req.body.template_id }, { _id: 0, body: 1, header: 1 }).lean();
+      const templateResult = { rows: importTemplate ? [importTemplate] : [] };
       if (!templateResult.rows.length) return res.status(400).json({ error: 'Selected template was not found.' });
       let requestedMappings = {};
       try {
@@ -4410,28 +4069,15 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
       }
     }
 
-    if (isCampaignBatch) {
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS campaign_import_recipients (
-          batch_id VARCHAR(30) NOT NULL,
-          lead_id BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
-          created_at TIMESTAMP DEFAULT NOW(),
-          template_parameters JSONB NOT NULL DEFAULT '{}'::jsonb,
-          PRIMARY KEY (batch_id, lead_id)
-        )
-      `);
-      await pool.query(`ALTER TABLE campaign_import_recipients ADD COLUMN IF NOT EXISTS template_parameters JSONB NOT NULL DEFAULT '{}'::jsonb`);
-    }
-
-    const [clientsRes, usersRes] = await Promise.all([
-      pool.query('SELECT id, name FROM clients'),
-      pool.query('SELECT id, name, email FROM users'),
+    const [importClients, importUsers] = await Promise.all([
+      Clients.find({}, { _id: 0, id: 1, name: 1 }).lean(),
+      Users.find({}, { _id: 0, id: 1, name: 1, email: 1 }).lean(),
     ]);
     const clientsMap = Object.fromEntries(
-      clientsRes.rows.map((client) => [client.name.toLowerCase(), client.id])
+      importClients.filter((client) => client.name).map((client) => [client.name.toLowerCase(), client.id])
     );
     const usersMap = {};
-    usersRes.rows.forEach((user) => {
+    importUsers.forEach((user) => {
       if (user.name) usersMap[user.name.toLowerCase()] = user.id;
       if (user.email) usersMap[user.email.toLowerCase()] = user.id;
     });
@@ -4525,13 +4171,11 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
         // Check for existing lead by email or 10-digit phone
         let existingLead = null;
         if (phoneDigits || email) {
-           const existingRes = await pool.query(`
-             SELECT id FROM leads 
-             WHERE ($1::text != '' AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = $1)
-                OR ($1::text = '' AND $2::text IS NOT NULL AND LOWER(email) = LOWER($2))
-             LIMIT 1
-           `, [phoneDigits, email]);
-           existingLead = existingRes.rows[0];
+           if (phoneDigits) {
+             existingLead = await Leads.findOne({ phone: phoneTailRegex(phoneDigits) }, { _id: 0, id: 1 }).lean();
+           } else if (email != null) {
+             existingLead = await Leads.findOne({ email: ieq(email) }, { _id: 0, id: 1 }).lean();
+           }
         }
 
         let importedLeadId;
@@ -4543,29 +4187,18 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
           if (!isCampaignImport) {
             // Normal CRM imports may refresh an existing lead. A campaign list
             // only references it and must not alter its CRM fields.
-            await pool.query(`
-              UPDATE leads
-              SET name = COALESCE($1, name),
-                  phone = COALESCE($2, phone),
-                  email = COALESCE($3, email),
-                  status = COALESCE($4, status),
-                  client_id = COALESCE($5, client_id),
-                  source = COALESCE($6, source),
-                  score = COALESCE($7, score),
-                  interest = COALESCE($8, interest),
-                  assigned_to = COALESCE($9, assigned_to),
-                  updated_at = NOW()
-              WHERE id = $10
-            `, [name, phone, email, status, rowClientId, source, score, interest, assignedTo, existingLead.id]);
+            const importChanges = { updated_at: new Date() };
+            for (const [field, value] of Object.entries({ name, phone, email, status, client_id: rowClientId, source, score, interest, assigned_to: assignedTo })) {
+              if (value != null) importChanges[field] = value;
+            }
+            await Leads.updateOne({ id: existingLead.id }, { $set: importChanges });
           }
         } else {
           // Insert new
-          const insertedLead = await pool.query(`
-            INSERT INTO leads (client_id, name, phone, email, status, source, score, interest, assigned_to, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-            RETURNING id
-          `, [rowClientId, name, phone, email, status, source, score, interest, assignedTo]);
-          importedLeadId = insertedLead.rows[0].id;
+          const insertedLead = await Leads.create({
+            client_id: rowClientId, name, phone, email, status, source, score, interest, assigned_to: assignedTo, created_at: new Date(),
+          });
+          importedLeadId = insertedLead.id;
           inserted++;
 
           // ── Send welcome template for newly inserted leads (not existing ones) ──
@@ -4574,12 +4207,9 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
             const delay = inserted * 1000;
             setTimeout(() => {
               // Fetch client-specific credentials for this lead (if client_id set)
-              pool.query(
-                'SELECT c.phone_number_id, c.wa_access_token FROM clients c WHERE c.id = $1',
-                [rowClientId]
-              ).then(clientRes => {
-                const phoneNumberId = clientRes.rows[0]?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-                const waAccessToken = clientRes.rows[0]?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
+              Clients.findOne({ id: rowClientId }, { _id: 0, phone_number_id: 1, wa_access_token: 1 }).lean().then(clientRow => {
+                const phoneNumberId = clientRow?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
+                const waAccessToken = clientRow?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
                 axios.post(process.env.N8N_NEW_LEAD_WEBHOOK_URL, {
                   lead_id: importedLeadId,
                   name,
@@ -4610,11 +4240,11 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
             if (match) rowTemplateParameters[match[1].toLowerCase()][match[2]] = String(value ?? '').trim();
           }
           console.log(`[Campaign Import] Linking lead ${importedLeadId} to batch ${req.body.force_source}`);
-          await pool.query(`
-            INSERT INTO campaign_import_recipients (batch_id, lead_id, template_parameters)
-            VALUES ($1, $2, $3::jsonb)
-            ON CONFLICT (batch_id, lead_id) DO UPDATE SET template_parameters = EXCLUDED.template_parameters
-          `, [req.body.force_source, importedLeadId, JSON.stringify(rowTemplateParameters)]);
+          await CampaignImportRecipients.updateOne(
+            { batch_id: req.body.force_source, lead_id: importedLeadId },
+            { $set: { template_parameters: rowTemplateParameters }, $setOnInsert: { created_at: new Date() } },
+            { upsert: true }
+          );
         }
 
         imported++;
@@ -4701,11 +4331,7 @@ app.post('/api/webhooks/meta', async (req, res) => {
         console.log(`[Webhook] Update: ${wamid} -> ${newStatus}`);
 
         // Update campaign_logs directly
-        await pool.query(`
-          UPDATE campaign_logs 
-          SET status = $1, error_message = $2
-          WHERE wa_message_id = $3
-        `, [newStatus, error, wamid]);
+        await CampaignLogs.updateMany({ wa_message_id: wamid }, { $set: { status: newStatus, error_message: error } });
       }
 
       // Handle incoming replied messages
@@ -4716,18 +4342,22 @@ app.post('/api/webhooks/meta', async (req, res) => {
         const text = msg.text ? msg.text.body : '';
 
         // Find if this user was part of a campaign
-        const { rowCount } = await pool.query(`
-          UPDATE campaign_logs 
-          SET status = 'replied'
-          WHERE lead_id = (SELECT id FROM leads WHERE phone LIKE '%' || $1 LIMIT 1)
-        `, [incomingPhone.substring(incomingPhone.length - 10)]);
+        const repliedLead = await Leads.findOne(
+          { phone: new RegExp(`${escapeRegex(incomingPhone.substring(incomingPhone.length - 10))}$`) },
+          { _id: 0, id: 1, phone: 1 }
+        ).lean();
+        if (repliedLead) {
+          await CampaignLogs.updateMany({ lead_id: repliedLead.id }, { $set: { status: 'replied' } });
 
-        // Insert into messages table
-        await pool.query(`
-          INSERT INTO messages (client_id, lead_id, direction, type, content, wa_message_id, status, timestamp)
-          SELECT client_id, id, 'inbound', 'text', $1, $2, 'delivered', NOW()
-          FROM leads WHERE phone LIKE '%' || $3 LIMIT 1
-        `, [text, msgId, incomingPhone.substring(incomingPhone.length - 10)]);
+          // Insert into messages table
+          const repliedConversation = await Conversations.findOne({ lead_id: repliedLead.id }, { id: 1 }).sort({ last_message_at: -1 }).lean();
+          if (repliedConversation && !(msgId && await Messages.exists({ wa_msg_id: msgId }))) {
+            await Messages.create({
+              conversation_id: repliedConversation.id, direction: 'inbound', content: text, msg_type: 'text',
+              wa_msg_id: msgId, status: 'delivered', is_ai: false, sent_at: new Date(),
+            });
+          }
+        }
       }
     }
 
@@ -4744,17 +4374,27 @@ app.post('/api/webhooks/meta', async (req, res) => {
 // ══════════════════════════════════════════════════════════
 app.get('/api/campaigns', auth, async (req, res) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT camp.*, c.name as brand_name, t.name as template_name,
-        (SELECT COUNT(*) FROM campaign_logs cl WHERE cl.campaign_id = camp.id AND cl.status = 'sent') as sent_count,
-        (SELECT COUNT(*) FROM campaign_logs cl WHERE cl.campaign_id = camp.id AND cl.status = 'delivered') as delivered_count,
-        (SELECT COUNT(*) FROM campaign_logs cl WHERE cl.campaign_id = camp.id AND cl.status = 'read') as read_count,
-        (SELECT COUNT(*) FROM campaign_logs cl WHERE cl.campaign_id = camp.id AND cl.status = 'replied') as replied_count
-      FROM campaigns camp
-      LEFT JOIN clients c ON camp.client_id = c.id
-      LEFT JOIN templates t ON camp.template_id = t.id
-      ORDER BY camp.created_at DESC
-    `);
+    const campaignRows = await Campaigns.find({}, NO_ID).sort({ created_at: -1 }).lean();
+    const [campaignClients, campaignTemplates, logCounts] = await Promise.all([
+      Clients.find({ id: { $in: campaignRows.map((c) => c.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean(),
+      Templates.find({ id: { $in: campaignRows.map((c) => c.template_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean(),
+      CampaignLogs.aggregate([
+        { $match: { campaign_id: { $in: campaignRows.map((c) => c.id) }, status: { $in: ['sent', 'delivered', 'read', 'replied'] } } },
+        { $group: { _id: { campaign_id: '$campaign_id', status: '$status' }, count: { $sum: 1 } } },
+      ]),
+    ]);
+    const clientNames = new Map(campaignClients.map((c) => [c.id, c.name]));
+    const templateNames = new Map(campaignTemplates.map((t) => [t.id, t.name]));
+    const logCount = (campaignId, status) => logCounts.find((c) => c._id.campaign_id === campaignId && c._id.status === status)?.count || 0;
+    const rows = campaignRows.map((camp) => ({
+      ...camp,
+      brand_name: clientNames.get(camp.client_id) ?? null,
+      template_name: templateNames.get(camp.template_id) ?? null,
+      sent_count: logCount(camp.id, 'sent'),
+      delivered_count: logCount(camp.id, 'delivered'),
+      read_count: logCount(camp.id, 'read'),
+      replied_count: logCount(camp.id, 'replied'),
+    }));
     res.json({ campaigns: rows });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -4768,14 +4408,13 @@ app.post('/api/campaigns', auth, async (req, res) => {
       return res.status(400).json({ error: 'Campaign name, brand, template, and target audience are required.' });
     }
 
-    const templateResult = await pool.query(
-      'SELECT id, name, status, body, header, client_id, parameter_definitions FROM templates WHERE id = $1',
-      [template_id]
-    );
-    if (!templateResult.rows.length) {
+    const selectedTemplate = await Templates.findOne(
+      { id: template_id },
+      { _id: 0, id: 1, name: 1, status: 1, body: 1, header: 1, client_id: 1, parameter_definitions: 1 }
+    ).lean();
+    if (!selectedTemplate) {
       return res.status(404).json({ error: 'Template not found.' });
     }
-    const selectedTemplate = templateResult.rows[0];
     if (!['approved', 'active'].includes(String(selectedTemplate.status).toLowerCase())) {
       return res.status(400).json({ error: 'Only Meta-approved templates can be used for live campaigns.' });
     }
@@ -4798,13 +4437,10 @@ app.post('/api/campaigns', auth, async (req, res) => {
     // Determine initial status
     const initialStatus = scheduled_at && new Date(scheduled_at) > new Date() ? 'scheduled' : 'scheduled';
 
-    const { rows } = await pool.query(`
-      INSERT INTO campaigns (name, client_id, template_id, target_status, scheduled_at, status, created_by, created_at, template_parameters)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8::jsonb)
-      RETURNING *
-    `, [name, client_id, template_id, target_status, scheduled_at, initialStatus, req.user.id, JSON.stringify(template_parameters)]);
-
-    const campaign = rows[0];
+    const campaign = (await Campaigns.create({
+      name, client_id, template_id, target_status, scheduled_at: scheduled_at || null, status: initialStatus,
+      created_by: req.user.id, created_at: new Date(), template_parameters,
+    })).toObject();
 
     // If send_immediately is true or no scheduled_at, trigger execution immediately
     if (send_immediately || !scheduled_at) {
@@ -4826,9 +4462,9 @@ app.post('/api/campaigns', auth, async (req, res) => {
 app.delete('/api/campaigns/:id', auth, async (req, res) => {
   try {
     const { id } = req.params;
-    await pool.query('DELETE FROM campaign_logs WHERE campaign_id = $1', [id]);
-    const { rowCount } = await pool.query('DELETE FROM campaigns WHERE id = $1', [id]);
-    if (rowCount === 0) return res.status(404).json({ error: 'Campaign not found' });
+    await deleteCascade('campaign_logs', { campaign_id: Number(id) });
+    const deleted = await deleteCascade('campaigns', { id: Number(id) });
+    if (deleted.length === 0) return res.status(404).json({ error: 'Campaign not found' });
     res.json({ success: true, message: 'Campaign deleted successfully' });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -4839,34 +4475,28 @@ app.delete('/api/campaigns/:id', auth, async (req, res) => {
 async function executeCampaign(campaign_id) {
   console.log(`[executeCampaign] Starting for campaign ${campaign_id}`);
   try {
-    // Ensure error_message column exists
-    await pool.query(`
-      ALTER TABLE campaign_logs
-      ADD COLUMN IF NOT EXISTS error_message TEXT
-    `).catch(() => {}); // Ignore if already exists
+    const campaignRow = await Campaigns.findOne({ id: campaign_id }, NO_ID).lean();
+    const campaignTemplate = campaignRow ? await Templates.findOne({ id: campaignRow.template_id }, NO_ID).lean() : null;
 
-    const campRes = await pool.query(`
-      SELECT c.*, t.body as template_body, t.header as template_header, t.name as template_name,
-             t.language as template_language, cl.name as brand_name,
-             cl.wa_access_token, cl.phone_number_id, cl.whatsapp_status
-      FROM campaigns c
-      JOIN templates t ON c.template_id = t.id
-      LEFT JOIN clients cl ON c.client_id = cl.id
-      WHERE c.id = $1
-    `, [campaign_id]);
-
-    if (!campRes.rows.length) {
+    if (!campaignRow || !campaignTemplate) {
       console.log(`[executeCampaign] Campaign ${campaign_id} not found`);
       return;
     }
-    const campaign = campRes.rows[0];
+    const campaignClient = campaignRow.client_id != null ? await Clients.findOne({ id: campaignRow.client_id }, NO_ID).lean() : null;
+    const campaign = {
+      ...campaignRow,
+      template_body: campaignTemplate.body, template_header: campaignTemplate.header, template_name: campaignTemplate.name,
+      template_language: campaignTemplate.language, brand_name: campaignClient?.name ?? null,
+      wa_access_token: campaignClient?.wa_access_token ?? null, phone_number_id: campaignClient?.phone_number_id ?? null,
+      whatsapp_status: campaignClient?.whatsapp_status ?? null,
+    };
 
     const templateError = validateCampaignTemplate({
       body: campaign.template_body,
       header: campaign.template_header,
     });
     if (templateError) {
-      await pool.query("UPDATE campaigns SET status = 'failed' WHERE id = $1", [campaign_id]);
+      await Campaigns.updateOne({ id: campaign_id }, { $set: { status: 'failed' } });
       console.error(`Campaign ${campaign_id}: ${templateError}`);
       return;
     }
@@ -4875,13 +4505,13 @@ async function executeCampaign(campaign_id) {
       campaign.template_parameters || {}
     );
     if (parameterError) {
-      await pool.query("UPDATE campaigns SET status = 'failed' WHERE id = $1", [campaign_id]);
+      await Campaigns.updateOne({ id: campaign_id }, { $set: { status: 'failed' } });
       console.error(`Campaign ${campaign_id}: ${parameterError}`);
       return;
     }
 
     if (campaign.client_id && campaign.whatsapp_status !== 'verified') {
-      await pool.query("UPDATE campaigns SET status = 'failed' WHERE id = $1", [campaign_id]);
+      await Campaigns.updateOne({ id: campaign_id }, { $set: { status: 'failed' } });
       console.error(`Campaign ${campaign_id}: WhatsApp is not verified for this brand`);
       return;
     }
@@ -4889,11 +4519,8 @@ async function executeCampaign(campaign_id) {
     console.log(`[executeCampaign] Campaign: ${campaign.name}, target_status: ${campaign.target_status}, client_id: ${campaign.client_id}`);
 
     // Atomically claim the campaign: only proceed if it's still 'scheduled' or 'failed'.
-    const claimRes = await pool.query(
-      "UPDATE campaigns SET status = 'running' WHERE id = $1 AND status IN ('scheduled', 'failed') RETURNING id",
-      [campaign_id]
-    );
-    if (claimRes.rowCount === 0) {
+    const claimRes = await Campaigns.updateOne({ id: campaign_id, status: { $in: ['scheduled', 'failed'] } }, { $set: { status: 'running' } });
+    if (claimRes.modifiedCount === 0) {
       console.warn(`Campaign ${campaign_id}: skipped, already running/completed (not in 'scheduled' or 'failed' state).`);
       return;
     }
@@ -4901,34 +4528,34 @@ async function executeCampaign(campaign_id) {
     console.log(`[executeCampaign] Campaign claimed, finding leads...`);
 
     // Build leads query
-    let leadsQuery = '';
+    let leadsQuery = {};
     const queryParams = [];
+    const leadFields = { _id: 0, id: 1, phone: 1, name: 1, email: 1, status: 1, source: 1, interest: 1, score: 1 };
+    let leads;
 
     if (campaign.target_status && campaign.target_status.startsWith('csv_')) {
       // A custom upload is an exact audience. Existing leads may belong to a
       // different CRM brand, but the selected campaign brand supplies the
       // WhatsApp credentials used for this send.
-      leadsQuery = `SELECT l.id, l.phone, l.name, l.email, l.status, l.source, l.interest, l.score, cir.template_parameters
-        FROM leads l
-        JOIN campaign_import_recipients cir ON cir.lead_id = l.id
-        WHERE cir.batch_id = $1
-          AND l.phone IS NOT NULL
-          AND BTRIM(l.phone) <> ''
-        ORDER BY cir.created_at, l.id`;
       queryParams.push(campaign.target_status);
+      const recipients = await CampaignImportRecipients.find({ batch_id: campaign.target_status }, NO_ID).lean();
+      leadsQuery = { batch_id: campaign.target_status };
+      const recipientLeads = new Map((await Leads.find({ id: { $in: recipients.map((r) => r.lead_id) } }, leadFields).lean()).map((l) => [l.id, l]));
+      leads = recipients
+        .filter((r) => recipientLeads.has(r.lead_id) && String(recipientLeads.get(r.lead_id).phone ?? '').trim() !== '')
+        .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0) || a.lead_id - b.lead_id)
+        .map((r) => ({ ...recipientLeads.get(r.lead_id), template_parameters: r.template_parameters }));
     } else {
       // Regular target status (new, warm, cold, etc.) or all leads
-      leadsQuery = `SELECT id, phone, name, email, status, source, interest, score FROM leads WHERE client_id = $1`;
+      leadsQuery = { client_id: campaign.client_id };
       queryParams.push(campaign.client_id);
 
       if (campaign.target_status && campaign.target_status !== 'all') {
-        leadsQuery += ' AND status = $2';
+        leadsQuery.status = campaign.target_status;
         queryParams.push(campaign.target_status);
       }
+      leads = await Leads.find(leadsQuery, leadFields).lean();
     }
-
-    let leadsRes = await pool.query(leadsQuery, queryParams);
-    let leads = leadsRes.rows;
 
     const excelMappings = ['header', 'body'].flatMap((section) =>
       Object.entries(campaign.template_parameters?.[section] || {})
@@ -4937,7 +4564,7 @@ async function executeCampaign(campaign_id) {
     );
     if (excelMappings.length) {
       if (!campaign.target_status?.startsWith('csv_')) {
-        await pool.query("UPDATE campaigns SET status = 'failed' WHERE id = $1", [campaign_id]);
+        await Campaigns.updateOne({ id: campaign_id }, { $set: { status: 'failed' } });
         console.error(`Campaign ${campaign_id}: Excel parameter mappings require a custom Excel audience.`);
         return;
       }
@@ -4945,13 +4572,13 @@ async function executeCampaign(campaign_id) {
         !String(lead.template_parameters?.[section]?.[number] || '').trim()
       ));
       if (incomplete) {
-        await pool.query("UPDATE campaigns SET status = 'failed' WHERE id = $1", [campaign_id]);
+        await Campaigns.updateOne({ id: campaign_id }, { $set: { status: 'failed' } });
         console.error(`Campaign ${campaign_id}: recipient ${incomplete.id} has missing Excel parameter values.`);
         return;
       }
     }
 
-    console.log(`[Campaign ${campaign_id}] Query: ${leadsQuery}`);
+    console.log(`[Campaign ${campaign_id}] Query: ${JSON.stringify(leadsQuery)}`);
     console.log(`[Campaign ${campaign_id}] Params: ${JSON.stringify(queryParams)}`);
     console.log(`[Campaign ${campaign_id}] Found: ${leads.length} leads`);
 
@@ -4959,14 +4586,11 @@ async function executeCampaign(campaign_id) {
       // Debug: check what's in the campaign_import_recipients table
       let debugInfo = '';
       if (campaign.target_status && campaign.target_status.startsWith('csv_')) {
-        const recipientsCheck = await pool.query(
-          `SELECT COUNT(*) as cnt FROM campaign_import_recipients WHERE batch_id = $1`,
-          [campaign.target_status]
-        );
-        debugInfo = ` (batch_id: ${campaign.target_status}, found: ${recipientsCheck.rows[0].cnt} recipients in campaign_import_recipients)`;
+        const recipientsCount = await CampaignImportRecipients.countDocuments({ batch_id: campaign.target_status });
+        debugInfo = ` (batch_id: ${campaign.target_status}, found: ${recipientsCount} recipients in campaign_import_recipients)`;
       }
 
-      await pool.query("UPDATE campaigns SET status = 'failed' WHERE id = $1", [campaign_id]);
+      await Campaigns.updateOne({ id: campaign_id }, { $set: { status: 'failed' } });
       console.warn(`Campaign ${campaign_id} has no recipients matching its target.${debugInfo}`);
       return;
     }
@@ -4976,7 +4600,7 @@ async function executeCampaign(campaign_id) {
 
     // Validate credentials
     if (!waToken || !phoneId) {
-      await pool.query("UPDATE campaigns SET status = 'failed' WHERE id = $1", [campaign_id]);
+      await Campaigns.updateOne({ id: campaign_id }, { $set: { status: 'failed' } });
       console.error(`Campaign ${campaign_id}: missing WhatsApp credentials`);
       return;
     }
@@ -4999,7 +4623,7 @@ async function executeCampaign(campaign_id) {
 
   } catch (err) {
     console.error('Campaign execution error:', err);
-    await pool.query("UPDATE campaigns SET status = 'failed' WHERE id = $1", [campaign_id]);
+    await Campaigns.updateOne({ id: campaign_id }, { $set: { status: 'failed' } });
   }
 }
 
@@ -5022,27 +4646,22 @@ app.post('/api/campaigns/:id/retry', auth, async (req, res) => {
     const { id } = req.params;
 
     // Get campaign details
-    const campRes = await pool.query('SELECT * FROM campaigns WHERE id = $1', [id]);
-    if (!campRes.rows.length) {
+    const campaign = await Campaigns.findOne({ id }, NO_ID).lean();
+    if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    const campaign = campRes.rows[0];
-
     // Check if there are already messages in queue for this campaign
-    const queueCheck = await pool.query(
-      'SELECT COUNT(*) as count FROM campaign_message_queue WHERE campaign_id = $1',
-      [id]
-    );
+    const queuedCount = await CampaignMessageQueue.countDocuments({ campaign_id: Number(id) });
 
-    if (parseInt(queueCheck.rows[0].count) > 0) {
+    if (queuedCount > 0) {
       // Messages already in queue, just reset status to running
-      await pool.query("UPDATE campaigns SET status = 'running' WHERE id = $1", [id]);
+      await Campaigns.updateOne({ id }, { $set: { status: 'running' } });
       return res.json({ success: true, message: 'Campaign already has messages in queue, status reset to running' });
     }
 
     // Re-execute the campaign (will add fresh messages to queue)
-    await pool.query("UPDATE campaigns SET status = 'scheduled' WHERE id = $1", [id]);
+    await Campaigns.updateOne({ id }, { $set: { status: 'scheduled' } });
 
     // Execute and wait for result
     try {
@@ -5051,7 +4670,7 @@ app.post('/api/campaigns/:id/retry', auth, async (req, res) => {
     } catch (execErr) {
       console.error('Execute campaign error:', execErr);
       // Reset status to failed
-      await pool.query("UPDATE campaigns SET status = 'failed' WHERE id = $1", [id]);
+      await Campaigns.updateOne({ id }, { $set: { status: 'failed' } });
       res.status(500).json({ error: 'Failed to execute campaign: ' + execErr.message });
     }
   } catch (err) {
@@ -5064,17 +4683,7 @@ app.post('/api/campaigns/:id/retry', auth, async (req, res) => {
 app.get('/api/campaigns/:id/queue', auth, async (req, res) => {
   try {
     const { id } = req.params;
-    const stats = await pool.query(`
-      SELECT
-        COUNT(*) FILTER (WHERE status = 'pending') as pending,
-        COUNT(*) FILTER (WHERE status = 'sent') as sent,
-        COUNT(*) FILTER (WHERE status = 'failed') as failed,
-        COUNT(*) as total
-      FROM campaign_message_queue
-      WHERE campaign_id = $1
-    `, [id]);
-
-    res.json({ queue: stats.rows[0] });
+    res.json({ queue: await campaignQueueStats({ campaign_id: Number(id) }) });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -5086,32 +4695,23 @@ app.get('/api/campaigns/:id/debug', auth, async (req, res) => {
     const { id } = req.params;
 
     // Get campaign details
-    const campaign = await pool.query('SELECT * FROM campaigns WHERE id = $1', [id]);
-    if (!campaign.rows.length) {
+    const c = await Campaigns.findOne({ id }, NO_ID).lean();
+    if (!c) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
-
-    const c = campaign.rows[0];
 
     // Check campaign_import_recipients
     let recipients = [];
     if (c.target_status && c.target_status.startsWith('csv_')) {
-      const recipientsRes = await pool.query(`
-        SELECT cir.*, l.name, l.phone, l.client_id
-        FROM campaign_import_recipients cir
-        JOIN leads l ON cir.lead_id = l.id
-        WHERE cir.batch_id = $1
-      `, [c.target_status]);
-      recipients = recipientsRes.rows;
+      const batchRecipients = await CampaignImportRecipients.find({ batch_id: c.target_status }, NO_ID).lean();
+      const batchLeads = new Map((await Leads.find({ id: { $in: batchRecipients.map((r) => r.lead_id) } }, { id: 1, name: 1, phone: 1, client_id: 1 }).lean()).map((l) => [l.id, l]));
+      recipients = batchRecipients
+        .filter((r) => batchLeads.has(r.lead_id))
+        .map((r) => ({ ...r, name: batchLeads.get(r.lead_id).name, phone: batchLeads.get(r.lead_id).phone, client_id: batchLeads.get(r.lead_id).client_id }));
     }
 
     // Check leads for this client
-    const leadsRes = await pool.query(`
-      SELECT id, name, phone, client_id, status
-      FROM leads
-      WHERE client_id = $1
-      LIMIT 10
-    `, [c.client_id]);
+    const leadsRes = { rows: await Leads.find({ client_id: c.client_id }, { _id: 0, id: 1, name: 1, phone: 1, client_id: 1, status: 1 }).limit(10).lean() };
 
     res.json({
       campaign: {
@@ -5133,17 +4733,8 @@ app.get('/api/campaigns/:id/debug', auth, async (req, res) => {
 // GET /api/campaigns/queue/status - Get overall queue processing status
 app.get('/api/campaigns/queue/status', auth, async (req, res) => {
   try {
-    const stats = await pool.query(`
-      SELECT
-        COUNT(*) FILTER (WHERE status = 'pending') as pending,
-        COUNT(*) FILTER (WHERE status = 'sent') as sent,
-        COUNT(*) FILTER (WHERE status = 'failed') as failed,
-        COUNT(*) as total
-      FROM campaign_message_queue
-    `);
-
     res.json({
-      queue: stats.rows[0],
+      queue: await campaignQueueStats({}),
       rateLimiter: {
         messagesThisMinute: rateLimiter.messagesThisMinute,
         messagesThisHour: rateLimiter.messagesThisHour,
@@ -5161,13 +4752,13 @@ app.get('/api/campaigns/queue/status', auth, async (req, res) => {
 app.get('/api/campaigns/:id/logs', auth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { rows } = await pool.query(`
-      SELECT cl.*, l.name, l.phone 
-      FROM campaign_logs cl
-      JOIN leads l ON cl.lead_id = l.id
-      WHERE cl.campaign_id = $1
-      ORDER BY cl.sent_at DESC
-    `, [id]);
+    const logRows = await CampaignLogs.find({ campaign_id: Number(id) }, NO_ID).lean();
+    const logLeads = new Map((await Leads.find({ id: { $in: logRows.map((l) => l.lead_id) } }, { id: 1, name: 1, phone: 1 }).lean()).map((l) => [l.id, l]));
+    const rows = logRows
+      .filter((log) => logLeads.has(log.lead_id))
+      // PostgreSQL DESC puts NULL sent_at first.
+      .sort((a, b) => (a.sent_at == null ? Infinity : new Date(a.sent_at).getTime()) < (b.sent_at == null ? Infinity : new Date(b.sent_at).getTime()) ? 1 : -1)
+      .map((log) => ({ ...log, name: logLeads.get(log.lead_id).name, phone: logLeads.get(log.lead_id).phone }));
     res.json({ logs: rows });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -5178,12 +4769,94 @@ app.get('/api/campaigns/:id/logs', auth, async (req, res) => {
 // REPORTS
 // ══════════════════════════════════════════════════════════
 
+async function campaignQueueStats(match) {
+  const [stats] = await CampaignMessageQueue.aggregate([
+    { $match: match },
+    { $group: {
+      _id: null,
+      pending: { $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] } },
+      sent: { $sum: { $cond: [{ $eq: ['$status', 'sent'] }, 1, 0] } },
+      failed: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
+      total: { $sum: 1 },
+    } },
+  ]);
+  return { pending: stats?.pending || 0, sent: stats?.sent || 0, failed: stats?.failed || 0, total: stats?.total || 0 };
+}
+
+const REPORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const REPORT_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+const addDays = (date, days) => new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);
+const dayKey = (date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+// Mirrors the PostgreSQL TO_CHAR formats used by the dashboard.
+const formatReportDay = (date, format) => {
+  if (format === 'Dy') return REPORT_WEEKDAYS[date.getDay()];
+  if (format === 'Mon') return REPORT_MONTHS[date.getMonth()];
+  return `${String(date.getDate()).padStart(2, '0')} ${REPORT_MONTHS[date.getMonth()]}`;
+};
+
+// Sum captured payments in [from, to), optionally restricted to one brand's leads.
+async function sumCapturedPayments(from, to, brandLeadIds) {
+  const match = { status: 'captured', created_at: { $gte: from, $lt: to } };
+  if (brandLeadIds) match.lead_id = { $in: brandLeadIds };
+  const [row] = await Payments.aggregate([{ $match: match }, { $group: { _id: null, total: { $sum: { $toDouble: '$amount' } } } }]);
+  return Number(row?.total || 0);
+}
+
+// Per-day lead / converted counts between two local dates (inclusive).
+async function dailyLeadBuckets(fromDay, toDay, format, brandFilter) {
+  const leads = await Leads.find(
+    { ...brandFilter, created_at: { $gte: fromDay, $lt: addDays(toDay, 1) } },
+    { _id: 0, created_at: 1, status: 1 }
+  ).lean();
+  const buckets = new Map();
+  for (let day = fromDay; day <= toDay; day = addDays(day, 1)) {
+    buckets.set(dayKey(day), { day: formatReportDay(day, format), leads: 0, converted: 0 });
+  }
+  for (const lead of leads) {
+    const bucket = buckets.get(dayKey(new Date(lead.created_at)));
+    if (!bucket) continue;
+    bucket.leads++;
+    if (lead.status === 'converted') bucket.converted++;
+  }
+  return [...buckets.values()];
+}
+
+async function leadSourceCounts(filter, otherLabel) {
+  const rows = await Leads.aggregate([
+    { $match: filter },
+    { $group: { _id: '$source', count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+    { $limit: 6 },
+  ]);
+  return rows.map((row) => ({ source: row._id ?? otherLabel, count: row.count }));
+}
+
+async function leadFunnel(filter) {
+  const [row] = await Leads.aggregate([
+    { $match: filter },
+    { $group: {
+      _id: null,
+      total: { $sum: 1 },
+      contacted: { $sum: { $cond: [{ $and: [{ $ne: [{ $ifNull: ['$status', null] }, null] }, { $ne: ['$status', 'new'] }] }, 1, 0] } },
+      qualified: { $sum: { $cond: [{ $and: [{ $isNumber: '$score' }, { $gte: ['$score', 40] }] }, 1, 0] } },
+      hot: { $sum: { $cond: [{ $eq: ['$status', 'hot'] }, 1, 0] } },
+      converted: { $sum: { $cond: [{ $eq: ['$status', 'converted'] }, 1, 0] } },
+    } },
+  ]);
+  return { total: row?.total || 0, contacted: row?.contacted || 0, qualified: row?.qualified || 0, hot: row?.hot || 0, converted: row?.converted || 0 };
+}
+
 // GET /api/reports/summary — dashboard stats
 app.get('/api/reports/summary', auth, async (req, res) => {
   try {
     const range = req.query.range || '30d';
     const client_id = req.query.client_id;
     const filterBrand = client_id && client_id !== 'all' && client_id !== 'All Brands' && client_id !== 'undefined';
+    const brandId = filterBrand ? Number(client_id) : null;
+    const brandFilter = filterBrand ? { client_id: brandId } : {};
+    const brandLeadIds = filterBrand ? await Leads.distinct('id', brandFilter) : null;
+    const countLeads = (filter) => Leads.countDocuments({ ...brandFilter, ...filter });
 
     if (range === 'custom') {
       const from = req.query.from;
@@ -5191,53 +4864,52 @@ app.get('/api/reports/summary', auth, async (req, res) => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '') || !/^\d{4}-\d{2}-\d{2}$/.test(to || '') || from > to) {
         return res.status(400).json({ error: 'Invalid custom date range' });
       }
-      const brandId = filterBrand ? client_id : null;
-      const params = [from, to, brandId];
-      const [leadCounts, hot, convertedCounts, revenues, weekly, sources, funnel, revenueTrend, brands] = await Promise.all([
-        pool.query(`WITH bounds AS (
-          SELECT $1::date AS from_date, $2::date AS to_date, ($2::date - $1::date + 1) AS span
-        ) SELECT
-          COUNT(*) FILTER (WHERE l.created_at >= b.from_date AND l.created_at < b.to_date + INTERVAL '1 day') AS current_count,
-          COUNT(*) FILTER (WHERE l.created_at >= b.from_date - b.span * INTERVAL '1 day' AND l.created_at < b.from_date) AS previous_count
-        FROM leads l CROSS JOIN bounds b WHERE ($3::bigint IS NULL OR l.client_id = $3)`, params),
-        pool.query(`SELECT COUNT(*) AS count FROM leads WHERE status = 'hot' AND created_at >= $1::date AND created_at < $2::date + INTERVAL '1 day' AND ($3::bigint IS NULL OR client_id = $3)`, params),
-        pool.query(`WITH bounds AS (SELECT $1::date AS from_date, $2::date AS to_date, ($2::date - $1::date + 1) AS span)
-          SELECT COUNT(*) FILTER (WHERE l.updated_at >= b.from_date AND l.updated_at < b.to_date + INTERVAL '1 day') AS current_count,
-          COUNT(*) FILTER (WHERE l.updated_at >= b.from_date - b.span * INTERVAL '1 day' AND l.updated_at < b.from_date) AS previous_count
-          FROM leads l CROSS JOIN bounds b WHERE l.status = 'converted' AND ($3::bigint IS NULL OR l.client_id = $3)`, params),
-        pool.query(`WITH bounds AS (SELECT $1::date AS from_date, $2::date AS to_date, ($2::date - $1::date + 1) AS span)
-          SELECT COALESCE(SUM(p.amount) FILTER (WHERE p.created_at >= b.from_date AND p.created_at < b.to_date + INTERVAL '1 day'),0) AS current_amount,
-          COALESCE(SUM(p.amount) FILTER (WHERE p.created_at >= b.from_date - b.span * INTERVAL '1 day' AND p.created_at < b.from_date),0) AS previous_amount
-          FROM payments p LEFT JOIN leads l ON l.id = p.lead_id CROSS JOIN bounds b
-          WHERE p.status = 'captured' AND ($3::bigint IS NULL OR l.client_id = $3)`, params),
-        pool.query(`SELECT TO_CHAR(d.day, 'DD Mon') AS day, COUNT(l.id) AS leads,
-          COUNT(l.id) FILTER (WHERE l.status = 'converted') AS converted
-          FROM generate_series($1::date, $2::date, '1 day') d(day)
-          LEFT JOIN leads l ON DATE(l.created_at) = d.day AND ($3::bigint IS NULL OR l.client_id = $3)
-          GROUP BY d.day ORDER BY d.day`, params),
-        pool.query(`SELECT COALESCE(source, 'Other') AS source, COUNT(*) AS count FROM leads
-          WHERE created_at >= $1::date AND created_at < $2::date + INTERVAL '1 day' AND ($3::bigint IS NULL OR client_id = $3)
-          GROUP BY source ORDER BY count DESC LIMIT 6`, params),
-        pool.query(`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE status != 'new') AS contacted,
-          COUNT(*) FILTER (WHERE score >= 40) AS qualified, COUNT(*) FILTER (WHERE status = 'hot') AS hot,
-          COUNT(*) FILTER (WHERE status = 'converted') AS converted FROM leads
-          WHERE created_at >= $1::date AND created_at < $2::date + INTERVAL '1 day' AND ($3::bigint IS NULL OR client_id = $3)`, params),
-        pool.query(`SELECT TO_CHAR(d.day, 'DD Mon') AS m, COALESCE(SUM(p.amount),0) AS r
-          FROM generate_series($1::date, $2::date, '1 day') d(day)
-          LEFT JOIN payments p ON DATE(p.created_at) = d.day AND p.status = 'captured'
-          LEFT JOIN leads l ON l.id = p.lead_id
-          WHERE ($3::bigint IS NULL OR l.client_id = $3 OR p.id IS NULL)
-          GROUP BY d.day ORDER BY d.day`, params),
-        pool.query(`SELECT c.id, c.name, COUNT(l.id) AS lead_count FROM clients c
-          LEFT JOIN leads l ON l.client_id = c.id AND l.created_at >= $1::date AND l.created_at < $2::date + INTERVAL '1 day'
-          WHERE ($3::bigint IS NULL OR c.id = $3) GROUP BY c.id, c.name ORDER BY lead_count DESC`, params),
+      const [fy, fm, fd] = from.split('-').map(Number);
+      const [ty, tm, td] = to.split('-').map(Number);
+      const fromDay = new Date(fy, fm - 1, fd);
+      const toDay = new Date(ty, tm - 1, td);
+      const toEnd = addDays(toDay, 1);
+      const span = Math.round((toDay - fromDay) / 86400000) + 1;
+      const previousFrom = addDays(fromDay, -span);
+      const inRange = { $gte: fromDay, $lt: toEnd };
+
+      const [currentLeads, previousLeads, hot, convertedCurrent, convertedPrevious, revenueCurrent, revenuePrevious,
+        weekly, sources, funnel, payments, brandClients, brandLeadCounts] = await Promise.all([
+        countLeads({ created_at: inRange }),
+        countLeads({ created_at: { $gte: previousFrom, $lt: fromDay } }),
+        countLeads({ status: 'hot', created_at: inRange }),
+        countLeads({ status: 'converted', updated_at: inRange }),
+        countLeads({ status: 'converted', updated_at: { $gte: previousFrom, $lt: fromDay } }),
+        sumCapturedPayments(fromDay, toEnd, brandLeadIds),
+        sumCapturedPayments(previousFrom, fromDay, brandLeadIds),
+        dailyLeadBuckets(fromDay, toDay, 'DD Mon', brandFilter),
+        leadSourceCounts({ ...brandFilter, created_at: inRange }, 'Other'),
+        leadFunnel({ ...brandFilter, created_at: inRange }),
+        Payments.find({ status: 'captured', created_at: inRange, ...(brandLeadIds ? { lead_id: { $in: brandLeadIds } } : {}) }, { _id: 0, amount: 1, created_at: 1 }).lean(),
+        Clients.find(filterBrand ? { id: brandId } : {}, { _id: 0, id: 1, name: 1 }).lean(),
+        Leads.aggregate([{ $match: { ...brandFilter, created_at: inRange } }, { $group: { _id: '$client_id', count: { $sum: 1 } } }]),
       ]);
+
+      const revenueByDay = new Map();
+      for (const payment of payments) {
+        const key = dayKey(new Date(payment.created_at));
+        revenueByDay.set(key, (revenueByDay.get(key) || 0) + Number(payment.amount || 0));
+      }
+      const revenueTrend = [];
+      for (let day = fromDay; day <= toDay; day = addDays(day, 1)) {
+        revenueTrend.push({ m: formatReportDay(day, 'DD Mon'), r: revenueByDay.get(dayKey(day)) || 0 });
+      }
+      const leadCountByBrand = new Map(brandLeadCounts.map((row) => [row._id, row.count]));
+      const brands = brandClients
+        .map((client) => ({ id: client.id, name: client.name, lead_count: leadCountByBrand.get(client.id) || 0 }))
+        .sort((a, b) => b.lead_count - a.lead_count);
+
       return res.json({
-        leads_today: Number(leadCounts.rows[0].current_count), leads_yesterday: Number(leadCounts.rows[0].previous_count),
-        hot_leads: Number(hot.rows[0].count), converted_today: Number(convertedCounts.rows[0].current_count),
-        converted_yesterday: Number(convertedCounts.rows[0].previous_count), revenue_month: Number(revenues.rows[0].current_amount),
-        revenue_last_month: Number(revenues.rows[0].previous_amount), weekly: weekly.rows, sources: sources.rows,
-        funnel: funnel.rows[0], revenue_trend: revenueTrend.rows.map(row => ({ m: row.m, r: Number(row.r) })), brands: brands.rows,
+        leads_today: currentLeads, leads_yesterday: previousLeads,
+        hot_leads: hot, converted_today: convertedCurrent,
+        converted_yesterday: convertedPrevious, revenue_month: revenueCurrent,
+        revenue_last_month: revenuePrevious, weekly, sources,
+        funnel, revenue_trend: revenueTrend, brands,
         date_range: { from, to },
       });
     }
@@ -5251,149 +4923,46 @@ app.get('/api/reports/summary', auth, async (req, res) => {
       days = 90;
       dateFormat = 'DD Mon';
     }
-    const intervalStr = `${days - 1} days`;
 
-    let todayQ = `SELECT COUNT(*) as leads_today FROM leads WHERE DATE(created_at) = CURRENT_DATE`;
-    let todayParams = [];
-    if (filterBrand) {
-      todayParams.push(client_id);
-      todayQ += ` AND client_id = $1`;
-    }
-    const today = await pool.query(todayQ, todayParams);
+    const today = startOfDay(new Date());
+    const tomorrow = addDays(today, 1);
+    const yesterday = addDays(today, -1);
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const nextMonthStart = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
 
-    let yesterdayQ = `SELECT COUNT(*) as leads_yesterday FROM leads WHERE DATE(created_at) = CURRENT_DATE - INTERVAL '1 day'`;
-    let yesterdayParams = [];
-    if (filterBrand) {
-      yesterdayParams.push(client_id);
-      yesterdayQ += ` AND client_id = $1`;
-    }
-    const yesterday = await pool.query(yesterdayQ, yesterdayParams);
+    const [leadsToday, leadsYesterday, hot, converted, convertedYesterday, revenue, revenueLastMonth, weekly, sources, funnel] = await Promise.all([
+      countLeads({ created_at: { $gte: today, $lt: tomorrow } }),
+      countLeads({ created_at: { $gte: yesterday, $lt: today } }),
+      countLeads({ status: 'hot' }),
+      countLeads({ status: 'converted', updated_at: { $gte: today, $lt: tomorrow } }),
+      countLeads({ status: 'converted', updated_at: { $gte: yesterday, $lt: today } }),
+      sumCapturedPayments(monthStart, nextMonthStart, brandLeadIds),
+      sumCapturedPayments(lastMonthStart, monthStart, brandLeadIds),
+      dailyLeadBuckets(addDays(today, -(days - 1)), today, dateFormat, brandFilter),
+      leadSourceCounts(brandFilter, null),
+      leadFunnel(brandFilter),
+    ]);
 
-    let hotQ = "SELECT COUNT(*) as hot FROM leads WHERE status = 'hot'";
-    let hotParams = [];
-    if (filterBrand) {
-      hotParams.push(client_id);
-      hotQ += ` AND client_id = $1`;
+    const revenueTrend = [];
+    for (let offset = 5; offset >= 0; offset--) {
+      const month = new Date(today.getFullYear(), today.getMonth() - offset, 1);
+      const nextMonth = new Date(today.getFullYear(), today.getMonth() - offset + 1, 1);
+      revenueTrend.push({ m: formatReportDay(month, 'Mon'), r: await sumCapturedPayments(month, nextMonth, brandLeadIds) });
     }
-    const hot = await pool.query(hotQ, hotParams);
-
-    let convertedQ = `SELECT COUNT(*) as converted FROM leads WHERE status = 'converted' AND DATE(updated_at) = CURRENT_DATE`;
-    let convertedParams = [];
-    if (filterBrand) {
-      convertedParams.push(client_id);
-      convertedQ += ` AND client_id = $1`;
-    }
-    const converted = await pool.query(convertedQ, convertedParams);
-
-    let convYestQ = `SELECT COUNT(*) as converted_yesterday FROM leads WHERE status = 'converted' AND DATE(updated_at) = CURRENT_DATE - INTERVAL '1 day'`;
-    let convYestParams = [];
-    if (filterBrand) {
-      convYestParams.push(client_id);
-      convYestQ += ` AND client_id = $1`;
-    }
-    const convertedYesterday = await pool.query(convYestQ, convYestParams);
-
-    let revenueQ = `
-      SELECT COALESCE(SUM(p.amount), 0) as revenue FROM payments p
-      LEFT JOIN leads l ON p.lead_id = l.id
-      WHERE p.status = 'captured' AND DATE_TRUNC('month', p.created_at) = DATE_TRUNC('month', NOW())
-    `;
-    let revenueParams = [];
-    if (filterBrand) {
-      revenueParams.push(client_id);
-      revenueQ += ` AND l.client_id = $1`;
-    }
-    const revenue = await pool.query(revenueQ, revenueParams);
-
-    let revenueLastQ = `
-      SELECT COALESCE(SUM(p.amount), 0) as revenue FROM payments p
-      LEFT JOIN leads l ON p.lead_id = l.id
-      WHERE p.status = 'captured' AND DATE_TRUNC('month', p.created_at) = DATE_TRUNC('month', NOW() - INTERVAL '1 month')
-    `;
-    let revenueLastParams = [];
-    if (filterBrand) {
-      revenueLastParams.push(client_id);
-      revenueLastQ += ` AND l.client_id = $1`;
-    }
-    const revenueLastMonth = await pool.query(revenueLastQ, revenueLastParams);
-
-    let weeklyQ = `
-      SELECT
-        TO_CHAR(d.day, $1) as day,
-        COUNT(l.id) as leads,
-        COUNT(CASE WHEN l.status = 'converted' THEN 1 END) as converted
-      FROM generate_series(
-        CURRENT_DATE - CAST($2 as INTERVAL), CURRENT_DATE, '1 day'
-      ) d(day)
-      LEFT JOIN leads l ON DATE(l.created_at) = d.day
-    `;
-    let weeklyParams = [dateFormat, intervalStr];
-    if (filterBrand) {
-      weeklyParams.push(client_id);
-      weeklyQ += ` AND l.client_id = $3`;
-    }
-    weeklyQ += ` GROUP BY d.day ORDER BY d.day`;
-    const weekly = await pool.query(weeklyQ, weeklyParams);
-
-    let sourcesQ = `
-      SELECT source, COUNT(*) as count
-      FROM leads
-    `;
-    let sourcesParams = [];
-    if (filterBrand) {
-      sourcesParams.push(client_id);
-      sourcesQ += ` WHERE client_id = $1`;
-    }
-    sourcesQ += ` GROUP BY source ORDER BY count DESC LIMIT 6`;
-    const sources = await pool.query(sourcesQ, sourcesParams);
-
-    let funnelQ = `
-      SELECT
-        COUNT(*) as total,
-        COUNT(CASE WHEN status != 'new' THEN 1 END) as contacted,
-        COUNT(CASE WHEN score >= 40 THEN 1 END) as qualified,
-        COUNT(CASE WHEN status = 'hot' THEN 1 END) as hot,
-        COUNT(CASE WHEN status = 'converted' THEN 1 END) as converted
-      FROM leads
-    `;
-    let funnelParams = [];
-    if (filterBrand) {
-      funnelParams.push(client_id);
-      funnelQ += ` WHERE client_id = $1`;
-    }
-    const funnel = await pool.query(funnelQ, funnelParams);
-
-    let trendQ = `
-      SELECT
-        TO_CHAR(d.month, 'Mon') as m,
-        COALESCE(SUM(p.amount), 0) as r
-      FROM generate_series(
-        DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '5 months',
-        DATE_TRUNC('month', CURRENT_DATE),
-        '1 month'
-      ) d(month)
-      LEFT JOIN payments p ON DATE_TRUNC('month', p.created_at) = d.month AND p.status = 'captured'
-    `;
-    let trendParams = [];
-    if (filterBrand) {
-      trendParams.push(client_id);
-      trendQ += ` AND EXISTS (SELECT 1 FROM leads l WHERE l.id = p.lead_id AND l.client_id = $1)`;
-    }
-    trendQ += ` GROUP BY d.month ORDER BY d.month`;
-    const revenueTrend = await pool.query(trendQ, trendParams);
 
     res.json({
-      leads_today: parseInt(today.rows[0].leads_today),
-      leads_yesterday: parseInt(yesterday.rows[0].leads_yesterday),
-      hot_leads: parseInt(hot.rows[0].hot),
-      converted_today: parseInt(converted.rows[0].converted),
-      converted_yesterday: parseInt(convertedYesterday.rows[0].converted_yesterday),
-      revenue_month: parseFloat(revenue.rows[0].revenue),
-      revenue_last_month: parseFloat(revenueLastMonth.rows[0].revenue),
-      weekly: weekly.rows,
-      sources: sources.rows,
-      funnel: funnel.rows[0],
-      revenue_trend: revenueTrend.rows.map(row => ({ m: row.m, r: parseFloat(row.r) })),
+      leads_today: leadsToday,
+      leads_yesterday: leadsYesterday,
+      hot_leads: hot,
+      converted_today: converted,
+      converted_yesterday: convertedYesterday,
+      revenue_month: revenue,
+      revenue_last_month: revenueLastMonth,
+      weekly,
+      sources,
+      funnel,
+      revenue_trend: revenueTrend,
     });
   } catch (err) {
     console.error(err);
@@ -5405,18 +4974,18 @@ app.get('/api/reports/summary', auth, async (req, res) => {
 app.get('/api/reports/leads', auth, async (req, res) => {
   try {
     const { from, to, brand } = req.query;
-    let q = `
-      SELECT l.*, c.name as brand_name
-      FROM leads l
-      LEFT JOIN clients c ON l.client_id = c.id
-      WHERE 1=1
-    `;
-    const params = [];
-    if (from) { params.push(from); q += ` AND l.created_at >= $${params.length}`; }
-    if (to) { params.push(to); q += ` AND l.created_at <= $${params.length}`; }
-    if (brand && brand !== 'All Brands') { params.push(`%${brand}%`); q += ` AND c.name ILIKE $${params.length}`; }
-    q += ' ORDER BY l.created_at DESC LIMIT 500';
-    const { rows } = await pool.query(q, params);
+    const filter = {};
+    if (from || to) filter.created_at = {};
+    if (from) filter.created_at.$gte = new Date(from);
+    if (to) filter.created_at.$lte = new Date(to);
+    const reportClients = await Clients.find(
+      brand && brand !== 'All Brands' ? { name: { $regex: escapeRegex(brand), $options: 'i' } } : {},
+      { id: 1, name: 1 }
+    ).lean();
+    if (brand && brand !== 'All Brands') filter.client_id = { $in: reportClients.map((c) => c.id) };
+    const brandNames = new Map(reportClients.map((c) => [c.id, c.name]));
+    const rows = (await Leads.find(filter, NO_ID).sort({ created_at: -1 }).limit(500).lean())
+      .map((lead) => ({ ...lead, brand_name: brandNames.get(lead.client_id) ?? null }));
     res.json({ leads: rows });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -5428,9 +4997,7 @@ app.get('/api/reports/leads', auth, async (req, res) => {
 // ══════════════════════════════════════════════════════════
 app.get('/api/users', auth, async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      'SELECT id, name, email, role, is_active, last_login, created_at FROM users ORDER BY created_at'
-    );
+    const rows = await Users.find({}, { _id: 0, id: 1, name: 1, email: 1, role: 1, is_active: 1, last_login: 1, created_at: 1 }).sort({ created_at: 1 }).lean();
     res.json({ users: rows });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -5442,14 +5009,10 @@ app.post('/api/users', auth, async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
     const hash = await bcrypt.hash(password, 12);
-    const { rows } = await pool.query(`
-      INSERT INTO users (name, email, password_hash, role, is_active, created_at)
-      VALUES ($1, $2, $3, $4, true, NOW())
-      RETURNING id, name, email, role
-    `, [name, email.toLowerCase(), hash, role || 'user']);
-    res.status(201).json({ user: rows[0] });
+    const created = await Users.create({ name, email: email.toLowerCase(), password_hash: hash, role: role || 'user', is_active: true, created_at: new Date() });
+    res.status(201).json({ user: { id: created.id, name: created.name, email: created.email, role: created.role } });
   } catch (err) {
-    if (err.code === '23505') return res.status(400).json({ error: 'Email already exists' });
+    if (err.code === 11000) return res.status(400).json({ error: 'Email already exists' });
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -5460,10 +5023,20 @@ app.post('/api/users', auth, async (req, res) => {
 app.post('/api/internal/save-conversation', internalAuth, async (req, res) => {
   try {
     const { lead_id, direction, message, sender, wa_message_id } = req.body;
-    await pool.query(`
-      INSERT INTO conversations (lead_id, direction, message, message_type, sent_at, sender, wa_message_id)
-      VALUES ($1, $2, $3, 'text', NOW(), $4, $5)
-    `, [lead_id, direction, message, sender, wa_message_id]);
+    // The old SQL wrote message columns into conversations (which has none of
+    // them); store the message on the lead's conversation instead.
+    const lead = await Leads.findOne({ id: lead_id }, { _id: 0, id: 1, phone: 1 }).lean();
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    const conversation = await upsertOne(
+      Conversations,
+      lead.phone ? { phone: lead.phone } : { lead_id: lead.id },
+      { $set: { lead_id: lead.id, last_message: message, last_message_at: new Date() } },
+      { lead_id: lead.id, phone: lead.phone || null, status: 'open', last_message: message, last_message_at: new Date(), created_at: new Date() }
+    );
+    await Messages.create({
+      conversation_id: conversation.id, direction, content: message, msg_type: 'text', wa_msg_id: wa_message_id || null,
+      is_ai: sender === 'ai' || sender === 'bot', status: 'sent', sent_at: new Date(),
+    });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -5474,14 +5047,11 @@ app.post('/api/internal/save-conversation', internalAuth, async (req, res) => {
 app.post('/api/internal/update-lead', internalAuth, async (req, res) => {
   try {
     const { lead_id, status, score, interest } = req.body;
-    await pool.query(`
-      UPDATE leads SET
-        status = COALESCE($1, status),
-        score = COALESCE($2, score),
-        interest = COALESCE($3, interest),
-        updated_at = NOW()
-      WHERE id = $4
-    `, [status, score, interest, lead_id]);
+    const leadChanges = { updated_at: new Date() };
+    if (status != null) leadChanges.status = status;
+    if (score != null) leadChanges.score = score;
+    if (interest != null) leadChanges.interest = interest;
+    await Leads.updateOne({ id: lead_id }, { $set: leadChanges });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -5495,20 +5065,17 @@ cron.schedule('* * * * *', async () => {
   if (scheduledCampaignCronRunning) return;
   scheduledCampaignCronRunning = true;
   try {
-    const { rows } = await pool.query(`
-      SELECT id FROM campaigns 
-      WHERE status = 'scheduled' AND scheduled_at <= NOW()
-    `);
+    const rows = await Campaigns.find({ status: 'scheduled', scheduled_at: { $lte: new Date() } }, { _id: 0, id: 1 }).lean();
 
     for (const row of rows) {
       console.log(`Cron: Starting scheduled campaign ${row.id}`);
       await executeCampaign(row.id);
       
       // Log the execution to workflow_logs so it appears in the Admin Dashboard
-      await pool.query(`
-        INSERT INTO workflow_logs (workflow, lead_id, status, message) 
-        VALUES ('WF05', null, 'success', $1)
-      `, [`Campaign ${row.id} execution automatically triggered by backend engine`]);
+      await WorkflowLogs.create({
+        workflow: 'WF05', lead_id: null, status: 'success',
+        message: `Campaign ${row.id} execution automatically triggered by backend engine`,
+      });
     }
   } catch (err) {
     console.error('Cron check error:', err);
@@ -5568,13 +5135,11 @@ if (process.env.DISABLE_DRIVE_POLLER !== 'true') {
 cron.schedule('* * * * *', async () => {
   console.log('Cron: Checking for scheduled approved content due for publishing...');
   try {
-    const { rows: duePosts } = await pool.query(`
-      SELECT id FROM content_queue
-      WHERE status IN ('APPROVED', 'approved', 'SCHEDULED', 'scheduled')
-        AND scheduled_at <= (NOW() AT TIME ZONE 'Asia/Kolkata') + INTERVAL '2 minutes'
-        AND scheduled_at > (NOW() AT TIME ZONE 'Asia/Kolkata') - INTERVAL '24 hours'
-      ORDER BY scheduled_at ASC
-    `);
+    const now = Date.now();
+    const duePosts = await models.ContentQueue.find({
+      status: { $in: ['APPROVED', 'approved', 'SCHEDULED', 'scheduled'] },
+      scheduled_at: { $lte: new Date(now + 2 * 60 * 1000), $gt: new Date(now - 24 * 60 * 60 * 1000) },
+    }, { _id: 0, id: 1 }).sort({ scheduled_at: 1 }).lean();
 
     if (duePosts.length > 0) {
       console.log(`Cron: Found ${duePosts.length} posts due for publishing.`);
@@ -5614,7 +5179,7 @@ cron.schedule('* * * * *', async () => {
 cron.schedule('0 2 * * 0', async () => {
   console.log('Cron: Starting weekly Mafiya citation check for all active clients...');
   try {
-    const { rows: clients } = await pool.query("SELECT id FROM mafiya_gmb_clients WHERE status = 'active'");
+    const clients = await models.MafiyaGmbClients.find({ status: 'active' }, { _id: 0, id: 1 }).lean();
     const { runCheckForBusiness } = require('./services/citations/citation.service');
     for (const client of clients) {
       console.log(`Cron: Running citation check for GMB Client ID ${client.id}...`);
@@ -5629,17 +5194,16 @@ cron.schedule('0 2 * * 0', async () => {
 });
 
 // ── START ─────────────────────────────────────────────────
-httpServer.listen(PORT, () => {
+connectMongo().then(() => httpServer.listen(PORT, () => {
   console.log(`LeadOS API running on port ${PORT} (Socket.io enabled)`);
 
   // Repair historical routing drift once at startup. New writes are also
   // forced through the same owner, so AI/source metadata cannot move them.
-  getLeadOSBrand(pool)
-    .then((brand) => pool.query(
-      `UPDATE leads SET client_id=$1, updated_at=NOW()
-       WHERE client_id IS DISTINCT FROM $1`,
-      [brand.id]
-    ).then((result) => console.log(`[LeadOS Brand Lock] ${result.rowCount} existing lead(s) assigned to ${brand.name}.`)))
+  getLeadOSBrand()
+    .then((brand) => Leads.updateMany(
+      { client_id: { $ne: brand.id } },
+      { $set: { client_id: brand.id, updated_at: new Date() } }
+    ).then((result) => console.log(`[LeadOS Brand Lock] ${result.modifiedCount} existing lead(s) assigned to ${brand.name}.`)))
     .catch((error) => console.error('[LeadOS Brand Lock]', error.message));
 
   startAllianceEmailWorker(io).catch((error) => {
@@ -5658,61 +5222,32 @@ httpServer.listen(PORT, () => {
   // Start campaign message queue processor
   startCampaignQueueProcessor();
 
-  // Initialize followup tables
-  pool.query(`
-    CREATE TABLE IF NOT EXISTS followup_rules (
-      id SERIAL PRIMARY KEY,
-      client_id BIGINT REFERENCES clients(id) ON DELETE CASCADE,
-      stage VARCHAR(50) NOT NULL,
-      touch_count INTEGER NOT NULL DEFAULT 0,
-      action_type VARCHAR(50) NOT NULL,
-      template_id VARCHAR(255),
-      ai_prompt_template TEXT,
-      payload_template JSONB,
-      delay_hours INTEGER NOT NULL DEFAULT 24,
-      created_at TIMESTAMP DEFAULT NOW(),
-      UNIQUE(client_id, stage, touch_count)
-    );
-
-    CREATE TABLE IF NOT EXISTS lead_notes (
-      id SERIAL PRIMARY KEY,
-      lead_id BIGINT REFERENCES leads(id) ON DELETE CASCADE,
-      user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
-      note TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-
-    -- Add columns if they don't exist
-    ALTER TABLE leads ADD COLUMN IF NOT EXISTS touch_count INTEGER DEFAULT 0;
-    ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_follow_up TIMESTAMP;
-  `).then(() => {
+  // Initialize followup collections (indexes only; MongoDB needs no DDL)
+  Promise.all([models.FollowupRules.createIndexes(), LeadNotes.createIndexes()]).then(() => {
     console.log('[Startup] Followup tables initialized');
   }).catch(err => {
     console.error('[Startup] Error initializing followup tables:', err.message);
   });
 
   // Reset any stuck publishing jobs on startup to prevent limbo states
-  pool.query(`
-    UPDATE publish_queue 
-    SET status = 'failed', 
-        error_message = 'Publishing interrupted by server restart', 
-        updated_at = NOW() 
-    WHERE status = 'publishing'
-  `).then(async (res) => {
-    if (res.rowCount > 0) {
-      console.log(`[Startup] Cleaned up ${res.rowCount} stuck publishing jobs.`);
-      const { rows } = await pool.query(`
-        SELECT DISTINCT content_id FROM publish_queue 
-        WHERE error_message = 'Publishing interrupted by server restart'
-      `);
+  models.PublishQueue.updateMany(
+    { status: 'publishing' },
+    { $set: { status: 'failed', error_message: 'Publishing interrupted by server restart', updated_at: new Date() } }
+  ).then(async (res) => {
+    if (res.modifiedCount > 0) {
+      console.log(`[Startup] Cleaned up ${res.modifiedCount} stuck publishing jobs.`);
+      const contentIds = await models.PublishQueue.distinct('content_id', { error_message: 'Publishing interrupted by server restart' });
       const { updateOverallPostStatus } = require("./controllers/contentController");
-      for (const r of rows) {
-        await updateOverallPostStatus(r.content_id);
+      for (const contentId of contentIds) {
+        await updateOverallPostStatus(contentId);
       }
     }
   }).catch(err => {
     console.error('[Startup] Failed to clean up stuck publishing jobs:', err.message);
   });
+})).catch((error) => {
+  console.error('[Startup] MongoDB connection failed:', error.message);
+  process.exit(1);
 });
 
 module.exports = { app, httpServer, io };

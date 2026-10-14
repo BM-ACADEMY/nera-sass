@@ -1,20 +1,23 @@
-const db = require('./db/connection');
+const { connectMongo, mongoose } = require('./db/mongo');
 
 async function run() {
   try {
-    const res = await db.query("SELECT table_name FROM information_schema.columns WHERE column_name = 'tenant_id' AND table_schema = 'public'");
-    
-    for (let row of res.rows) {
-      console.log('Dropping tenant_id from ' + row.table_name);
-      await db.query(`ALTER TABLE "${row.table_name}" DROP COLUMN IF EXISTS tenant_id CASCADE`);
+    await connectMongo();
+    const collections = await mongoose.connection.db.listCollections().toArray();
+    for (const { name } of collections) {
+      const result = await mongoose.connection.db.collection(name).updateMany(
+        { tenant_id: { $exists: true } },
+        { $unset: { tenant_id: '' } }
+      );
+      if (result.modifiedCount) console.log('Dropping tenant_id from ' + name);
     }
-    
-    await db.query('DROP TABLE IF EXISTS tenants CASCADE');
+
+    await mongoose.connection.db.collection('tenants').drop().catch(() => {});
     console.log('Done DB clean');
   } catch (error) {
     console.error('Error:', error);
   } finally {
-    db.end();
+    await mongoose.disconnect();
   }
 }
 

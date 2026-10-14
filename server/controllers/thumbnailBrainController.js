@@ -3,7 +3,7 @@
  * All DB operations for: Config Versions, Platform Profiles, Brand Styles, Analytics
  */
 
-const pool = require('../db/connection');
+const { ThumbBrainConfig, ThumbBrainPlatforms, ThumbBrainBrandStyles, ThumbBrainAnalytics, BrandSocialAccounts } = require('../models');
 
 // ── Default data ─────────────────────────────────────────────────────────────
 
@@ -56,80 +56,30 @@ const DEFAULT_BRAND_STYLES = [
   { name: 'Real Estate', slug: 'real_estate', primary_color: '#14532d', secondary_color: '#f0fdf4', accent_color: '#16a34a', typography_style: 'Modern', lighting_preset: 'Golden Hour', background_style: 'City', design_keywords: ['modern', 'premium', 'bright', 'aspirational'], prompt_injection: 'Premium real estate aesthetic, golden hour lighting, architectural composition, aspirational luxury property feel', sort_order: 6 },
 ];
 
-// ── Auto-migration ───────────────────────────────────────────────────────────
+// ── Collection setup ─────────────────────────────────────────────────────────
 
-async function ensureTables() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS thumb_brain_config (
-      id SERIAL PRIMARY KEY,
-      version_number INT NOT NULL DEFAULT 1,
-      version_name VARCHAR(100) DEFAULT 'Untitled',
-      config JSONB NOT NULL,
-      is_active BOOLEAN DEFAULT false,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-
-    CREATE TABLE IF NOT EXISTS thumb_brain_platforms (
-      id SERIAL PRIMARY KEY,
-      name VARCHAR(100) NOT NULL,
-      slug VARCHAR(50) UNIQUE NOT NULL,
-      icon VARCHAR(10) DEFAULT '📱',
-      aspect_ratio VARCHAR(20) NOT NULL,
-      width INT NOT NULL,
-      height INT NOT NULL,
-      safe_margin INT DEFAULT 5,
-      text_scale FLOAT DEFAULT 1.0,
-      optimization_notes TEXT DEFAULT '',
-      is_active BOOLEAN DEFAULT true,
-      sort_order INT DEFAULT 0,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-
-    CREATE TABLE IF NOT EXISTS thumb_brain_brand_styles (
-      id SERIAL PRIMARY KEY,
-      name VARCHAR(100) NOT NULL,
-      slug VARCHAR(50) UNIQUE,
-      primary_color VARCHAR(7) DEFAULT '#000000',
-      secondary_color VARCHAR(7) DEFAULT '#ffffff',
-      accent_color VARCHAR(7) DEFAULT '#f97316',
-      typography_style VARCHAR(50) DEFAULT 'Bold',
-      lighting_preset VARCHAR(50) DEFAULT 'Cinematic',
-      background_style VARCHAR(50) DEFAULT 'Gradient',
-      design_keywords TEXT[] DEFAULT '{}',
-      prompt_injection TEXT DEFAULT '',
-      is_active BOOLEAN DEFAULT true,
-      sort_order INT DEFAULT 0,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    );
-
-    CREATE TABLE IF NOT EXISTS thumb_brain_analytics (
-      id SERIAL PRIMARY KEY,
-      content_id INT,
-      brand_style_id INT,
-      platform_slug VARCHAR(50),
-      model_used VARCHAR(100),
-      engine_used VARCHAR(50),
-      generation_time_ms INT,
-      prompt_length INT,
-      was_approved BOOLEAN,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-  `);
+let tablesReady;
+function ensureTables() {
+  if (!tablesReady) {
+    tablesReady = Promise.all([ThumbBrainConfig, ThumbBrainPlatforms, ThumbBrainBrandStyles, ThumbBrainAnalytics].map((m) => m.createIndexes()))
+      .catch((error) => { tablesReady = null; throw error; });
+  }
+  return tablesReady;
 }
+
+const NO_ID = { _id: 0 };
+const isDuplicate = (error) => error && error.code === 11000;
 
 // ── Config Versions ──────────────────────────────────────────────────────────
 
 async function getConfig(req, res) {
   try {
     await ensureTables();
-    const { rows } = await pool.query(
-      'SELECT * FROM thumb_brain_config WHERE is_active = true ORDER BY created_at DESC LIMIT 1'
-    );
-    if (rows.length === 0) {
+    const active = await ThumbBrainConfig.findOne({ is_active: true }, NO_ID).sort({ created_at: -1 }).lean();
+    if (!active) {
       return res.json({ config: DEFAULT_CONFIG, version: null });
     }
-    res.json({ config: rows[0].config, version: rows[0] });
+    res.json({ config: active.config, version: active });
   } catch (err) {
     console.error('[thumbBrain] getConfig:', err.message);
     res.status(500).json({ error: err.message });
@@ -140,14 +90,16 @@ async function saveConfig(req, res) {
   try {
     await ensureTables();
     const { config, version_name } = req.body;
-    await pool.query('UPDATE thumb_brain_config SET is_active = false');
-    const { rows: vRows } = await pool.query('SELECT COALESCE(MAX(version_number), 0) AS max_v FROM thumb_brain_config');
-    const nextVersion = Number(vRows[0].max_v) + 1;
-    const { rows } = await pool.query(
-      'INSERT INTO thumb_brain_config (version_number, version_name, config, is_active) VALUES ($1, $2, $3, true) RETURNING *',
-      [nextVersion, version_name || `Version ${nextVersion}`, JSON.stringify(config)]
-    );
-    res.json({ success: true, version: rows[0] });
+    await ThumbBrainConfig.updateMany({}, { $set: { is_active: false } });
+    const latest = await ThumbBrainConfig.findOne({}, { version_number: 1 }).sort({ version_number: -1 }).lean();
+    const nextVersion = Number(latest?.version_number || 0) + 1;
+    const version = await ThumbBrainConfig.create({
+      version_number: nextVersion,
+      version_name: version_name || `Version ${nextVersion}`,
+      config,
+      is_active: true,
+    });
+    res.json({ success: true, version: version.toObject() });
   } catch (err) {
     console.error('[thumbBrain] saveConfig:', err.message);
     res.status(500).json({ error: err.message });
@@ -157,8 +109,8 @@ async function saveConfig(req, res) {
 async function getVersions(req, res) {
   try {
     await ensureTables();
-    const { rows } = await pool.query('SELECT * FROM thumb_brain_config ORDER BY created_at DESC LIMIT 50');
-    res.json({ versions: rows });
+    const versions = await ThumbBrainConfig.find({}, NO_ID).sort({ created_at: -1 }).limit(50).lean();
+    res.json({ versions });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -166,12 +118,13 @@ async function getVersions(req, res) {
 
 async function activateVersion(req, res) {
   try {
-    await pool.query('UPDATE thumb_brain_config SET is_active = false');
-    const { rows } = await pool.query(
-      'UPDATE thumb_brain_config SET is_active = true WHERE id = $1 RETURNING *',
-      [req.params.id]
-    );
-    res.json({ success: true, version: rows[0] });
+    await ThumbBrainConfig.updateMany({}, { $set: { is_active: false } });
+    const version = await ThumbBrainConfig.findOneAndUpdate(
+      { id: req.params.id },
+      { $set: { is_active: true } },
+      { new: true, projection: NO_ID }
+    ).lean();
+    res.json({ success: true, version: version || undefined });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -179,7 +132,7 @@ async function activateVersion(req, res) {
 
 async function deleteVersion(req, res) {
   try {
-    await pool.query('DELETE FROM thumb_brain_config WHERE id = $1', [req.params.id]);
+    await ThumbBrainConfig.deleteOne({ id: req.params.id });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -250,19 +203,17 @@ async function getPlatformsFromAccounts(req, res) {
     await ensureTables();
 
     // Get all distinct active platforms with brand counts
-    const { rows: acctRows } = await pool.query(`
-      SELECT platform, COUNT(DISTINCT brand_name) AS brand_count,
-             array_agg(DISTINCT brand_name ORDER BY brand_name) AS brands
-      FROM brand_social_accounts
-      WHERE is_active = true
-      GROUP BY platform
-      ORDER BY platform
-    `);
+    const acctRows = (await BrandSocialAccounts.aggregate([
+      { $match: { is_active: true } },
+      { $group: { _id: '$platform', brands: { $addToSet: '$brand_name' } } },
+      { $sort: { _id: 1 } },
+    ])).map((row) => {
+      const brands = row.brands.filter((b) => b !== null && b !== undefined).sort();
+      return { platform: row._id, brand_count: brands.length, brands: row.brands.some((b) => b == null) ? [...brands, null] : brands };
+    });
 
     // Get any saved dimension overrides from DB
-    const { rows: overrides } = await pool.query(
-      'SELECT * FROM thumb_brain_platforms'
-    );
+    const overrides = await ThumbBrainPlatforms.find({}, NO_ID).lean();
     const overrideMap = {};
     overrides.forEach(o => { overrideMap[o.slug] = o; });
 
@@ -303,19 +254,19 @@ async function savePlatformOverride(req, res) {
   try {
     const { slug } = req.params;
     const { aspect_ratio, width, height, safe_margin, text_scale, optimization_notes } = req.body;
-    const { rows } = await pool.query(`
-      INSERT INTO thumb_brain_platforms (name, slug, icon, aspect_ratio, width, height, safe_margin, text_scale, optimization_notes)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      ON CONFLICT (slug) DO UPDATE SET
-        aspect_ratio       = EXCLUDED.aspect_ratio,
-        width              = EXCLUDED.width,
-        height             = EXCLUDED.height,
-        safe_margin        = EXCLUDED.safe_margin,
-        text_scale         = EXCLUDED.text_scale,
-        optimization_notes = EXCLUDED.optimization_notes
-      RETURNING *
-    `, [slug, slug, '📱', aspect_ratio, Number(width), Number(height), Number(safe_margin), Number(text_scale), optimization_notes || '']);
-    res.json({ success: true, platform: rows[0] });
+    const fields = {
+      aspect_ratio,
+      width: Number(width),
+      height: Number(height),
+      safe_margin: Number(safe_margin),
+      text_scale: Number(text_scale),
+      optimization_notes: optimization_notes || '',
+    };
+    let platform = await ThumbBrainPlatforms.findOneAndUpdate({ slug }, { $set: fields }, { new: true, projection: NO_ID }).lean();
+    if (!platform) {
+      platform = (await ThumbBrainPlatforms.create({ name: slug, slug, icon: '📱', ...fields })).toObject();
+    }
+    res.json({ success: true, platform });
   } catch (err) {
     console.error('[thumbBrain] savePlatformOverride:', err.message);
     res.status(500).json({ error: err.message });
@@ -329,18 +280,17 @@ async function getBrandStylesFromAccounts(req, res) {
     await ensureTables();
 
     // Get all distinct active brands
-    const { rows: brandRows } = await pool.query(`
-      SELECT brand_name,
-             array_agg(DISTINCT platform ORDER BY platform) AS platforms,
-             COUNT(DISTINCT platform) AS platform_count
-      FROM brand_social_accounts
-      WHERE is_active = true
-      GROUP BY brand_name
-      ORDER BY brand_name
-    `);
+    const brandRows = (await BrandSocialAccounts.aggregate([
+      { $match: { is_active: true } },
+      { $group: { _id: '$brand_name', platforms: { $addToSet: '$platform' } } },
+      { $sort: { _id: 1 } },
+    ])).map((row) => {
+      const platforms = row.platforms.filter((p) => p !== null && p !== undefined).sort();
+      return { brand_name: row._id, platforms, platform_count: platforms.length };
+    });
 
     // Get any saved style overrides from DB (keyed by slug = brand_name lowercased)
-    const { rows: overrides } = await pool.query('SELECT * FROM thumb_brain_brand_styles');
+    const overrides = await ThumbBrainBrandStyles.find({}, NO_ID).lean();
     const overrideMap = {};
     overrides.forEach(o => { overrideMap[o.slug] = o; });
 
@@ -378,25 +328,25 @@ async function saveBrandStyleOverride(req, res) {
   try {
     const { slug } = req.params;
     const { name, primary_color, secondary_color, accent_color, typography_style, lighting_preset, background_style, design_keywords, prompt_injection } = req.body;
-    const { rows } = await pool.query(`
-      INSERT INTO thumb_brain_brand_styles
-        (name, slug, primary_color, secondary_color, accent_color, typography_style, lighting_preset, background_style, design_keywords, prompt_injection)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-      ON CONFLICT (slug) DO UPDATE SET
-        primary_color    = EXCLUDED.primary_color,
-        secondary_color  = EXCLUDED.secondary_color,
-        accent_color     = EXCLUDED.accent_color,
-        typography_style = EXCLUDED.typography_style,
-        lighting_preset  = EXCLUDED.lighting_preset,
-        background_style = EXCLUDED.background_style,
-        design_keywords  = EXCLUDED.design_keywords,
-        prompt_injection = EXCLUDED.prompt_injection,
-        updated_at       = NOW()
-      RETURNING *
-    `, [name, slug, primary_color || '#000000', secondary_color || '#ffffff', accent_color || '#f97316',
-        typography_style || 'Bold', lighting_preset || 'Cinematic', background_style || 'Gradient',
-        design_keywords || [], prompt_injection || '']);
-    res.json({ success: true, brandStyle: rows[0] });
+    const fields = {
+      primary_color: primary_color || '#000000',
+      secondary_color: secondary_color || '#ffffff',
+      accent_color: accent_color || '#f97316',
+      typography_style: typography_style || 'Bold',
+      lighting_preset: lighting_preset || 'Cinematic',
+      background_style: background_style || 'Gradient',
+      design_keywords: design_keywords || [],
+      prompt_injection: prompt_injection || '',
+    };
+    let brandStyle = await ThumbBrainBrandStyles.findOneAndUpdate(
+      { slug },
+      { $set: { ...fields, updated_at: new Date() } },
+      { new: true, projection: NO_ID }
+    ).lean();
+    if (!brandStyle) {
+      brandStyle = (await ThumbBrainBrandStyles.create({ name, slug, ...fields })).toObject();
+    }
+    res.json({ success: true, brandStyle });
   } catch (err) {
     console.error('[thumbBrain] saveBrandStyleOverride:', err.message);
     res.status(500).json({ error: err.message });
@@ -406,15 +356,12 @@ async function saveBrandStyleOverride(req, res) {
 async function getPlatforms(req, res) {
   try {
     await ensureTables();
-    const { rows } = await pool.query('SELECT * FROM thumb_brain_platforms ORDER BY sort_order, name');
+    const rows = await ThumbBrainPlatforms.find({}, NO_ID).sort({ sort_order: 1, name: 1 }).lean();
     if (rows.length === 0) {
       for (const p of DEFAULT_PLATFORMS) {
-        await pool.query(
-          'INSERT INTO thumb_brain_platforms (name, slug, icon, aspect_ratio, width, height, safe_margin, text_scale, optimization_notes, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (slug) DO NOTHING',
-          [p.name, p.slug, p.icon, p.aspect_ratio, p.width, p.height, p.safe_margin, p.text_scale, p.optimization_notes, p.sort_order]
-        );
+        await ThumbBrainPlatforms.create(p).catch((error) => { if (!isDuplicate(error)) throw error; });
       }
-      const { rows: seeded } = await pool.query('SELECT * FROM thumb_brain_platforms ORDER BY sort_order');
+      const seeded = await ThumbBrainPlatforms.find({}, NO_ID).sort({ sort_order: 1 }).lean();
       return res.json({ platforms: seeded });
     }
     res.json({ platforms: rows });
@@ -426,11 +373,18 @@ async function getPlatforms(req, res) {
 async function createPlatform(req, res) {
   try {
     const { name, slug, icon, aspect_ratio, width, height, safe_margin, text_scale, optimization_notes } = req.body;
-    const { rows } = await pool.query(
-      'INSERT INTO thumb_brain_platforms (name, slug, icon, aspect_ratio, width, height, safe_margin, text_scale, optimization_notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
-      [name, slug || name.toLowerCase().replace(/\s+/g, '_'), icon || '📱', aspect_ratio, Number(width), Number(height), Number(safe_margin) || 5, Number(text_scale) || 1.0, optimization_notes || '']
-    );
-    res.json({ success: true, platform: rows[0] });
+    const platform = await ThumbBrainPlatforms.create({
+      name,
+      slug: slug || name.toLowerCase().replace(/\s+/g, '_'),
+      icon: icon || '📱',
+      aspect_ratio,
+      width: Number(width),
+      height: Number(height),
+      safe_margin: Number(safe_margin) || 5,
+      text_scale: Number(text_scale) || 1.0,
+      optimization_notes: optimization_notes || '',
+    });
+    res.json({ success: true, platform: platform.toObject() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -439,11 +393,16 @@ async function createPlatform(req, res) {
 async function updatePlatform(req, res) {
   try {
     const { name, icon, aspect_ratio, width, height, safe_margin, text_scale, optimization_notes, is_active } = req.body;
-    const { rows } = await pool.query(
-      'UPDATE thumb_brain_platforms SET name=$1, icon=$2, aspect_ratio=$3, width=$4, height=$5, safe_margin=$6, text_scale=$7, optimization_notes=$8, is_active=$9 WHERE id=$10 RETURNING *',
-      [name, icon, aspect_ratio, Number(width), Number(height), Number(safe_margin), Number(text_scale), optimization_notes, is_active !== false, req.params.id]
-    );
-    res.json({ success: true, platform: rows[0] });
+    const platform = await ThumbBrainPlatforms.findOneAndUpdate(
+      { id: req.params.id },
+      { $set: {
+        name, icon, aspect_ratio,
+        width: Number(width), height: Number(height), safe_margin: Number(safe_margin), text_scale: Number(text_scale),
+        optimization_notes, is_active: is_active !== false,
+      } },
+      { new: true, projection: NO_ID }
+    ).lean();
+    res.json({ success: true, platform: platform || undefined });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -451,7 +410,7 @@ async function updatePlatform(req, res) {
 
 async function deletePlatform(req, res) {
   try {
-    await pool.query('DELETE FROM thumb_brain_platforms WHERE id = $1', [req.params.id]);
+    await ThumbBrainPlatforms.deleteOne({ id: req.params.id });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -463,15 +422,12 @@ async function deletePlatform(req, res) {
 async function getBrandStyles(req, res) {
   try {
     await ensureTables();
-    const { rows } = await pool.query('SELECT * FROM thumb_brain_brand_styles ORDER BY sort_order, name');
+    const rows = await ThumbBrainBrandStyles.find({}, NO_ID).sort({ sort_order: 1, name: 1 }).lean();
     if (rows.length === 0) {
       for (const b of DEFAULT_BRAND_STYLES) {
-        await pool.query(
-          'INSERT INTO thumb_brain_brand_styles (name, slug, primary_color, secondary_color, accent_color, typography_style, lighting_preset, background_style, design_keywords, prompt_injection, sort_order) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (slug) DO NOTHING',
-          [b.name, b.slug, b.primary_color, b.secondary_color, b.accent_color, b.typography_style, b.lighting_preset, b.background_style, b.design_keywords, b.prompt_injection, b.sort_order]
-        );
+        await ThumbBrainBrandStyles.create(b).catch((error) => { if (!isDuplicate(error)) throw error; });
       }
-      const { rows: seeded } = await pool.query('SELECT * FROM thumb_brain_brand_styles ORDER BY sort_order');
+      const seeded = await ThumbBrainBrandStyles.find({}, NO_ID).sort({ sort_order: 1 }).lean();
       return res.json({ brandStyles: seeded });
     }
     res.json({ brandStyles: rows });
@@ -484,11 +440,19 @@ async function createBrandStyle(req, res) {
   try {
     const { name, primary_color, secondary_color, accent_color, typography_style, lighting_preset, background_style, design_keywords, prompt_injection } = req.body;
     const slug = name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
-    const { rows } = await pool.query(
-      'INSERT INTO thumb_brain_brand_styles (name, slug, primary_color, secondary_color, accent_color, typography_style, lighting_preset, background_style, design_keywords, prompt_injection) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *',
-      [name, slug, primary_color || '#000000', secondary_color || '#ffffff', accent_color || '#f97316', typography_style || 'Bold', lighting_preset || 'Cinematic', background_style || 'Gradient', design_keywords || [], prompt_injection || '']
-    );
-    res.json({ success: true, brandStyle: rows[0] });
+    const brandStyle = await ThumbBrainBrandStyles.create({
+      name,
+      slug,
+      primary_color: primary_color || '#000000',
+      secondary_color: secondary_color || '#ffffff',
+      accent_color: accent_color || '#f97316',
+      typography_style: typography_style || 'Bold',
+      lighting_preset: lighting_preset || 'Cinematic',
+      background_style: background_style || 'Gradient',
+      design_keywords: design_keywords || [],
+      prompt_injection: prompt_injection || '',
+    });
+    res.json({ success: true, brandStyle: brandStyle.toObject() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -497,11 +461,15 @@ async function createBrandStyle(req, res) {
 async function updateBrandStyle(req, res) {
   try {
     const { name, primary_color, secondary_color, accent_color, typography_style, lighting_preset, background_style, design_keywords, prompt_injection, is_active } = req.body;
-    const { rows } = await pool.query(
-      'UPDATE thumb_brain_brand_styles SET name=$1, primary_color=$2, secondary_color=$3, accent_color=$4, typography_style=$5, lighting_preset=$6, background_style=$7, design_keywords=$8, prompt_injection=$9, is_active=$10, updated_at=NOW() WHERE id=$11 RETURNING *',
-      [name, primary_color, secondary_color, accent_color, typography_style, lighting_preset, background_style, design_keywords || [], prompt_injection, is_active !== false, req.params.id]
-    );
-    res.json({ success: true, brandStyle: rows[0] });
+    const brandStyle = await ThumbBrainBrandStyles.findOneAndUpdate(
+      { id: req.params.id },
+      { $set: {
+        name, primary_color, secondary_color, accent_color, typography_style, lighting_preset, background_style,
+        design_keywords: design_keywords || [], prompt_injection, is_active: is_active !== false, updated_at: new Date(),
+      } },
+      { new: true, projection: NO_ID }
+    ).lean();
+    res.json({ success: true, brandStyle: brandStyle || undefined });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -509,7 +477,7 @@ async function updateBrandStyle(req, res) {
 
 async function deleteBrandStyle(req, res) {
   try {
-    await pool.query('DELETE FROM thumb_brain_brand_styles WHERE id = $1', [req.params.id]);
+    await ThumbBrainBrandStyles.deleteOne({ id: req.params.id });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -518,24 +486,44 @@ async function deleteBrandStyle(req, res) {
 
 // ── Analytics ────────────────────────────────────────────────────────────────
 
+const countBy = (field, limit) => ThumbBrainAnalytics.aggregate([
+  { $match: { [field]: { $ne: null } } },
+  { $group: { _id: `$${field}`, count: { $sum: 1 } } },
+  { $sort: { count: -1 } },
+  ...(limit ? [{ $limit: limit }] : []),
+  { $project: { _id: 0, [field]: '$_id', count: 1 } },
+]);
+
 async function getAnalytics(req, res) {
   try {
     await ensureTables();
-    const { rows: summary } = await pool.query(`
-      SELECT
-        COUNT(*) AS total_generated,
-        COUNT(*) FILTER (WHERE was_approved = true)  AS total_approved,
-        COUNT(*) FILTER (WHERE was_approved = false) AS total_rejected,
-        COUNT(*) FILTER (WHERE was_approved IS NULL) AS pending_review,
-        ROUND(AVG(generation_time_ms))               AS avg_generation_ms,
-        ROUND(AVG(prompt_length))                    AS avg_prompt_length
-      FROM thumb_brain_analytics
-    `);
-    const { rows: byModel }    = await pool.query(`SELECT model_used, COUNT(*) AS count FROM thumb_brain_analytics WHERE model_used IS NOT NULL GROUP BY model_used ORDER BY count DESC LIMIT 5`);
-    const { rows: byPlatform } = await pool.query(`SELECT platform_slug, COUNT(*) AS count FROM thumb_brain_analytics WHERE platform_slug IS NOT NULL GROUP BY platform_slug ORDER BY count DESC`);
-    const { rows: byEngine }   = await pool.query(`SELECT engine_used, COUNT(*) AS count FROM thumb_brain_analytics WHERE engine_used IS NOT NULL GROUP BY engine_used ORDER BY count DESC`);
-    const { rows: recent }     = await pool.query(`SELECT * FROM thumb_brain_analytics ORDER BY created_at DESC LIMIT 20`);
-    res.json({ summary: summary[0], byModel, byPlatform, byEngine, recent });
+    const [summary = {
+      total_generated: 0, total_approved: 0, total_rejected: 0, pending_review: 0, avg_generation_ms: null, avg_prompt_length: null,
+    }] = await ThumbBrainAnalytics.aggregate([
+      {
+        $group: {
+          _id: null,
+          total_generated: { $sum: 1 },
+          total_approved: { $sum: { $cond: [{ $eq: ['$was_approved', true] }, 1, 0] } },
+          total_rejected: { $sum: { $cond: [{ $eq: ['$was_approved', false] }, 1, 0] } },
+          pending_review: { $sum: { $cond: [{ $eq: [{ $ifNull: ['$was_approved', null] }, null] }, 1, 0] } },
+          avg_generation_ms: { $avg: '$generation_time_ms' },
+          avg_prompt_length: { $avg: '$prompt_length' },
+        },
+      },
+      {
+        $project: {
+          _id: 0, total_generated: 1, total_approved: 1, total_rejected: 1, pending_review: 1,
+          avg_generation_ms: { $round: ['$avg_generation_ms', 0] },
+          avg_prompt_length: { $round: ['$avg_prompt_length', 0] },
+        },
+      },
+    ]);
+    const byModel = await countBy('model_used', 5);
+    const byPlatform = await countBy('platform_slug');
+    const byEngine = await countBy('engine_used');
+    const recent = await ThumbBrainAnalytics.find({}, NO_ID).sort({ created_at: -1 }).limit(20).lean();
+    res.json({ summary, byModel, byPlatform, byEngine, recent });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -545,10 +533,16 @@ async function recordAnalytics(req, res) {
   try {
     await ensureTables();
     const { content_id, brand_style_id, platform_slug, model_used, engine_used, generation_time_ms, prompt_length, was_approved } = req.body;
-    await pool.query(
-      'INSERT INTO thumb_brain_analytics (content_id, brand_style_id, platform_slug, model_used, engine_used, generation_time_ms, prompt_length, was_approved) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-      [content_id || null, brand_style_id || null, platform_slug || null, model_used || null, engine_used || null, generation_time_ms || null, prompt_length || null, was_approved ?? null]
-    );
+    await ThumbBrainAnalytics.create({
+      content_id: content_id || null,
+      brand_style_id: brand_style_id || null,
+      platform_slug: platform_slug || null,
+      model_used: model_used || null,
+      engine_used: engine_used || null,
+      generation_time_ms: generation_time_ms || null,
+      prompt_length: prompt_length || null,
+      was_approved: was_approved ?? null,
+    });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

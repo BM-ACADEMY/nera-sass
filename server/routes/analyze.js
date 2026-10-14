@@ -1,6 +1,6 @@
 const express = require('express');
 const { analyzeBatch } = require('../services/openai');
-const db = require('../db/connection');
+const { AiAnalysis } = require('../models');
 const router = express.Router();
 
 // POST /api/analyze/batch
@@ -21,11 +21,8 @@ router.post('/batch', async (req, res) => {
 // GET /api/analyze/:orgId/result
 router.get('/:orgId/result', async (req, res) => {
   try {
-    const { rows } = await db.query(
-      'SELECT * FROM ai_analysis WHERE org_id = $1 ORDER BY created_at DESC LIMIT 1',
-      [req.params.orgId]
-    );
-    res.json({ success: true, analysis: rows[0] || null });
+    const analysis = await AiAnalysis.findOne({ org_id: req.params.orgId }).sort({ created_at: -1 }).lean();
+    res.json({ success: true, analysis: analysis || null });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

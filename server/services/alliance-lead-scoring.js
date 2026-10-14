@@ -1,4 +1,4 @@
-const db = require('../db/connection');
+const { AllianceProspects, AllianceProspectScoreEvents } = require('../models');
 
 const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
 
@@ -16,25 +16,34 @@ function scoreDelta(message, intent = '') {
   return Math.max(-40, Math.min(35, delta));
 }
 
-async function scoreAllianceProspect(prospectId, { message, intent, channel, eventKey }, queryable = db) {
+async function scoreAllianceProspect(prospectId, { message, intent, channel, eventKey }) {
   if (!prospectId || !eventKey) return null;
   const delta = scoreDelta(message, intent);
-  const inserted = await queryable.query(
-    `INSERT INTO alliance_prospect_score_events(prospect_id,channel,event_key,intent,score_delta)
-     VALUES($1,$2,$3,$4,$5) ON CONFLICT(channel,event_key) DO NOTHING RETURNING id`,
-    [prospectId, channel || 'unknown', String(eventKey), intent || null, delta]
-  );
-  if (!inserted.rowCount) {
-    const existing = await queryable.query(`SELECT ai_score FROM alliance_prospects WHERE id=$1`, [prospectId]);
-    return existing.rows[0]?.ai_score ?? null;
+  try {
+    await AllianceProspectScoreEvents.create({
+      prospect_id: prospectId,
+      channel: channel || 'unknown',
+      event_key: String(eventKey),
+      intent: intent || null,
+      score_delta: delta,
+    });
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    // Event already scored (ON CONFLICT DO NOTHING) — report the current score.
+    const existing = await AllianceProspects.findOne({ id: prospectId }, { ai_score: 1 }).lean();
+    return existing?.ai_score ?? null;
   }
-  const updated = await queryable.query(
-    `UPDATE alliance_prospects
-     SET ai_score=LEAST(100,GREATEST(0,COALESCE(ai_score,10)+$1)),updated_at=NOW()
-     WHERE id=$2 RETURNING ai_score`,
-    [delta, prospectId]
-  );
-  return clamp(updated.rows[0]?.ai_score);
+  const updated = await AllianceProspects.findOneAndUpdate(
+    { id: prospectId },
+    [{
+      $set: {
+        ai_score: { $min: [100, { $max: [0, { $add: [{ $ifNull: ['$ai_score', 10] }, delta] }] }] },
+        updated_at: '$$NOW',
+      },
+    }],
+    { new: true, projection: { ai_score: 1 } }
+  ).lean();
+  return clamp(updated?.ai_score);
 }
 
 module.exports = { scoreAllianceProspect, scoreDelta };

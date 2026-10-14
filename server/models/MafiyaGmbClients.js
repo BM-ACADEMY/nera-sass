@@ -1,0 +1,28 @@
+const { defineModel } = require('../db/mongo');
+
+module.exports = defineModel('mafiya_gmb_clients', {
+  id: { type: Number },
+  business_name: { type: String },
+  business_category: { type: String },
+  custom_category: { type: String },
+  contact_person: { type: String },
+  phone_number: { type: String },
+  website_url: { type: String },
+  gmb_url: { type: String },
+  gmb_email: { type: String },
+  gmb_verified: { type: Boolean, default: false },
+  status: { type: String, default: "active" },
+  created_at: { type: Date, default: Date.now },
+  latitude: { type: Number },
+  longitude: { type: Number },
+  reviews_cache: { type: String },
+  reviews_updated_at: { type: Date },
+  logo_url: { type: String },
+  google_account_id: { type: String },
+  google_location_id: { type: String },
+  ga4_property_id: { type: String },
+  display_name: { type: String },
+  business_address: { type: String },
+  client_type: { type: String, default: "internal" },
+  plan_id: { type: Number },
+}, { autoId: true, indexes: [['plan_id']] });

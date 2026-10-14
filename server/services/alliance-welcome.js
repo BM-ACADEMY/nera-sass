@@ -1,5 +1,12 @@
 const axios = require('axios');
-const db = require('../db/connection');
+const {
+  AllianceInboxMessages,
+  AllianceInboxContacts,
+  AllianceInboxConversations,
+  AllianceInboxSettings,
+  AllianceProspects,
+  AllianceAudiences,
+} = require('../models');
 
 let processing = false;
 
@@ -19,45 +26,40 @@ async function processQueuedAllianceWelcomes(io) {
   processing = true;
   try {
     while (true) {
-      const client = await db.connect();
-      let job;
-      try {
-        await client.query('BEGIN');
-        const result = await client.query(
-          `SELECT m.id, m.contact_id, m.conversation_id, m.content, m.raw_payload,
-                  c.phone, c.name, c.profile_name, p.business_name, a.brand,
-                  cv.phone_number_id
-           FROM alliance_inbox_messages m
-           JOIN alliance_inbox_contacts c ON c.id = m.contact_id
-           JOIN alliance_inbox_conversations cv ON cv.id = m.conversation_id
-           LEFT JOIN alliance_prospects p ON p.id = c.prospect_id
-           LEFT JOIN alliance_audiences a ON a.code = p.audience
-           WHERE m.direction = 'outbound' AND m.msg_type = 'template' AND m.status = 'queued'
-             AND m.raw_payload->>'purpose' = 'welcome'
-           ORDER BY m.created_at
-           FOR UPDATE OF m SKIP LOCKED LIMIT 1`
-        );
-        if (!result.rowCount) {
-          await client.query('COMMIT');
-          client.release();
-          break;
-        }
-        job = result.rows[0];
-        await client.query(`UPDATE alliance_inbox_messages SET status = 'sending' WHERE id = $1`, [job.id]);
-        await client.query(`UPDATE alliance_inbox_conversations SET welcome_status = 'sending', welcome_error = NULL WHERE id = $1`, [job.conversation_id]);
-        await client.query('COMMIT');
-      } catch (error) {
-        await client.query('ROLLBACK');
-        client.release();
-        throw error;
-      }
-      client.release();
+      // Atomically claim the oldest queued welcome template (replaces FOR UPDATE SKIP LOCKED).
+      const message = await AllianceInboxMessages.findOneAndUpdate(
+        { direction: 'outbound', msg_type: 'template', status: 'queued', 'raw_payload.purpose': 'welcome' },
+        { $set: { status: 'sending' } },
+        { sort: { created_at: 1 }, projection: { id: 1, contact_id: 1, conversation_id: 1, content: 1, raw_payload: 1 } }
+      ).lean();
+      if (!message) break;
 
-      const settingsResult = await db.query(
-        `SELECT * FROM alliance_inbox_settings WHERE active = TRUE AND phone_number_id = $1 LIMIT 1`,
-        [job.phone_number_id]
-      );
-      const settings = settingsResult.rows[0] || {
+      const [contact, conversation] = await Promise.all([
+        AllianceInboxContacts.findOne({ id: message.contact_id }).lean(),
+        AllianceInboxConversations.findOne({ id: message.conversation_id }, { phone_number_id: 1 }).lean(),
+      ]);
+      if (!contact || !conversation) {
+        await AllianceInboxMessages.updateOne({ id: message.id }, { $set: { status: 'failed', error_message: 'Contact or conversation no longer exists.' } });
+        continue;
+      }
+      const prospect = contact.prospect_id ? await AllianceProspects.findOne({ id: contact.prospect_id }, { business_name: 1, audience: 1 }).lean() : null;
+      const audience = prospect?.audience ? await AllianceAudiences.findOne({ code: prospect.audience }, { brand: 1 }).lean() : null;
+      const job = {
+        id: message.id,
+        contact_id: message.contact_id,
+        conversation_id: message.conversation_id,
+        content: message.content,
+        raw_payload: message.raw_payload,
+        phone: contact.phone,
+        name: contact.name,
+        profile_name: contact.profile_name,
+        business_name: prospect?.business_name ?? null,
+        brand: audience?.brand ?? null,
+        phone_number_id: conversation.phone_number_id,
+      };
+      await AllianceInboxConversations.updateOne({ id: job.conversation_id }, { $set: { welcome_status: 'sending', welcome_error: null } });
+
+      const settings = await AllianceInboxSettings.findOne({ active: true, phone_number_id: job.phone_number_id }).lean() || {
         phone_number_id: process.env.ALLIANCE_WA_PHONE_NUMBER_ID,
         access_token_env: 'ALLIANCE_WA_ACCESS_TOKEN',
       };
@@ -87,27 +89,26 @@ async function processQueuedAllianceWelcomes(io) {
           { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
         );
         const waMessageId = response.data?.messages?.[0]?.id || null;
-        const saved = await db.query(
-          `UPDATE alliance_inbox_messages
-           SET status = 'sent', wa_msg_id = $1, raw_payload = raw_payload || $2::jsonb, sent_at = NOW()
-           WHERE id = $3 RETURNING *`,
-          [waMessageId, JSON.stringify({ meta_response: response.data }), job.id]
-        );
-        await db.query(
-          `UPDATE alliance_inbox_conversations
-           SET welcome_status = 'sent', welcome_wa_msg_id = $1, welcome_sent_at = NOW(),
-               welcome_error = NULL, last_message = $2, last_message_at = NOW(), updated_at = NOW()
-           WHERE id = $3`,
-          [waMessageId, job.content || `[Template: ${templateName}]`, job.conversation_id]
+        const saved = await AllianceInboxMessages.findOneAndUpdate(
+          { id: job.id },
+          { $set: { status: 'sent', wa_msg_id: waMessageId, 'raw_payload.meta_response': response.data, sent_at: new Date() } },
+          { new: true, projection: { _id: 0 } }
+        ).lean();
+        await AllianceInboxConversations.updateOne(
+          { id: job.conversation_id },
+          { $set: {
+            welcome_status: 'sent', welcome_wa_msg_id: waMessageId, welcome_sent_at: new Date(),
+            welcome_error: null, last_message: job.content || `[Template: ${templateName}]`, last_message_at: new Date(), updated_at: new Date(),
+          } }
         );
         io?.emit('alliance_outgoing_message', {
           lead_id: String(job.contact_id),
-          message: { ...saved.rows[0], type: 'template', timestamp: saved.rows[0].sent_at },
+          message: { ...saved, type: 'template', timestamp: saved.sent_at },
         });
       } catch (error) {
         const reason = error.response?.data?.error?.message || error.message || 'Welcome template send failed.';
-        await db.query(`UPDATE alliance_inbox_messages SET status = 'failed', error_message = $1 WHERE id = $2`, [reason, job.id]);
-        await db.query(`UPDATE alliance_inbox_conversations SET welcome_status = 'failed', welcome_error = $1 WHERE id = $2`, [reason, job.conversation_id]);
+        await AllianceInboxMessages.updateOne({ id: job.id }, { $set: { status: 'failed', error_message: reason } });
+        await AllianceInboxConversations.updateOne({ id: job.conversation_id }, { $set: { welcome_status: 'failed', welcome_error: reason } });
         console.error('[Alliance welcome template]', reason);
       }
     }

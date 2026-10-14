@@ -1,4 +1,4 @@
-const pool = require('../../db/connection');
+const { MafiyaGmbClients, ClientDirectoryCache, CitationScans, CitationResults } = require('../../models');
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { chromium } = require('playwright');
@@ -924,11 +924,10 @@ async function runCheckForBusiness(businessId, forceRefresh = false, io = null) 
     directoryStatuses: SUPPORTED_DIRECTORIES.map(d => ({ name: d.name, status: 'Pending', type: 'Pending' }))
   });
 
-  const clientRes = await pool.query('SELECT * FROM mafiya_gmb_clients WHERE id = $1', [businessId]);
-  if (clientRes.rowCount === 0) {
+  const client = await MafiyaGmbClients.findOne({ id: businessId }).lean();
+  if (!client) {
     throw new Error('Business client not found');
   }
-  const client = clientRes.rows[0];
 
   const businessName = client.business_name;
   const phone = client.phone_number;
@@ -969,10 +968,11 @@ async function runCheckForBusiness(businessId, forceRefresh = false, io = null) 
   // ── FIX: Cache HIT condition — only count rows with a real listing_url ──
   // Rows with listing_url = NULL are Missing Listing entries that should
   // NOT block a fresh search from running.
-  const cacheRes = await pool.query(`
-    SELECT * FROM client_directory_cache
-    WHERE client_id = $1 AND updated_at >= NOW() - INTERVAL '7 days'
-  `, [businessId]);
+  const cacheRows = await ClientDirectoryCache.find({
+    client_id: businessId,
+    updated_at: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+  }).lean();
+  const cacheRes = { rows: cacheRows, rowCount: cacheRows.length };
 
   const cacheRowsWithUrl = cacheRes.rows.filter(r => r.listing_url && r.listing_url.trim() !== '');
   const cacheMissingRows = cacheRes.rows.filter(r => !r.listing_url || r.listing_url.trim() === '');
@@ -1074,12 +1074,10 @@ async function runCheckForBusiness(businessId, forceRefresh = false, io = null) 
     });
   }
 
-  const scanInsertRes = await pool.query(
-    `INSERT INTO citation_scans ("businessId", score, "totalDirectories", matched, mismatched, missing)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-    [businessId, 0, SUPPORTED_DIRECTORIES.length, 0, 0, 0]
-  );
-  const scanId = scanInsertRes.rows[0].id;
+  const scanInsert = await CitationScans.create({
+    businessId, score: 0, totalDirectories: SUPPORTED_DIRECTORIES.length, matched: 0, mismatched: 0, missing: 0,
+  });
+  const scanId = scanInsert.id;
 
   let verifiedCount = 0;
   let mismatchCount = 0;
@@ -1220,20 +1218,22 @@ async function runCheckForBusiness(businessId, forceRefresh = false, io = null) 
 
       // Upsert into client_directory_cache (only for live scrapes with real URLs)
       const cacheBName = (scraped && isValidBusinessName(scraped.businessName)) ? scraped.businessName : null;
-      await pool.query(`
-        INSERT INTO client_directory_cache
-          (client_id, directory, listing_url, business_name, address, phone, website, status, last_scraped_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
-        ON CONFLICT (client_id, directory) DO UPDATE SET
-          listing_url = EXCLUDED.listing_url,
-          business_name = EXCLUDED.business_name,
-          address = EXCLUDED.address,
-          phone = EXCLUDED.phone,
-          website = EXCLUDED.website,
-          status = EXCLUDED.status,
-          last_scraped_at = NOW(),
-          updated_at = NOW()
-      `, [businessId, dir.name, listingUrl, cacheBName, scraped?.address || null, scraped?.phone || null, scraped?.website || null, finalStatus]);
+      const existingCache = await ClientDirectoryCache.findOne({ client_id: businessId, directory: dir.name }, { id: 1 }).lean();
+      const cacheFields = {
+        listing_url: listingUrl,
+        business_name: cacheBName,
+        address: scraped?.address || null,
+        phone: scraped?.phone || null,
+        website: scraped?.website || null,
+        status: finalStatus,
+        last_scraped_at: new Date(),
+        updated_at: new Date(),
+      };
+      if (existingCache) {
+        await ClientDirectoryCache.updateOne({ id: existingCache.id }, { $set: cacheFields });
+      } else {
+        await ClientDirectoryCache.create({ client_id: businessId, directory: dir.name, ...cacheFields });
+      }
 
       console.log(`    → Cached: listing_url="${listingUrl}", status="${finalStatus}"`);
     }
@@ -1243,15 +1243,12 @@ async function runCheckForBusiness(businessId, forceRefresh = false, io = null) 
     const aAddr = scraped?.address || null;
     const wWeb = scraped?.website || null;
 
-    const resultRes = await pool.query(
-      `INSERT INTO citation_results (
-        "scanId", directory, "listingUrl", "businessName", phone, address, website, status, confidence
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [scanId, dir.name, listingUrl, bName, pPhone, aAddr, wWeb, finalStatus, 100]
-    );
+    const resultDoc = await CitationResults.create({
+      scanId, directory: dir.name, listingUrl, businessName: bName, phone: pPhone, address: aAddr, website: wWeb,
+      status: finalStatus, confidence: 100,
+    });
 
-    results.push(resultRes.rows[0]);
+    results.push(resultDoc.toObject());
     directoryStatuses.push({
       name: dir.name,
       status: finalStatus,
@@ -1291,12 +1288,11 @@ async function runCheckForBusiness(businessId, forceRefresh = false, io = null) 
 
   const score = calculateScore(verifiedCount, totalDirs);
 
-  const scanUpdateRes = await pool.query(
-    `UPDATE citation_scans
-     SET score = $1, matched = $2, mismatched = $3, missing = $4, "debugData" = $5
-     WHERE id = $6 RETURNING *`,
-    [score, verifiedCount, mismatchCount, missingCount, debugData || null, scanId]
-  );
+  const updatedScan = await CitationScans.findOneAndUpdate(
+    { id: scanId },
+    { $set: { score, matched: verifiedCount, mismatched: mismatchCount, missing: missingCount, debugData: debugData || null } },
+    { new: true, projection: { _id: 0 } }
+  ).lean();
 
   const totalScanTimeSeconds = parseFloat(((Date.now() - startTime) / 1000).toFixed(1));
 
@@ -1333,7 +1329,7 @@ async function runCheckForBusiness(businessId, forceRefresh = false, io = null) 
   });
 
   return {
-    scan: scanUpdateRes.rows[0],
+    scan: updatedScan,
     results,
     summary,
     debugData

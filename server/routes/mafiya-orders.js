@@ -1,70 +1,57 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../db/connection');
+const { MafiyaOrders } = require('../models');
+const { ilike } = require('../db/mongo');
 
-// Auto-initialize table & seed default data
+const NO_ID = { _id: 0 };
+
+// Auto-seed default data
 const initTable = async () => {
   try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS mafiya_orders (
-        id SERIAL PRIMARY KEY,
-        title VARCHAR(255) NOT NULL,
-        priority VARCHAR(20) DEFAULT 'High',
-        tag_category VARCHAR(100),
-        assignee VARCHAR(100) DEFAULT 'Satish',
-        client_name VARCHAR(255),
-        description TEXT,
-        box_type VARCHAR(50) DEFAULT 'steps',
-        box_content JSONB DEFAULT '{}',
-        status VARCHAR(20) DEFAULT 'open',
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-    `);
-
-    const countRes = await pool.query('SELECT COUNT(*) FROM mafiya_orders');
-    if (parseInt(countRes.rows[0].count) === 0) {
+    const count = await MafiyaOrders.countDocuments();
+    if (count === 0) {
       // Seed default orders matching the screenshot
-      await pool.query(`
-        INSERT INTO mafiya_orders (title, priority, tag_category, assignee, client_name, description, box_type, box_content, status)
-        VALUES
-        (
-          'Fix Justdial listing — Namma Pondy Properties',
-          'High',
-          'Citation mismatch',
-          'Satish',
-          'Namma Pondy Properties',
-          'Name mismatch between Justdial and Google. This tells Google your business info can''t be trusted — rank drops.',
-          'steps',
-          '{"steps": ["Go to justdial.com/business-owner-login", "Find ''Namma Pondy Realty'' listing — Click Edit", "Change name to: Namma Pondy Properties", "Save and mark done"]}',
-          'open'
-        ),
-        (
-          'Upload 3 photos to GMB — BM Academy',
-          'Medium',
-          'Photo freshness',
-          'Babila',
-          'BM Academy',
-          'No new photos in 16 days. Google rewards active profiles with higher visibility.',
-          'photos',
-          '{"photosNeeded": "Office interior · Team photo · Class in session", "captions": ["BM Academy — Pondicherry''s #1 digital marketing training centre", "Expert faculty with 14+ years of industry experience", "Hands-on practical training — not just theory, real results"]}',
-          'open'
-        ),
-        (
-          'Add services list to GBP — BM TechX',
-          'Low',
-          'Profile completeness',
-          'Satish',
-          'BM TechX',
-          'GBP services list is empty. Competitors have 8-12 services. Missing = missing keyword matches.',
-          'services',
-          '{"servicesText": "Services to add (copy-paste into GBP → Edit → Services):", "servicesList": ["Social Media Marketing", "Google Ads Management", "SEO Services", "Website Design & Development", "Branding & Logo Design", "Google Business Profile Management", "Meta Ads", "Content Creation"]}',
-          'open'
-        );
-      `);
-      console.log('✅ mafiya_orders table seeded with initial orders');
+      for (const order of [
+        {
+          title: 'Fix Justdial listing — Namma Pondy Properties',
+          priority: 'High',
+          tag_category: 'Citation mismatch',
+          assignee: 'Satish',
+          client_name: 'Namma Pondy Properties',
+          description: "Name mismatch between Justdial and Google. This tells Google your business info can't be trusted — rank drops.",
+          box_type: 'steps',
+          box_content: { steps: ['Go to justdial.com/business-owner-login', "Find 'Namma Pondy Realty' listing — Click Edit", 'Change name to: Namma Pondy Properties', 'Save and mark done'] },
+          status: 'open',
+        },
+        {
+          title: 'Upload 3 photos to GMB — BM Academy',
+          priority: 'Medium',
+          tag_category: 'Photo freshness',
+          assignee: 'Babila',
+          client_name: 'BM Academy',
+          description: 'No new photos in 16 days. Google rewards active profiles with higher visibility.',
+          box_type: 'photos',
+          box_content: { photosNeeded: 'Office interior · Team photo · Class in session', captions: ["BM Academy — Pondicherry's #1 digital marketing training centre", 'Expert faculty with 14+ years of industry experience', 'Hands-on practical training — not just theory, real results'] },
+          status: 'open',
+        },
+        {
+          title: 'Add services list to GBP — BM TechX',
+          priority: 'Low',
+          tag_category: 'Profile completeness',
+          assignee: 'Satish',
+          client_name: 'BM TechX',
+          description: 'GBP services list is empty. Competitors have 8-12 services. Missing = missing keyword matches.',
+          box_type: 'services',
+          box_content: { servicesText: 'Services to add (copy-paste into GBP → Edit → Services):', servicesList: ['Social Media Marketing', 'Google Ads Management', 'SEO Services', 'Website Design & Development', 'Branding & Logo Design', 'Google Business Profile Management', 'Meta Ads', 'Content Creation'] },
+          status: 'open',
+        },
+      ]) {
+        await MafiyaOrders.create(order);
+      }
+      console.log('✅ mafiya_orders collection seeded with initial orders');
     }
   } catch (err) {
-    console.error('Error initializing mafiya_orders table:', err.message);
+    console.error('Error initializing mafiya_orders collection:', err.message);
   }
 };
 
@@ -74,26 +61,14 @@ initTable();
 router.get('/', async (req, res) => {
   try {
     const { status, priority, client } = req.query;
-    let query = 'SELECT * FROM mafiya_orders WHERE 1=1';
-    const params = [];
+    const filter = {};
 
-    if (status) {
-      params.push(status);
-      query += ` AND status = $${params.length}`;
-    }
-    if (priority) {
-      params.push(priority);
-      query += ` AND priority = $${params.length}`;
-    }
-    if (client) {
-      params.push(`%${client}%`);
-      query += ` AND client_name ILIKE $${params.length}`;
-    }
+    if (status) filter.status = status;
+    if (priority) filter.priority = priority;
+    if (client) filter.client_name = ilike(client);
 
-    query += ' ORDER BY id ASC';
-
-    const result = await pool.query(query, params);
-    res.json(result.rows);
+    const rows = await MafiyaOrders.find(filter, NO_ID).sort({ id: 1 }).lean();
+    res.json(rows);
   } catch (err) {
     console.error('[Mafiya Orders] GET / error:', err);
     res.status(500).json({ error: 'Server error fetching orders' });
@@ -108,22 +83,18 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const result = await pool.query(
-      `INSERT INTO mafiya_orders (title, priority, tag_category, assignee, client_name, description, box_type, box_content, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open')
-       RETURNING *`,
-      [
-        title,
-        priority || 'High',
-        tag_category || 'General',
-        assignee || 'Satish',
-        client_name || 'General Client',
-        description || '',
-        box_type || 'steps',
-        JSON.stringify(box_content || {})
-      ]
-    );
-    res.status(201).json(result.rows[0]);
+    const order = await MafiyaOrders.create({
+      title,
+      priority: priority || 'High',
+      tag_category: tag_category || 'General',
+      assignee: assignee || 'Satish',
+      client_name: client_name || 'General Client',
+      description: description || '',
+      box_type: box_type || 'steps',
+      box_content: box_content || {},
+      status: 'open',
+    });
+    res.status(201).json(order.toObject());
   } catch (err) {
     console.error('[Mafiya Orders] POST / error:', err);
     res.status(500).json({ error: 'Server error creating order' });
@@ -136,16 +107,17 @@ router.patch('/:id/status', async (req, res) => {
   const { status } = req.body;
 
   try {
-    const result = await pool.query(
-      'UPDATE mafiya_orders SET status = $1 WHERE id = $2 RETURNING *',
-      [status || 'completed', id]
-    );
+    const order = await MafiyaOrders.findOneAndUpdate(
+      { id },
+      { $set: { status: status || 'completed' } },
+      { new: true, projection: NO_ID }
+    ).lean();
 
-    if (result.rows.length === 0) {
+    if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    res.json(result.rows[0]);
+    res.json(order);
   } catch (err) {
     console.error('[Mafiya Orders] PATCH /:id/status error:', err);
     res.status(500).json({ error: 'Server error updating order status' });
@@ -158,16 +130,17 @@ router.patch('/:id/assign', async (req, res) => {
   const { assignee } = req.body;
 
   try {
-    const result = await pool.query(
-      'UPDATE mafiya_orders SET assignee = $1 WHERE id = $2 RETURNING *',
-      [assignee, id]
-    );
+    const order = await MafiyaOrders.findOneAndUpdate(
+      { id },
+      { $set: { assignee } },
+      { new: true, projection: NO_ID }
+    ).lean();
 
-    if (result.rows.length === 0) {
+    if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    res.json(result.rows[0]);
+    res.json(order);
   } catch (err) {
     console.error('[Mafiya Orders] PATCH /:id/assign error:', err);
     res.status(500).json({ error: 'Server error updating assignee' });
@@ -178,7 +151,7 @@ router.patch('/:id/assign', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    await pool.query('DELETE FROM mafiya_orders WHERE id = $1', [id]);
+    await MafiyaOrders.deleteOne({ id });
     res.json({ success: true, id });
   } catch (err) {
     console.error('[Mafiya Orders] DELETE /:id error:', err);

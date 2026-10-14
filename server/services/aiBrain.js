@@ -1,5 +1,5 @@
 const openRouter = require('./openrouter');
-const db = require('../db/connection');
+const { Leads, Conversations, Messages } = require('../models');
 const { getLeadOSBrand } = require('./leadosBrand');
 require('dotenv').config();
 
@@ -11,11 +11,11 @@ require('dotenv').config();
 async function evaluateLeadBrandAndSchedule(leadId) {
   try {
     const brand = await getLeadOSBrand();
-    await db.query(`UPDATE leads
-      SET client_id=$1,
-          next_follow_up=COALESCE(next_follow_up, NOW() + INTERVAL '15 minutes'),
-          updated_at=NOW()
-      WHERE id=$2`, [brand.id, leadId]);
+    await Leads.updateOne({ id: leadId }, [{ $set: {
+      client_id: brand.id,
+      next_follow_up: { $ifNull: ['$next_follow_up', { $add: ['$$NOW', 15 * 60 * 1000] }] },
+      updated_at: '$$NOW',
+    } }]);
     console.log(`[AI Brain] Locked LeadOS lead ${leadId} to ${brand.name}.`);
 
   } catch (err) {
@@ -30,27 +30,24 @@ async function evaluateStuckLeads() {
   if (!openRouter.isConfigured) return;
 
   try {
-    const stuckLeads = await db.query(`
-      SELECT l.id, l.name, l.source, l.status, l.touch_count, l.client_id, l.next_follow_up
-      FROM leads l
-      WHERE l.status NOT IN ('lost', 'converted')
-        AND l.client_id IS NOT NULL
-        AND (l.next_follow_up IS NULL OR l.next_follow_up < NOW())
-      ORDER BY l.created_at ASC
-      LIMIT 50
-    `);
+    const stuckLeads = await Leads.find(
+      {
+        status: { $nin: ['lost', 'converted', null] },
+        client_id: { $ne: null },
+        $or: [{ next_follow_up: null }, { next_follow_up: { $lt: new Date() } }],
+      },
+      { _id: 0, id: 1, name: 1, source: 1, status: 1, touch_count: 1, client_id: 1, next_follow_up: 1 }
+    ).sort({ created_at: 1 }).limit(50).lean();
 
-    for (const lead of stuckLeads.rows) {
+    for (const lead of stuckLeads) {
       // Get conversation history (last 5 messages)
-      const msgs = await db.query(`
-        SELECT content, direction, sent_at
-        FROM messages
-        WHERE conversation_id IN (SELECT id FROM conversations WHERE lead_id = $1)
-        ORDER BY sent_at DESC
-        LIMIT 5
-      `, [lead.id]);
+      const conversationIds = await Conversations.distinct('id', { lead_id: lead.id });
+      const msgs = await Messages.find(
+        { conversation_id: { $in: conversationIds } },
+        { _id: 0, content: 1, direction: 1, sent_at: 1 }
+      ).sort({ sent_at: -1 }).limit(5).lean();
       
-      const history = msgs.rows.reverse().map(m => `[${m.direction.toUpperCase()}]: ${m.content}`).join('\n');
+      const history = msgs.reverse().map(m => `[${m.direction.toUpperCase()}]: ${m.content}`).join('\n');
       
       const prompt = `
 You are the AI Follow-Up Manager for a CRM.
@@ -89,20 +86,16 @@ FORMAT:
       const result = JSON.parse(aiText);
       const delayHours = parseInt(result.delay_hours) || 24;
 
-      await db.query(`
-        UPDATE leads 
-        SET 
-          next_follow_up = NOW() + INTERVAL '${delayHours} hours',
-          updated_at = NOW()
-        WHERE id = $1
-      `, [lead.id]);
+      await Leads.updateOne(
+        { id: lead.id },
+        { $set: { next_follow_up: new Date(Date.now() + delayHours * 3600 * 1000), updated_at: new Date() } }
+      );
       
       if (result.internal_note) {
         // Fallback: append note directly to lead notes if history table doesn't exist.
-        await db.query(`
-          UPDATE leads SET notes = COALESCE(notes, '') || '\n[' || NOW() || '] AI Brain: ' || $1
-          WHERE id = $2
-        `, [result.internal_note, lead.id]).catch(e => console.error("Could not save note", e));
+        await Leads.updateOne({ id: lead.id }, [{ $set: {
+          notes: { $concat: [{ $ifNull: ['$notes', ''] }, `\n[${new Date().toISOString()}] AI Brain: `, String(result.internal_note)] },
+        } }]).catch(e => console.error("Could not save note", e));
       }
 
       console.log(`[AI Brain] Processed stuck lead ${lead.id}, next follow-up in ${delayHours} hours.`);

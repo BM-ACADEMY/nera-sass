@@ -1,4 +1,4 @@
-const pool = require('../db/connection');
+const { MafiyaCitationsScansLog, CitationScans, CitationResults } = require('../models');
 const { runCheckForBusiness } = require('../services/citations/citation.service');
 
 async function runCheck(req, res) {
@@ -11,11 +11,10 @@ async function runCheck(req, res) {
 
   try {
     const limitCheck = await checkLimit(businessId, 'mafiya_citations_scans', async () => {
-      const countRes = await pool.query(
-        'SELECT COUNT(*) FROM mafiya_citations_scans_log WHERE client_id = $1 AND scanned_at >= NOW() - INTERVAL \'30 days\'',
-        [businessId]
-      );
-      return parseInt(countRes.rows[0].count, 10);
+      return MafiyaCitationsScansLog.countDocuments({
+        client_id: businessId,
+        scanned_at: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      });
     });
 
     if (!limitCheck.allowed) {
@@ -28,10 +27,7 @@ async function runCheck(req, res) {
     }
 
     // Log the manual check
-    await pool.query(
-      'INSERT INTO mafiya_citations_scans_log (client_id) VALUES ($1)',
-      [businessId]
-    );
+    await MafiyaCitationsScansLog.create({ client_id: businessId });
 
     const io = req.app ? req.app.get('io') : null;
     const result = await runCheckForBusiness(businessId, forceRefresh, io);
@@ -50,30 +46,18 @@ async function getScan(req, res) {
 
   try {
     // 1. Get latest scan
-    const scanRes = await pool.query(
-      `SELECT * FROM citation_scans 
-       WHERE "businessId" = $1 
-       ORDER BY id DESC LIMIT 1`,
-      [businessId]
-    );
+    const scan = await CitationScans.findOne({ businessId }, { _id: 0 }).sort({ id: -1 }).lean();
 
-    if (scanRes.rowCount === 0) {
+    if (!scan) {
       return res.json({ scan: null, results: [] });
     }
 
-    const scan = scanRes.rows[0];
-
     // 2. Get results for that scan
-    const resultsRes = await pool.query(
-      `SELECT * FROM citation_results 
-       WHERE "scanId" = $1 
-       ORDER BY directory ASC`,
-      [scan.id]
-    );
+    const results = await CitationResults.find({ scanId: scan.id }, { _id: 0 }).sort({ directory: 1 }).lean();
 
     res.json({
       scan,
-      results: resultsRes.rows,
+      results,
       debugData: scan.debugData || null
     });
   } catch (err) {
@@ -90,51 +74,35 @@ async function markFixed(req, res) {
 
   try {
     // 1. Find the result to get the scanId
-    const resultQuery = await pool.query('SELECT "scanId" FROM citation_results WHERE id = $1', [resultId]);
-    if (resultQuery.rowCount === 0) {
+    const resultRow = await CitationResults.findOne({ id: resultId }, { scanId: 1 }).lean();
+    if (!resultRow) {
       return res.status(404).json({ error: 'Citation result not found' });
     }
-    
-    const scanId = resultQuery.rows[0].scanId;
+
+    const scanId = resultRow.scanId;
 
     // 2. Update the status of this result to 'Match'
-    await pool.query(
-      `UPDATE citation_results 
-       SET status = 'Match' 
-       WHERE id = $1`,
-      [resultId]
-    );
+    await CitationResults.updateOne({ id: resultId }, { $set: { status: 'Match' } });
 
     // 3. Recalculate the scan summary counts and score
-    const countsRes = await pool.query(
-      `SELECT 
-         COUNT(*) FILTER (WHERE status = 'Match') as matched,
-         COUNT(*) FILTER (WHERE status = 'Mismatch') as mismatched,
-         COUNT(*) FILTER (WHERE status = 'Missing') as missing,
-         COUNT(*) as total
-       FROM citation_results WHERE "scanId" = $1`,
-      [scanId]
-    );
-
-    const matched = parseInt(countsRes.rows[0].matched || '0', 10);
-    const mismatched = parseInt(countsRes.rows[0].mismatched || '0', 10);
-    const missing = parseInt(countsRes.rows[0].missing || '0', 10);
-    const total = parseInt(countsRes.rows[0].total || '0', 10);
+    const statuses = await CitationResults.find({ scanId }, { _id: 0, status: 1 }).lean();
+    const matched = statuses.filter((r) => r.status === 'Match').length;
+    const mismatched = statuses.filter((r) => r.status === 'Mismatch').length;
+    const missing = statuses.filter((r) => r.status === 'Missing').length;
+    const total = statuses.length;
 
     const score = total > 0 ? Math.round((matched / total) * 100) : 0;
 
     // 4. Update the scan record
-    const updatedScanRes = await pool.query(
-      `UPDATE citation_scans
-       SET score = $1, matched = $2, mismatched = $3, missing = $4
-       WHERE id = $5
-       RETURNING *`,
-      [score, matched, mismatched, missing, scanId]
-    );
+    const updatedScan = await CitationScans.findOneAndUpdate(
+      { id: scanId },
+      { $set: { score, matched, mismatched, missing } },
+      { new: true, projection: { _id: 0 } }
+    ).lean();
 
     res.json({
       success: true,
-      scan: updatedScanRes.rows[0]
+      scan: updatedScan
     });
   } catch (err) {
     console.error('[Citation Controller] markFixed error:', err);

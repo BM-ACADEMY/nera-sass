@@ -1,0 +1,26 @@
+const { defineModel, Mixed } = require('../db/mongo');
+
+module.exports = defineModel('campaign_message_queue', {
+  id: { type: Number },
+  campaign_id: { type: Number },
+  lead_id: { type: Number },
+  phone: { type: String },
+  name: { type: String },
+  template_name: { type: String },
+  template_language: { type: String, default: "en" },
+  template_body: { type: String },
+  template_header: { type: String },
+  template_parameters: { type: Mixed, default: () => ({}) },
+  recipient_parameters: { type: Mixed, default: () => ({}) },
+  recipient_data: { type: Mixed, default: () => ({}) },
+  campaign_name: { type: String },
+  brand_name: { type: String },
+  wa_token: { type: String },
+  phone_number_id: { type: String },
+  status: { type: String, default: "pending" },
+  attempts: { type: Number, default: 0 },
+  last_attempt_at: { type: Date },
+  error_message: { type: String },
+  created_at: { type: Date, default: Date.now },
+  processed_at: { type: Date },
+}, { autoId: true, indexes: [['campaign_id'], ['lead_id']] });

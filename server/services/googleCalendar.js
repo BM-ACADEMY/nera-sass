@@ -1,19 +1,10 @@
 const crypto = require('crypto');
 const { google } = require('googleapis');
-const pool = require('../db/connection');
+const { GoogleCalendarCredentials } = require('../models');
 const { encrypt, decrypt } = require('../utils/crypto');
 
 const TIME_ZONE = process.env.GOOGLE_CALENDAR_TIME_ZONE || 'Asia/Kolkata';
 const ORGANIZER_EMAIL = process.env.GOOGLE_CALENDAR_ID || 'bmacademypondy@gmail.com';
-
-const calendarCredentialsReady = pool.query(`
-  CREATE TABLE IF NOT EXISTS google_calendar_credentials (
-    id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-    refresh_token_encrypted TEXT NOT NULL,
-    connected_email TEXT,
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-  )
-`).catch(error => console.error('[Google Calendar] Credential table initialization failed:', error.message));
 
 const createOAuthClient = () => new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -30,10 +21,9 @@ const requireOAuthConfig = () => {
 
 const getStoredRefreshToken = async () => {
   if (process.env.GOOGLE_REFRESH_TOKEN) return process.env.GOOGLE_REFRESH_TOKEN;
-  await calendarCredentialsReady;
-  const result = await pool.query('SELECT refresh_token_encrypted FROM google_calendar_credentials WHERE id = 1');
-  return result.rows[0]?.refresh_token_encrypted
-    ? decrypt(result.rows[0].refresh_token_encrypted)
+  const row = await GoogleCalendarCredentials.findOne({ id: 1 }, { refresh_token_encrypted: 1 }).lean();
+  return row?.refresh_token_encrypted
+    ? decrypt(row.refresh_token_encrypted)
     : null;
 };
 
@@ -63,15 +53,15 @@ const exchangeAndStoreCode = async code => {
   client.setCredentials(tokens);
   const oauth = google.oauth2({ version: 'v2', auth: client });
   const profile = await oauth.userinfo.get().catch(() => ({ data: {} }));
-  await calendarCredentialsReady;
-  await pool.query(`
-    INSERT INTO google_calendar_credentials (id, refresh_token_encrypted, connected_email, updated_at)
-    VALUES (1, $1, $2, NOW())
-    ON CONFLICT (id) DO UPDATE SET
-      refresh_token_encrypted = EXCLUDED.refresh_token_encrypted,
-      connected_email = EXCLUDED.connected_email,
-      updated_at = NOW()
-  `, [encrypt(tokens.refresh_token), profile.data.email || ORGANIZER_EMAIL]);
+  await GoogleCalendarCredentials.updateOne(
+    { id: 1 },
+    { $set: {
+      refresh_token_encrypted: encrypt(tokens.refresh_token),
+      connected_email: profile.data.email || ORGANIZER_EMAIL,
+      updated_at: new Date(),
+    } },
+    { upsert: true }
+  );
   return profile.data.email || ORGANIZER_EMAIL;
 };
 
