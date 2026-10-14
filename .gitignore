@@ -1,0 +1,7 @@
+
+# Secrets: never commit (added 2026-10-14 after .env files were found tracked)
+.env
+.env.*
+!.env.example
+**/node_modules/
+server/data/gsc_tokens.json
