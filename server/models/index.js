@@ -155,4 +155,7 @@ module.exports = {
   UsageSettings: require('./UsageSettings'),
   Users: require('./Users'),
   WorkflowLogs: require('./WorkflowLogs'),
+  AuditEvents: require('./AuditEvents'),
+  Invitations: require('./Invitations'),
+  Plans: require('./Plans'),
 };

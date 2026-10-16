@@ -9,7 +9,11 @@
  * 3. Run this script to verify results
  */
 
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const axios = require('axios');
+
+// SalesOS routes require the internal key (or a user token).
+axios.defaults.headers.common['x-internal-key'] = process.env.INTERNAL_API_KEY;
 
 const API_BASE = process.env.API_URL || 'https://leados-api.abmgroups.org/api';
 

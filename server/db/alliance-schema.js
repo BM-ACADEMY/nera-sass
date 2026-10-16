@@ -9,7 +9,6 @@ const {
   AllianceAudiences,
   AllianceTemplates,
   AllianceBulkSendLimits,
-  Tenants,
 } = models;
 
 let schemaPromise;
@@ -75,10 +74,6 @@ async function insertIfMissing(model, filter, doc) {
 }
 
 async function seedDefaults() {
-  if (!(await Tenants.exists({}))) {
-    await Tenants.create({ name: 'Default Tenant', status: 'active' });
-  }
-
   for (const audience of AUDIENCES) {
     await insertIfMissing(AllianceAudiences, { code: audience.code }, {
       label: audience.label,

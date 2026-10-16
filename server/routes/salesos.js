@@ -1,4 +1,9 @@
 const express = require('express');
+// internalAuth: customer users and n8n acting for one tenant (x-tenant-id).
+// internalPlatformAuth: cross-tenant reports and maintenance — the internal
+// service key or founder/ops platform staff only, never a customer token.
+const { internalAuth, internalPlatformAuth, staffAuth, hasInternalKey } = require('../middleware/authMiddleware');
+const audit = require('../services/audit');
 const fs = require('fs');
 const path = require('path');
 const router = express.Router();
@@ -147,7 +152,7 @@ async function ensureSalesTask(req, leadId, taskType) {
 
 // Resolve a raw Meta WhatsApp payload synchronously so n8n can continue the
 // same execution with the spoken text instead of ending on an audio placeholder.
-router.post('/whatsapp/transcribe', async (req, res) => {
+router.post('/whatsapp/transcribe', internalAuth, async (req, res) => {
   const payload = req.body?.payload || req.body;
   const value = payload?.entry?.[0]?.changes?.[0]?.value;
   const audio = value?.messages?.[0]?.audio;
@@ -631,7 +636,7 @@ async function sendWhatsAppText(lead_id, content) {
 }
 
 // 1. Deduplicate Lead
-router.post('/leads/deduplicate', async (req, res) => {
+router.post('/leads/deduplicate', internalAuth, async (req, res) => {
   const { phone, email } = req.body;
   try {
     const conditions = [];
@@ -653,7 +658,7 @@ router.post('/leads/deduplicate', async (req, res) => {
 });
 
 // 2. Hybrid Brand Detection
-router.post('/brand/detect', async (req, res) => {
+router.post('/brand/detect', internalAuth, async (req, res) => {
   const { phone_number_id, phone, message } = req.body;
   try {
     // AllianceOS owns this WhatsApp number. It must never enter LeadOS AI,
@@ -745,7 +750,7 @@ router.post('/brand/detect', async (req, res) => {
 });
 
 // 3. Create or Update Lead
-router.post('/leads/createOrUpdate', async (req, res) => {
+router.post('/leads/createOrUpdate', internalAuth, async (req, res) => {
   const { name, phone, email, source } = req.body;
   try {
     if (!phone) {
@@ -798,7 +803,7 @@ router.post('/leads/createOrUpdate', async (req, res) => {
 // ==========================================
 
 // 1. Intent Detection
-router.post('/ai/intent', async (req, res) => {
+router.post('/ai/intent', internalAuth, async (req, res) => {
   const { message, brand, lead_id } = req.body;
   try {
     let effectiveBrand = brand || 'ABM Groups';
@@ -868,7 +873,7 @@ router.post('/ai/intent', async (req, res) => {
 });
 
 // 2. Objection Detection
-router.post('/ai/objections', async (req, res) => {
+router.post('/ai/objections', internalAuth, async (req, res) => {
   const { message, brand, lead_id } = req.body;
   try {
     const prompt = `Analyze this message. Does the user have any objections? Choose one: [TOO_EXPENSIVE, NO_TIME, NOT_SURE, USING_COMPETITOR, NONE]. Message: "${message}". Reply ONLY with the objection type.`;
@@ -957,7 +962,7 @@ const getRelevantKnowledge = (documents, query = '') => {
 };
 
 // 3. Knowledge Retrieval
-router.post('/kb/search', async (req, res) => {
+router.post('/kb/search', internalAuth, async (req, res) => {
   const { brand, query, lead_id, chat_history } = req.body;
   try {
     // The database is authoritative. Workflow payloads are sometimes empty or
@@ -1045,7 +1050,7 @@ When the user asks for a syllabus, resolve which course(s) they mean from the cu
 });
 
 // 4. Generate AI Response
-router.post('/ai/response', async (req, res) => {
+router.post('/ai/response', internalAuth, async (req, res) => {
   const { brand, intent, message, kb_snippets, system_instructions, lead_id, chat_history, name } = req.body;
   try {
     let leadName = name || '';
@@ -1444,7 +1449,7 @@ router.post('/ai/response', async (req, res) => {
 });
 
 // 5. Qualify And Score - DETERMINISTIC FORMULA (no LLM involvement)
-router.post('/leads/score', async (req, res) => {
+router.post('/leads/score', internalAuth, async (req, res) => {
   const { lead_id, message, intent, objections } = req.body;
   try {
     let scoreBoost = 0;
@@ -1479,7 +1484,7 @@ router.post('/leads/score', async (req, res) => {
 });
 
 // 6. Assign Owner
-router.post('/leads/assign-owner', async (req, res) => {
+router.post('/leads/assign-owner', internalAuth, async (req, res) => {
   const { lead_id, brand, lead_score, intent } = req.body;
   try {
     let owner = 'System (AI)';
@@ -1502,7 +1507,7 @@ router.post('/leads/assign-owner', async (req, res) => {
 });
 
 // 7. Update CRM
-router.post('/leads/update', async (req, res) => {
+router.post('/leads/update', internalAuth, async (req, res) => {
   const { lead_id, stage, owner, lead_score, intent } = req.body;
   try {
     let status = 'new';
@@ -1524,7 +1529,7 @@ router.post('/leads/update', async (req, res) => {
 });
 
 // 8. Send Communication
-router.post('/communication/send', async (req, res) => {
+router.post('/communication/send', internalAuth, async (req, res) => {
   const { lead_id, channel, type, content } = req.body;
   try {
     const safeContent = content || "Thank you for reaching out to ABM Groups! We have received your message and will get back to you shortly.";
@@ -1595,7 +1600,7 @@ router.post('/communication/send', async (req, res) => {
 });
 
 // ─── SEND TO FOUNDER (WF06 REPORT) ──────────────────────
-router.post('/communication/send-founder', async (req, res) => {
+router.post('/communication/send-founder', internalAuth, async (req, res) => {
   const { channel, type, content } = req.body;
   try {
     const founderPhone = process.env.FOUNDER_WHATSAPP_PHONE || '8807226257';
@@ -1637,7 +1642,7 @@ router.post('/communication/send-founder', async (req, res) => {
 });
 
 // 9. Workflow Logger
-router.post('/workflows/log', async (req, res) => {
+router.post('/workflows/log', internalAuth, async (req, res) => {
   const { workflow, lead_id, status, message } = req.body;
   try {
     await WorkflowLogs.create({ workflow, lead_id: lead_id == null ? lead_id : String(lead_id), status, message: message || null });
@@ -1647,7 +1652,7 @@ router.post('/workflows/log', async (req, res) => {
   }
 });
 
-router.get('/workflows/logs', async (req, res) => {
+router.get('/workflows/logs', internalPlatformAuth, async (req, res) => {
   try {
     const logs = await WorkflowLogs.find({}, { _id: 0, id: 1, workflow: 1, lead_id: 1, status: 1, message: 1, created_at: 1 })
       .sort({ created_at: -1 }).limit(1000).lean();
@@ -1670,7 +1675,7 @@ router.get('/workflows/logs', async (req, res) => {
   }
 });
 
-router.delete('/workflows/logs/:id', async (req, res) => {
+router.delete('/workflows/logs/:id', internalPlatformAuth, async (req, res) => {
   try {
     const result = await WorkflowLogs.deleteOne({ id: req.params.id });
     if (result.deletedCount === 0) return res.status(404).json({ error: 'Log not found' });
@@ -1680,7 +1685,7 @@ router.delete('/workflows/logs/:id', async (req, res) => {
   }
 });
 
-router.get('/workflows/telemetry', async (req, res) => {
+router.get('/workflows/telemetry', internalPlatformAuth, async (req, res) => {
   try {
     // 1. Total executions
     const totalExecutions = await WorkflowLogs.countDocuments();
@@ -1711,7 +1716,7 @@ router.get('/workflows/telemetry', async (req, res) => {
 
 // Authoritative WF06 snapshot. Starting from clients guarantees that every
 // configured brand is present, including brands which currently have no data.
-router.get('/reports/founder-dashboard', async (req, res) => {
+router.get('/reports/founder-dashboard', internalPlatformAuth, async (req, res) => {
   try {
     const today = startOfUtcDay();
     const monthStart = startOfUtcMonth();
@@ -1787,14 +1792,14 @@ router.get('/reports/founder-dashboard', async (req, res) => {
   }
 });
 
-router.get('/reports/revenue-today', async (req, res) => {
+router.get('/reports/revenue-today', internalAuth, async (req, res) => {
   try {
     const converted = await Leads.countDocuments({ status: 'converted', updated_at: { $gte: startOfUtcDay() } });
     res.json({ revenue: converted * 500 });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/revenue-month', async (req, res) => {
+router.get('/reports/revenue-month', internalAuth, async (req, res) => {
   try {
     const monthStart = startOfUtcMonth();
     const nextMonth = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 1));
@@ -1803,7 +1808,7 @@ router.get('/reports/revenue-month', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/brand-revenue', async (req, res) => {
+router.get('/reports/brand-revenue', internalAuth, async (req, res) => {
   try {
     const convertedByClient = await Leads.aggregate([
       { $match: { status: 'converted', client_id: { $ne: null } } },
@@ -1820,7 +1825,7 @@ router.get('/reports/brand-revenue', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/lead-sources', async (req, res) => {
+router.get('/reports/lead-sources', internalAuth, async (req, res) => {
   try {
     const sources = await Leads.aggregate([
       { $group: { _id: '$source', count: { $sum: 1 } } },
@@ -1830,7 +1835,7 @@ router.get('/reports/lead-sources', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/conversion-rate', async (req, res) => {
+router.get('/reports/conversion-rate', internalAuth, async (req, res) => {
   try {
     const data = await Leads.aggregate([
       { $group: { _id: '$status', count: { $sum: 1 } } },
@@ -1840,21 +1845,21 @@ router.get('/reports/conversion-rate', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/followups-pending', async (req, res) => {
+router.get('/reports/followups-pending', internalAuth, async (req, res) => {
   try {
     const pending = await Leads.countDocuments({ next_followup_due: { $gt: new Date() }, status: { $nin: ['converted', null] } });
     res.json({ pending });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/sla-breaches', async (req, res) => {
+router.get('/reports/sla-breaches', internalAuth, async (req, res) => {
   try {
     const breaches = await Leads.countDocuments({ next_followup_due: { $lt: new Date() }, status: { $nin: ['converted', null] } });
     res.json({ breaches });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/ai-performance', async (req, res) => {
+router.get('/reports/ai-performance', internalAuth, async (req, res) => {
   try {
     const [avg] = await AiDecisions.aggregate([{ $group: { _id: null, avg_confidence: { $avg: '$confidence' } } }]);
     res.json({ avg_confidence: parseFloat(avg?.avg_confidence) || 0 });
@@ -1864,7 +1869,7 @@ router.get('/reports/ai-performance', async (req, res) => {
 // ==========================================
 // WF02 - Followup Engine
 // ==========================================
-router.get('/followups/due', async (req, res) => {
+router.get('/followups/due', internalAuth, async (req, res) => {
   try {
     await salesTrackingReady;
     const MAX_FOLLOWUP_ATTEMPTS = 5; // Stop after 5 attempts
@@ -1889,7 +1894,7 @@ router.get('/followups/due', async (req, res) => {
 });
 
 // 2. Fetch Followup Rule
-router.post('/followups/sales-guard', async (req, res) => {
+router.post('/followups/sales-guard', internalAuth, async (req, res) => {
   try {
     await salesTrackingReady;
     const leadRow = await Leads.findOne({ id: req.body.lead_id }, { id: 1, sales_status: 1, sales_followup_stopped: 1, sales_followup_at: 1 }).lean();
@@ -1916,7 +1921,7 @@ router.post('/followups/sales-guard', async (req, res) => {
 });
 
 // 2. Fetch Followup Rule
-router.post('/followups/rule', async (req, res) => {
+router.post('/followups/rule', internalAuth, async (req, res) => {
   const { touch_count } = req.body;
   try {
     const cadenceHours = [4, 8, 12, 24, 72];
@@ -1947,7 +1952,7 @@ router.post('/followups/rule', async (req, res) => {
 });
 
 // Opt-out: Stop follow-ups when lead says "not interested"
-router.post('/leads/opt-out', async (req, res) => {
+router.post('/leads/opt-out', internalAuth, async (req, res) => {
   const { lead_id, reason } = req.body;
   try {
     if (!lead_id) {
@@ -1964,7 +1969,7 @@ router.post('/leads/opt-out', async (req, res) => {
 });
 
 // 3. Check 24h Window
-router.post('/whatsapp/check-24h', async (req, res) => {
+router.post('/whatsapp/check-24h', internalAuth, async (req, res) => {
   const { lead_id, base_channel, template_id, payload_template, ai_prompt_template } = req.body;
   try {
     const result = { rows: await leadMessages(lead_id, { direction: 'inbound' }, { limit: 1, projection: { _id: 0, sent_at: 1 } }) };
@@ -1988,7 +1993,7 @@ router.post('/whatsapp/check-24h', async (req, res) => {
 });
 
 // 4. Generate & Send Followup AI Text
-router.post('/ai/followup', async (req, res) => {
+router.post('/ai/followup', internalAuth, async (req, res) => {
   const { lead_id } = req.body;
   try {
     const lead = await leadWithClient(lead_id, { brand_name: 'name', phone_number_id: 'phone_number_id', client_wa_token: 'wa_access_token' });
@@ -2071,7 +2076,7 @@ Write one natural follow-up that continues the unfinished topic. Reference the s
 
 // Demo-call reminder branch used by WF02. Each reminder is claimed with a
 // database uniqueness key, so a repeated n8n execution cannot double-send it.
-router.get('/demo-reminders/due', async (req, res) => {
+router.get('/demo-reminders/due', internalAuth, async (req, res) => {
   try {
     await demoReminderReady;
     await salesTrackingReady;
@@ -2108,7 +2113,7 @@ router.get('/demo-reminders/due', async (req, res) => {
   }
 });
 
-router.post('/demo-reminders/send', async (req, res) => {
+router.post('/demo-reminders/send', internalAuth, async (req, res) => {
   const { lead_id, booking_time, reminder_minutes } = req.body;
   try {
     await demoReminderReady;
@@ -2257,7 +2262,7 @@ Naturally reference relevant details already discussed when useful. Do not inven
 // WF03 - Reminder Engine
 // ==========================================
 
-router.get('/reports/today-calls', async (req, res) => {
+router.get('/reports/today-calls', internalAuth, async (req, res) => {
   try {
     const today = startOfUtcDay();
     const calls = await Leads.find({ call_booked_at: { $gte: today, $lt: new Date(today.getTime() + DAY_MS) } }, { id: 1, name: 1, call_booked_at: 1 }).lean();
@@ -2265,7 +2270,7 @@ router.get('/reports/today-calls', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/today-followups', async (req, res) => {
+router.get('/reports/today-followups', internalAuth, async (req, res) => {
   try {
     const today = startOfUtcDay();
     const followups = await Leads.find({ next_followup_due: { $gte: today, $lt: new Date(today.getTime() + DAY_MS) } }, { id: 1, name: 1, stage: 1 }).lean();
@@ -2273,14 +2278,14 @@ router.get('/reports/today-followups', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/hot-leads', async (req, res) => {
+router.get('/reports/hot-leads', internalAuth, async (req, res) => {
   try {
     const hotLeads = await Leads.find({ status: 'hot' }, { _id: 0, id: 1, name: 1, score: 1 }).sort({ score: -1 }).limit(10).lean();
     res.json({ hot_leads: hotLeads });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/ai/report-generator', async (req, res) => {
+router.post('/ai/report-generator', internalAuth, async (req, res) => {
   const data = req.body.data || req.body.metrics || req.body;
   try {
     if (!ai) return res.json({ summary: "Daily Summary generated." });
@@ -2317,7 +2322,7 @@ Use clear headings and bullet points. Use Indian number formatting for all curre
 // WF04 - Customer Journey
 // ==========================================
 
-router.post('/leads/find-by-invoice', async (req, res) => {
+router.post('/leads/find-by-invoice', internalAuth, async (req, res) => {
   const { invoice_id, lead_id, link_id } = req.body;
   try {
     let lead = null;
@@ -2398,7 +2403,7 @@ router.post('/leads/find-by-invoice', async (req, res) => {
 // yet, so this is a fixed sequence rather than per-brand configurable - the
 // delayed nurture steps (feedback/review/referral, sent days/weeks later)
 // need a scheduled trigger like WF02's follow-up engine and aren't included here.
-router.post('/journey/steps', async (req, res) => {
+router.post('/journey/steps', internalAuth, async (req, res) => {
   try {
     const steps = [
       { action: 'send_invoice' },
@@ -2412,7 +2417,7 @@ router.post('/journey/steps', async (req, res) => {
 });
 
 // Journey Actions
-router.post('/invoices/send', async (req, res) => {
+router.post('/invoices/send', internalAuth, async (req, res) => {
   const { lead_id } = req.body;
   try {
     const payment = await Payments.findOne({ lead_id, status: 'captured' }, { _id: 0, amount: 1, currency: 1 }).sort({ created_at: -1 }).lean();
@@ -2427,7 +2432,7 @@ router.post('/invoices/send', async (req, res) => {
 // user to a WhatsApp group - that's not something the Business API supports.
 // This sends a real message; an actual group invite link would need to be
 // configured per-client (no such field exists in `clients` yet) and pasted in.
-router.post('/whatsapp/add-to-group', async (req, res) => {
+router.post('/whatsapp/add-to-group', internalAuth, async (req, res) => {
   const { lead_id } = req.body;
   try {
     const content = `Welcome aboard! We'll be sharing your community group invite link shortly - keep an eye on this chat.`;
@@ -2437,7 +2442,7 @@ router.post('/whatsapp/add-to-group', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/access/grant', async (req, res) => {
+router.post('/access/grant', internalAuth, async (req, res) => {
   const { lead_id } = req.body;
   try {
     await Leads.updateOne({ id: lead_id }, { $set: { payment_status: 'access_granted', updated_at: new Date() } });
@@ -2449,7 +2454,7 @@ router.post('/access/grant', async (req, res) => {
 
 // NOTE: no dedicated tasks table exists - logged into workflow_logs so it's
 // visible on the Workflow Logs page, same pattern as WF02's internal-note.
-router.post('/tasks/create', async (req, res) => {
+router.post('/tasks/create', internalAuth, async (req, res) => {
   const { lead_id, type } = req.body;
   try {
     await WorkflowLogs.create({ workflow: 'WF04', lead_id: lead_id == null ? lead_id : String(lead_id), status: 'pending', message: `Task created: ${type || 'general'}` });
@@ -2457,7 +2462,7 @@ router.post('/tasks/create', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/leads/log-event', async (req, res) => {
+router.post('/leads/log-event', internalAuth, async (req, res) => {
   const { lead_id, event } = req.body;
   try {
     await WorkflowLogs.create({ workflow: 'WF04', lead_id: lead_id == null ? lead_id : String(lead_id), status: 'success', message: `Event: ${event || 'unknown'}` });
@@ -2469,7 +2474,7 @@ router.post('/leads/log-event', async (req, res) => {
 // WF05 - Marketing Automation
 // ==========================================
 
-router.get('/campaigns/active', async (req, res) => {
+router.get('/campaigns/active', internalAuth, async (req, res) => {
   try {
     // Due = scheduled to run and either unscheduled (run ASAP) or its time has passed.
     // 'running'/'completed'/'failed' are excluded so a campaign is only ever executed once.
@@ -2481,7 +2486,7 @@ router.get('/campaigns/active', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/campaigns/select-leads', async (req, res) => {
+router.post('/campaigns/select-leads', internalAuth, async (req, res) => {
   const { campaign_id, status_filter } = req.body;
   try {
     const projection = { _id: 0, id: 1, phone: 1, name: 1 };
@@ -2494,7 +2499,7 @@ router.post('/campaigns/select-leads', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/campaigns/check-frequency', async (req, res) => {
+router.post('/campaigns/check-frequency', internalAuth, async (req, res) => {
   const { lead_id } = req.body;
   try {
     const firstConversation = await Conversations.findOne({ lead_id }, { id: 1 }).lean();
@@ -2514,27 +2519,64 @@ router.post('/campaigns/check-frequency', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/campaigns/log', (req, res) => res.json({ success: true }));
+router.post('/campaigns/log', internalAuth, (req, res) => res.json({ success: true }));
 
 // ==========================================
 // WF07 - Admin & Maintenance
 // ==========================================
 
-router.post('/admin/retry', async (req, res) => {
+// Maintenance operations (retry, cleanup):
+//  - One workspace: the internal service key with x-tenant-id (n8n acting for
+//    that tenant); the tenant scope limits the operation to that workspace.
+//  - All workspaces: founder/ops platform staff only, recorded in the audit log.
+// The service key alone is not enough for a cross-tenant operation, and
+// customer tokens are refused.
+const maintenanceAuth = (operation, code) => (req, res, next) => {
+  if (hasInternalKey(req)) {
+    if (!req.headers['x-tenant-id']) {
+      return res.status(403).json({
+        error: `Cross-tenant ${operation} needs platform staff. Send x-tenant-id to ${operation} one workspace.`,
+        code,
+      });
+    }
+    return internalAuth(req, res, next);
+  }
+  return staffAuth('platform.tenants.manage')(req, res, next);
+};
+const maintenanceTenant = (req) => (req.identity?.kind === 'service' ? req.identity.tenantId : null);
+
+router.post('/admin/retry', maintenanceAuth('retry', 'CROSS_TENANT_RETRY_FORBIDDEN'), async (req, res) => {
   try {
+    const tenantId = maintenanceTenant(req);
     const result = await Messages.updateMany({ status: 'failed' }, { $set: { status: 'pending' } });
-    res.json({ retried_count: result.modifiedCount });
+    if (!tenantId) {
+      await audit.record(audit.EVENTS.PLATFORM_MAINTENANCE, {
+        req, targetType: 'messages', meta: { operation: 'retry_failed_messages', scope: 'all_tenants', retried_count: result.modifiedCount },
+      });
+    }
+    res.json({ retried_count: result.modifiedCount, scope: tenantId ? 'tenant' : 'all_tenants' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/admin/cleanup', async (req, res) => {
+// Deletes workflow logs older than the 30-day retention period. In a tenant
+// context the tenant scope adds tenant_id to the filter, so only that
+// workspace's logs can match; platform staff clean up every workspace.
+const WORKFLOW_LOG_RETENTION_DAYS = 30;
+router.post('/admin/cleanup', maintenanceAuth('cleanup', 'CROSS_TENANT_CLEANUP_FORBIDDEN'), async (req, res) => {
   try {
-    const result = await WorkflowLogs.deleteMany({ created_at: { $lt: new Date(Date.now() - 30 * DAY_MS) } });
-    res.json({ deleted_logs: result.deletedCount });
+    const tenantId = maintenanceTenant(req);
+    const cutoff = new Date(Date.now() - WORKFLOW_LOG_RETENTION_DAYS * DAY_MS);
+    const result = await WorkflowLogs.deleteMany({ created_at: { $lt: cutoff } });
+    if (!tenantId) {
+      await audit.record(audit.EVENTS.PLATFORM_MAINTENANCE, {
+        req, targetType: 'workflow_logs', meta: { operation: 'cleanup_workflow_logs', scope: 'all_tenants', retention_days: WORKFLOW_LOG_RETENTION_DAYS, deleted_logs: result.deletedCount },
+      });
+    }
+    res.json({ deleted_logs: result.deletedCount, scope: tenantId ? 'tenant' : 'all_tenants' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/admin/refresh-embeddings', async (req, res) => {
+router.post('/admin/refresh-embeddings', internalPlatformAuth, async (req, res) => {
   try {
     // In a real system, you'd trigger a vector DB sync here
     res.json({ success: true, embeddings_updated: 0 });
@@ -2545,12 +2587,12 @@ router.post('/admin/refresh-embeddings', async (req, res) => {
 // Missing Workflows Endpoints Implementation
 // ==========================================
 
-router.post('/communication/send-email', (req, res) => {
+router.post('/communication/send-email', internalAuth, (req, res) => {
   // Mock endpoint for sending emails (could integrate SendGrid here)
   res.json({ ...req.body, success: true, delivered: true, channel: 'email' });
 });
 
-router.post('/communication/send-template', async (req, res) => {
+router.post('/communication/send-template', internalAuth, async (req, res) => {
   try {
     await salesTrackingReady;
     if (req.body.lead_id) {
@@ -2565,7 +2607,7 @@ router.post('/communication/send-template', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/leads/internal-note', async (req, res) => {
+router.post('/leads/internal-note', internalAuth, async (req, res) => {
   const { lead_id, note } = req.body;
   try {
     await WorkflowLogs.create({ workflow: 'WF02', lead_id: lead_id == null ? lead_id : String(lead_id), status: 'success', message: `Internal Note: ${note}` });
@@ -2573,7 +2615,7 @@ router.post('/leads/internal-note', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/leads/update-followup', async (req, res) => {
+router.post('/leads/update-followup', internalAuth, async (req, res) => {
   const { lead_id, touch_count_increment } = req.body;
   try {
     const increment = touch_count_increment || 1;
@@ -2607,7 +2649,7 @@ router.post('/leads/update-followup', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/overdue-followups', async (req, res) => {
+router.get('/reports/overdue-followups', internalAuth, async (req, res) => {
   try {
     const overdue = await Leads.find(
       { next_followup_due: { $lt: new Date() }, status: { $nin: ['converted', null] } },
@@ -2617,7 +2659,7 @@ router.get('/reports/overdue-followups', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/pending-payments', async (req, res) => {
+router.get('/reports/pending-payments', internalAuth, async (req, res) => {
   try {
     // We don't have an invoice table, so we fallback to a mock for now
     res.json({ pending: [] });
@@ -2629,7 +2671,7 @@ router.get('/reports/pending-payments', async (req, res) => {
 // NOTE: leads.owner only ever holds the generic bucket 'human_sales' or 'ai_bot' -
 // there is no per-individual sales-rep assignment in the schema today, so this
 // produces one combined "human sales team" summary rather than per-person lists.
-router.get('/reports/reminder-bundle', async (req, res) => {
+router.get('/reports/reminder-bundle', internalAuth, async (req, res) => {
   try {
     const todayStart = startOfUtcDay();
     const todayRange = { $gte: todayStart, $lt: new Date(todayStart.getTime() + DAY_MS) };
@@ -2688,7 +2730,7 @@ router.get('/reports/reminder-bundle', async (req, res) => {
 // since this isn't lead messaging. Requires FOUNDER_WHATSAPP_PHONE (or an explicit
 // `phone`) to actually deliver; otherwise it no-ops with delivered:false so callers
 // can see nothing was sent instead of silently failing.
-router.post('/communication/notify-staff', async (req, res) => {
+router.post('/communication/notify-staff', internalAuth, async (req, res) => {
   const { phone, content, label } = req.body;
   try {
     const targetPhone = phone || process.env.FOUNDER_WHATSAPP_PHONE;
@@ -2723,7 +2765,7 @@ router.post('/communication/notify-staff', async (req, res) => {
 // ==========================================
 // Sales Person Tasks API
 // ==========================================
-router.get('/sales-tasks', async (req, res) => {
+router.get('/sales-tasks', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     await salesTrackingReady;
@@ -2767,7 +2809,7 @@ router.get('/sales-tasks', async (req, res) => {
   }
 });
 
-router.post('/sales-tasks/export', async (req, res) => {
+router.post('/sales-tasks/export', internalAuth, async (req, res) => {
   try {
     const ids = Array.isArray(req.body.ids)
       ? [...new Set(req.body.ids.map(Number).filter(Number.isInteger))]
@@ -2817,7 +2859,7 @@ router.post('/sales-tasks/export', async (req, res) => {
   }
 });
 
-router.put('/sales-tasks/:id/status', async (req, res) => {
+router.put('/sales-tasks/:id/status', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     const status = String(req.body.status || '').toLowerCase();
@@ -2836,7 +2878,7 @@ router.put('/sales-tasks/:id/status', async (req, res) => {
   }
 });
 
-router.get('/sales-tasks/unread-count', async (req, res) => {
+router.get('/sales-tasks/unread-count', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     const count = await SalesTasks.countDocuments({ unread: true, status: { $ne: 'completed' } });
@@ -2844,7 +2886,7 @@ router.get('/sales-tasks/unread-count', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/sales-tasks/lead/:leadId/read', async (req, res) => {
+router.put('/sales-tasks/lead/:leadId/read', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     await SalesTasks.updateMany({ lead_id: req.params.leadId, unread: true }, { $set: { unread: false, updated_at: new Date() } });
@@ -2853,7 +2895,7 @@ router.put('/sales-tasks/lead/:leadId/read', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/sales-tasks/lead/:leadId/sales-status', async (req, res) => {
+router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, async (req, res) => {
   try {
     await salesTrackingReady;
     const allowed = ['new', 'contacted', 'processing', 'follow_up', 'converted', 'not_interested', 'closed'];
@@ -2877,7 +2919,7 @@ router.put('/sales-tasks/lead/:leadId/sales-status', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/sales-tasks/lead/:leadId/notes', async (req, res) => {
+router.post('/sales-tasks/lead/:leadId/notes', internalAuth, async (req, res) => {
   try {
     await salesTrackingReady;
     const note = String(req.body.note || '').trim();
@@ -2920,7 +2962,7 @@ Return only JSON: {"stop_followups":boolean,"followup_at":string|null}. Set stop
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/sales-tasks/notes/:noteId', async (req, res) => {
+router.put('/sales-tasks/notes/:noteId', internalAuth, async (req, res) => {
   try {
     const note = String(req.body.note || '').trim();
     if (!note) return res.status(400).json({ error: 'Note is required' });
@@ -2930,7 +2972,7 @@ router.put('/sales-tasks/notes/:noteId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/sales-tasks/notes/:noteId', async (req, res) => {
+router.delete('/sales-tasks/notes/:noteId', internalAuth, async (req, res) => {
   try {
     const deletedNote = await SalesLeadNotes.findOneAndDelete({ id: req.params.noteId }, { projection: { lead_id: 1 } }).lean();
     if (!deletedNote) return res.status(404).json({ error: 'Note not found' });
@@ -2940,7 +2982,7 @@ router.delete('/sales-tasks/notes/:noteId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/sales-tasks/bulk-delete', async (req, res) => {
+router.post('/sales-tasks/bulk-delete', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     const ids = Array.isArray(req.body.ids)
@@ -2973,7 +3015,7 @@ router.post('/sales-tasks/bulk-delete', async (req, res) => {
   }
 });
 
-router.delete('/sales-tasks/:id', async (req, res) => {
+router.delete('/sales-tasks/:id', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     const deletedTask = await SalesTasks.findOneAndDelete({ id: req.params.id }, { projection: { _id: 0, id: 1, lead_id: 1, task_type: 1 } }).lean();
@@ -3006,11 +3048,11 @@ router.get('/auth/google/callback-calender', async (req, res) => {
   }
 });
 
-router.get('/calendar/status', async (req, res) => {
+router.get('/calendar/status', internalAuth, async (req, res) => {
   res.json(await googleCalendar.getConnectionStatus());
 });
 
-router.post('/calendar/availability', async (req, res) => {
+router.post('/calendar/availability', internalAuth, async (req, res) => {
   try {
     const start = new Date(req.body.start);
     const durationMinutes = Math.min(Math.max(Number(req.body.duration_minutes) || 30, 15), 180);
@@ -3023,7 +3065,7 @@ router.post('/calendar/availability', async (req, res) => {
   }
 });
 
-router.post('/leads/book-call', async (req, res) => {
+router.post('/leads/book-call', internalAuth, async (req, res) => {
   try {
     const { lead_id, booking_time, duration_minutes, notes } = req.body;
 

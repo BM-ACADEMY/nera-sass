@@ -1,0 +1,50 @@
+{
+  "source": "Full scope LeadOS + AllianceOS.pdf, section 5 (Nera Pricing Specification v2.0, 24 Aug 2026), pages 8-10. Prices exclude 18% GST. Complete plans are omitted: they need AllianceOS, which is outside the LeadOS launch.",
+  "open_items": [
+    "max_knowledge_bases follows the PDF screen table (1 / 3 / no cap). The PDF's open items ask for a real cap instead of no cap (-1) on the top tier; replace -1 once approved.",
+    "Workflows show -1 (no cap) on Growth and Agency in the spec; the PDF asks for real caps."
+  ],
+  "pricing_rules": {
+    "term_discount_pct": { "1": 0, "3": 5, "6": 10, "12": 15 },
+    "onboarding_discount_pct": { "12": 50 },
+    "rounding": "nearest_rupee"
+  },
+  "plans": [
+    {
+      "code": "DESK-LITE", "name": "Desk Lite", "product_line": "desk", "tier": 1,
+      "monthly_price": 3999, "onboarding_fee": 4999,
+      "limits": { "max_users": 3, "max_wa_numbers": 1, "max_contacts": 2500, "ai_replies": 1000, "service_msgs": 2000, "promo_msgs": 0, "max_knowledge_bases": 1 },
+      "features": { "broadcasts": false, "follow_up_automation": false, "lead_scoring": false, "api_access": false }
+    },
+    {
+      "code": "DESK-PRO", "name": "Desk Pro", "product_line": "desk", "tier": 2,
+      "monthly_price": 9999, "onboarding_fee": 4999,
+      "limits": { "max_users": 10, "max_wa_numbers": 2, "max_contacts": 25000, "ai_replies": 4000, "service_msgs": 10000, "promo_msgs": 0, "max_knowledge_bases": 3 },
+      "features": { "broadcasts": false, "follow_up_automation": true, "lead_scoring": true, "api_access": false }
+    },
+    {
+      "code": "DESK-MAX", "name": "Desk Max", "product_line": "desk", "tier": 3,
+      "monthly_price": 22999, "onboarding_fee": 9999,
+      "limits": { "max_users": 50, "max_wa_numbers": 5, "max_contacts": 100000, "ai_replies": 10000, "service_msgs": 25000, "promo_msgs": 0, "max_knowledge_bases": -1 },
+      "features": { "broadcasts": false, "follow_up_automation": true, "lead_scoring": true, "api_access": true }
+    },
+    {
+      "code": "WA-STARTER", "name": "WhatsApp Starter", "product_line": "whatsapp", "tier": 1,
+      "monthly_price": 5999, "onboarding_fee": 9999,
+      "limits": { "max_users": 3, "max_wa_numbers": 1, "max_contacts": 2500, "ai_replies": 1000, "service_msgs": 2000, "promo_msgs": 1000, "max_knowledge_bases": 1, "ai_images": 20, "workflows": 3 },
+      "features": { "broadcasts": true, "follow_up_automation": false, "lead_scoring": false, "api_access": false }
+    },
+    {
+      "code": "WA-GROWTH", "name": "WhatsApp Growth", "product_line": "whatsapp", "tier": 2,
+      "monthly_price": 12999, "onboarding_fee": 9999,
+      "limits": { "max_users": 10, "max_wa_numbers": 2, "max_contacts": 25000, "ai_replies": 4000, "service_msgs": 10000, "promo_msgs": 2000, "max_knowledge_bases": 3, "ai_images": 100, "workflows": -1 },
+      "features": { "broadcasts": true, "follow_up_automation": true, "lead_scoring": true, "api_access": false }
+    },
+    {
+      "code": "WA-AGENCY", "name": "WhatsApp Agency", "product_line": "whatsapp", "tier": 3,
+      "monthly_price": 29999, "onboarding_fee": 19999,
+      "limits": { "max_users": 50, "max_wa_numbers": 5, "max_contacts": 100000, "ai_replies": 10000, "service_msgs": 25000, "promo_msgs": 3000, "max_knowledge_bases": -1, "ai_images": 300, "workflows": -1, "sub_accounts": 5 },
+      "features": { "broadcasts": true, "follow_up_automation": true, "lead_scoring": true, "api_access": true, "white_label": true }
+    }
+  ]
+}

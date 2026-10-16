@@ -72,6 +72,7 @@ export default function Citations() {
     const SOCKET_URL = isLocalDev ? window.location.origin : (import.meta.env.VITE_API_URL || 'https://leados-api.abmgroups.org');
 
     const socket = socketIO(SOCKET_URL, {
+      auth: { token: localStorage.getItem('leados_token') },
       transports: ['polling', 'websocket'],
     });
 

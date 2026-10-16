@@ -16,8 +16,18 @@ const Login = () => {
     try {
       const res = await axiosClient.post('/auth/login', values);
       if (res.data.token) {
+        const user = res.data.user;
+        const isStaff = Boolean(user?.is_platform_staff || user?.staff_role);
+        if (!isStaff) {
+          message.error('Access restricted to platform staff. Customer accounts cannot sign in to the platform admin panel.');
+          return;
+        }
         localStorage.setItem('adminToken', res.data.token);
         navigate('/dashboard');
+      } else if (res.data.mfa_setup_required || res.data.mfa_required) {
+        message.warning('MFA is required for this account.');
+      } else {
+        message.error('Authentication response missing session token');
       }
     } catch (err) {
       message.error(err.response?.data?.error || 'Failed to sign in');

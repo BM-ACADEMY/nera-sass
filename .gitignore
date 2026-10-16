@@ -5,3 +5,6 @@
 !.env.example
 **/node_modules/
 server/data/gsc_tokens.json
+
+# Local development mailbox written by server/services/notify.js
+server/.dev-outbox/

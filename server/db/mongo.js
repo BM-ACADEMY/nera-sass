@@ -5,6 +5,8 @@ require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true
 
 mongoose.set('strictQuery', false);
 
+const { applyTenantScope } = require('./tenantScope');
+
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/nera';
 
 let connectPromise = null;
@@ -98,9 +100,11 @@ function defineModel(collection, fields, options = {}) {
     }
     schema.index(spec, { unique: true, partialFilterExpression: partial });
   }
-  // UNIQUE (LOWER(col)) WHERE col IS NOT NULL
+  // UNIQUE (LOWER(col)) WHERE col IS NOT NULL. Named explicitly so it can sit
+  // next to an older case-sensitive index on the same key.
   for (const keys of options.uniqueCaseInsensitive || []) {
     schema.index(Object.fromEntries(keys.map((k) => [k, 1])), {
+      name: `${keys.join('_')}_ci_unique`,
       unique: true,
       collation: { locale: 'en', strength: 2 },
       partialFilterExpression: Object.fromEntries(keys.map((k) => [k, { $type: 'string' }])),
@@ -109,6 +113,11 @@ function defineModel(collection, fields, options = {}) {
   for (const keys of options.indexes || []) {
     schema.index(Object.fromEntries(keys.map((k) => [k, 1])));
   }
+
+  // Tenant isolation for every collection listed in db/tenantScope.js.
+  applyTenantScope(schema, collection);
+  // Extra schema hooks must be registered before the model is compiled.
+  if (options.configure) options.configure(schema);
 
   const model = mongoose.model(collection, schema, collection);
   model.syncCounter = () => syncCounter(collection, model);

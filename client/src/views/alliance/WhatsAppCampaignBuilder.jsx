@@ -505,7 +505,7 @@ export const WhatsAppCampaignBuilder = () => {
                 <div>{template.body}</div>
                 {template.footer && <small>{template.footer}</small>}
                 {!!templateButtons.length && <div className="al-wa-template-buttons">{templateButtons.map((button, index) => <span key={`${button.type}-${index}`}>{button.type === 'URL' ? '↗' : button.type === 'PHONE_NUMBER' ? '☎' : '↩'} {button.text}</span>)}</div>}
-                <a href={`${api.baseUrl}/api/templates/${template.id}/campaign-sheet`} download className="al-button secondary" style={{ marginTop: 10, width: 'fit-content', textDecoration: 'none' }}>
+                <a href={`${api.baseUrl}/api/templates/${template.id}/campaign-sheet?token=${encodeURIComponent(localStorage.getItem('leados_token') || '')}`} download className="al-button secondary" style={{ marginTop: 10, width: 'fit-content', textDecoration: 'none' }}>
                   <Download size={14} /> Download parameter Excel
                 </a>
               </div>

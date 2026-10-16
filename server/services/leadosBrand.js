@@ -1,18 +1,19 @@
+/**
+ * The current tenant's brand profile (Full Scope decision 2: one brand per
+ * tenant). Replaces the old single-company lock that forced every lead onto
+ * one hard-coded brand. Must be called inside a tenant context.
+ */
 const { Clients } = require('../models');
+const { requireTenantId } = require('./tenantContext');
 
-const LEADOS_BRAND_NAME = 'ABM Groups';
-let cachedBrand = null;
-
-async function getLeadOSBrand() {
-  if (cachedBrand) return cachedBrand;
-  // Matches "ABM Groups" ignoring case, spaces and punctuation.
-  const candidates = await Clients.find({ name: /a\W*b\W*m\W*g\W*r\W*o\W*u\W*p\W*s/i }, { _id: 0, id: 1, name: 1, status: 1 }).lean();
-  const [brand] = candidates
-    .filter((client) => String(client.name || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === 'abmgroups')
-    .sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1) || a.id - b.id);
-  if (!brand) throw new Error(`Required LeadOS brand "${LEADOS_BRAND_NAME}" is not configured`);
-  cachedBrand = { id: brand.id, name: brand.name };
-  return cachedBrand;
+async function getTenantBrand() {
+  const tenantId = requireTenantId();
+  const brand = await Clients.findOne({}, { _id: 0, id: 1, name: 1, status: 1 }).lean();
+  if (!brand) throw new Error(`Workspace ${tenantId} has no brand profile`);
+  return { id: brand.id, name: brand.name };
 }
 
-module.exports = { LEADOS_BRAND_NAME, getLeadOSBrand };
+// Older call sites use this name.
+const getLeadOSBrand = getTenantBrand;
+
+module.exports = { getTenantBrand, getLeadOSBrand };

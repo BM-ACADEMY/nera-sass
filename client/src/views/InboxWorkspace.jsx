@@ -432,6 +432,7 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   // ── SOCKET.IO CONNECTION ────────────────────────────────────
   useEffect(() => {
     const socket = socketIO(SOCKET_URL, {
+      auth: { token: localStorage.getItem('leados_token') },
       transports: ['polling', 'websocket'], // Start with HTTP polling, then upgrade to WS (safer through Vite proxy)
       withCredentials: true,
       reconnectionAttempts: 10,

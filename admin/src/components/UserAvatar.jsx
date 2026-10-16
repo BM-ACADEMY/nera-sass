@@ -9,13 +9,15 @@ import { roleStyle } from '../utils/roles';
 // another.
 const UserAvatar = ({ name, role, size = 40 }) => {
   const style = roleStyle(role);
+  const initial = typeof name === 'string' && name.trim() ? name.trim().charAt(0).toUpperCase() : '?';
+  const isHighRole = ['owner', 'admin', 'superadmin', 'staff_admin'].includes(String(role || '').toLowerCase());
   return (
     <Avatar
       size={size}
-      icon={role === 'admin' ? <CrownOutlined /> : <UserOutlined />}
-      style={{ background: style.bg, color: style.color, border: `1px solid ${style.color}22`, flexShrink: 0 }}
+      icon={isHighRole ? <CrownOutlined /> : <UserOutlined />}
+      style={{ background: style.bg, color: style.color, border: `1px solid ${style.color}22`, flexShrink: 0, fontWeight: 700 }}
     >
-      {!role && name ? name.charAt(0).toUpperCase() : null}
+      {!role && initial ? initial : null}
     </Avatar>
   );
 };
