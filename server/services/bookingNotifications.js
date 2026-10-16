@@ -1,17 +1,5 @@
 const nodemailer = require('nodemailer');
-const pool = require('../db/connection');
-
-const notificationLogReady = pool.query(`
-  CREATE TABLE IF NOT EXISTS booking_notification_log (
-    id BIGSERIAL PRIMARY KEY,
-    calendar_event_id TEXT NOT NULL,
-    meeting_start TIMESTAMPTZ NOT NULL,
-    recipient TEXT NOT NULL,
-    message_id TEXT,
-    sent_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE (calendar_event_id, meeting_start, recipient)
-  )
-`).catch(error => console.error('[Booking Notification] Log table initialization failed:', error.message));
+const { BookingNotificationLog } = require('../models');
 
 const supportEmail = () => process.env.SUPPORT_NOTIFICATION_EMAIL ||
   process.env.GOOGLE_CALENDAR_SUPPORT_EMAIL ||
@@ -41,14 +29,12 @@ const getTransport = () => {
 };
 
 const sendBookingNotification = async ({ eventId, brand, name, email, phone, start, eventUrl, meetLink, rescheduled = false }) => {
-  await notificationLogReady;
   const recipient = supportEmail();
-  const existing = await pool.query(`
-    SELECT id, message_id FROM booking_notification_log
-    WHERE calendar_event_id = $1 AND meeting_start = $2::timestamptz AND recipient = $3
-    LIMIT 1
-  `, [eventId, start, recipient]);
-  if (existing.rows[0]) return { sent: true, deduplicated: true, recipient, message_id: existing.rows[0].message_id };
+  const existing = await BookingNotificationLog.findOne(
+    { calendar_event_id: eventId, meeting_start: new Date(start), recipient },
+    { id: 1, message_id: 1 }
+  ).lean();
+  if (existing) return { sent: true, deduplicated: true, recipient, message_id: existing.message_id };
 
   const { transporter, from } = getTransport();
   const meetingTime = new Date(start).toLocaleString('en-IN', {
@@ -75,11 +61,9 @@ const sendBookingNotification = async ({ eventId, brand, name, email, phone, sta
     subject,
     html,
   });
-  await pool.query(`
-    INSERT INTO booking_notification_log (calendar_event_id, meeting_start, recipient, message_id)
-    VALUES ($1, $2::timestamptz, $3, $4)
-    ON CONFLICT (calendar_event_id, meeting_start, recipient) DO NOTHING
-  `, [eventId, start, recipient, result.messageId]);
+  await BookingNotificationLog.create({
+    calendar_event_id: eventId, meeting_start: new Date(start), recipient, message_id: result.messageId,
+  }).catch((error) => { if (error.code !== 11000) throw error; });
   return { sent: true, recipient, message_id: result.messageId };
 };
 

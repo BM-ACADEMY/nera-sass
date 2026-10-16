@@ -1,13 +1,37 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../db/connection');
+const {
+  MafiyaGmbClients,
+  MafiyaGmbTokens,
+  MafiyaPlans,
+  MafiyaPlanFeatures,
+  MafiyaReviewReplies,
+  MafiyaAiSuggestionsLog,
+  MafiyaBrainAiLog,
+  MafiyaGeogridScansLog,
+  MafiyaTurfKeywords,
+  MafiyaOrders,
+} = require('../models');
+const { deleteCascade } = require('../db/cascade');
+
+const NO_ID = { _id: 0 };
+const startOfUtcDay = () => { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d; };
+
+// { client_id: count } for rows of `model` whose `dateField` is on/after `since`
+async function countsByClient(model, dateField, since) {
+  const rows = await model.aggregate([
+    { $match: { [dateField]: { $gte: since } } },
+    { $group: { _id: '$client_id', count: { $sum: 1 } } },
+  ]);
+  return rows.reduce((acc, row) => { acc[row._id] = row.count; return acc; }, {});
+}
 const { sendGmbConnectEmail } = require('../utils/mafiya-email');
 
 // GET all GMB clients
 router.get('/', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM mafiya_gmb_clients ORDER BY created_at DESC');
-    res.json(result.rows);
+    const clients = await MafiyaGmbClients.find({}, NO_ID).sort({ created_at: -1 }).lean();
+    res.json(clients);
   } catch (err) {
     console.error('[Mafiya] GET /clients error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -38,15 +62,10 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const result = await pool.query(
-      `INSERT INTO mafiya_gmb_clients
-        (business_name, display_name, business_category, custom_category, contact_person, phone_number, business_address, website_url, gmb_url, gmb_email, logo_url, ga4_property_id, client_type, plan_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-       RETURNING *`,
-      [business_name, display_name, business_category, custom_category, contact_person, phone_number, business_address, website_url, gmb_url, gmb_email, logo_url, ga4_property_id, client_type || 'internal', plan_id || null]
-    );
-
-    const savedClient = result.rows[0];
+    const savedClient = (await MafiyaGmbClients.create({
+      business_name, display_name, business_category, custom_category, contact_person, phone_number, business_address,
+      website_url, gmb_url, gmb_email, logo_url, ga4_property_id, client_type: client_type || 'internal', plan_id: plan_id || null,
+    })).toObject();
 
     // Send GMB authorization email if gmb_email is provided
     if (gmb_email) {
@@ -87,16 +106,18 @@ router.put('/:id', async (req, res) => {
   }
 
   try {
-    const result = await pool.query(
-      `UPDATE mafiya_gmb_clients
-       SET business_name = $1, display_name = $2, business_category = $3, custom_category = $4, contact_person = $5, phone_number = $6, business_address = $7, website_url = $8, gmb_url = $9, gmb_email = $10, logo_url = $11, ga4_property_id = $12, client_type = $13, plan_id = $14
-       WHERE id = $15
-       RETURNING *`,
-      [business_name, display_name, business_category, custom_category, contact_person, phone_number, business_address, website_url, gmb_url, gmb_email, logo_url, ga4_property_id, client_type || 'internal', plan_id || null, id]
-    );
+    const updated = await MafiyaGmbClients.findOneAndUpdate(
+      { id },
+      { $set: {
+        business_name, display_name: display_name ?? null, business_category: business_category ?? null, custom_category: custom_category ?? null,
+        contact_person, phone_number, business_address, website_url: website_url ?? null, gmb_url: gmb_url ?? null, gmb_email: gmb_email ?? null,
+        logo_url: logo_url ?? null, ga4_property_id: ga4_property_id ?? null, client_type: client_type || 'internal', plan_id: plan_id || null,
+      } },
+      { new: true, projection: NO_ID }
+    ).lean();
 
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Client not found' });
-    res.json(result.rows[0]);
+    if (!updated) return res.status(404).json({ error: 'Client not found' });
+    res.json(updated);
   } catch (err) {
     console.error('[Mafiya] PUT /clients/:id error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -107,8 +128,8 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await pool.query('DELETE FROM mafiya_gmb_clients WHERE id = $1 RETURNING *', [id]);
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Client not found' });
+    const deleted = await deleteCascade('mafiya_gmb_clients', { id });
+    if (deleted.length === 0) return res.status(404).json({ error: 'Client not found' });
     res.json({ message: 'Client deleted' });
   } catch (err) {
     console.error('[Mafiya] DELETE /clients error:', err);
@@ -120,12 +141,10 @@ router.delete('/:id', async (req, res) => {
 router.post('/:id/resend-email', async (req, res) => {
   const { id } = req.params;
   try {
-    const result = await pool.query('SELECT * FROM mafiya_gmb_clients WHERE id = $1', [id]);
-    if (result.rowCount === 0) {
+    const client = await MafiyaGmbClients.findOne({ id }, NO_ID).lean();
+    if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
-
-    const client = result.rows[0];
     if (!client.gmb_email) {
       return res.status(400).json({ error: 'Client does not have a GMB email configured' });
     }
@@ -142,14 +161,12 @@ router.post('/:id/resend-email', async (req, res) => {
 router.post('/:id/disconnect-gmb', async (req, res) => {
   const { id } = req.params;
   try {
-    await pool.query('DELETE FROM mafiya_gmb_tokens WHERE client_id = $1', [id]);
-    const result = await pool.query(
-      `UPDATE mafiya_gmb_clients 
-       SET gmb_verified = false, reviews_cache = NULL, reviews_updated_at = NULL 
-       WHERE id = $1 RETURNING *`, 
-      [id]
+    await MafiyaGmbTokens.deleteMany({ client_id: id });
+    const result = await MafiyaGmbClients.updateOne(
+      { id },
+      { $set: { gmb_verified: false, reviews_cache: null, reviews_updated_at: null } }
     );
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Client not found' });
+    if (result.matchedCount === 0) return res.status(404).json({ error: 'Client not found' });
     res.json({ success: true, message: 'GMB disconnected successfully' });
   } catch (err) {
     console.error('[Mafiya] POST /clients/:id/disconnect-gmb error:', err);
@@ -161,63 +178,28 @@ router.post('/:id/disconnect-gmb', async (req, res) => {
 router.get('/family/dashboard', async (req, res) => {
   try {
     // 1. Fetch GMB Clients
-    const clientsRes = await pool.query('SELECT * FROM mafiya_gmb_clients ORDER BY created_at DESC');
-    let clients = clientsRes.rows;
- 
+    let clients = await MafiyaGmbClients.find({}, NO_ID).sort({ created_at: -1 }).lean();
+
     // 2. Fetch Plans and features to get the limits for each client
-    const plansRes = await pool.query('SELECT * FROM mafiya_plans');
-    const plans = plansRes.rows;
-    const featuresRes = await pool.query('SELECT * FROM mafiya_plan_features');
-    const planFeatures = featuresRes.rows;
+    const plans = await MafiyaPlans.find({}, NO_ID).lean();
+    const planFeatures = await MafiyaPlanFeatures.find({}, NO_ID).lean();
 
-    // 3. Fetch actual AI reply counts per client (last 30 days)
-    const aiRepliesRes = await pool.query(
-      "SELECT client_id, COUNT(*)::int as count FROM mafiya_review_replies WHERE created_at >= NOW() - INTERVAL '30 days' GROUP BY client_id"
-    );
-    const aiRepliesCounts = aiRepliesRes.rows.reduce((acc, row) => {
-      acc[row.client_id] = row.count;
-      return acc;
-    }, {});
-
-    // Fetch actual AI post suggestions counts per client (last 30 days)
-    const aiSugRes = await pool.query(
-      "SELECT client_id, COUNT(*)::int as count FROM mafiya_ai_suggestions_log WHERE generated_at >= NOW() - INTERVAL '30 days' GROUP BY client_id"
-    );
-    const aiSugCounts = aiSugRes.rows.reduce((acc, row) => {
-      acc[row.client_id] = row.count;
-      return acc;
-    }, {});
-
-    // Fetch actual GMB Brain AI counts per client (last 30 days)
-    const brainAiRes = await pool.query(
-      "SELECT client_id, COUNT(*)::int as count FROM mafiya_brain_ai_log WHERE used_at >= NOW() - INTERVAL '30 days' GROUP BY client_id"
-    );
-    const brainAiCounts = brainAiRes.rows.reduce((acc, row) => {
-      acc[row.client_id] = row.count;
-      return acc;
-    }, {});
-
-    // 4. Fetch actual ValueSERP scans counts per client (last 30 days)
-    const scansRes = await pool.query(
-      "SELECT client_id, COUNT(*)::int as count FROM mafiya_geogrid_scans_log WHERE scanned_at >= NOW() - INTERVAL '30 days' GROUP BY client_id"
-    );
-    const scansCounts = scansRes.rows.reduce((acc, row) => {
-      acc[row.client_id] = row.count;
-      return acc;
-    }, {});
-
-    // Daily (Today) counts
-    const aiRepliesTodayRes = await pool.query("SELECT client_id, COUNT(*)::int as count FROM mafiya_review_replies WHERE created_at >= CURRENT_DATE GROUP BY client_id");
-    const aiRepliesToday = aiRepliesTodayRes.rows.reduce((acc, row) => { acc[row.client_id] = row.count; return acc; }, {});
-
-    const aiSugTodayRes = await pool.query("SELECT client_id, COUNT(*)::int as count FROM mafiya_ai_suggestions_log WHERE generated_at >= CURRENT_DATE GROUP BY client_id");
-    const aiSugToday = aiSugTodayRes.rows.reduce((acc, row) => { acc[row.client_id] = row.count; return acc; }, {});
-
-    const brainAiTodayRes = await pool.query("SELECT client_id, COUNT(*)::int as count FROM mafiya_brain_ai_log WHERE used_at >= CURRENT_DATE GROUP BY client_id");
-    const brainAiToday = brainAiTodayRes.rows.reduce((acc, row) => { acc[row.client_id] = row.count; return acc; }, {});
-
-    const scansTodayRes = await pool.query("SELECT client_id, COUNT(*)::int as count FROM mafiya_geogrid_scans_log WHERE scanned_at >= CURRENT_DATE GROUP BY client_id");
-    const scansToday = scansTodayRes.rows.reduce((acc, row) => { acc[row.client_id] = row.count; return acc; }, {});
+    // 3. Usage counts per client (last 30 days, and today)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const today = startOfUtcDay();
+    const [
+      aiRepliesCounts, aiSugCounts, brainAiCounts, scansCounts,
+      aiRepliesToday, aiSugToday, brainAiToday, scansToday,
+    ] = await Promise.all([
+      countsByClient(MafiyaReviewReplies, 'created_at', thirtyDaysAgo),
+      countsByClient(MafiyaAiSuggestionsLog, 'generated_at', thirtyDaysAgo),
+      countsByClient(MafiyaBrainAiLog, 'used_at', thirtyDaysAgo),
+      countsByClient(MafiyaGeogridScansLog, 'scanned_at', thirtyDaysAgo),
+      countsByClient(MafiyaReviewReplies, 'created_at', today),
+      countsByClient(MafiyaAiSuggestionsLog, 'generated_at', today),
+      countsByClient(MafiyaBrainAiLog, 'used_at', today),
+      countsByClient(MafiyaGeogridScansLog, 'scanned_at', today),
+    ]);
 
     // Map limits per plan_id
     const limitsMap = {};
@@ -273,12 +255,10 @@ router.get('/family/dashboard', async (req, res) => {
     });
  
     // 3. Fetch Turf Keywords for calculations
-    const keywordsRes = await pool.query('SELECT * FROM mafiya_turf_keywords');
-    const keywords = keywordsRes.rows;
- 
+    const keywords = await MafiyaTurfKeywords.find({}, NO_ID).lean();
+
     // 4. Fetch open orders
-    const ordersRes = await pool.query("SELECT * FROM mafiya_orders WHERE status = 'open' ORDER BY id ASC LIMIT 5");
-    const orders = ordersRes.rows;
+    const orders = await MafiyaOrders.find({ status: 'open' }, NO_ID).sort({ id: 1 }).limit(5).lean();
  
     const totalClientsCount = clients.length;
      

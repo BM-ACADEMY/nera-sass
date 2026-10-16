@@ -1,98 +1,198 @@
-const db = require('../db/connection');
 const ensureAllianceSchema = require('../db/alliance-schema');
 const { createAllianceEmailTransport, getAllianceEmailConfig, isAllianceSenderAllowed, allowedAllianceFromAddresses } = require('./alliance-email');
+const {
+  AllianceTouches,
+  AllianceProspects,
+  AllianceCampaigns,
+  AllianceCampaignProspects,
+  AllianceCampaignTemplates,
+  AllianceDomains,
+  AllianceBulkSendLimits,
+  AllianceEmailEvents,
+} = require('../models');
 
 let interval;
 let processing = false;
 
+const CLOSED_PROSPECT_STATUSES = ['converted', 'closed', 'not_interested', 'unsubscribed', 'complete', 'completed'];
+const ACTIVE_TOUCH_STATUSES = ['scheduled', 'processing', 'paused', 'failed'];
+const DAY_MS = 24 * 60 * 60 * 1000;
+// prospect.status NOT IN (...) — a NULL status never matches, exactly as in SQL
+const isOpenProspect = (prospect) => prospect && prospect.status != null && !CLOSED_PROSPECT_STATUSES.includes(prospect.status);
+const pairKey = (campaignId, prospectId) => `${campaignId}:${prospectId}`;
+const startOfUtcDay = () => { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d; };
+
+async function mapById(model, ids, projection) {
+  const unique = [...new Set(ids.filter((id) => id !== null && id !== undefined))];
+  if (!unique.length) return new Map();
+  return new Map((await model.find({ id: { $in: unique } }, projection).lean()).map((doc) => [doc.id, doc]));
+}
+
+// Inserts a touch unless (campaign_id, prospect_id, touch_no) already exists (ON CONFLICT DO NOTHING).
+async function insertTouchIfMissing(doc) {
+  if (await AllianceTouches.exists({ campaign_id: doc.campaign_id, prospect_id: doc.prospect_id, touch_no: doc.touch_no })) return false;
+  try {
+    await AllianceTouches.create(doc);
+    return true;
+  } catch (error) {
+    if (error.code === 11000) return false;
+    throw error;
+  }
+}
+
+// enrollment.next_touch_at = earliest scheduled touch, for every enrollment that has one.
+async function refreshNextTouchAt(match = {}) {
+  const due = await AllianceTouches.aggregate([
+    { $match: { ...match, status: 'scheduled' } },
+    { $group: { _id: { campaign_id: '$campaign_id', prospect_id: '$prospect_id' }, next_touch_at: { $min: '$scheduled_at' } } },
+  ]);
+  if (!due.length) return;
+  await AllianceCampaignProspects.bulkWrite(due.map((row) => ({
+    updateOne: {
+      filter: { campaign_id: row._id.campaign_id, prospect_id: row._id.prospect_id },
+      update: { $set: { next_touch_at: row.next_touch_at } },
+    },
+  })));
+}
+
 async function reconcileEmailFollowups() {
-  await db.query(
-    `UPDATE alliance_touches touch
-     SET status='scheduled',processing_started_at=NULL,error_message=NULL
-     FROM alliance_prospects prospect, alliance_campaigns campaign
-     WHERE prospect.id=touch.prospect_id AND campaign.id=touch.campaign_id
-       AND touch.status='cancelled' AND touch.sent_at IS NULL
-       AND touch.error_message='Recipient replied; follow-ups stopped.'
-       AND campaign.status<>'stopped' AND prospect.suppressed=FALSE
-       AND prospect.status NOT IN ('converted','closed','not_interested','unsubscribed','complete','completed')`
-  );
-  await db.query(
-    `UPDATE alliance_campaign_prospects enrollment
-     SET enrollment_status='in_sequence',stopped_at=NULL,stop_reason=NULL
-     FROM alliance_prospects prospect, alliance_campaigns campaign
-     WHERE prospect.id=enrollment.prospect_id AND campaign.id=enrollment.campaign_id
-       AND enrollment.stop_reason='recipient_replied' AND campaign.status<>'stopped'
-       AND prospect.suppressed=FALSE
-       AND prospect.status NOT IN ('converted','closed','not_interested','unsubscribed','complete','completed')`
-  );
+  const stoppedTouches = await AllianceTouches.find(
+    { status: 'cancelled', sent_at: null, error_message: 'Recipient replied; follow-ups stopped.' },
+    { id: 1, prospect_id: 1, campaign_id: 1 }
+  ).lean();
+  const stoppedEnrollments = await AllianceCampaignProspects.find(
+    { stop_reason: 'recipient_replied' },
+    { _id: 1, prospect_id: 1, campaign_id: 1 }
+  ).lean();
+  const all = [...stoppedTouches, ...stoppedEnrollments];
+  if (!all.length) return;
+  const prospects = await mapById(AllianceProspects, all.map((r) => r.prospect_id), { id: 1, status: 1, suppressed: 1 });
+  const campaigns = await mapById(AllianceCampaigns, all.map((r) => r.campaign_id), { id: 1, status: 1 });
+  const eligible = (row) => {
+    const prospect = prospects.get(row.prospect_id);
+    const campaign = campaigns.get(row.campaign_id);
+    return campaign && campaign.status !== 'stopped' && prospect && prospect.suppressed === false && isOpenProspect(prospect);
+  };
+
+  const touchIds = stoppedTouches.filter(eligible).map((t) => t.id);
+  if (touchIds.length) {
+    await AllianceTouches.updateMany(
+      { id: { $in: touchIds } },
+      { $set: { status: 'scheduled', processing_started_at: null, error_message: null } }
+    );
+  }
+  const enrollmentIds = stoppedEnrollments.filter(eligible).map((e) => e._id);
+  if (enrollmentIds.length) {
+    await AllianceCampaignProspects.updateMany(
+      { _id: { $in: enrollmentIds } },
+      { $set: { enrollment_status: 'in_sequence', stopped_at: null, stop_reason: null } }
+    );
+  }
 }
 
 async function recoverMissingEmailFollowups() {
-  await db.query(
-    `INSERT INTO alliance_touches
-      (prospect_id,campaign_id,touch_no,channel,domain_id,subject,message_body,status,scheduled_at)
-     SELECT first_touch.prospect_id,first_touch.campaign_id,template.touch_no,'email',campaign.sender_domain_id,
-            template.subject,template.body,'scheduled',
-            COALESCE(campaign.started_at,first_touch.sent_at,NOW())+(template.delay_days*INTERVAL '1 day')
-     FROM alliance_touches first_touch
-     JOIN alliance_campaigns campaign ON campaign.id=first_touch.campaign_id
-     JOIN alliance_campaign_prospects enrollment ON enrollment.campaign_id=first_touch.campaign_id AND enrollment.prospect_id=first_touch.prospect_id
-     JOIN alliance_prospects prospect ON prospect.id=first_touch.prospect_id
-     JOIN alliance_campaign_templates template ON template.campaign_id=first_touch.campaign_id AND template.touch_no>1
-     WHERE first_touch.touch_no=1 AND first_touch.status='sent' AND first_touch.sent_at IS NOT NULL
-       AND campaign.status IN ('running','completed') AND enrollment.enrollment_status='in_sequence'
-       AND prospect.suppressed=FALSE AND prospect.status NOT IN ('converted','closed','not_interested','unsubscribed','complete','completed')
-     ON CONFLICT (campaign_id,prospect_id,touch_no) DO NOTHING`
-  );
-  await db.query(
-    `UPDATE alliance_campaigns campaign SET status='running',completed_at=NULL
-     WHERE campaign.status='completed' AND EXISTS (
-       SELECT 1 FROM alliance_touches touch
-       WHERE touch.campaign_id=campaign.id AND touch.status='scheduled'
-     )`
-  );
-  await db.query(
-    `UPDATE alliance_campaign_prospects enrollment SET next_touch_at=due.next_touch_at
-     FROM (SELECT campaign_id,prospect_id,MIN(scheduled_at) AS next_touch_at
-           FROM alliance_touches WHERE status='scheduled' GROUP BY campaign_id,prospect_id) due
-     WHERE enrollment.campaign_id=due.campaign_id AND enrollment.prospect_id=due.prospect_id`
-  );
+  const campaigns = await AllianceCampaigns.find({ status: { $in: ['running', 'completed'] } }, { id: 1, started_at: 1, sender_domain_id: 1 }).lean();
+  if (campaigns.length) {
+    const campaignById = new Map(campaigns.map((c) => [c.id, c]));
+    const firstTouches = await AllianceTouches.find(
+      { campaign_id: { $in: [...campaignById.keys()] }, touch_no: 1, status: 'sent', sent_at: { $ne: null } },
+      { campaign_id: 1, prospect_id: 1, sent_at: 1 }
+    ).lean();
+    if (firstTouches.length) {
+      const templates = await AllianceCampaignTemplates.find(
+        { campaign_id: { $in: [...new Set(firstTouches.map((t) => t.campaign_id))] }, touch_no: { $gt: 1 } }
+      ).lean();
+      const enrollments = new Set((await AllianceCampaignProspects.find(
+        { campaign_id: { $in: [...new Set(firstTouches.map((t) => t.campaign_id))] }, enrollment_status: 'in_sequence' },
+        { campaign_id: 1, prospect_id: 1 }
+      ).lean()).map((e) => pairKey(e.campaign_id, e.prospect_id)));
+      const prospects = await mapById(AllianceProspects, firstTouches.map((t) => t.prospect_id), { id: 1, status: 1, suppressed: 1 });
+      const existing = new Set((await AllianceTouches.find(
+        { campaign_id: { $in: [...new Set(firstTouches.map((t) => t.campaign_id))] } },
+        { campaign_id: 1, prospect_id: 1, touch_no: 1 }
+      ).lean()).map((t) => `${pairKey(t.campaign_id, t.prospect_id)}:${t.touch_no}`));
+
+      for (const first of firstTouches) {
+        const prospect = prospects.get(first.prospect_id);
+        if (!enrollments.has(pairKey(first.campaign_id, first.prospect_id))) continue;
+        if (!prospect || prospect.suppressed !== false || !isOpenProspect(prospect)) continue;
+        const campaign = campaignById.get(first.campaign_id);
+        for (const template of templates.filter((t) => t.campaign_id === first.campaign_id)) {
+          if (existing.has(`${pairKey(first.campaign_id, first.prospect_id)}:${template.touch_no}`)) continue;
+          const base = new Date(campaign.started_at || first.sent_at || Date.now());
+          await insertTouchIfMissing({
+            prospect_id: first.prospect_id,
+            campaign_id: first.campaign_id,
+            touch_no: template.touch_no,
+            channel: 'email',
+            domain_id: campaign.sender_domain_id ?? null,
+            subject: template.subject,
+            message_body: template.body,
+            status: 'scheduled',
+            scheduled_at: new Date(base.getTime() + Number(template.delay_days || 0) * DAY_MS),
+          });
+        }
+      }
+    }
+  }
+
+  const reopen = await AllianceTouches.distinct('campaign_id', { status: 'scheduled' });
+  if (reopen.length) {
+    await AllianceCampaigns.updateMany(
+      { status: 'completed', id: { $in: reopen } },
+      { $set: { status: 'running', completed_at: null } }
+    );
+  }
+  await refreshNextTouchAt();
 }
 
 async function finalizeEmailCampaigns() {
-  await db.query(
-    `UPDATE alliance_campaign_prospects enrollment
-     SET enrollment_status='completed',next_touch_at=NULL
-     WHERE enrollment.enrollment_status='in_sequence'
-       AND EXISTS (SELECT 1 FROM alliance_touches sent WHERE sent.campaign_id=enrollment.campaign_id AND sent.prospect_id=enrollment.prospect_id AND sent.status='sent')
-       AND NOT EXISTS (
-         SELECT 1 FROM alliance_campaign_templates template
-         WHERE template.campaign_id=enrollment.campaign_id
-           AND NOT EXISTS (SELECT 1 FROM alliance_touches expected WHERE expected.campaign_id=enrollment.campaign_id AND expected.prospect_id=enrollment.prospect_id AND expected.touch_no=template.touch_no)
-       )
-       AND NOT EXISTS (SELECT 1 FROM alliance_touches active WHERE active.campaign_id=enrollment.campaign_id AND active.prospect_id=enrollment.prospect_id AND active.status IN ('scheduled','processing','paused','failed'))`
-  );
-  await db.query(
-    `UPDATE alliance_campaigns campaign SET status='completed',completed_at=NOW()
-     WHERE campaign.status='running'
-       AND NOT EXISTS (
-         SELECT 1 FROM alliance_campaign_prospects enrollment
-         JOIN alliance_prospects prospect ON prospect.id=enrollment.prospect_id
-         WHERE enrollment.campaign_id=campaign.id
-           AND prospect.status NOT IN ('converted','closed','not_interested','unsubscribed','complete','completed')
-       )
-       AND NOT EXISTS (SELECT 1 FROM alliance_touches active WHERE active.campaign_id=campaign.id AND active.status IN ('scheduled','processing','paused','failed'))`
-  );
-  await db.query(
-    `UPDATE alliance_campaigns campaign SET status='running',completed_at=NULL
-     WHERE campaign.status='completed'
-       AND EXISTS (
-         SELECT 1 FROM alliance_campaign_prospects enrollment
-         JOIN alliance_prospects prospect ON prospect.id=enrollment.prospect_id
-         WHERE enrollment.campaign_id=campaign.id
-           AND prospect.status NOT IN ('converted','closed','not_interested','unsubscribed','complete','completed')
-       )`
-  );
+  const inSequence = await AllianceCampaignProspects.find({ enrollment_status: 'in_sequence' }, { _id: 1, campaign_id: 1, prospect_id: 1 }).lean();
+  if (inSequence.length) {
+    const campaignIds = [...new Set(inSequence.map((e) => e.campaign_id))];
+    const touches = await AllianceTouches.find(
+      { campaign_id: { $in: campaignIds } },
+      { campaign_id: 1, prospect_id: 1, touch_no: 1, status: 1 }
+    ).lean();
+    const templates = await AllianceCampaignTemplates.find({ campaign_id: { $in: campaignIds } }, { campaign_id: 1, touch_no: 1 }).lean();
+    const touchesByPair = new Map();
+    for (const touch of touches) {
+      const key = pairKey(touch.campaign_id, touch.prospect_id);
+      if (!touchesByPair.has(key)) touchesByPair.set(key, []);
+      touchesByPair.get(key).push(touch);
+    }
+    const completedIds = inSequence.filter((enrollment) => {
+      const own = touchesByPair.get(pairKey(enrollment.campaign_id, enrollment.prospect_id)) || [];
+      if (!own.some((t) => t.status === 'sent')) return false;
+      const expected = templates.filter((t) => t.campaign_id === enrollment.campaign_id);
+      if (!expected.every((template) => own.some((t) => t.touch_no === template.touch_no))) return false;
+      return !own.some((t) => ACTIVE_TOUCH_STATUSES.includes(t.status));
+    }).map((e) => e._id);
+    if (completedIds.length) {
+      await AllianceCampaignProspects.updateMany(
+        { _id: { $in: completedIds } },
+        { $set: { enrollment_status: 'completed', next_touch_at: null } }
+      );
+    }
+  }
+
+  // Campaigns with at least one enrollment whose prospect is still open
+  const enrollments = await AllianceCampaignProspects.find({}, { campaign_id: 1, prospect_id: 1 }).lean();
+  const prospects = await mapById(AllianceProspects, enrollments.map((e) => e.prospect_id), { id: 1, status: 1 });
+  const campaignsWithOpenProspects = new Set(enrollments.filter((e) => isOpenProspect(prospects.get(e.prospect_id))).map((e) => e.campaign_id));
+  const campaignsWithActiveTouches = new Set(await AllianceTouches.distinct('campaign_id', { status: { $in: ACTIVE_TOUCH_STATUSES } }));
+
+  const running = await AllianceCampaigns.find({ status: 'running' }, { id: 1 }).lean();
+  const toComplete = running.map((c) => c.id).filter((id) => !campaignsWithOpenProspects.has(id) && !campaignsWithActiveTouches.has(id));
+  if (toComplete.length) {
+    await AllianceCampaigns.updateMany({ id: { $in: toComplete }, status: 'running' }, { $set: { status: 'completed', completed_at: new Date() } });
+  }
+  if (campaignsWithOpenProspects.size) {
+    await AllianceCampaigns.updateMany(
+      { status: 'completed', id: { $in: [...campaignsWithOpenProspects] } },
+      { $set: { status: 'running', completed_at: null } }
+    );
+  }
 }
 
 function normalizeEmail(value) {
@@ -126,49 +226,72 @@ function textToHtml(value) {
     .replace(/\n/g, '<br>');
 }
 
+// Resets each sender's daily counter once per day.
+async function resetDailySenderCounters() {
+  await AllianceDomains.updateMany({ last_reset: { $lt: startOfUtcDay() } }, { $set: { sent_today: 0, last_reset: new Date() } });
+}
+
+// Joins one touch with its campaign, enrollment, prospect and sender domain.
+// Returns null when any of them is missing (the SQL used inner joins).
+async function loadTouchContext(touch) {
+  const campaign = await AllianceCampaigns.findOne({ id: touch.campaign_id }).lean();
+  if (!campaign) return null;
+  const [enrollment, prospect, domain] = await Promise.all([
+    AllianceCampaignProspects.findOne({ campaign_id: touch.campaign_id, prospect_id: touch.prospect_id }).lean(),
+    AllianceProspects.findOne({ id: touch.prospect_id }).lean(),
+    campaign.sender_domain_id != null ? AllianceDomains.findOne({ id: campaign.sender_domain_id }).lean() : null,
+  ]);
+  if (!enrollment || !prospect || !domain) return null;
+  return { campaign, enrollment, prospect, domain };
+}
+
 async function claimDueTouch() {
-  const client = await db.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query(`UPDATE alliance_domains SET sent_today=0,last_reset=NOW() WHERE last_reset::date<CURRENT_DATE`);
-    await client.query(
-      `UPDATE alliance_touches SET status = 'scheduled', processing_started_at = NULL,
-              error_message = 'Recovered after interrupted email processing.'
-       WHERE status = 'processing' AND processing_started_at < NOW() - INTERVAL '15 minutes'`
+  await resetDailySenderCounters();
+  await AllianceTouches.updateMany(
+    { status: 'processing', processing_started_at: { $lt: new Date(Date.now() - 15 * 60 * 1000) } },
+    { $set: { status: 'scheduled', processing_started_at: null, error_message: 'Recovered after interrupted email processing.' } }
+  );
+
+  const candidates = await AllianceTouches.find(
+    { channel: 'email', status: 'scheduled', scheduled_at: { $lte: new Date() } },
+    { id: 1, campaign_id: 1, prospect_id: 1, touch_no: 1, subject: 1, message_body: 1 }
+  ).sort({ scheduled_at: 1, id: 1 }).lean();
+
+  for (const candidate of candidates) {
+    const context = await loadTouchContext(candidate);
+    if (!context) continue;
+    // Atomically claim (replaces FOR UPDATE SKIP LOCKED)
+    const claimed = await AllianceTouches.updateOne(
+      { id: candidate.id, status: 'scheduled' },
+      { $set: { status: 'processing', processing_started_at: new Date(), error_message: null } }
     );
-    const result = await client.query(
-      `SELECT t.id, t.campaign_id, t.prospect_id, t.touch_no, t.subject, t.message_body,
-              p.name, p.business_name, p.email, p.phone, p.audience, p.industry, p.location,
-              p.source, p.channel, p.channel_pref, p.consent, p.consent_source, p.ai_score, p.created_at,
-              p.custom_fields, p.status AS prospect_status,
-              p.suppressed, c.name AS campaign_name, c.status AS campaign_status, c.started_at, c.sender_domain_id,
-              cp.enrollment_status, d.inbox_email, d.status AS sender_status,
-              d.daily_cap, d.sent_today, policy.limit_mode AS bulk_limit_mode, policy.custom_limit AS bulk_custom_limit,
-              sent_count.contacted_count
-       FROM alliance_touches t
-       JOIN alliance_campaigns c ON c.id = t.campaign_id
-       JOIN alliance_campaign_prospects cp ON cp.campaign_id = t.campaign_id AND cp.prospect_id = t.prospect_id
-       JOIN alliance_prospects p ON p.id = t.prospect_id
-       JOIN alliance_domains d ON d.id = c.sender_domain_id
-       LEFT JOIN alliance_bulk_send_limits policy ON policy.channel='email'
-       LEFT JOIN LATERAL (
-         SELECT COUNT(DISTINCT already.prospect_id)::int AS contacted_count
-         FROM alliance_touches already WHERE already.campaign_id=t.campaign_id AND already.channel='email' AND already.status='sent'
-       ) sent_count ON TRUE
-       WHERE t.channel = 'email' AND t.status = 'scheduled' AND t.scheduled_at <= NOW()
-       ORDER BY t.scheduled_at, t.id
-       FOR UPDATE OF t SKIP LOCKED LIMIT 1`
-    );
-    if (!result.rowCount) {
-      await client.query('COMMIT');
-      return null;
-    }
-    const touch = result.rows[0];
+    if (!claimed.modifiedCount) continue;
+
+    const { campaign, enrollment, prospect: p, domain: d } = context;
+    const policy = await AllianceBulkSendLimits.findOne({ channel: 'email' }).lean();
+    const contactedCount = (await AllianceTouches.distinct('prospect_id', { campaign_id: candidate.campaign_id, channel: 'email', status: 'sent' })).length;
+    const touch = {
+      id: candidate.id,
+      campaign_id: candidate.campaign_id,
+      prospect_id: candidate.prospect_id,
+      touch_no: candidate.touch_no,
+      subject: candidate.subject,
+      message_body: candidate.message_body,
+      name: p.name, business_name: p.business_name, email: p.email, phone: p.phone, audience: p.audience,
+      industry: p.industry, location: p.location, source: p.source, channel: p.channel, channel_pref: p.channel_pref,
+      consent: p.consent, consent_source: p.consent_source, ai_score: p.ai_score, created_at: p.created_at,
+      custom_fields: p.custom_fields, prospect_status: p.status, suppressed: p.suppressed,
+      campaign_name: campaign.name, campaign_status: campaign.status, started_at: campaign.started_at, sender_domain_id: campaign.sender_domain_id,
+      enrollment_status: enrollment.enrollment_status,
+      inbox_email: d.inbox_email, sender_status: d.status, daily_cap: d.daily_cap, sent_today: d.sent_today,
+      bulk_limit_mode: policy?.limit_mode ?? null, bulk_custom_limit: policy?.custom_limit ?? null,
+      contacted_count: contactedCount,
+    };
+
     if (touch.campaign_status === 'scheduled') {
-      await client.query(
-        `UPDATE alliance_campaigns SET status = 'running', started_at = COALESCE(started_at, NOW())
-         WHERE id = $1 AND status = 'scheduled'`,
-        [touch.campaign_id]
+      await AllianceCampaigns.updateOne(
+        { id: touch.campaign_id, status: 'scheduled' },
+        [{ $set: { status: 'running', started_at: { $ifNull: ['$started_at', '$$NOW'] } } }]
       );
       touch.campaign_status = 'running';
     }
@@ -182,72 +305,60 @@ async function claimDueTouch() {
                   : !touch.email ? 'missing_email' : null;
     if (stopReason) {
       const retryable = ['campaign_not_running', 'sender_not_active', 'sender_daily_cap_reached'].includes(stopReason);
-      await client.query(
-        // $1 is cast explicitly both places it's used — otherwise Postgres infers a
-        // different type for the same parameter at each site (varchar from the column
-        // assignment, text from the bare literal comparison) and errors 42P08.
-        `UPDATE alliance_touches SET status = $1::varchar, error_message = $2,
-                scheduled_at = CASE WHEN $1::varchar = 'scheduled' THEN NOW() + INTERVAL '5 minutes' ELSE scheduled_at END
-         WHERE id = $3`,
-        [retryable ? 'scheduled' : 'cancelled', stopReason, touch.id]
+      await AllianceTouches.updateOne(
+        { id: touch.id },
+        { $set: retryable
+          ? { status: 'scheduled', error_message: stopReason, processing_started_at: null, scheduled_at: new Date(Date.now() + 5 * 60 * 1000) }
+          : { status: 'cancelled', error_message: stopReason, processing_started_at: null } }
       );
       if (!retryable) {
-        await client.query(
-          `UPDATE alliance_campaign_prospects SET enrollment_status = 'stopped', stopped_at = NOW(), stop_reason = $1
-           WHERE campaign_id = $2 AND prospect_id = $3`,
-          [stopReason, touch.campaign_id, touch.prospect_id]
+        await AllianceCampaignProspects.updateMany(
+          { campaign_id: touch.campaign_id, prospect_id: touch.prospect_id },
+          { $set: { enrollment_status: 'stopped', stopped_at: new Date(), stop_reason: stopReason } }
         );
       }
-      await client.query('COMMIT');
       return null;
     }
-    await client.query(`UPDATE alliance_touches SET status = 'processing', processing_started_at = NOW(), error_message = NULL WHERE id = $1`, [touch.id]);
-    await client.query('COMMIT');
     return touch;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
   }
+  return null;
 }
 
 async function scheduleRemainingTouches(touch) {
-  await db.query(
-    `INSERT INTO alliance_touches
-      (prospect_id, campaign_id, touch_no, channel, domain_id, subject, message_body, status, scheduled_at)
-     SELECT $1, ct.campaign_id, ct.touch_no, 'email', $2, ct.subject, ct.body, 'scheduled',
-            COALESCE(c.started_at,$4::timestamptz,NOW()) + (ct.delay_days * INTERVAL '1 day')
-     FROM alliance_campaign_templates ct
-     JOIN alliance_campaigns c ON c.id = ct.campaign_id
-     WHERE ct.campaign_id = $3 AND ct.touch_no > 1
-     ON CONFLICT (campaign_id, prospect_id, touch_no) DO NOTHING`,
-    [touch.prospect_id, touch.sender_domain_id, touch.campaign_id, touch.sent_at || new Date().toISOString()]
-  );
-  await db.query(
-    `UPDATE alliance_campaign_prospects cp SET next_touch_at = due.next_touch_at
-     FROM (SELECT campaign_id, prospect_id, MIN(scheduled_at) AS next_touch_at
-           FROM alliance_touches WHERE campaign_id=$1 AND prospect_id=$2 AND status='scheduled'
-           GROUP BY campaign_id, prospect_id) due
-     WHERE cp.campaign_id=due.campaign_id AND cp.prospect_id=due.prospect_id`,
-    [touch.campaign_id, touch.prospect_id]
-  );
+  const campaign = await AllianceCampaigns.findOne({ id: touch.campaign_id }, { started_at: 1 }).lean();
+  if (campaign) {
+    const templates = await AllianceCampaignTemplates.find({ campaign_id: touch.campaign_id, touch_no: { $gt: 1 } }).lean();
+    const base = new Date(campaign.started_at || touch.sent_at || Date.now());
+    for (const template of templates) {
+      await insertTouchIfMissing({
+        prospect_id: touch.prospect_id,
+        campaign_id: template.campaign_id,
+        touch_no: template.touch_no,
+        channel: 'email',
+        domain_id: touch.sender_domain_id ?? null,
+        subject: template.subject,
+        message_body: template.body,
+        status: 'scheduled',
+        scheduled_at: new Date(base.getTime() + Number(template.delay_days || 0) * DAY_MS),
+      });
+    }
+  }
+  await refreshNextTouchAt({ campaign_id: touch.campaign_id, prospect_id: touch.prospect_id });
 }
 
 async function finalEligibilityCheck(touch) {
-  await db.query(`UPDATE alliance_domains SET sent_today=0,last_reset=NOW() WHERE last_reset::date<CURRENT_DATE`);
-  const result = await db.query(
-    `SELECT c.status AS campaign_status, p.status AS prospect_status, p.suppressed,
-            cp.enrollment_status, d.status AS sender_status, d.sent_today, d.daily_cap
-     FROM alliance_campaigns c
-     JOIN alliance_campaign_prospects cp ON cp.campaign_id=c.id AND cp.prospect_id=$2
-     JOIN alliance_prospects p ON p.id=cp.prospect_id
-     JOIN alliance_domains d ON d.id=c.sender_domain_id
-     WHERE c.id=$1`,
-    [touch.campaign_id, touch.prospect_id]
-  );
-  if (!result.rowCount) return 'campaign_or_enrollment_missing';
-  const state = result.rows[0];
+  await resetDailySenderCounters();
+  const context = await loadTouchContext(touch);
+  if (!context) return 'campaign_or_enrollment_missing';
+  const state = {
+    campaign_status: context.campaign.status,
+    prospect_status: context.prospect.status,
+    suppressed: context.prospect.suppressed,
+    enrollment_status: context.enrollment.enrollment_status,
+    sender_status: context.domain.status,
+    sent_today: context.domain.sent_today,
+    daily_cap: context.domain.daily_cap,
+  };
   if (state.campaign_status !== 'running') return 'campaign_not_running';
   if (state.suppressed) return 'suppressed';
   if (['converted', 'closed', 'not_interested', 'unsubscribed'].includes(state.prospect_status)) return `prospect_${state.prospect_status}`;
@@ -264,16 +375,15 @@ async function deliverTouch(touch, io) {
     const stoppedBecause = await finalEligibilityCheck(touch);
     if (stoppedBecause) {
       const retryable = ['campaign_not_running', 'sender_not_active', 'sender_daily_cap_reached'].includes(stoppedBecause);
-      await db.query(
-        `UPDATE alliance_touches SET status=$1, processing_started_at=NULL, error_message=$2,
-                scheduled_at=CASE WHEN $1='scheduled' THEN NOW()+INTERVAL '5 minutes' ELSE scheduled_at END
-         WHERE id=$3 AND status='processing'`,
-        [retryable ? 'scheduled' : 'cancelled', stoppedBecause, touch.id]
+      await AllianceTouches.updateOne(
+        { id: touch.id, status: 'processing' },
+        { $set: retryable
+          ? { status: 'scheduled', processing_started_at: null, error_message: stoppedBecause, scheduled_at: new Date(Date.now() + 5 * 60 * 1000) }
+          : { status: 'cancelled', processing_started_at: null, error_message: stoppedBecause } }
       );
-      if (!retryable) await db.query(
-        `UPDATE alliance_campaign_prospects SET enrollment_status='stopped', stopped_at=NOW(), stop_reason=$1, next_touch_at=NULL
-         WHERE campaign_id=$2 AND prospect_id=$3`,
-        [stoppedBecause, touch.campaign_id, touch.prospect_id]
+      if (!retryable) await AllianceCampaignProspects.updateMany(
+        { campaign_id: touch.campaign_id, prospect_id: touch.prospect_id },
+        { $set: { enrollment_status: 'stopped', stopped_at: new Date(), stop_reason: stoppedBecause, next_touch_at: null } }
       );
       return;
     }
@@ -296,56 +406,53 @@ async function deliverTouch(touch, io) {
         'List-Unsubscribe': `<mailto:${config.replyTo}?subject=unsubscribe>`,
       },
     });
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(
-        `UPDATE alliance_touches SET status = 'sent', sent_at = NOW(), processing_started_at = NULL,
-                provider_message_id = $1, subject = $2, message_body = $3 WHERE id = $4`,
-        [result.messageId || null, subject, body, touch.id]
-      );
-      await client.query(`UPDATE alliance_domains SET sent_today = sent_today + 1 WHERE id = $1`, [touch.sender_domain_id]);
-      await client.query(
-        `UPDATE alliance_campaign_prospects SET enrollment_status = 'in_sequence', current_touch = GREATEST(current_touch, $1),
-                next_touch_at = NULL
-         WHERE campaign_id = $2 AND prospect_id = $3`,
-        [touch.touch_no, touch.campaign_id, touch.prospect_id]
-      );
-      await client.query(
-        `INSERT INTO alliance_email_events (touch_id, campaign_id, prospect_id, provider_message_id, event_type, event_payload)
-         VALUES ($1,$2,$3,$4,'sent',$5::jsonb)`,
-        [touch.id, touch.campaign_id, touch.prospect_id, result.messageId || null, JSON.stringify({ accepted: result.accepted, rejected: result.rejected, response: result.response })]
-      );
-      await client.query('COMMIT');
-      deliveryRecorded = true;
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    await AllianceTouches.updateOne(
+      { id: touch.id },
+      { $set: {
+        status: 'sent', sent_at: new Date(), processing_started_at: null,
+        provider_message_id: result.messageId || null, subject, message_body: body,
+      } }
+    );
+    await AllianceDomains.updateOne({ id: touch.sender_domain_id }, { $inc: { sent_today: 1 } });
+    await AllianceCampaignProspects.updateMany(
+      { campaign_id: touch.campaign_id, prospect_id: touch.prospect_id },
+      { $set: { enrollment_status: 'in_sequence', next_touch_at: null }, $max: { current_touch: touch.touch_no } }
+    );
+    await AllianceEmailEvents.create({
+      touch_id: touch.id,
+      campaign_id: touch.campaign_id,
+      prospect_id: touch.prospect_id,
+      provider_message_id: result.messageId || null,
+      event_type: 'sent',
+      event_payload: { accepted: result.accepted, rejected: result.rejected, response: result.response },
+    });
+    deliveryRecorded = true;
     await scheduleRemainingTouches(touch);
     io?.emit('alliance_campaign_updated', { campaign_id: touch.campaign_id, prospect_id: touch.prospect_id, touch_id: touch.id, status: 'sent' });
   } catch (error) {
     const reason = error.response || error.message || 'Zoho email delivery failed.';
     if (deliveryRecorded) {
-      await db.query(
-        `INSERT INTO alliance_email_events (touch_id,campaign_id,prospect_id,event_type,event_payload)
-         VALUES ($1,$2,$3,'followup_schedule_failed',$4::jsonb)`,
-        [touch.id,touch.campaign_id,touch.prospect_id,JSON.stringify({ error:String(reason).slice(0,2000) })]
-      );
+      await AllianceEmailEvents.create({
+        touch_id: touch.id,
+        campaign_id: touch.campaign_id,
+        prospect_id: touch.prospect_id,
+        event_type: 'followup_schedule_failed',
+        event_payload: { error: String(reason).slice(0, 2000) },
+      });
       console.error('[Alliance email follow-up scheduling]', reason);
       return;
     }
-    await db.query(
-      `UPDATE alliance_touches SET status = 'failed', error_message = $1, processing_started_at = NULL WHERE id = $2`,
-      [String(reason).slice(0, 2000), touch.id]
+    await AllianceTouches.updateOne(
+      { id: touch.id },
+      { $set: { status: 'failed', error_message: String(reason).slice(0, 2000), processing_started_at: null } }
     );
-    await db.query(
-      `INSERT INTO alliance_email_events (touch_id, campaign_id, prospect_id, event_type, event_payload)
-       VALUES ($1,$2,$3,'failed',$4::jsonb)`,
-      [touch.id, touch.campaign_id, touch.prospect_id, JSON.stringify({ error: String(reason).slice(0, 2000) })]
-    );
+    await AllianceEmailEvents.create({
+      touch_id: touch.id,
+      campaign_id: touch.campaign_id,
+      prospect_id: touch.prospect_id,
+      event_type: 'failed',
+      event_payload: { error: String(reason).slice(0, 2000) },
+    });
     io?.emit('alliance_campaign_updated', { campaign_id: touch.campaign_id, prospect_id: touch.prospect_id, touch_id: touch.id, status: 'failed', error: reason });
     console.error('[Alliance email delivery]', reason);
   }

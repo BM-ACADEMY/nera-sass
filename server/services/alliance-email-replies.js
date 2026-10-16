@@ -1,7 +1,18 @@
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const crypto = require('crypto');
-const db = require('../db/connection');
+const {
+  AllianceTouches,
+  AllianceProspects,
+  AllianceAudiences,
+  AllianceEmailInbound,
+  AllianceEmailAttachments,
+  AllianceEmailSyncState,
+  AllianceReplies,
+  AllianceCampaignProspects,
+  AllianceSuppression,
+} = require('../models');
+const { escapeRegex, ieq } = require('../db/mongo');
 const { scoreAllianceProspect } = require('./alliance-lead-scoring');
 const ensureAllianceSchema = require('../db/alliance-schema');
 const openRouter = require('./openrouter');
@@ -39,59 +50,102 @@ function imapConfig() {
   };
 }
 
+// Email conversation history for one prospect, newest first (max 30): campaign touches,
+// inbound replies and approved outbound replies.
+async function loadEmailMemory(prospectId) {
+  const touches = await AllianceTouches.find(
+    { prospect_id: prospectId, channel: 'email', status: 'sent' },
+    { subject: 1, message_body: 1, sent_at: 1 }
+  ).lean();
+  const inbound = await AllianceEmailInbound.find({ prospect_id: prospectId }, { id: 1, subject: 1, text_body: 1, received_at: 1 }).lean();
+  const inboundIds = inbound.map((ei) => ei.id);
+  const repliesByInbound = new Map((await AllianceReplies.find(
+    { email_inbound_id: { $in: inboundIds } },
+    { email_inbound_id: 1, body: 1 }
+  ).lean()).map((r) => [r.email_inbound_id, r]));
+  const approved = await AllianceReplies.find(
+    { prospect_id: prospectId, channel: 'email', status: 'sent', approved_at: { $ne: null }, email_inbound_id: { $ne: null } },
+    { email_inbound_id: 1, ai_draft: 1, approved_at: 1 }
+  ).lean();
+  const approvedInbound = new Map((await AllianceEmailInbound.find(
+    { id: { $in: approved.map((r) => r.email_inbound_id) } },
+    { id: 1, subject: 1 }
+  ).lean()).map((ei) => [ei.id, ei]));
+
+  return [
+    ...touches.map((t) => ({ direction: 'outbound', message_type: 'campaign', subject: t.subject ?? null, body: t.message_body ?? null, occurred_at: t.sent_at ?? null })),
+    ...inbound.map((ei) => ({
+      direction: 'inbound', message_type: 'recipient_reply', subject: ei.subject ?? null,
+      body: repliesByInbound.get(ei.id)?.body ?? ei.text_body ?? null, occurred_at: ei.received_at ?? null,
+    })),
+    ...approved.filter((r) => approvedInbound.has(r.email_inbound_id)).map((r) => ({
+      direction: 'outbound', message_type: 'approved_reply', subject: approvedInbound.get(r.email_inbound_id).subject ?? null,
+      body: r.ai_draft ?? null, occurred_at: r.approved_at ?? null,
+    })),
+  ]
+    .filter((item) => item.body !== null && item.occurred_at !== null)
+    .sort((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at))
+    .slice(0, 30);
+}
+
+// INSERT INTO alliance_suppression (email, phone, reason) SELECT ... ON CONFLICT DO NOTHING
+async function suppressProspect(prospectId, reason) {
+  const prospect = await AllianceProspects.findOne({ id: prospectId }, { email: 1, phone: 1 }).lean();
+  if (!prospect || (prospect.email == null && prospect.phone == null)) return;
+  await AllianceSuppression.create({ email: prospect.email ?? null, phone: prospect.phone ?? null, reason })
+    .catch((error) => { if (error.code !== 11000) throw error; });
+}
+
 async function correlateReply(parsed) {
   const references = [parsed.inReplyTo, ...(Array.isArray(parsed.references) ? parsed.references : [parsed.references])]
     .map(normalizeMessageId).filter(Boolean);
+  const asCorrelation = (touch) => ({ touch_id: touch.id, campaign_id: touch.campaign_id ?? null, prospect_id: touch.prospect_id });
   if (references.length) {
-    const linked = await db.query(
-      `SELECT t.id AS touch_id, t.campaign_id, t.prospect_id
-       FROM alliance_touches t
-       WHERE LOWER(TRIM(BOTH '<>' FROM COALESCE(t.provider_message_id,''))) = ANY($1::text[])
-       ORDER BY t.sent_at DESC LIMIT 1`,
-      [references]
-    );
-    if (linked.rowCount) return { ...linked.rows[0], references };
+    // provider_message_id may be stored with or without <> and in any case
+    const linked = await AllianceTouches.findOne(
+      { provider_message_id: { $in: references.map((ref) => new RegExp(`^<*${escapeRegex(ref)}>*$`, 'i')) } },
+      { id: 1, campaign_id: 1, prospect_id: 1 }
+    ).sort({ sent_at: -1 }).lean();
+    if (linked) return { ...asCorrelation(linked), references };
   }
   const fromEmail = normalizeEmail(parsed.from?.value?.[0]?.address);
-  const fallback = await db.query(
-    `SELECT t.id AS touch_id, t.campaign_id, t.prospect_id
-     FROM alliance_touches t JOIN alliance_prospects p ON p.id = t.prospect_id
-     WHERE LOWER(p.email) = $1 AND t.channel = 'email' AND t.status = 'sent'
-       AND t.sent_at > NOW() - INTERVAL '30 days'
-     ORDER BY t.sent_at DESC LIMIT 1`,
-    [fromEmail]
-  );
-  return fallback.rowCount ? { ...fallback.rows[0], references } : { references };
+  const prospectIds = fromEmail ? await AllianceProspects.distinct('id', { email: ieq(fromEmail) }) : [];
+  const fallback = prospectIds.length ? await AllianceTouches.findOne(
+    {
+      prospect_id: { $in: prospectIds },
+      channel: 'email',
+      status: 'sent',
+      sent_at: { $gt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+    },
+    { id: 1, campaign_id: 1, prospect_id: 1 }
+  ).sort({ sent_at: -1 }).lean() : null;
+  return fallback ? { ...asCorrelation(fallback), references } : { references };
 }
 
 async function recordCampaignReply(inboundId, correlation, parsed) {
   if (!correlation.prospect_id || !correlation.campaign_id) return null;
-  const client = await db.connect();
+  await AllianceEmailInbound.updateOne(
+    { id: inboundId },
+    { $set: {
+      prospect_id: correlation.prospect_id,
+      campaign_id: correlation.campaign_id,
+      touch_id: correlation.touch_id || null,
+      processing_status: 'matched',
+    } }
+  );
+  await AllianceProspects.updateOne({ id: correlation.prospect_id }, { $set: { status: 'in_process', updated_at: new Date() } });
   try {
-    await client.query('BEGIN');
-    await client.query(
-      `UPDATE alliance_email_inbound SET prospect_id=$1, campaign_id=$2, touch_id=$3, processing_status='matched'
-       WHERE id=$4`,
-      [correlation.prospect_id, correlation.campaign_id, correlation.touch_id || null, inboundId]
-    );
-    await client.query(`UPDATE alliance_prospects SET status='in_process', updated_at=NOW() WHERE id=$1`, [correlation.prospect_id]);
-    const reply = await client.query(
-      `INSERT INTO alliance_replies (prospect_id, channel, body, status, email_inbound_id)
-       VALUES ($1,'email',$2,'new',$3)
-       ON CONFLICT DO NOTHING
-       RETURNING *`,
-      [correlation.prospect_id, latestReplyText(parsed.text) || parsed.text || String(parsed.html || ''), inboundId]
-    );
-    const storedReply = reply.rowCount
-      ? reply.rows[0]
-      : (await client.query(`SELECT * FROM alliance_replies WHERE email_inbound_id=$1`, [inboundId])).rows[0];
-    await client.query('COMMIT');
-    return storedReply;
+    const reply = await AllianceReplies.create({
+      prospect_id: correlation.prospect_id,
+      channel: 'email',
+      body: latestReplyText(parsed.text) || parsed.text || String(parsed.html || ''),
+      status: 'new',
+      email_inbound_id: inboundId,
+    });
+    return reply.toObject();
   } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
+    if (error.code !== 11000) throw error; // ON CONFLICT DO NOTHING
+    return AllianceReplies.findOne({ email_inbound_id: inboundId }, { _id: 0 }).lean();
   }
 }
 
@@ -101,35 +155,14 @@ async function enrichReply(reply, correlation, parsed, io) {
   let draft = '';
   try {
     if (openRouter.isConfigured) {
-      const context = await db.query(
-        `SELECT p.name,p.business_name,p.audience,p.status,a.brand
-         FROM alliance_prospects p LEFT JOIN alliance_audiences a ON a.code=p.audience
-         WHERE p.id=$1`,
-        [correlation.prospect_id]
-      );
+      const prospect = await AllianceProspects.findOne(
+        { id: correlation.prospect_id },
+        { _id: 0, name: 1, business_name: 1, audience: 1, status: 1 }
+      ).lean();
+      const audienceRow = prospect?.audience ? await AllianceAudiences.findOne({ code: prospect.audience }, { brand: 1 }).lean() : null;
+      const context = { rows: prospect ? [{ ...prospect, brand: audienceRow?.brand ?? null }] : [] };
       const inboundReply = latestReplyText(parsed.text) || String(parsed.text || '');
-      const memoryResult = await db.query(
-        `SELECT direction,message_type,subject,body,occurred_at FROM (
-           SELECT 'outbound'::text AS direction,'campaign'::text AS message_type,t.subject,
-                  t.message_body AS body,t.sent_at AS occurred_at
-           FROM alliance_touches t
-           WHERE t.prospect_id=$1 AND t.channel='email' AND t.status='sent'
-           UNION ALL
-           SELECT 'inbound','recipient_reply',ei.subject,COALESCE(r.body,ei.text_body),ei.received_at
-           FROM alliance_email_inbound ei
-           LEFT JOIN alliance_replies r ON r.email_inbound_id=ei.id
-           WHERE ei.prospect_id=$1
-           UNION ALL
-           SELECT 'outbound','approved_reply',ei.subject,r.ai_draft,r.approved_at
-           FROM alliance_replies r
-           JOIN alliance_email_inbound ei ON ei.id=r.email_inbound_id
-           WHERE r.prospect_id=$1 AND r.channel='email' AND r.status='sent' AND r.approved_at IS NOT NULL
-         ) memory
-         WHERE body IS NOT NULL AND occurred_at IS NOT NULL
-         ORDER BY occurred_at DESC LIMIT 30`,
-        [correlation.prospect_id]
-      );
-      const prospectMemory = memoryResult.rows.reverse();
+      const prospectMemory = (await loadEmailMemory(correlation.prospect_id)).reverse();
       const durableLeadMemory = await getAllianceLeadMemory(correlation.prospect_id);
       const brain = await getAllianceBrainContext(context.rows[0]?.audience, `${parsed.subject || ''} ${inboundReply}`);
       const promptRules = await getAlliancePromptRules('reply_suggestion', 'email', context.rows[0]?.audience, inboundReply);
@@ -175,17 +208,11 @@ Update memory by merging prior durable memory with the latest exchange. Preserve
       };
       await saveAllianceLeadMemory(correlation.prospect_id, memoryUpdate, 'email', new Date());
     }
-    await db.query(
-      `UPDATE alliance_replies SET ai_intent=$1, ai_draft=$2, status='drafted' WHERE id=$3`,
-      [intent, draft || null, reply.id]
-    );
+    await AllianceReplies.updateOne({ id: reply.id }, { $set: { ai_intent: intent, ai_draft: draft || null, status: 'drafted' } });
     const prospectStatus = intent === 'interested'
       ? 'interested'
       : intent === 'not_interested' ? 'not_interested' : 'in_process';
-    await db.query(
-      `UPDATE alliance_prospects SET status=$1, updated_at=NOW() WHERE id=$2`,
-      [prospectStatus, correlation.prospect_id]
-    );
+    await AllianceProspects.updateOne({ id: correlation.prospect_id }, { $set: { status: prospectStatus, updated_at: new Date() } });
     await scoreAllianceProspect(correlation.prospect_id, {
       message: latestReplyText(parsed.text) || String(parsed.text || ''),
       intent,
@@ -193,51 +220,48 @@ Update memory by merging prior durable memory with the latest exchange. Preserve
       eventKey: `inbound:${reply.email_inbound_id || reply.id}`,
     });
     if (intent === 'not_interested') {
-      await db.query(
-        `UPDATE alliance_touches SET status='cancelled',error_message='Prospect is not interested; follow-ups stopped.'
-         WHERE campaign_id=$1 AND prospect_id=$2 AND status IN ('scheduled','paused') AND sent_at IS NULL`,
-        [correlation.campaign_id,correlation.prospect_id]
+      await AllianceTouches.updateMany(
+        { campaign_id: correlation.campaign_id, prospect_id: correlation.prospect_id, status: { $in: ['scheduled', 'paused'] }, sent_at: null },
+        { $set: { status: 'cancelled', error_message: 'Prospect is not interested; follow-ups stopped.' } }
       );
-      await db.query(
-        `UPDATE alliance_campaign_prospects SET enrollment_status='stopped',stopped_at=NOW(),
-                stop_reason='not_interested',next_touch_at=NULL
-         WHERE campaign_id=$1 AND prospect_id=$2`,
-        [correlation.campaign_id,correlation.prospect_id]
+      await AllianceCampaignProspects.updateMany(
+        { campaign_id: correlation.campaign_id, prospect_id: correlation.prospect_id },
+        { $set: { enrollment_status: 'stopped', stopped_at: new Date(), stop_reason: 'not_interested', next_touch_at: null } }
       );
-      await db.query(
-        `INSERT INTO alliance_suppression (email, phone, reason)
-         SELECT email,phone,'not_interested' FROM alliance_prospects WHERE id=$1
-         ON CONFLICT DO NOTHING`,
-        [correlation.prospect_id]
-      );
+      await suppressProspect(correlation.prospect_id, 'not_interested');
     }
-    await db.query(
-      `UPDATE alliance_email_inbound SET processing_status='processed', processing_error=NULL WHERE id=$1`,
-      [reply.email_inbound_id]
+    await AllianceEmailInbound.updateOne(
+      { id: reply.email_inbound_id },
+      { $set: { processing_status: 'processed', processing_error: null } }
     );
     io?.emit('alliance_email_reply', { reply_id: reply.id, prospect_id: correlation.prospect_id, campaign_id: correlation.campaign_id });
   } catch (error) {
-    await db.query(`UPDATE alliance_email_inbound SET processing_status='processed', processing_error=$1 WHERE id=$2`, [error.message, reply.email_inbound_id]);
+    await AllianceEmailInbound.updateOne({ id: reply.email_inbound_id }, { $set: { processing_status: 'processed', processing_error: error.message } });
     console.error('[Alliance email AI reply]', error.message);
   }
 }
 
 async function regenerateReplySuggestion(replyId) {
-  const result = await db.query(
-    `SELECT r.*, ei.subject, ei.text_body, ei.html_body, ei.campaign_id, ei.touch_id
-     FROM alliance_replies r JOIN alliance_email_inbound ei ON ei.id=r.email_inbound_id
-     WHERE r.id=$1`,
-    [replyId]
-  );
-  if (!result.rowCount) throw new Error('Reply record not found.');
+  const replyRow = await AllianceReplies.findOne({ id: replyId }, { _id: 0 }).lean();
+  const inbound = replyRow?.email_inbound_id != null
+    ? await AllianceEmailInbound.findOne({ id: replyRow.email_inbound_id }, { subject: 1, text_body: 1, html_body: 1, campaign_id: 1, touch_id: 1 }).lean()
+    : null;
+  if (!replyRow || !inbound) throw new Error('Reply record not found.');
   if (!openRouter.isConfigured) throw new Error('OpenRouter is not configured.');
-  const row = result.rows[0];
+  const row = {
+    ...replyRow,
+    subject: inbound.subject,
+    text_body: inbound.text_body,
+    html_body: inbound.html_body,
+    campaign_id: inbound.campaign_id,
+    touch_id: inbound.touch_id,
+  };
   const parsed = { subject: row.subject, text: row.text_body || String(row.html_body || '') };
   await enrichReply(row, { prospect_id: row.prospect_id, campaign_id: row.campaign_id, touch_id: row.touch_id }, parsed);
-  await db.query(`UPDATE alliance_replies SET body=$1 WHERE id=$2`, [latestReplyText(parsed.text) || parsed.text, replyId]);
-  const updated = await db.query(`SELECT id, ai_intent, ai_draft, status FROM alliance_replies WHERE id=$1`, [replyId]);
-  if (!updated.rows[0]?.ai_draft) throw new Error('AI could not create a reply suggestion. Please try again.');
-  return updated.rows[0];
+  await AllianceReplies.updateOne({ id: replyId }, { $set: { body: latestReplyText(parsed.text) || parsed.text } });
+  const updated = await AllianceReplies.findOne({ id: replyId }, { _id: 0, id: 1, ai_intent: 1, ai_draft: 1, status: 1 }).lean();
+  if (!updated?.ai_draft) throw new Error('AI could not create a reply suggestion. Please try again.');
+  return updated;
 }
 
 async function processMessage(parsed, io) {
@@ -245,48 +269,63 @@ async function processMessage(parsed, io) {
   const fromEmail = normalizeEmail(parsed.from?.value?.[0]?.address);
   if (!fromEmail || fromEmail === normalizeEmail(process.env.ALLIANCE_EMAIL_FROM)) return;
   const correlation = await correlateReply(parsed);
-  const inserted = await db.query(
-    `INSERT INTO alliance_email_inbound
-      (message_id,in_reply_to,message_references,from_email,from_name,to_email,subject,text_body,html_body,received_at,processing_status,raw_headers)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'received',$11::jsonb)
-     ON CONFLICT (message_id) DO NOTHING RETURNING id`,
-    [messageId, normalizeMessageId(parsed.inReplyTo) || null, correlation.references || [], fromEmail,
-      parsed.from?.value?.[0]?.name || null, parsed.to?.value?.[0]?.address || null, parsed.subject || null,
-      parsed.text || null, typeof parsed.html === 'string' ? parsed.html : null, parsed.date || new Date(),
-      JSON.stringify(Object.fromEntries(parsed.headers || []))]
-  );
-  let inboundId = inserted.rows[0]?.id;
+  let inboundId;
+  try {
+    const inserted = await AllianceEmailInbound.create({
+      message_id: messageId,
+      in_reply_to: normalizeMessageId(parsed.inReplyTo) || null,
+      message_references: correlation.references || [],
+      from_email: fromEmail,
+      from_name: parsed.from?.value?.[0]?.name || null,
+      to_email: parsed.to?.value?.[0]?.address || null,
+      subject: parsed.subject || null,
+      text_body: parsed.text || null,
+      html_body: typeof parsed.html === 'string' ? parsed.html : null,
+      received_at: parsed.date || new Date(),
+      processing_status: 'received',
+      raw_headers: JSON.parse(JSON.stringify(Object.fromEntries(parsed.headers || []))),
+    });
+    inboundId = inserted.id;
+  } catch (error) {
+    if (error.code !== 11000) throw error; // ON CONFLICT (message_id) DO NOTHING
+  }
   if (!inboundId) {
-    const existing = await db.query(
-      `SELECT id, processing_status FROM alliance_email_inbound WHERE message_id=$1`,
-      [messageId]
-    );
-    if (!existing.rowCount || existing.rows[0].processing_status === 'processed') return;
-    inboundId = existing.rows[0].id;
+    const existing = await AllianceEmailInbound.findOne({ message_id: messageId }, { id: 1, processing_status: 1 }).lean();
+    if (!existing || existing.processing_status === 'processed') return;
+    inboundId = existing.id;
   }
   if (Array.isArray(parsed.attachments) && parsed.attachments.length) {
     for (const [index, attachment] of parsed.attachments.entries()) {
       if (!attachment?.content) continue;
-      await db.query(
-        `INSERT INTO alliance_email_attachments
-          (inbound_id,attachment_index,filename,content_type,content_id,size_bytes,content)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
-         ON CONFLICT (inbound_id,attachment_index) DO NOTHING`,
-        [inboundId, index, attachment.filename || `attachment-${index + 1}`,
-          attachment.contentType || null, attachment.contentId || null,
-          attachment.size || attachment.content.length, attachment.content]
-      );
+      if (await AllianceEmailAttachments.exists({ inbound_id: inboundId, attachment_index: index })) continue;
+      await AllianceEmailAttachments.create({
+        inbound_id: inboundId,
+        attachment_index: index,
+        filename: attachment.filename || `attachment-${index + 1}`,
+        content_type: attachment.contentType || null,
+        content_id: attachment.contentId || null,
+        size_bytes: attachment.size || attachment.content.length,
+        content: attachment.content,
+      }).catch((error) => {
+        if (error.code === 11000) return;
+        // MongoDB documents are capped at 16MB; skip attachments that cannot be stored.
+        if (/too large|BSONObjectTooLarge|exceeds/i.test(error.message)) {
+          console.warn(`[Alliance email] Attachment ${index} of inbound ${inboundId} is too large to store; skipped.`);
+          return;
+        }
+        throw error;
+      });
     }
   }
   try {
     const reply = await recordCampaignReply(inboundId, correlation, parsed);
     if (!reply) {
-      await db.query(`UPDATE alliance_email_inbound SET processing_status='unmatched' WHERE id=$1`, [inboundId]);
+      await AllianceEmailInbound.updateOne({ id: inboundId }, { $set: { processing_status: 'unmatched' } });
       return;
     }
     await enrichReply(reply, correlation, parsed, io);
   } catch (error) {
-    await db.query(`UPDATE alliance_email_inbound SET processing_status='failed', processing_error=$1 WHERE id=$2`, [error.message, inboundId]);
+    await AllianceEmailInbound.updateOne({ id: inboundId }, { $set: { processing_status: 'failed', processing_error: error.message } });
     throw error;
   }
 }
@@ -309,8 +348,8 @@ async function pollAllianceEmailReplies(io) {
     const lock = await client.getMailboxLock('INBOX');
     let checkpointUid = null;
     try {
-      const state = await db.query(`SELECT last_uid FROM alliance_email_sync_state WHERE mailbox=$1`, [mailbox]);
-      const savedUid = state.rows[0]?.last_uid == null ? null : Number(state.rows[0].last_uid);
+      const state = await AllianceEmailSyncState.findOne({ mailbox }, { last_uid: 1 }).lean();
+      const savedUid = state?.last_uid == null ? null : Number(state.last_uid);
       const latestUid = Math.max(0, Number(client.mailbox?.uidNext || 1) - 1);
       let uids = [];
       if (savedUid == null) {
@@ -330,11 +369,16 @@ async function pollAllianceEmailReplies(io) {
     } finally {
       lock.release();
     }
-    await db.query(
-      `INSERT INTO alliance_email_sync_state (mailbox,last_checked_at,last_success_at,last_error,last_uid)
-       VALUES ($1,NOW(),NOW(),NULL,$2) ON CONFLICT (mailbox) DO UPDATE SET
-       last_checked_at=NOW(),last_success_at=NOW(),last_error=NULL,last_uid=COALESCE(EXCLUDED.last_uid,alliance_email_sync_state.last_uid),updated_at=NOW()`,
-      [mailbox, checkpointUid]
+    await AllianceEmailSyncState.updateOne(
+      { mailbox },
+      { $set: {
+        last_checked_at: new Date(),
+        last_success_at: new Date(),
+        last_error: null,
+        updated_at: new Date(),
+        ...(checkpointUid == null ? {} : { last_uid: checkpointUid }),
+      } },
+      { upsert: true }
     );
     consecutiveFailures = 0;
     nextAllowedPollAt = 0;
@@ -342,13 +386,13 @@ async function pollAllianceEmailReplies(io) {
     consecutiveFailures += 1;
     const backoffMs = Math.min(15 * 60 * 1000, 30000 * (2 ** Math.min(consecutiveFailures - 1, 5)));
     nextAllowedPollAt = Date.now() + backoffMs;
-    if (mailbox) await db.query(
-      `INSERT INTO alliance_email_sync_state (mailbox,last_checked_at,last_error)
-       VALUES ($1,NOW(),$2) ON CONFLICT (mailbox) DO UPDATE SET last_checked_at=NOW(),last_error=$2,updated_at=NOW()`,
-      [mailbox, error.message]
+    if (mailbox) await AllianceEmailSyncState.updateOne(
+      { mailbox },
+      { $set: { last_checked_at: new Date(), last_error: error.message, updated_at: new Date() } },
+      { upsert: true }
     ).catch(() => {});
     const detail = errorDetail(error);
-    if (mailbox) await db.query(`UPDATE alliance_email_sync_state SET last_error=$2, updated_at=NOW() WHERE mailbox=$1`, [mailbox, detail]).catch(() => {});
+    if (mailbox) await AllianceEmailSyncState.updateOne({ mailbox }, { $set: { last_error: detail, updated_at: new Date() } }).catch(() => {});
     console.error('[Alliance Zoho IMAP]', detail);
   } finally {
     if (client?.usable) await client.logout().catch(() => {});

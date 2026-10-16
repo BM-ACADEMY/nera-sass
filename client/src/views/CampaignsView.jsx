@@ -147,7 +147,7 @@ export const CampaignsView = () => {
   const handleDownloadTemplate = () => {
     const link = document.createElement('a');
     link.href = templateId
-      ? `${api.baseUrl}/api/templates/${encodeURIComponent(templateId)}/campaign-sheet?mappings=${encodeURIComponent(JSON.stringify(templateParameters))}`
+      ? `${api.baseUrl}/api/templates/${encodeURIComponent(templateId)}/campaign-sheet?mappings=${encodeURIComponent(JSON.stringify(templateParameters))}&token=${encodeURIComponent(localStorage.getItem('leados_token') || '')}`
       : `${api.baseUrl}/api/leads/template`;
     link.download = templateId ? 'template_campaign_recipients.xlsx' : 'leados_campaign_template.xlsx';
     document.body.appendChild(link);

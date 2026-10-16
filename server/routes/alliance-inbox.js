@@ -1,24 +1,28 @@
 const express = require('express');
-const db = require('../db/connection');
+const { Organisations, Outreach } = require('../models');
 const router = express.Router();
 
 // GET /api/alliance-inbox
 router.get('/', async (req, res) => {
   try {
-    const q = `
-      SELECT 
-        o.id, 
-        o.name, 
-        o.type as brand, 
-        o.status,
-        (SELECT content FROM outreach WHERE org_id = o.id ORDER BY sent_at DESC LIMIT 1) as last,
-        (SELECT sent_at FROM outreach WHERE org_id = o.id ORDER BY sent_at DESC LIMIT 1) as time,
-        0 as unread
-      FROM organisations o
-      WHERE EXISTS (SELECT 1 FROM outreach WHERE org_id = o.id)
-      ORDER BY time DESC NULLS LAST
-    `;
-    const { rows } = await db.query(q);
+    // Latest outreach per organisation (only organisations that have outreach)
+    const latest = await Outreach.aggregate([
+      { $sort: { sent_at: -1 } },
+      { $group: { _id: '$org_id', last: { $first: '$content' }, time: { $first: '$sent_at' } } },
+    ]);
+    const latestByOrg = new Map(latest.map((item) => [item._id, item]));
+    const orgs = await Organisations.find({ id: { $in: [...latestByOrg.keys()] } }, { _id: 0, id: 1, name: 1, type: 1, status: 1 }).lean();
+    const rows = orgs.map((o) => ({
+      id: o.id,
+      name: o.name,
+      brand: o.type,
+      status: o.status,
+      last: latestByOrg.get(o.id)?.last ?? null,
+      time: latestByOrg.get(o.id)?.time ?? null,
+      unread: 0,
+    }));
+    // ORDER BY time DESC NULLS LAST
+    rows.sort((a, b) => (b.time ? new Date(b.time).getTime() : -Infinity) - (a.time ? new Date(a.time).getTime() : -Infinity));
     res.json(rows);
   } catch (err) {
     console.error('Alliance Inbox fetch error:', err);
@@ -30,14 +34,14 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const org = await db.query('SELECT * FROM organisations WHERE id = $1', [id]);
-    if (!org.rows.length) return res.status(404).json({ error: 'Not found' });
-    
+    const org = await Organisations.findOne({ id }).lean();
+    if (!org) return res.status(404).json({ error: 'Not found' });
+
     // Convert outreach records to conversation format
-    const outreach = await db.query('SELECT * FROM outreach WHERE org_id = $1 ORDER BY sent_at ASC', [id]);
-    
+    const outreach = await Outreach.find({ org_id: id }).sort({ sent_at: 1 }).lean();
+
     const conversations = [];
-    for (const r of outreach.rows) {
+    for (const r of outreach) {
       // Outbound message
       if (r.content) {
         conversations.push({
@@ -57,11 +61,11 @@ router.get('/:id', async (req, res) => {
         });
       }
     }
-    
+
     // Sort combined conversations by time
     conversations.sort((a, b) => new Date(a.sent_at) - new Date(b.sent_at));
 
-    res.json({ lead: org.rows[0], conversations });
+    res.json({ lead: org, conversations });
   } catch (err) {
     console.error('Alliance conversation fetch error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -73,13 +77,8 @@ router.post('/:id/send', async (req, res) => {
   const { id } = req.params;
   const { message } = req.body;
   try {
-    const q = `
-      INSERT INTO outreach (org_id, channel, msg_type, content, sent_at)
-      VALUES ($1, 'whatsapp', 'text', $2, NOW())
-      RETURNING *
-    `;
-    const { rows } = await db.query(q, [id, message]);
-    res.json({ success: true, message: rows[0] });
+    const row = await Outreach.create({ org_id: id, channel: 'whatsapp', msg_type: 'text', content: message, sent_at: new Date() });
+    res.json({ success: true, message: row.toObject() });
   } catch (err) {
     console.error('Alliance send message error:', err);
     res.status(500).json({ error: 'Server error' });

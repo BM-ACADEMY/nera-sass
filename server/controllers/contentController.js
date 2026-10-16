@@ -2,7 +2,29 @@
 // All Content OS approval-dashboard logic + SQL.
 // Source of truth: the content_queue table. No mock data anywhere.
 
-const pool = require("../db/connection"); // reuse your existing LeadOS pool if you have one
+const {
+  Clients,
+  ContentQueue,
+  BrandSocialAccounts,
+  DriveFolderMonitors,
+  PublishQueue,
+  PublishingLogs,
+} = require("../models");
+const { NO_ID, ieq, upsertOne, escapeRegex } = require("../db/mongo");
+
+// Brand-name matching used by the publishing pipeline (spaces removed, '-' as '_' or removed).
+const brandKeyUnderscore = (value) => String(value ?? '').replace(/ /g, '').replace(/-/g, '_').toLowerCase();
+const brandKeyCompact = (value) => String(value ?? '').replace(/ /g, '').replace(/-/g, '').toLowerCase();
+async function findBrandAccounts(brandName, projection = NO_ID) {
+  const accounts = await BrandSocialAccounts.find({ is_active: true }, projection).lean();
+  return accounts.filter((account) => brandKeyUnderscore(account.brand_name) === brandKeyUnderscore(brandName)
+    || brandKeyCompact(account.brand_name) === brandKeyCompact(brandName));
+}
+// SELECT * FROM content_queue WHERE id = $1 — result kept in { rows } form for the callers below
+async function queryPost(id) {
+  const post = await ContentQueue.findOne({ id }, NO_ID).lean();
+  return { rows: post ? [post] : [] };
+}
 const Groq = require("groq-sdk");
 const groq = new Groq({ apiKey: process.env.OPENAI_API_KEY || "dummy_key" });
 const openRouter = require("../services/openrouter");
@@ -285,10 +307,7 @@ function getBrandSlug(brandName) {
 
 async function findBrandVoice(brandName) {
   try {
-    const { rows } = await pool.query(
-      `SELECT brand_tag, brand_voice FROM clients WHERE LOWER(name) = LOWER($1) LIMIT 1`,
-      [brandName]
-    );
+    const rows = await Clients.find({ name: ieq(brandName) }, { _id: 0, brand_tag: 1, brand_voice: 1 }).limit(1).lean();
     if (rows.length && (rows[0].brand_tag || rows[0].brand_voice)) {
       return { tag: rows[0].brand_tag || brandName, voice: rows[0].brand_voice || `Professional voice for ${brandName}` };
     }
@@ -300,10 +319,7 @@ async function findBrandVoice(brandName) {
 
 async function findBrandDetails(brandName) {
   try {
-    const { rows } = await pool.query(
-      `SELECT industry, target_audience FROM clients WHERE LOWER(name) = LOWER($1) LIMIT 1`,
-      [brandName]
-    );
+    const rows = await Clients.find({ name: ieq(brandName) }, { _id: 0, industry: 1, target_audience: 1 }).limit(1).lean();
     if (rows.length && (rows[0].industry || rows[0].target_audience)) {
       return { industry: rows[0].industry || "Social Media / Business", targetAudience: rows[0].target_audience || "General social media audience" };
     }
@@ -426,6 +442,10 @@ const CONTENT_COLUMNS = `
   key_moments, drive_file_id, brand_id, video_name, transcript,
   platform_post_ids
 `;
+const CONTENT_PROJECTION = {
+  _id: 0,
+  ...Object.fromEntries(CONTENT_COLUMNS.split(',').map((column) => column.trim()).filter(Boolean).map((column) => [column, 1])),
+};
 
 // ---------------------------------------------------------------
 // GET /api/content?status=PENDING|APPROVED|REJECTED|ALL
@@ -436,41 +456,38 @@ async function getContent(req, res) {
     const status = req.query.status || "pending_approval";
     const { search, brand, startDate, endDate, limit = 200, offset = 0 } = req.query;
 
-    let query = `SELECT ${CONTENT_COLUMNS} FROM content_queue WHERE 1=1`;
-    const params = [];
+    const filter = {};
 
     if (status !== "all" && status !== "ALL") {
       if (status.toLowerCase() === "published") {
-        query += ` AND status IN ('published', 'PUBLISHED', 'partial', 'PARTIAL')`;
+        filter.status = { $in: ['published', 'PUBLISHED', 'partial', 'PARTIAL'] };
       } else if (status.toLowerCase() === "failed") {
-        query += ` AND status IN ('failed', 'FAILED', 'partial', 'PARTIAL')`;
+        filter.status = { $in: ['failed', 'FAILED', 'partial', 'PARTIAL'] };
       } else if (status.toLowerCase() === "pending_approval") {
-        query += ` AND status IN ('pending_approval', 'PUBLISHING', 'publishing', 'PROCESSING', 'processing', 'draft')`;
+        filter.status = { $in: ['pending_approval', 'PUBLISHING', 'publishing', 'PROCESSING', 'processing', 'draft'] };
       } else {
-        params.push(status);
-        query += ` AND status = $${params.length}`;
+        filter.status = status;
       }
     }
 
     if (brand && brand !== "All Brands" && brand !== "all") {
-      params.push(`%${brand}%`);
-      query += ` AND brand_name ILIKE $${params.length}`;
+      filter.brand_name = new RegExp(escapeRegex(brand), 'i');
     }
 
     if (search) {
-      params.push(`%${search}%`);
-      query += ` AND (thumbnail_title ILIKE $${params.length} OR brand_name ILIKE $${params.length} OR caption ILIKE $${params.length} OR file_name ILIKE $${params.length})`;
+      const pattern = new RegExp(escapeRegex(search), 'i');
+      filter.$or = [{ thumbnail_title: pattern }, { brand_name: pattern }, { caption: pattern }, { file_name: pattern }];
     }
 
     if (startDate && endDate) {
-      params.push(startDate, endDate);
-      query += ` AND created_at BETWEEN $${params.length - 1} AND $${params.length}`;
+      filter.created_at = { $gte: new Date(startDate), $lte: new Date(endDate) };
     }
 
-    query += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-    params.push(parseInt(limit), parseInt(offset));
-
-    const { rows } = await pool.query(query, params);
+    const rows = await ContentQueue.find(filter, CONTENT_PROJECTION)
+      .sort({ created_at: -1 })
+      .skip(parseInt(offset) || 0)
+      .limit(parseInt(limit) || 0)
+      .lean();
 
     // Dynamically resolve localhost/relative paths to the current public base URL of the incoming request
     const resolvedItems = rows.map(item => ({
@@ -492,22 +509,30 @@ async function getContent(req, res) {
 // ---------------------------------------------------------------
 async function getStats(req, res) {
   try {
-    const { rows } = await pool.query(`
-      SELECT
-        COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE status IN ('PENDING', 'pending_approval'))::int AS pending,
-        COUNT(*) FILTER (WHERE status IN ('APPROVED', 'approved'))::int AS approved,
-        COUNT(*) FILTER (WHERE status IN ('SCHEDULED', 'scheduled'))::int AS scheduled,
-        COUNT(*) FILTER (WHERE status IN ('REJECTED', 'rejected'))::int AS rejected,
-        COUNT(*) FILTER (WHERE status IN ('PUBLISHED', 'published', 'PARTIAL', 'partial')
-                         AND published_at::date = CURRENT_DATE)::int AS published_today,
-        COUNT(*) FILTER (WHERE status IN ('PUBLISHED', 'published', 'PARTIAL', 'partial')
-                         AND published_at >= CURRENT_DATE - INTERVAL '7 days')::int AS published_this_week,
-        COUNT(*) FILTER (WHERE status IN ('FAILED', 'failed', 'PARTIAL', 'partial')
-                         AND COALESCE(failed_at, created_at)::date = CURRENT_DATE)::int AS failed_today
-      FROM content_queue
-    `);
-    res.json({ success: true, stats: rows[0] });
+    const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+    const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const isIn = (values) => ({ $in: ['$status', values] });
+    const count = (condition) => ({ $sum: { $cond: [condition, 1, 0] } });
+    const inDay = (expr) => ({ $and: [{ $gte: [expr, today] }, { $lt: [expr, tomorrow] }] });
+    const published = isIn(['PUBLISHED', 'published', 'PARTIAL', 'partial']);
+    const [stats = {
+      total: 0, pending: 0, approved: 0, scheduled: 0, rejected: 0, published_today: 0, published_this_week: 0, failed_today: 0,
+    }] = await ContentQueue.aggregate([
+      { $group: {
+        _id: null,
+        total: { $sum: 1 },
+        pending: count(isIn(['PENDING', 'pending_approval'])),
+        approved: count(isIn(['APPROVED', 'approved'])),
+        scheduled: count(isIn(['SCHEDULED', 'scheduled'])),
+        rejected: count(isIn(['REJECTED', 'rejected'])),
+        published_today: count({ $and: [published, inDay('$published_at')] }),
+        published_this_week: count({ $and: [published, { $gte: ['$published_at', weekAgo] }] }),
+        failed_today: count({ $and: [isIn(['FAILED', 'failed', 'PARTIAL', 'partial']), inDay({ $ifNull: ['$failed_at', '$created_at'] })] }),
+      } },
+      { $project: { _id: 0 } },
+    ]);
+    res.json({ success: true, stats });
   } catch (err) {
     console.error("getStats error:", err);
     res.status(500).json({ success: false, error: "Failed to load stats" });
@@ -528,21 +553,20 @@ async function approveContent(req, res) {
     let resolvedScheduledAt = bodyScheduledAt;
 
     if (!resolvedScheduledAt) {
-      const { rows: cur } = await pool.query('SELECT scheduled_at FROM content_queue WHERE id = $1', [id]);
-      if (cur.length > 0 && cur[0].scheduled_at) resolvedScheduledAt = cur[0].scheduled_at;
+      const cur = await ContentQueue.findOne({ id }, { scheduled_at: 1 }).lean();
+      if (cur && cur.scheduled_at) resolvedScheduledAt = cur.scheduled_at;
     }
 
     if (resolvedScheduledAt && new Date(resolvedScheduledAt) > new Date()) {
       newStatus = 'SCHEDULED';
     }
 
-    const { rows } = await pool.query(
-      `UPDATE content_queue
-         SET status = $3, approved_by = $2, approved_at = NOW()
-       WHERE id = $1 AND status IN ('PENDING', 'pending_approval', 'pending', 'PENDING_APPROVAL')
-       RETURNING *`,
-      [id, approvedBy, newStatus]
-    );
+    const approvedPost = await ContentQueue.findOneAndUpdate(
+      { id, status: { $in: ['PENDING', 'pending_approval', 'pending', 'PENDING_APPROVAL'] } },
+      { $set: { status: newStatus, approved_by: approvedBy, approved_at: new Date() } },
+      { new: true, projection: NO_ID }
+    ).lean();
+    const rows = approvedPost ? [approvedPost] : [];
 
     if (rows.length === 0) {
       return res.status(409).json({ success: false, error: "Item not found or not in pending state" });
@@ -567,13 +591,8 @@ async function approveContent(req, res) {
 
     if (!hasAnyAccountSelected) {
       // Fetch all active social accounts for this brand
-      const { rows: brandAccounts } = await pool.query(
-        `SELECT platform, account_id FROM brand_social_accounts 
-         WHERE (LOWER(REPLACE(REPLACE(brand_name, ' ', ''), '-', '_')) = LOWER(REPLACE(REPLACE($1, ' ', ''), '-', '_'))
-            OR LOWER(REPLACE(REPLACE(brand_name, ' ', ''), '-', '')) = LOWER(REPLACE(REPLACE($1, ' ', ''), '-', '')))
-           AND is_active = true`,
-        [post.brand_name]
-      );
+      const brandAccounts = (await findBrandAccounts(post.brand_name, { _id: 0, platform: 1, account_id: 1, brand_name: 1 }))
+        .map(({ platform, account_id }) => ({ platform, account_id }));
 
       if (brandAccounts.length > 0) {
         // Build selected_accounts map: { instagram: [acc1], facebook: [acc2], youtube: [acc3], ... }
@@ -608,10 +627,7 @@ async function approveContent(req, res) {
           platforms = Object.keys(autoSelected).map(p => platformMap[p] || p);
         }
 
-        await pool.query(
-          `UPDATE content_queue SET selected_accounts = $1, platforms = $2, updated_at = NOW() WHERE id = $3`,
-          [JSON.stringify(autoSelected), JSON.stringify(platforms), id]
-        );
+        await ContentQueue.updateOne({ id }, { $set: { selected_accounts: autoSelected, platforms, updated_at: new Date() } });
 
         console.log(`[approveContent] Auto-selected accounts for post ${id} (brand: ${post.brand_name}):`, JSON.stringify(autoSelected));
       }
@@ -641,13 +657,12 @@ async function scheduleContent(req, res) {
   }
 
   try {
-    const { rows } = await pool.query(
-      `UPDATE content_queue
-         SET status = 'SCHEDULED', scheduled_at = $2
-       WHERE id = $1 AND status IN ('APPROVED', 'approved', 'SCHEDULED', 'scheduled')
-       RETURNING id, brand_name, status, scheduled_at`,
-      [id, scheduled_at]
-    );
+    const scheduledPost = await ContentQueue.findOneAndUpdate(
+      { id, status: { $in: ['APPROVED', 'approved', 'SCHEDULED', 'scheduled'] } },
+      { $set: { status: 'SCHEDULED', scheduled_at } },
+      { new: true, projection: { _id: 0, id: 1, brand_name: 1, status: 1, scheduled_at: 1 } }
+    ).lean();
+    const rows = scheduledPost ? [scheduledPost] : [];
 
     if (rows.length === 0) {
       return res.status(404).json({ success: false, error: "Item not found or not in approved/scheduled state" });
@@ -669,13 +684,12 @@ async function rejectContent(req, res) {
   const rejectedBy = (req.body && req.body.rejected_by) || "Kamar";
   const reason = (req.body && req.body.rejection_reason) || null;
   try {
-    const { rows } = await pool.query(
-      `UPDATE content_queue
-         SET status = 'rejected', rejected_by = $2, rejected_at = NOW(), rejection_reason = $3
-       WHERE id = $1 AND status IN ('PENDING', 'pending_approval')
-       RETURNING id, brand_name, status`,
-      [id, rejectedBy, reason]
-    );
+    const rejectedPost = await ContentQueue.findOneAndUpdate(
+      { id, status: { $in: ['PENDING', 'pending_approval'] } },
+      { $set: { status: 'rejected', rejected_by: rejectedBy, rejected_at: new Date(), rejection_reason: reason } },
+      { new: true, projection: { _id: 0, id: 1, brand_name: 1, status: 1 } }
+    ).lean();
+    const rows = rejectedPost ? [rejectedPost] : [];
 
     if (rows.length === 0) {
       return res.status(409).json({ success: false, error: "Item not found or not in pending state" });
@@ -712,9 +726,7 @@ async function updateContent(req, res) {
     "thumbnail_options", "key_moments", "thumbnail_url", "brand_id", "video_name", "status",
     "story_1", "story_2", "story_3"
   ];
-  const sets = [];
-  const params = [id];
-  let i = 2;
+  const sets = {};
 
   // Keep platforms and selected_channels in sync
   if (req.body.platforms !== undefined && req.body.selected_channels === undefined) {
@@ -726,33 +738,27 @@ async function updateContent(req, res) {
   for (const key of allowed) {
     if (req.body[key] !== undefined) {
       const isJson = ["platforms", "selected_channels", "selected_accounts", "thumbnail_options", "key_moments"].includes(key);
-      let val = isJson ? JSON.stringify(safeJsonValue(req.body[key])) : req.body[key];
+      let val = isJson ? safeJsonValue(req.body[key]) : req.body[key];
 
       // Convert empty timestamp string to null
       if (key === "scheduled_at" && val === "") {
         val = null;
       }
 
-      sets.push(`${key} = $${i}${isJson ? "::jsonb" : ""}`);
-      params.push(val);
-      i++;
+      sets[key] = val;
     }
   }
 
-  if (sets.length === 0) {
+  if (Object.keys(sets).length === 0) {
     return res.status(400).json({ success: false, error: "No editable fields provided" });
   }
 
   try {
-    console.log(`[updateContent] Running query: UPDATE content_queue SET ${sets.join(", ")} WHERE id = ${id}. Params:`, JSON.stringify(params));
-    const { rows } = await pool.query(
-      `UPDATE content_queue SET ${sets.join(", ")} WHERE id = $1 RETURNING ${CONTENT_COLUMNS}`,
-      params
-    );
-    if (rows.length === 0) return res.status(404).json({ success: false, error: "Item not found" });
+    console.log(`[updateContent] Updating content_queue ${id} with:`, JSON.stringify(sets));
+    const item = await ContentQueue.findOneAndUpdate({ id }, { $set: sets }, { new: true, projection: CONTENT_PROJECTION }).lean();
+    if (!item) return res.status(404).json({ success: false, error: "Item not found" });
 
     // Dynamically resolve localhost/relative paths to the current public base URL of the incoming request
-    const item = rows[0];
     const resolvedItem = {
       ...item,
       public_video_url: resolvePublicUrl(item.public_video_url, req),
@@ -772,9 +778,7 @@ async function updateContent(req, res) {
 // ---------------------------------------------------------------
 async function getSocialAccounts(req, res) {
   try {
-    const { rows } = await pool.query(
-      "SELECT * FROM brand_social_accounts WHERE is_active = true ORDER BY brand_name, platform"
-    );
+    const rows = await BrandSocialAccounts.find({ is_active: true }, NO_ID).sort({ brand_name: 1, platform: 1 }).lean();
     res.json(rows);
   } catch (err) {
     console.error("Fetch social accounts error:", err);
@@ -938,11 +942,9 @@ async function createBatchContent(req, res) {
     return res.status(400).json({ success: false, error: "Invalid items format" });
   }
 
-  const client = await pool.connect();
+  const created = [];
   try {
-    await client.query("BEGIN");
-    const created = [];
-    const { rows: allClients } = await client.query("SELECT name FROM clients");
+    const allClients = await Clients.find({}, { _id: 0, name: 1 }).lean();
     const BRAND_NAME_TO_SLUG = {};
     for (const c of allClients) {
       BRAND_NAME_TO_SLUG[c.name] = getBrandSlug(c.name);
@@ -957,54 +959,39 @@ async function createBatchContent(req, res) {
       } = item;
       const brand_id = BRAND_NAME_TO_SLUG[brand_name] || brand_name.toLowerCase().replace(/'/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 
-      const { rows } = await client.query(`
-        INSERT INTO content_queue (
-          brand_name, platforms, selected_accounts, 
-          caption, instagram_caption, facebook_caption, x_caption, linkedin_caption, 
-          youtube_title, youtube_description, 
-          thumbnail_title, scheduled_at, file_name, status,
-          brand_id, video_name
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending_approval', $14, $15)
-        RETURNING *
-      `, [
+      const item = await ContentQueue.create({
         brand_name,
-        platforms ? JSON.stringify(safeJsonValue(platforms)) : '[]',
-        selected_accounts ? JSON.stringify(safeJsonValue(selected_accounts)) : '{}',
-        caption || '',
-        instagram_caption || caption || '',
-        facebook_caption || caption || '',
-        x_caption || '',
-        linkedin_caption || '',
-        youtube_title || thumbnail_title || 'Social Media Video',
-        youtube_description || '',
-        thumbnail_title || '',
-        scheduled_at || null,
-        file_name || 'pending_upload.mp4',
+        platforms: platforms ? safeJsonValue(platforms) : [],
+        selected_accounts: selected_accounts ? safeJsonValue(selected_accounts) : {},
+        caption: caption || '',
+        instagram_caption: instagram_caption || caption || '',
+        facebook_caption: facebook_caption || caption || '',
+        x_caption: x_caption || '',
+        linkedin_caption: linkedin_caption || '',
+        youtube_title: youtube_title || thumbnail_title || 'Social Media Video',
+        youtube_description: youtube_description || '',
+        thumbnail_title: thumbnail_title || '',
+        scheduled_at: scheduled_at || null,
+        file_name: file_name || 'pending_upload.mp4',
+        status: 'pending_approval',
         brand_id,
-        file_name || 'pending_upload.mp4'
-      ]);
-      created.push(rows[0]);
+        video_name: file_name || 'pending_upload.mp4',
+      });
+      created.push(item.toObject());
     }
-    await client.query("COMMIT");
     res.status(201).json({ success: true, items: created });
   } catch (err) {
-    await client.query("ROLLBACK");
+    // Roll back the items created before the failure
+    if (created.length) await ContentQueue.deleteMany({ id: { $in: created.map((item) => item.id) } }).catch(() => {});
     console.error("createBatchContent error:", err);
     res.status(500).json({ success: false, error: "Failed to create content batch" });
-  } finally {
-    client.release();
   }
 }
 
 async function getFolderMonitors(req, res) {
   try {
-    const { rows } = await pool.query(
-      `SELECT brand_slug AS "brandSlug", folder_id AS "folderId" 
-       FROM drive_folder_monitors 
-       WHERE is_active = true 
-       ORDER BY brand_slug`
-    );
-    res.json(rows);
+    const monitors = await DriveFolderMonitors.find({ is_active: true }, { brand_slug: 1, folder_id: 1 }).sort({ brand_slug: 1 }).lean();
+    res.json(monitors.map((m) => ({ brandSlug: m.brand_slug, folderId: m.folder_id })));
   } catch (err) {
     console.error("getFolderMonitors error:", err);
     res.status(500).json({ error: "Failed to retrieve monitors" });
@@ -1017,11 +1004,11 @@ async function upsertFolderMonitor(req, res) {
     return res.status(400).json({ error: "Missing required fields: brandSlug, folderId" });
   }
   try {
-    await pool.query(
-      `INSERT INTO drive_folder_monitors (brand_slug, folder_id, last_checked_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (brand_slug) DO UPDATE SET folder_id = $2, last_checked_at = NOW()`,
-      [brandSlug, folderId]
+    await upsertOne(
+      DriveFolderMonitors,
+      { brand_slug: brandSlug },
+      { $set: { folder_id: folderId, last_checked_at: new Date() } },
+      { folder_id: folderId, last_checked_at: new Date() }
     );
     res.json({ success: true });
   } catch (err) {
@@ -1041,9 +1028,9 @@ async function checkNewDriveVideos() {
   try {
     const drive = google.drive({ version: 'v3', auth });
 
-    const { rows: monitors } = await pool.query("SELECT brand_slug, folder_id FROM drive_folder_monitors WHERE is_active = true");
+    const monitors = await DriveFolderMonitors.find({ is_active: true }, { _id: 0, brand_slug: 1, folder_id: 1 }).lean();
 
-    const { rows: allClients } = await pool.query("SELECT name FROM clients");
+    const allClients = await Clients.find({}, { _id: 0, name: 1 }).lean();
     const SLUG_TO_BRAND = {};
     for (const c of allClients) {
       const slug = getBrandSlug(c.name);
@@ -1073,34 +1060,25 @@ async function checkNewDriveVideos() {
 
       // Soft-delete: check for files deleted from Google Drive
       const currentDriveFileIds = new Set(files.map(f => f.id));
-      const { rows: dbPendingFiles } = await pool.query(
-        "SELECT id, drive_file_id, file_name FROM content_queue WHERE brand_id = $1 AND drive_file_id IS NOT NULL AND status IN ('pending_approval', 'draft')",
-        [brand_slug]
-      );
+      const dbPendingFiles = await ContentQueue.find(
+        { brand_id: brand_slug, drive_file_id: { $ne: null }, status: { $in: ['pending_approval', 'draft'] } },
+        { _id: 0, id: 1, drive_file_id: 1, file_name: 1 }
+      ).lean();
       for (const dbFile of dbPendingFiles) {
         if (!currentDriveFileIds.has(dbFile.drive_file_id)) {
           console.log(`DrivePoller: File ${dbFile.file_name} (ID: ${dbFile.drive_file_id}) was deleted from Google Drive. Marking status as 'deleted_from_drive'.`);
-          await pool.query(
-            "UPDATE content_queue SET status = 'deleted_from_drive', updated_at = NOW() WHERE id = $1",
-            [dbFile.id]
-          );
+          await ContentQueue.updateOne({ id: dbFile.id }, { $set: { status: 'deleted_from_drive', updated_at: new Date() } });
         }
       }
 
       for (const file of files) {
         // Check if already ingested
-        const { rows: existing } = await pool.query(
-          "SELECT id, status FROM content_queue WHERE drive_file_id = $1",
-          [file.id]
-        );
+        const existing = await ContentQueue.find({ drive_file_id: file.id }, { _id: 0, id: 1, status: 1 }).lean();
         if (existing.length > 0) {
           const dbItem = existing[0];
           if (dbItem.status === 'deleted_from_drive') {
             console.log(`DrivePoller: File ${file.name} (ID: ${file.id}) was restored in Google Drive. Re-activating as 'pending_approval'.`);
-            await pool.query(
-              "UPDATE content_queue SET status = 'pending_approval', updated_at = NOW() WHERE id = $1",
-              [dbItem.id]
-            );
+            await ContentQueue.updateOne({ id: dbItem.id }, { $set: { status: 'pending_approval', updated_at: new Date() } });
           }
           continue; // Already processed
         }
@@ -1196,36 +1174,30 @@ async function checkNewDriveVideos() {
 
         try {
           // Insert into database
-          await pool.query(`
-            INSERT INTO content_queue (
-              brand_name, file_name, video_url, public_video_url, drive_file_id,
-              caption, x_caption, linkedin_caption, description, hashtags,
-              thumbnail_options, key_moments, status, thumbnail_title, platforms,
-              brand_id, video_name, thumbnail_url, story_1, story_2, story_3, transcript
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending_approval', $13, $14, $15, $16, $17, $18, $19, $20, $21)
-          `, [
+          await ContentQueue.create({
             brand_name,
-            file.name,
-            videoUrl,
-            publicVideoUrl,
-            file.id,
-            "", // caption
-            "", // x_caption
-            "", // linkedin_caption
-            "", // description
-            "", // hashtags
-            JSON.stringify([]), // thumbnail_options
-            JSON.stringify([]), // key_moments
-            file.name.replace(/\.[^/.]+$/, ""), // thumbnail_title
-            JSON.stringify(safeJsonValue(defaultPlatforms)),
-            brand_slug,
-            file.name,
-            publicThumbnailUrl,
-            "", // story_1
-            "", // story_2
-            "", // story_3
-            transcript || ""
-          ]);
+            file_name: file.name,
+            video_url: videoUrl,
+            public_video_url: publicVideoUrl,
+            drive_file_id: file.id,
+            caption: "",
+            x_caption: "",
+            linkedin_caption: "",
+            description: "",
+            hashtags: "",
+            thumbnail_options: [],
+            key_moments: [],
+            status: 'pending_approval',
+            thumbnail_title: file.name.replace(/\.[^/.]+$/, ""),
+            platforms: safeJsonValue(defaultPlatforms),
+            brand_id: brand_slug,
+            video_name: file.name,
+            thumbnail_url: publicThumbnailUrl,
+            story_1: "",
+            story_2: "",
+            story_3: "",
+            transcript: transcript || "",
+          });
 
           console.log(`DrivePoller: Successfully ingested and staged video: ${file.name}`);
         } catch (dbErr) {
@@ -1234,7 +1206,7 @@ async function checkNewDriveVideos() {
       }
 
       // Update last checked time
-      await pool.query("UPDATE drive_folder_monitors SET last_checked_at = NOW() WHERE brand_slug = $1", [brand_slug]);
+      await DriveFolderMonitors.updateMany({ brand_slug }, { $set: { last_checked_at: new Date() } });
     }
   } catch (err) {
     console.error("DrivePoller: Ingestion cron check error:", err.message);
@@ -2063,25 +2035,25 @@ async function linkBrandAccount(req, res) {
     const encryptedToken = cryptoHelper.encrypt(access_token);
     const expiry = expires_at ? new Date(expires_at) : null;
 
-    const query = `
-      INSERT INTO brand_social_accounts 
-        (brand_name, platform, account_name, account_id, facebook_page_id, instagram_business_id, access_token, token_expires_at, is_active, created_at)
-      VALUES 
-        ($1, $2, $3, $4, $5, $6, $7, $8, true, NOW())
-      ON CONFLICT (brand_name, platform, account_name) 
-      DO UPDATE SET 
-        account_id = EXCLUDED.account_id,
-        facebook_page_id = EXCLUDED.facebook_page_id,
-        instagram_business_id = EXCLUDED.instagram_business_id,
-        access_token = EXCLUDED.access_token,
-        token_expires_at = EXCLUDED.token_expires_at,
-        is_active = true
-      RETURNING id, brand_name, platform, account_name, account_id, instagram_business_id, facebook_page_id, token_expires_at;
-    `;
-
-    const { rows } = await pool.query(query, [
-      brand_name, platform, account_name, account_id, facebook_page_id, instagram_business_id, encryptedToken, expiry
-    ]);
+    const accountFields = {
+      account_id: account_id ?? null,
+      facebook_page_id: facebook_page_id ?? null,
+      instagram_business_id: instagram_business_id ?? null,
+      access_token: encryptedToken,
+      token_expires_at: expiry,
+      is_active: true,
+    };
+    const linked = await upsertOne(
+      BrandSocialAccounts,
+      { brand_name, platform, account_name },
+      { $set: accountFields },
+      { ...accountFields, created_at: new Date() }
+    );
+    const rows = [{
+      id: linked.id, brand_name: linked.brand_name, platform: linked.platform, account_name: linked.account_name,
+      account_id: linked.account_id, instagram_business_id: linked.instagram_business_id,
+      facebook_page_id: linked.facebook_page_id, token_expires_at: linked.token_expires_at,
+    }];
 
     // ── Auto-Subscribe to Meta Leads Webhook for Facebook Pages ──
     if (platform === 'facebook' && (facebook_page_id || account_id)) {
@@ -2111,8 +2083,8 @@ async function linkBrandAccount(req, res) {
 async function deleteBrandAccount(req, res) {
   const { id } = req.params;
   try {
-    const { rowCount } = await pool.query('DELETE FROM brand_social_accounts WHERE id = $1', [id]);
-    if (rowCount === 0) {
+    const { deletedCount } = await BrandSocialAccounts.deleteOne({ id });
+    if (deletedCount === 0) {
       return res.status(404).json({ success: false, error: 'Account not found' });
     }
     res.json({ success: true });
@@ -2126,7 +2098,7 @@ async function deleteBrandAccount(req, res) {
 async function publishPost(req, res) {
   const { id } = req.params;
   try {
-    const postRes = await pool.query('SELECT * FROM content_queue WHERE id = $1', [id]);
+    const postRes = await queryPost(id);
     if (!postRes.rows.length) {
       return res.status(404).json({ success: false, error: 'Content queue item not found' });
     }
@@ -2168,11 +2140,7 @@ async function publishPost(req, res) {
     });
 
     // 2. Fetch all existing jobs for this post
-    const existingJobsRes = await pool.query(
-      "SELECT * FROM publish_queue WHERE content_id = $1",
-      [post.id]
-    );
-    const existingJobs = existingJobsRes.rows;
+    const existingJobs = await PublishQueue.find({ content_id: post.id }, NO_ID).lean();
 
     // 3. Delete non-success jobs that are NOT in activeChannels (clean up deselected channels)
     const jobsToDelete = existingJobs.filter(job => {
@@ -2181,10 +2149,7 @@ async function publishPost(req, res) {
 
     if (jobsToDelete.length > 0) {
       const deleteIds = jobsToDelete.map(j => j.id);
-      await pool.query(
-        "DELETE FROM publish_queue WHERE id = ANY($1)",
-        [deleteIds]
-      );
+      await PublishQueue.deleteMany({ id: { $in: deleteIds } });
     }
 
     // 4. Ensure a pending job exists for all activeChannels that do NOT already have a 'success' job
@@ -2194,20 +2159,17 @@ async function publishPost(req, res) {
       if (!hasSuccessJob) {
         // Upsert to ensure it exists with status 'pending' (failed ones are reset to pending to allow retry)
         console.log(`[publishPost] Creating/updating publish_queue job for content_id: ${post.id}, channel: ${channel}`);
-        await pool.query(`
-          INSERT INTO publish_queue (content_id, brand_name, channel, status)
-          VALUES ($1, $2, $3, 'pending')
-          ON CONFLICT (content_id, channel) 
-          DO UPDATE SET status = 'pending', updated_at = NOW(), error_message = NULL
-        `, [post.id, post.brand_name, channel]);
+        await upsertOne(
+          PublishQueue,
+          { content_id: post.id, channel },
+          { $set: { status: 'pending', updated_at: new Date(), error_message: null } },
+          { brand_name: post.brand_name, status: 'pending' }
+        );
       }
     }
 
     // 5. Fetch all pending or failed jobs to process
-    let { rows: jobs } = await pool.query(
-      "SELECT * FROM publish_queue WHERE content_id = $1 AND status IN ('pending', 'failed')",
-      [post.id]
-    );
+    let jobs = await PublishQueue.find({ content_id: post.id, status: { $in: ['pending', 'failed'] } }, NO_ID).lean();
     console.log(`[publishPost] Pending/failed publish queue jobs retrieved for post ${post.id}:`, JSON.stringify(jobs.map(j => ({ id: j.id, channel: j.channel, status: j.status }))));
 
     if (!jobs || jobs.length === 0) {
@@ -2219,20 +2181,10 @@ async function publishPost(req, res) {
       return res.status(400).json({ success: false, error: 'No video or media URL found for this post' });
     }
 
-    const accountsRes = await pool.query(
-      `SELECT * FROM brand_social_accounts 
-       WHERE (LOWER(REPLACE(REPLACE(brand_name, ' ', ''), '-', '_')) = LOWER(REPLACE(REPLACE($1, ' ', ''), '-', '_')) 
-          OR LOWER(REPLACE(REPLACE(brand_name, ' ', ''), '-', '')) = LOWER(REPLACE(REPLACE($1, ' ', ''), '-', '')))
-         AND is_active = true`,
-      [post.brand_name]
-    );
-    const accounts = accountsRes.rows;
+    const accounts = await findBrandAccounts(post.brand_name);
 
     // Set overall post status to PUBLISHING immediately in the DB
-    await pool.query(
-      "UPDATE content_queue SET status = 'PUBLISHING', updated_at = NOW() WHERE id = $1",
-      [post.id]
-    );
+    await ContentQueue.updateOne({ id: post.id }, { $set: { status: 'PUBLISHING', updated_at: new Date() } });
 
     // Minimize Express req object to prevent garbage collection issues in background
     const reqInfo = {
@@ -2265,12 +2217,10 @@ async function publishPost(req, res) {
 // Recalculates and updates the overall status of the content_queue post incrementally
 async function updateOverallPostStatus(postId) {
   try {
-    const postRes = await pool.query('SELECT * FROM content_queue WHERE id = $1', [postId]);
-    if (!postRes.rows.length) return;
-    const post = postRes.rows[0];
+    const post = await ContentQueue.findOne({ id: postId }, NO_ID).lean();
+    if (!post) return;
 
-    const allJobsRes = await pool.query("SELECT * FROM publish_queue WHERE content_id = $1", [postId]);
-    const allJobs = allJobsRes.rows;
+    const allJobs = await PublishQueue.find({ content_id: postId }, NO_ID).lean();
 
     let finalStatus = 'publishing';
     let errorMessage = null;
@@ -2288,10 +2238,10 @@ async function updateOverallPostStatus(postId) {
         // Fetch Instagram permalink so frontend can link directly to the post
         if (job.channel && job.channel.includes('instagram') && !job.channel.includes('story') && job.post_id) {
           try {
-            const accRes = await pool.query(
-              `SELECT access_token FROM brand_social_accounts WHERE LOWER(REPLACE(REPLACE(brand_name, ' ', '_'), '-', '_')) = LOWER($1) AND platform = 'instagram' LIMIT 1`,
-              [post.brand_id]
-            );
+            const instagramKey = (value) => String(value ?? '').replace(/[ -]/g, '_').toLowerCase();
+            const accRes = { rows: (await BrandSocialAccounts.find({ platform: 'instagram' }, { _id: 0, access_token: 1, brand_name: 1 }).lean())
+              .filter((acc) => instagramKey(acc.brand_name) === String(post.brand_id ?? '').toLowerCase())
+              .slice(0, 1) };
             if (accRes.rows.length > 0) {
               const tok = cryptoHelper.decrypt(accRes.rows[0].access_token);
               const plRes = await axios.get(`https://graph.facebook.com/v19.0/${job.post_id}`, {
@@ -2347,17 +2297,15 @@ async function updateOverallPostStatus(postId) {
       }
     }
 
-    await pool.query(
-      `UPDATE content_queue 
-       SET status = $1::varchar, 
-           published_at = CASE WHEN $1::varchar IN ('PUBLISHED', 'PARTIAL', 'published', 'partial') THEN NOW() ELSE published_at END,
-           failed_at = CASE WHEN $1::varchar IN ('FAILED', 'failed') THEN NOW() ELSE failed_at END,
-           platform_post_ids = $2,
-           error_message = $3,
-           updated_at = NOW()
-       WHERE id = $4`,
-      [finalStatus.toUpperCase(), JSON.stringify(mergedPostIds), errorMessage, postId]
-    );
+    const overallStatus = finalStatus.toUpperCase();
+    await ContentQueue.updateOne({ id: postId }, { $set: {
+      status: overallStatus,
+      ...(['PUBLISHED', 'PARTIAL', 'published', 'partial'].includes(overallStatus) ? { published_at: new Date() } : {}),
+      ...(['FAILED', 'failed'].includes(overallStatus) ? { failed_at: new Date() } : {}),
+      platform_post_ids: mergedPostIds ?? null,
+      error_message: errorMessage ?? null,
+      updated_at: new Date(),
+    } });
 
     console.log(`[updateOverallPostStatus] Post ${postId} status updated to: ${finalStatus.toUpperCase()}`);
   } catch (err) {
@@ -2373,7 +2321,7 @@ async function runBackgroundPublish(postId, jobs, publicUrl, accounts, reqInfo) 
     const channel = job.channel.toLowerCase();
 
     // Set job status to 'publishing' and sync post status
-    await pool.query("UPDATE publish_queue SET status = 'publishing', updated_at = NOW() WHERE id = $1", [job.id]);
+    await PublishQueue.updateOne({ id: job.id }, { $set: { status: 'publishing', updated_at: new Date() } });
     await updateOverallPostStatus(postId);
 
     let accountPlatform;
@@ -2385,7 +2333,7 @@ async function runBackgroundPublish(postId, jobs, publicUrl, accounts, reqInfo) 
       accountPlatform = channel;
     }
 
-    const postRes = await pool.query('SELECT * FROM content_queue WHERE id = $1', [postId]);
+    const postRes = await queryPost(postId);
     if (!postRes.rows.length) {
       console.warn(`[BackgroundPublish] Post ${postId} missing from content_queue.`);
       continue;
@@ -2412,15 +2360,11 @@ async function runBackgroundPublish(postId, jobs, publicUrl, accounts, reqInfo) 
 
     if (!selectedAccIds || !Array.isArray(selectedAccIds) || selectedAccIds.length === 0) {
       const errMsg = `No accounts selected for platform ${accountPlatform || channel}`;
-      await pool.query(
-        "UPDATE publish_queue SET status = 'failed', error_message = $1, updated_at = NOW() WHERE id = $2",
-        [errMsg, job.id]
-      );
-      await pool.query(
-        `INSERT INTO publishing_logs (content_id, brand_name, platform, post_id, status, published_at, metadata)
-         VALUES ($1, $2, $3, $4, $5, NOW(), $6)`,
-        [post.id, post.brand_name, channel, null, 'failed', JSON.stringify({ error: errMsg })]
-      );
+      await PublishQueue.updateOne({ id: job.id }, { $set: { status: 'failed', error_message: errMsg, updated_at: new Date() } });
+      await PublishingLogs.create({
+        content_id: post.id, brand_name: post.brand_name, platform: channel, post_id: null,
+        status: 'failed', published_at: new Date(), metadata: { error: errMsg },
+      });
       await updateOverallPostStatus(postId);
       continue;
     }
@@ -2433,15 +2377,11 @@ async function runBackgroundPublish(postId, jobs, publicUrl, accounts, reqInfo) 
 
     if (!account) {
       const errMsg = `Selected account not found or inactive for brand ${post.brand_name} on ${channel}`;
-      await pool.query(
-        "UPDATE publish_queue SET status = 'failed', error_message = $1, updated_at = NOW() WHERE id = $2",
-        [errMsg, job.id]
-      );
-      await pool.query(
-        `INSERT INTO publishing_logs (content_id, brand_name, platform, post_id, status, published_at, metadata)
-         VALUES ($1, $2, $3, $4, $5, NOW(), $6)`,
-        [post.id, post.brand_name, channel, null, 'failed', JSON.stringify({ error: errMsg })]
-      );
+      await PublishQueue.updateOne({ id: job.id }, { $set: { status: 'failed', error_message: errMsg, updated_at: new Date() } });
+      await PublishingLogs.create({
+        content_id: post.id, brand_name: post.brand_name, platform: channel, post_id: null,
+        status: 'failed', published_at: new Date(), metadata: { error: errMsg },
+      });
       await updateOverallPostStatus(postId);
       continue;
     }
@@ -2451,15 +2391,11 @@ async function runBackgroundPublish(postId, jobs, publicUrl, accounts, reqInfo) 
       decryptedToken = cryptoHelper.decrypt(account.access_token);
     } catch (decErr) {
       const errMsg = `Token decryption failed for platform ${channel}: ${decErr.message}`;
-      await pool.query(
-        "UPDATE publish_queue SET status = 'failed', error_message = $1, updated_at = NOW() WHERE id = $2",
-        [errMsg, job.id]
-      );
-      await pool.query(
-        `INSERT INTO publishing_logs (content_id, brand_name, platform, post_id, status, published_at, metadata)
-         VALUES ($1, $2, $3, $4, $5, NOW(), $6)`,
-        [post.id, post.brand_name, channel, null, 'failed', JSON.stringify({ error: errMsg })]
-      );
+      await PublishQueue.updateOne({ id: job.id }, { $set: { status: 'failed', error_message: errMsg, updated_at: new Date() } });
+      await PublishingLogs.create({
+        content_id: post.id, brand_name: post.brand_name, platform: channel, post_id: null,
+        status: 'failed', published_at: new Date(), metadata: { error: errMsg },
+      });
       await updateOverallPostStatus(postId);
       continue;
     }
@@ -2565,10 +2501,10 @@ async function runBackgroundPublish(postId, jobs, publicUrl, accounts, reqInfo) 
         // Try to get the reel permalink so we can add a link sticker in the story
         let linkStickerUrl = null;
         try {
-          const reelJob = await pool.query(
-            `SELECT post_id FROM publish_queue WHERE content_id = $1 AND channel IN ('instagram', 'instagram_post') AND status = 'success' AND post_id IS NOT NULL LIMIT 1`,
-            [post.id]
-          );
+          const reelJob = { rows: await PublishQueue.find(
+            { content_id: post.id, channel: { $in: ['instagram', 'instagram_post'] }, status: 'success', post_id: { $ne: null } },
+            { _id: 0, post_id: 1 }
+          ).limit(1).lean() };
           if (reelJob.rows.length > 0) {
             const reelMediaId = reelJob.rows[0].post_id;
             const permalinkRes = await axios.get(`https://graph.facebook.com/v19.0/${reelMediaId}`, {
@@ -2612,44 +2548,34 @@ async function runBackgroundPublish(postId, jobs, publicUrl, accounts, reqInfo) 
         const statusVal = isWarning ? 'partial' : 'success';
         console.log(`[BackgroundPublish] Successfully published to ${channel} (${statusVal})! Post ID: ${publishRes.post_id}`);
 
-        await pool.query(
-          "UPDATE publish_queue SET status = 'success', post_id = $1, published_at = NOW(), error_message = $3, updated_at = NOW() WHERE id = $2",
-          [publishRes.post_id, job.id, publishRes.warning || null]
-        );
+        await PublishQueue.updateOne({ id: job.id }, { $set: {
+          status: 'success', post_id: publishRes.post_id, published_at: new Date(), error_message: publishRes.warning || null, updated_at: new Date(),
+        } });
 
-        await pool.query(
-          `INSERT INTO publishing_logs (content_id, brand_name, platform, post_id, status, published_at, metadata)
-           VALUES ($1, $2, $3, $4, $5, NOW(), $6)`,
-          [
-            post.id,
-            post.brand_name,
-            channel,
-            publishRes.post_id,
-            statusVal,
-            JSON.stringify({ account_id: account.account_id, response: publishRes })
-          ]
-        );
+        await PublishingLogs.create({
+          content_id: post.id,
+          brand_name: post.brand_name,
+          platform: channel,
+          post_id: publishRes.post_id,
+          status: statusVal,
+          published_at: new Date(),
+          metadata: JSON.parse(JSON.stringify({ account_id: account.account_id, response: publishRes })),
+        });
       }
     } catch (pubErr) {
       console.error(`[BackgroundPublish] Publishing to ${channel} failed:`, pubErr.message);
 
-      await pool.query(
-        "UPDATE publish_queue SET status = 'failed', error_message = $1, updated_at = NOW() WHERE id = $2",
-        [pubErr.message, job.id]
-      );
+      await PublishQueue.updateOne({ id: job.id }, { $set: { status: 'failed', error_message: pubErr.message, updated_at: new Date() } });
 
-      await pool.query(
-        `INSERT INTO publishing_logs (content_id, brand_name, platform, post_id, status, published_at, metadata)
-         VALUES ($1, $2, $3, $4, $5, NOW(), $6)`,
-        [
-          post.id,
-          post.brand_name,
-          channel,
-          null,
-          'failed',
-          JSON.stringify({ error: pubErr.message })
-        ]
-      );
+      await PublishingLogs.create({
+        content_id: post.id,
+        brand_name: post.brand_name,
+        platform: channel,
+        post_id: null,
+        status: 'failed',
+        published_at: new Date(),
+        metadata: { error: pubErr.message },
+      });
     }
 
     // Refresh overall status incrementally
@@ -2701,10 +2627,7 @@ async function getOrGenerateTranscript(post) {
         console.log(`[Transcript Helper] Dynamic transcription success: ${transcript.length} characters.`);
         
         // Cache the transcript back to the database
-        await pool.query(
-          "UPDATE content_queue SET transcript = $1, updated_at = NOW() WHERE id = $2",
-          [transcript, post.id]
-        );
+        await ContentQueue.updateOne({ id: post.id }, { $set: { transcript, updated_at: new Date() } });
       } catch (transcribeErr) {
         console.error(`[Transcript Helper] Dynamic transcription failed:`, transcribeErr.message);
       } finally {
@@ -2732,7 +2655,7 @@ async function suggestCaptions(req, res) {
   }
 
   try {
-    const postRes = await pool.query('SELECT * FROM content_queue WHERE id = $1', [id]);
+    const postRes = await queryPost(id);
     if (!postRes.rows.length) {
       return res.status(404).json({ success: false, error: 'Content queue item not found' });
     }
@@ -3022,7 +2945,7 @@ async function suggestStories(req, res) {
   }
 
   try {
-    const postRes = await pool.query('SELECT * FROM content_queue WHERE id = $1', [id]);
+    const postRes = await queryPost(id);
     if (!postRes.rows.length) {
       return res.status(404).json({ success: false, error: 'Content queue item not found' });
     }
@@ -3176,19 +3099,17 @@ async function handleYoutubeCallback(req, res) {
 
     const encryptedTokens = cryptoHelper.encrypt(JSON.stringify(tokens));
 
-    await pool.query(
-      `INSERT INTO brand_social_accounts (brand_name, platform, account_name, account_id, access_token, token_expires_at, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, true)
-       ON CONFLICT (brand_name, platform, account_name) 
-       DO UPDATE SET account_id = EXCLUDED.account_id, access_token = EXCLUDED.access_token, token_expires_at = EXCLUDED.token_expires_at, is_active = true`,
-      [
-        brandName || 'BM Academy',
-        'youtube',
-        channelTitle,
-        channelId,
-        encryptedTokens,
-        tokens.expiry_date ? new Date(tokens.expiry_date) : null
-      ]
+    const youtubeFields = {
+      account_id: channelId,
+      access_token: encryptedTokens,
+      token_expires_at: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+      is_active: true,
+    };
+    await upsertOne(
+      BrandSocialAccounts,
+      { brand_name: brandName || 'BM Academy', platform: 'youtube', account_name: channelTitle },
+      { $set: youtubeFields },
+      youtubeFields
     );
 
     console.log(`[YouTube OAuth] Successfully connected channel "${channelTitle}" for brand "${brandName || 'BM Academy'}"`);
@@ -3227,15 +3148,12 @@ async function getFreshYoutubeClient(encryptedTokens) {
       
       const encryptedNewTokens = cryptoHelper.encrypt(JSON.stringify(updatedTokens));
       
-      await pool.query(
-        `UPDATE brand_social_accounts 
-         SET access_token = $1, token_expires_at = $2 
-         WHERE access_token = $3`,
-        [
-          encryptedNewTokens,
-          newCredentials.expiry_date ? new Date(newCredentials.expiry_date) : null,
-          encryptedTokens
-        ]
+      await BrandSocialAccounts.updateMany(
+        { access_token: encryptedTokens },
+        { $set: {
+          access_token: encryptedNewTokens,
+          token_expires_at: newCredentials.expiry_date ? new Date(newCredentials.expiry_date) : null,
+        } }
       );
       
       oauth2Client.setCredentials(updatedTokens);
@@ -3355,26 +3273,30 @@ async function publishVideoToYouTube(oauth2Client, { title, description, localVi
 async function deletePost(req, res) {
   const { id } = req.params;
   try {
-    const postRes = await pool.query('SELECT * FROM content_queue WHERE id = $1', [id]);
+    const postRes = await queryPost(id);
     if (!postRes.rows.length) return res.status(404).json({ success: false, error: 'Post not found' });
     const post = postRes.rows[0];
 
     // Get all successfully published jobs with their platform post IDs
-    const jobsRes = await pool.query(
-      `SELECT pq.channel, pq.post_id, bsa.access_token, bsa.instagram_business_id, bsa.facebook_page_id, bsa.account_id, bsa.platform
-       FROM publish_queue pq
-       LEFT JOIN brand_social_accounts bsa ON (
-         LOWER(REPLACE(REPLACE(bsa.brand_name,' ',''),'-','_')) = LOWER(REPLACE(REPLACE($2,' ',''),'-','_'))
-         AND (
-           (pq.channel IN ('instagram','instagram_post','instagram_story') AND bsa.platform = 'instagram') OR
-           (pq.channel IN ('facebook','facebook_post','facebook_story') AND bsa.platform = 'facebook') OR
-           (pq.channel = 'youtube' AND bsa.platform = 'youtube') OR
-           (pq.channel = 'linkedin' AND bsa.platform = 'linkedin')
-         )
-       )
-       WHERE pq.content_id = $1 AND pq.status IN ('success','partial') AND pq.post_id IS NOT NULL`,
-      [id, post.brand_name]
-    );
+    const publishedJobs = await PublishQueue.find(
+      { content_id: id, status: { $in: ['success', 'partial'] }, post_id: { $ne: null } },
+      { _id: 0, channel: 1, post_id: 1 }
+    ).lean();
+    const brandAccounts = (await BrandSocialAccounts.find({}, NO_ID).lean())
+      .filter((account) => brandKeyUnderscore(account.brand_name) === brandKeyUnderscore(post.brand_name));
+    const platformForChannel = (channel) => (['instagram', 'instagram_post', 'instagram_story'].includes(channel) ? 'instagram'
+      : ['facebook', 'facebook_post', 'facebook_story'].includes(channel) ? 'facebook'
+        : channel === 'youtube' ? 'youtube' : channel === 'linkedin' ? 'linkedin' : null);
+    // LEFT JOIN: one row per matching account, or a single row without account data
+    const jobsRes = { rows: publishedJobs.flatMap((job) => {
+      const matches = brandAccounts.filter((account) => account.platform === platformForChannel(job.channel));
+      const empty = { access_token: null, instagram_business_id: null, facebook_page_id: null, account_id: null, platform: null };
+      return (matches.length ? matches : [empty]).map((account) => ({
+        channel: job.channel, post_id: job.post_id,
+        access_token: account.access_token ?? null, instagram_business_id: account.instagram_business_id ?? null,
+        facebook_page_id: account.facebook_page_id ?? null, account_id: account.account_id ?? null, platform: account.platform ?? null,
+      }));
+    }) };
 
     const results = [];
 
@@ -3422,10 +3344,7 @@ async function deletePost(req, res) {
           results.push({ channel: job.channel, status: 'skipped', reason: 'Platform not supported for deletion' });
         }
 
-        await pool.query(
-          "UPDATE publish_queue SET status = 'deleted', updated_at = NOW() WHERE content_id = $1 AND channel = $2",
-          [id, job.channel]
-        );
+        await PublishQueue.updateMany({ content_id: id, channel: job.channel }, { $set: { status: 'deleted', updated_at: new Date() } });
       } catch (platformErr) {
         const errMsg = platformErr.response?.data?.error?.message || platformErr.message;
         console.error(`[deletePost] Failed to delete from ${job.channel}:`, errMsg);
@@ -3434,10 +3353,7 @@ async function deletePost(req, res) {
     }
 
     // Mark post as DELETED in content_queue
-    await pool.query(
-      "UPDATE content_queue SET status = 'DELETED', updated_at = NOW() WHERE id = $1",
-      [id]
-    );
+    await ContentQueue.updateOne({ id }, { $set: { status: 'DELETED', updated_at: new Date() } });
 
     res.json({ success: true, results });
   } catch (err) {
@@ -3525,13 +3441,12 @@ async function handleLinkedInCallback(req, res) {
     const encryptedToken = cryptoHelper.encrypt(access_token);
 
     if (brand_name) {
-      await pool.query(
-        `INSERT INTO brand_social_accounts (brand_name, platform, account_name, account_id, access_token, token_expires_at, is_active)
-         VALUES ($1, 'linkedin', $2, $3, $4, $5, true)
-         ON CONFLICT (brand_name, platform, account_name)
-         DO UPDATE SET account_id = EXCLUDED.account_id, access_token = EXCLUDED.access_token,
-                       token_expires_at = EXCLUDED.token_expires_at, is_active = true`,
-        [brand_name, accountName, authorUrn, encryptedToken, tokenExpiresAt]
+      const linkedinFields = { account_id: authorUrn, access_token: encryptedToken, token_expires_at: tokenExpiresAt ?? null, is_active: true };
+      await upsertOne(
+        BrandSocialAccounts,
+        { brand_name, platform: 'linkedin', account_name: accountName },
+        { $set: linkedinFields },
+        linkedinFields
       );
     }
 
@@ -3675,10 +3590,7 @@ async function generateThumbnails(req, res) {
   const baseUrl = process.env.API_BASE_URL || 'https://leados-api.abmgroups.org';
 
   try {
-    const { rows } = await pool.query(
-      `SELECT video_url, public_video_url FROM content_queue WHERE id = $1`,
-      [id]
-    );
+    const rows = await ContentQueue.find({ id }, { _id: 0, video_url: 1, public_video_url: 1 }).lean();
     if (!rows.length) return res.status(404).json({ error: 'Content not found' });
 
     const item = rows[0];
@@ -3829,10 +3741,10 @@ async function generatePoster(req, res) {
     const frameBase64 = fs.readFileSync(framePath).toString('base64');
 
     // Get video context (title, caption, description)
-    const { rows } = await pool.query(
-      `SELECT youtube_title, thumbnail_title, caption, instagram_caption, youtube_description, brand_name FROM content_queue WHERE id = $1`,
-      [id]
-    );
+    const rows = await ContentQueue.find(
+      { id },
+      { _id: 0, youtube_title: 1, thumbnail_title: 1, caption: 1, instagram_caption: 1, youtube_description: 1, brand_name: 1 }
+    ).lean();
     const rawTitle = rows[0]?.youtube_title || rows[0]?.thumbnail_title || '';
     // Strip filename-like titles so the AI text prompt doesn't produce garbage (e.g. "WhatsApp Video 2026-06-19")
     const isFilenameTitle = /whatsapp\s*video|^\d{4}[-_]\d{2}[-_]\d{2}|\.(mp4|mov|avi|mkv)$/i.test(rawTitle);
@@ -4072,10 +3984,7 @@ async function generatePoster(req, res) {
     // Save poster as thumbnail_url in DB so YouTube/Instagram/Facebook all use the AI poster
     const posterPathForDb = `${baseUrl}/uploads/poster_${id}.jpg`;
     try {
-      await pool.query(
-        `UPDATE content_queue SET thumbnail_url = $1, updated_at = NOW() WHERE id = $2`,
-        [posterPathForDb, id]
-      );
+      await ContentQueue.updateOne({ id }, { $set: { thumbnail_url: posterPathForDb, updated_at: new Date() } });
     } catch (dbErr) {
       console.warn('[generatePoster] Could not save poster URL to content_queue:', dbErr.message);
     }
@@ -4151,10 +4060,7 @@ async function uploadPosterOverlay(req, res) {
     const baseUrl = process.env.API_BASE_URL || 'https://leados-api.abmgroups.org';
     const posterUrl = `${baseUrl}/uploads/${filename}`;
 
-    await pool.query(
-      `UPDATE content_queue SET thumbnail_url = $1, updated_at = NOW() WHERE id = $2`,
-      [posterUrl, id]
-    );
+    await ContentQueue.updateOne({ id }, { $set: { thumbnail_url: posterUrl, updated_at: new Date() } });
 
     res.json({ success: true, poster_url: posterUrl });
   } catch (err) {

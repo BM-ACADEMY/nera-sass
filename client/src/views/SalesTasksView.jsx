@@ -62,7 +62,7 @@ export const SalesTasksView = () => {
       fetchCalendarStatus();
       allianceInboxApi.getTags().then(setAvailableTags).catch(console.error);
     }, 0);
-    const socket = socketIO(api.baseUrl, { transports: ['websocket', 'polling'] });
+    const socket = socketIO(api.baseUrl, { auth: { token: localStorage.getItem('leados_token') }, transports: ['websocket', 'polling'] });
     socket.on('sales_task_update', fetchTasks);
     return () => {
       window.clearTimeout(initialLoad);

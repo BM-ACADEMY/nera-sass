@@ -1,16 +1,8 @@
 const express = require('express');
-const { Pool } = require('pg');
 const axios = require('axios');
 const openRouter = require('../services/openrouter');
+const { ChatbotKnowledgebase, ChatbotUserprogresses, ChatbotFlowsteps, Leads, Clients, Messages } = require('../models');
 const router = express.Router();
-
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASS
-});
 
 // Helper: Get OpenRouter Embedding
 async function getEmbedding(text) {
@@ -45,12 +37,8 @@ router.post('/knowledgebase', async (req, res) => {
   if (!embedding) return res.status(500).json({ error: 'Failed to generate embedding' });
 
   try {
-    const result = await pool.query(
-      `INSERT INTO chatbot_knowledgebase (flow_id, title, content, tags, embedding)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [flow_id, title, content, JSON.stringify(tags || []), JSON.stringify(embedding)]
-    );
-    res.json(result.rows[0]);
+    const entry = await ChatbotKnowledgebase.create({ flow_id, title, content, tags: tags || [], embedding });
+    res.json(entry.toObject());
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -59,11 +47,11 @@ router.post('/knowledgebase', async (req, res) => {
 // GET knowledge base entries
 router.get('/knowledgebase/:flow_id', async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT id, flow_id, title, content, tags, is_active FROM chatbot_knowledgebase WHERE flow_id = $1`,
-      [req.params.flow_id]
-    );
-    res.json(result.rows);
+    const entries = await ChatbotKnowledgebase.find(
+      { flow_id: req.params.flow_id },
+      { _id: 0, id: 1, flow_id: 1, title: 1, content: 1, tags: 1, is_active: 1 }
+    ).lean();
+    res.json(entries);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -75,23 +63,17 @@ router.post('/chat', async (req, res) => {
   
   try {
     // 1. Look up user progress
-    let progressRes = await pool.query(`SELECT * FROM chatbot_userprogresses WHERE lead_id = $1 AND flow_id = $2`, [lead_id, flow_id]);
-    let progress = progressRes.rows[0];
-    
+    let progress = await ChatbotUserprogresses.findOne({ lead_id, flow_id }).lean();
+
     if (!progress) {
       // Create initial progress if it doesn't exist
-      const initRes = await pool.query(
-        `INSERT INTO chatbot_userprogresses (lead_id, flow_id, current_step) VALUES ($1, $2, 'welcome') RETURNING *`,
-        [lead_id, flow_id]
-      );
-      progress = initRes.rows[0];
+      progress = (await ChatbotUserprogresses.create({ lead_id, flow_id, current_step: 'welcome' })).toObject();
     }
 
     const currentStepId = progress.current_step;
 
     // 2. Look up the matching chatbot_flowsteps document
-    const stepRes = await pool.query(`SELECT * FROM chatbot_flowsteps WHERE flow_id = $1 AND step_id = $2`, [flow_id, currentStepId]);
-    const currentStep = stepRes.rows[0];
+    const currentStep = await ChatbotFlowsteps.findOne({ flow_id, step_id: currentStepId }).lean();
 
     let nextAction = null;
     let fallbackToAI = true;
@@ -120,13 +102,13 @@ router.post('/chat', async (req, res) => {
       
       if (queryEmbedding) {
         // Fetch all active KB entries for this flow
-        const kbRes = await pool.query(`SELECT content, embedding FROM chatbot_knowledgebase WHERE flow_id = $1 AND is_active = true`, [flow_id]);
+        const kbRows = await ChatbotKnowledgebase.find({ flow_id, is_active: true }, { _id: 0, content: 1, embedding: 1 }).lean();
         
         let bestMatch = null;
         let highestScore = -1;
         let contextChunks = [];
 
-        for (const entry of kbRes.rows) {
+        for (const entry of kbRows) {
           const score = cosineSimilarity(queryEmbedding, typeof entry.embedding === 'string' ? JSON.parse(entry.embedding) : entry.embedding);
           if (score > highestScore) {
             highestScore = score;
@@ -158,16 +140,18 @@ router.post('/chat', async (req, res) => {
       };
       
       // Look up lead's phone number and token
-      const leadRes = await pool.query('SELECT phone, clients.wa_phone_number_id, clients.wa_access_token FROM leads JOIN clients ON leads.client_id = clients.id WHERE leads.id = $1', [lead_id]);
-      const leadInfo = leadRes.rows[0];
+      const lead = await Leads.findOne({ id: lead_id }, { _id: 0, id: 1, phone: 1, client_id: 1 }).lean();
+      const leadClient = lead ? await Clients.findOne({ id: lead.client_id }).lean() : null;
+      const leadInfo = lead && leadClient
+        ? { phone: lead.phone, wa_phone_number_id: leadClient.wa_phone_number_id, wa_access_token: leadClient.wa_access_token }
+        : null;
       
       if (leadInfo && leadInfo.wa_phone_number_id && leadInfo.wa_access_token) {
         // Log to messages
-        await pool.query(`
-          INSERT INTO messages (client_id, lead_id, direction, type, content, status, timestamp)
-          SELECT client_id, id, 'outbound', 'text', $1, 'sent', NOW()
-          FROM leads WHERE id = $2
-        `, [nextAction.text, lead_id]);
+        await Messages.create({
+          client_id: lead.client_id, lead_id: lead.id, direction: 'outbound', type: 'text',
+          content: nextAction.text, status: 'sent', timestamp: new Date(),
+        });
         
         // Send via Meta API
         try {

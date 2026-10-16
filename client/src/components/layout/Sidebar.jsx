@@ -23,8 +23,6 @@ const NAV = [
   { path: '/templates', Icon: FileText, label: 'Templates' },
   { path: '/brain', Icon: Brain, label: 'AI Brain' },
   { path: '/reports', Icon: BarChart2, label: 'Reports' },
-  { path: '/founder-reports', Icon: FileText, label: 'Founder Reports' },
-  { path: '/clients', Icon: Building2, label: 'Clients' },
   { path: '/integrations', Icon: Share2, label: 'Integrations' },
 ];
 
@@ -41,7 +39,7 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
       .catch(() => {});
     loadUnread();
 
-    const socket = socketIO(api.baseUrl, { transports: ['websocket', 'polling'] });
+    const socket = socketIO(api.baseUrl, { auth: { token: localStorage.getItem('leados_token') }, transports: ['websocket', 'polling'] });
     socket.on('sales_task_update', data => {
       setTaskUnreadCount(data.unread_count || 0);
       if (data.event === 'created' && data.task && 'Notification' in window && Notification.permission === 'granted') {
@@ -156,18 +154,7 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
         { key: '/mafiya/brain', icon: <Brain size={14} />, label: "Don's Brain" },
         { key: '/mafiya/usage', icon: <Activity size={14} />, label: 'Usage' },
       ]
-    }] : []),
-
-    {
-      key: '/workflows',
-      icon: <Activity size={16} />,
-      label: 'Workflow Logs',
-    },
-    {
-      key: '/settings',
-      icon: <Settings size={16} />,
-      label: 'Settings',
-    }
+    }] : [])
   ];
 
   return (

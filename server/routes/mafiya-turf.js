@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const axios = require('axios');
 const cheerio = require('cheerio');
-const pool = require('../db/connection');
+const { MafiyaTurfKeywords, MafiyaGmbClients } = require('../models');
 const { generateContent, DEFAULT_MODEL } = require('../services/openrouter');
 
 // GET keywords for a GMB client
@@ -11,11 +11,8 @@ router.get('/keywords', async (req, res) => {
   if (!clientId) return res.status(400).json({ error: 'clientId is required' });
 
   try {
-    const result = await pool.query(
-      'SELECT * FROM mafiya_turf_keywords WHERE client_id = $1 ORDER BY created_at DESC',
-      [clientId]
-    );
-    res.json(result.rows);
+    const rows = await MafiyaTurfKeywords.find({ client_id: clientId }, { _id: 0 }).sort({ created_at: -1 }).lean();
+    res.json(rows);
   } catch (err) {
     console.error('[Mafiya Turf] GET /keywords error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -34,8 +31,7 @@ router.post('/keywords', async (req, res) => {
   try {
     // Enforce keyword limit check
     const limitCheck = await checkLimit(client_id, 'mafiya_keywords', async () => {
-      const countRes = await pool.query('SELECT COUNT(*) FROM mafiya_turf_keywords WHERE client_id = $1', [client_id]);
-      return parseInt(countRes.rows[0].count, 10);
+      return MafiyaTurfKeywords.countDocuments({ client_id });
     });
 
     if (!limitCheck.allowed) {
@@ -45,13 +41,15 @@ router.post('/keywords', async (req, res) => {
       });
     }
 
-    const result = await pool.query(
-      `INSERT INTO mafiya_turf_keywords (client_id, keyword, initial_rank, current_rank, pack_status, last_checked)
-       VALUES ($1, $2, $3, $3, $4, NOW())
-       RETURNING *`,
-      [client_id, keyword.trim(), initial_rank || 100, pack_status || 'Not in Pack']
-    );
-    res.status(201).json(result.rows[0]);
+    const created = await MafiyaTurfKeywords.create({
+      client_id,
+      keyword: keyword.trim(),
+      initial_rank: initial_rank || 100,
+      current_rank: initial_rank || 100,
+      pack_status: pack_status || 'Not in Pack',
+      last_checked: new Date(),
+    });
+    res.status(201).json(created.toObject());
   } catch (err) {
     console.error('[Mafiya Turf] POST /keywords error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -80,16 +78,13 @@ router.put('/keywords/:id', async (req, res) => {
     const initialRank = parseRank(initial_rank, 'Initial rank');
     const currentRank = parseRank(current_rank, 'Current rank');
     const packStatus = pack_status === 'In Pack' ? 'In Pack' : 'Not in Pack';
-    const result = await pool.query(
-      `UPDATE mafiya_turf_keywords
-       SET keyword = $1, initial_rank = $2, current_rank = $3,
-           pack_status = $4, last_checked = NOW()
-       WHERE id = $5 AND client_id = $6
-       RETURNING *`,
-      [keyword.trim(), initialRank, currentRank, packStatus, req.params.id, client_id]
-    );
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Keyword not found for this client' });
-    res.json(result.rows[0]);
+    const updated = await MafiyaTurfKeywords.findOneAndUpdate(
+      { id: req.params.id, client_id },
+      { $set: { keyword: keyword.trim(), initial_rank: initialRank, current_rank: currentRank, pack_status: packStatus, last_checked: new Date() } },
+      { new: true, projection: { _id: 0 } }
+    ).lean();
+    if (!updated) return res.status(404).json({ error: 'Keyword not found for this client' });
+    res.json(updated);
   } catch (err) {
     if (err.status === 400) return res.status(400).json({ error: err.message });
     console.error('[Mafiya Turf] PUT /keywords error:', err);
@@ -100,11 +95,8 @@ router.put('/keywords/:id', async (req, res) => {
 // DELETE stop tracking keyword
 router.delete('/keywords/:id', async (req, res) => {
   try {
-    const result = await pool.query(
-      'DELETE FROM mafiya_turf_keywords WHERE id = $1 RETURNING *',
-      [req.params.id]
-    );
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Keyword not found' });
+    const result = await MafiyaTurfKeywords.deleteOne({ id: req.params.id });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Keyword not found' });
     res.json({ message: 'Keyword deleted successfully' });
   } catch (err) {
     console.error('[Mafiya Turf] DELETE /keywords error:', err);
@@ -171,10 +163,7 @@ async function resolveClientCoords(client, apiKey) {
 
     if (matchedPlace) {
       const { latitude, longitude } = matchedPlace;
-      await pool.query(
-        'UPDATE mafiya_gmb_clients SET latitude = $1, longitude = $2 WHERE id = $3',
-        [latitude, longitude, client.id]
-      );
+      await MafiyaGmbClients.updateOne({ id: client.id }, { $set: { latitude, longitude } });
       return { latitude, longitude };
     }
   } catch (err) {
@@ -188,14 +177,11 @@ router.post('/keywords/refresh/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const kwResult = await pool.query('SELECT * FROM mafiya_turf_keywords WHERE id = $1', [id]);
-    if (kwResult.rowCount === 0) return res.status(404).json({ error: 'Keyword not found' });
+    const kwItem = await MafiyaTurfKeywords.findOne({ id }).lean();
+    if (!kwItem) return res.status(404).json({ error: 'Keyword not found' });
 
-    const kwItem = kwResult.rows[0];
-    const clientResult = await pool.query('SELECT * FROM mafiya_gmb_clients WHERE id = $1', [kwItem.client_id]);
-    if (clientResult.rowCount === 0) return res.status(404).json({ error: 'Client not found' });
-
-    let client = clientResult.rows[0];
+    let client = await MafiyaGmbClients.findOne({ id: kwItem.client_id }).lean();
+    if (!client) return res.status(404).json({ error: 'Client not found' });
     const apiKey = process.env.SERPER_API_KEY || process.env.SERP_API_KEY;
     const isDemo = !apiKey;
 
@@ -281,19 +267,19 @@ router.post('/keywords/refresh/:id', async (req, res) => {
       }
     }
 
-    const updated = await pool.query(
-      `UPDATE mafiya_turf_keywords
-       SET previous_rank = current_rank, 
-           current_rank = $1, 
-           pack_status = $2, 
-           initial_rank = CASE WHEN initial_rank = 100 THEN $1 ELSE initial_rank END,
-           last_checked = NOW()
-       WHERE id = $3
-       RETURNING *`,
-      [newRank, packStatus, id]
-    );
+    const updated = await MafiyaTurfKeywords.findOneAndUpdate(
+      { id },
+      [{ $set: {
+        previous_rank: '$current_rank',
+        current_rank: newRank,
+        pack_status: packStatus,
+        initial_rank: { $cond: [{ $eq: ['$initial_rank', 100] }, newRank, '$initial_rank'] },
+        last_checked: '$$NOW',
+      } }],
+      { new: true, projection: { _id: 0 } }
+    ).lean();
 
-    res.json(updated.rows[0]);
+    res.json(updated);
   } catch (err) {
     console.error('[Mafiya Turf] refresh error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -357,10 +343,8 @@ router.get('/ai-suggestions', async (req, res) => {
   const targetLoc = location && location.trim() ? location.trim() : 'Pondicherry';
 
   try {
-    const clientResult = await pool.query('SELECT * FROM mafiya_gmb_clients WHERE id = $1', [clientId]);
-    if (clientResult.rowCount === 0) return res.status(404).json({ error: 'Client not found' });
-
-    const client = clientResult.rows[0];
+    const client = await MafiyaGmbClients.findOne({ id: clientId }).lean();
+    if (!client) return res.status(404).json({ error: 'Client not found' });
 
     let scrapedContent = '';
     if (client.website_url) {

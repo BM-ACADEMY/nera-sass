@@ -23,20 +23,17 @@ const WhatsAppConfigModal = ({ tenantId, tenantName, onClose }) => {
   const [clients, setClients] = useState([]);
   const [activeClient, setActiveClient] = useState(null);
 
-  const loadClient = async (preferId) => {
+  const loadClient = async () => {
     setLoading(true);
     try {
-      const res = await axiosClient.get('/clients', { params: { tenant_id: tenantId } });
-      const list = res.data.clients || [];
-      setClients(list);
-      const chosen = list.find(c => c.id === preferId) || list[0] || null;
-      setActiveClient(chosen);
+      const res = await axiosClient.get(`/admin/tenants/${tenantId}`);
+      const brand = res.data.brand || null;
+      setActiveClient(brand);
       form.setFieldsValue({
-        client_id: chosen?.id,
-        whatsapp_number: chosen?.whatsapp_number || '',
-        phone_number_id: chosen?.phone_number_id || '',
-        wa_access_token: chosen?.wa_access_token || '',
-        wa_business_id: chosen?.wa_business_id || '',
+        whatsapp_number: brand?.whatsapp_number || '',
+        phone_number_id: brand?.phone_number_id || '',
+        wa_access_token: '',
+        wa_business_id: brand?.wa_business_id || '',
       });
     } catch (err) {
       message.error('Failed to load workspace WhatsApp config');
@@ -46,43 +43,26 @@ const WhatsAppConfigModal = ({ tenantId, tenantName, onClose }) => {
   };
 
   useEffect(() => {
-    loadClient();
+    if (tenantId) loadClient();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantId]);
-
-  const handleClientSwitch = (id) => {
-    const chosen = clients.find(c => c.id === id) || null;
-    setActiveClient(chosen);
-    form.setFieldsValue({
-      client_id: chosen?.id,
-      whatsapp_number: chosen?.whatsapp_number || '',
-      phone_number_id: chosen?.phone_number_id || '',
-      wa_access_token: chosen?.wa_access_token || '',
-      wa_business_id: chosen?.wa_business_id || '',
-    });
-  };
 
   const handleSave = async () => {
     const values = await form.validateFields();
     setSaving(true);
     try {
-      let client = activeClient;
-      if (!client) {
-        const created = await axiosClient.post('/clients', { name: tenantName, tenant_id: tenantId });
-        client = created.data.client;
-      }
-      const res = await axiosClient.patch(`/clients/${client.id}`, {
+      const payload = {
         whatsapp_number: values.whatsapp_number,
         phone_number_id: values.phone_number_id,
-        wa_access_token: values.wa_access_token,
         wa_business_id: values.wa_business_id,
-      });
-      setActiveClient(res.data.client);
-      setClients(current => {
-        const exists = current.some(c => c.id === res.data.client.id);
-        return exists ? current.map(c => c.id === res.data.client.id ? res.data.client : c) : [...current, res.data.client];
-      });
-      message.success('WhatsApp config saved for this workspace');
+      };
+      if (values.wa_access_token) {
+        payload.wa_access_token = values.wa_access_token;
+      }
+      const res = await axiosClient.put(`/admin/tenants/${tenantId}/whatsapp`, payload);
+      setActiveClient(res.data.brand);
+      form.setFieldsValue({ wa_access_token: '' });
+      message.success('WhatsApp credentials updated and encrypted for this workspace');
     } catch (err) {
       message.error(err.response?.data?.error || 'Failed to save WhatsApp config');
     } finally {
@@ -91,11 +71,10 @@ const WhatsAppConfigModal = ({ tenantId, tenantName, onClose }) => {
   };
 
   const handleVerify = async () => {
-    if (!activeClient) return;
     setVerifying(true);
     try {
-      const res = await axiosClient.post(`/clients/${activeClient.id}/whatsapp-setup`);
-      setActiveClient(res.data.client);
+      const res = await axiosClient.post(`/admin/tenants/${tenantId}/whatsapp/verify`);
+      setActiveClient(res.data.brand);
       message.success('WhatsApp verified and enabled for this workspace');
     } catch (err) {
       message.error(err.response?.data?.error || 'Meta verification failed');
@@ -122,15 +101,6 @@ const WhatsAppConfigModal = ({ tenantId, tenantName, onClose }) => {
         </div>
       </div>
 
-      {clients.length > 1 && (
-        <>
-          <Form.Item label="Brand / client under this workspace" style={{ marginBottom: 8 }}>
-            <Select value={activeClient?.id} onChange={handleClientSwitch} options={clients.map(c => ({ value: c.id, label: c.name }))} />
-          </Form.Item>
-          <Divider style={{ margin: '8px 0 20px' }} />
-        </>
-      )}
-
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20,
         background: status.bg, border: `1px solid ${status.border}`, color: status.color,
@@ -141,17 +111,20 @@ const WhatsAppConfigModal = ({ tenantId, tenantName, onClose }) => {
       </div>
 
       <Form form={form} layout="vertical">
-        <Form.Item name="client_id" hidden><Input /></Form.Item>
-        <Form.Item name="whatsapp_number" label="WhatsApp Number">
+        <Form.Item name="whatsapp_number" label="WhatsApp Number" rules={[{ required: true, message: 'WhatsApp number is required' }]}>
           <Input prefix={<PhoneOutlined style={{ color: '#94a3b8' }} />} placeholder="+91 98765 43210" size="large" />
         </Form.Item>
-        <Form.Item name="phone_number_id" label="Meta Phone Number ID">
+        <Form.Item name="phone_number_id" label="Meta Phone Number ID" rules={[{ required: true, message: 'Meta Phone Number ID is required' }]}>
           <Input prefix={<IdcardOutlined style={{ color: '#94a3b8' }} />} placeholder="15-digit ID from Meta" size="large" />
         </Form.Item>
-        <Form.Item name="wa_access_token" label="Meta Access Token">
-          <Input.Password prefix={<KeyOutlined style={{ color: '#94a3b8' }} />} placeholder="Permanent or system-user token" size="large" />
+        <Form.Item
+          name="wa_access_token"
+          label="Meta Access Token"
+          extra={activeClient?.wa_token_configured ? `Token is saved and encrypted (ends in ${activeClient.wa_token_last4 || '••••'}). Leave blank to keep current token.` : 'Enter system user access token'}
+        >
+          <Input.Password prefix={<KeyOutlined style={{ color: '#94a3b8' }} />} placeholder={activeClient?.wa_token_configured ? '••••••••••••••••' : 'EAAG...'} size="large" />
         </Form.Item>
-        <Form.Item name="wa_business_id" label="WABA ID" extra="Optional — falls back to the platform default if left empty.">
+        <Form.Item name="wa_business_id" label="WABA ID" rules={[{ required: true, message: 'WABA ID is required' }]}>
           <Input prefix={<SafetyCertificateOutlined style={{ color: '#94a3b8' }} />} placeholder="WhatsApp Business Account ID" size="large" />
         </Form.Item>
 

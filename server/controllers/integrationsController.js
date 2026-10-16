@@ -1,10 +1,29 @@
-const db = require('../db/connection');
+const { BrandSocialAccounts, Clients, Leads } = require('../models');
 const cryptoHelper = require('../utils/crypto');
 const axios = require('axios');
 const { evaluateLeadBrandAndSchedule } = require('../services/aiBrain');
 const { getLeadOSBrand } = require('../services/leadosBrand');
 
 const META_NEW_LEAD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+const META_CAMPAIGN_FIELDS = ['lead_ad_form_id', 'campaign_id', 'campaign_name', 'ad_name', 'ad_id'];
+const hasStatus = (status) => typeof status === 'string' && status.trim() !== '';
+
+// INSERT INTO leads ... ON CONFLICT (leadgen_id) DO UPDATE: keeps a non-blank stored
+// status and only overwrites the campaign fields with non-null incoming values.
+async function upsertMetaLead(doc) {
+  const existing = await Leads.findOne({ leadgen_id: doc.leadgen_id }).lean();
+  if (!existing) return Leads.create(doc);
+  const set = { status: hasStatus(existing.status) ? existing.status : doc.status };
+  for (const field of META_CAMPAIGN_FIELDS) set[field] = doc[field] ?? existing[field] ?? null;
+  return Leads.updateOne({ id: existing.id }, { $set: set });
+}
+
+// Page accounts joined with the client that shares their brand name (LEFT JOIN clients).
+async function withClientIds(accounts) {
+  const clients = await Clients.find({ name: { $in: accounts.map((a) => a.brand_name) } }, { id: 1, name: 1 }).lean();
+  return accounts.map((account) => ({ ...account, client_id: clients.find((c) => c.name === account.brand_name)?.id ?? null }));
+}
 
 const getMetaLeadStatus = (createdTime) => {
   const createdAt = createdTime ? new Date(createdTime) : new Date();
@@ -27,54 +46,38 @@ async function linkMetaAccount(req, res) {
     // lead_ads_access_token is a dedicated column separate from access_token, which Content OS's
     // own Facebook connect flow (contentController.js) also writes to on this same table. Keeping
     // them separate means reconnecting a page in Content OS can never break Lead Ads sync, and vice versa.
-    const checkQuery = `
-      SELECT id FROM brand_social_accounts
-      WHERE brand_name = $1 AND platform = $2 AND account_name = $3
-    `;
-    const checkRes = await db.query(checkQuery, [brand_name, platform, account_name]);
+    const existingAccount = await BrandSocialAccounts.findOne({ brand_name, platform, account_name }, { id: 1 }).lean();
 
     let result;
-    if (checkRes.rows.length > 0) {
+    if (existingAccount) {
       // Update existing
-      const updateQuery = `
-        UPDATE brand_social_accounts SET
-          account_id = $1, facebook_page_id = $2, instagram_business_id = $3,
-          lead_ads_access_token = $4, token_expires_at = $5, is_active = true
-        WHERE id = $6
-        RETURNING *;
-      `;
-      const updateRes = await db.query(updateQuery, [
-        account_id, facebook_page_id, instagram_business_id, encryptedToken, expiry, checkRes.rows[0].id
-      ]);
-      result = updateRes.rows[0];
+      result = await BrandSocialAccounts.findOneAndUpdate(
+        { id: existingAccount.id },
+        { $set: {
+          account_id, facebook_page_id, instagram_business_id,
+          lead_ads_access_token: encryptedToken, token_expires_at: expiry, is_active: true,
+        } },
+        { new: true, projection: { _id: 0 } }
+      ).lean();
     } else {
       // Because there's a bad unique constraint on just (brand_name, platform), let's see if we hit it.
       // We will try an insert, and if it fails, we will fall back to updating based on just (brand_name, platform)
       try {
-        const insertQuery = `
-          INSERT INTO brand_social_accounts
-            (brand_name, platform, account_name, account_id, facebook_page_id, instagram_business_id, lead_ads_access_token, token_expires_at, is_active)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)
-          RETURNING *;
-        `;
-        const insertRes = await db.query(insertQuery, [
-          brand_name, platform, account_name, account_id, facebook_page_id, instagram_business_id, encryptedToken, expiry
-        ]);
-        result = insertRes.rows[0];
+        result = (await BrandSocialAccounts.create({
+          brand_name, platform, account_name, account_id, facebook_page_id, instagram_business_id,
+          lead_ads_access_token: encryptedToken, token_expires_at: expiry, is_active: true,
+        })).toObject();
       } catch (insertErr) {
-        if (insertErr.code === '23505') {
+        if (insertErr.code === 11000) {
           // Fallback update on the existing duplicate if the constraint is blocking us
-          const fallbackQuery = `
-            UPDATE brand_social_accounts SET
-              account_name = $1, account_id = $2, facebook_page_id = $3,
-              instagram_business_id = $4, lead_ads_access_token = $5, token_expires_at = $6, is_active = true
-            WHERE brand_name = $7 AND platform = $8
-            RETURNING *;
-          `;
-          const fallbackRes = await db.query(fallbackQuery, [
-            account_name, account_id, facebook_page_id, instagram_business_id, encryptedToken, expiry, brand_name, platform
-          ]);
-          result = fallbackRes.rows[0];
+          await BrandSocialAccounts.updateMany(
+            { brand_name, platform },
+            { $set: {
+              account_name, account_id, facebook_page_id, instagram_business_id,
+              lead_ads_access_token: encryptedToken, token_expires_at: expiry, is_active: true,
+            } }
+          );
+          result = await BrandSocialAccounts.findOne({ brand_name, platform }, { _id: 0 }).lean();
         } else {
           throw insertErr;
         }
@@ -112,7 +115,7 @@ async function linkMetaAccount(req, res) {
 async function deleteMetaAccount(req, res) {
   try {
     const { id } = req.params;
-    await db.query('DELETE FROM brand_social_accounts WHERE id = $1', [id]);
+    await BrandSocialAccounts.deleteOne({ id });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -148,24 +151,20 @@ async function handleMetaWebhook(req, res) {
           const leadgenId = change.value.leadgen_id;
           
           try {
-            const { rows } = await db.query(`
-              SELECT lead_ads_access_token, brand_name, c.id as client_id
-              FROM brand_social_accounts bsa
-              LEFT JOIN clients c ON bsa.brand_name = c.name
-              WHERE bsa.facebook_page_id = $1 AND bsa.is_active = true LIMIT 1
-            `, [pageId]);
+            const pageAccount = await BrandSocialAccounts.findOne({ facebook_page_id: pageId, is_active: true }, { lead_ads_access_token: 1, brand_name: 1 }).lean();
+            const rows = pageAccount ? await withClientIds([pageAccount]) : [];
 
             if (rows.length === 0) continue;
 
             const masterTokenEncrypted = rows[0].lead_ads_access_token;
             const masterToken = cryptoHelper.decrypt(masterTokenEncrypted);
-            const clientId = (await getLeadOSBrand(db)).id;
-            
+            const clientId = (await getLeadOSBrand()).id;
+
             const pageTokenRes = await axios.get(
               `https://graph.facebook.com/v18.0/${pageId}?fields=access_token&access_token=${masterToken}`
             );
             const pageToken = pageTokenRes.data.access_token;
-            
+
             const leadRes = await axios.get(
               `https://graph.facebook.com/v18.0/${leadgenId}?fields=created_time,id,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,form_id,field_data`,
               { params: { access_token: pageToken } }
@@ -196,30 +195,23 @@ async function handleMetaWebhook(req, res) {
             // regardless of which brand/client the lead is attached to. A raw INSERT can collide with
             // an existing lead for that phone under a different client, so check by phone first and
             // update that row with the latest touch instead of letting the insert fail silently.
-            const existingByPhone = phone ? await db.query('SELECT id FROM leads WHERE phone = $1', [phone]) : { rows: [] };
-            if (existingByPhone.rows.length > 0) {
-              await db.query(`
-                UPDATE leads SET leadgen_id = $1, meta_lead_id = $1,
-                  lead_ad_form_id = $2, campaign_id = $3, campaign_name = $4, ad_name = $5, ad_id = $6
-                WHERE id = $7
-              `, [leadgenId, formIdStr, campaignIdStr, campaignNameStr, adNameStr, adIdStr, existingByPhone.rows[0].id]);
-              console.log(`Updated existing lead ${existingByPhone.rows[0].id} with latest Meta touch ${leadgenId}`);
+            const existingByPhone = phone ? await Leads.findOne({ phone }, { id: 1 }).lean() : null;
+            if (existingByPhone) {
+              await Leads.updateOne({ id: existingByPhone.id }, { $set: {
+                leadgen_id: leadgenId, meta_lead_id: leadgenId,
+                lead_ad_form_id: formIdStr, campaign_id: campaignIdStr, campaign_name: campaignNameStr, ad_name: adNameStr, ad_id: adIdStr,
+              } });
+              console.log(`Updated existing lead ${existingByPhone.id} with latest Meta touch ${leadgenId}`);
             } else {
-              await db.query(`
-                INSERT INTO leads (name, phone, email, source, status, score, client_id, leadgen_id, meta_lead_id, lead_ad_form_id, campaign_id, campaign_name, ad_name, ad_id)
-                VALUES ($1, $2, $3, 'facebook', 'new', 10, $4, $5, $5, $6, $7, $8, $9, $10)
-                ON CONFLICT (leadgen_id) DO UPDATE SET
-                    status = COALESCE(NULLIF(TRIM(leads.status), ''), 'new'),
-                    lead_ad_form_id = COALESCE(EXCLUDED.lead_ad_form_id, leads.lead_ad_form_id),
-                    campaign_id = COALESCE(EXCLUDED.campaign_id, leads.campaign_id),
-                    campaign_name = COALESCE(EXCLUDED.campaign_name, leads.campaign_name),
-                    ad_name = COALESCE(EXCLUDED.ad_name, leads.ad_name),
-                    ad_id = COALESCE(EXCLUDED.ad_id, leads.ad_id)
-              `, [name || 'FB Lead', phone, email, clientId, leadgenId, formIdStr, campaignIdStr, campaignNameStr, adNameStr, adIdStr]);
+              await upsertMetaLead({
+                name: name || 'FB Lead', phone, email, source: 'facebook', status: 'new', score: 10, client_id: clientId,
+                leadgen_id: leadgenId, meta_lead_id: leadgenId, lead_ad_form_id: formIdStr, campaign_id: campaignIdStr,
+                campaign_name: campaignNameStr, ad_name: adNameStr, ad_id: adIdStr,
+              });
             }
 
-            const newLead = await db.query('SELECT id FROM leads WHERE leadgen_id = $1', [leadgenId]);
-            if(newLead.rows.length) { evaluateLeadBrandAndSchedule(newLead.rows[0].id).catch(console.error); }
+            const newLead = await Leads.findOne({ leadgen_id: leadgenId }, { id: 1 }).lean();
+            if(newLead) { evaluateLeadBrandAndSchedule(newLead.id).catch(console.error); }
             console.log(`Successfully saved Meta lead ${leadgenId}`);
           } catch (err) {
             console.error('Error processing webhook lead:', err.response?.data || err.message);
@@ -236,12 +228,8 @@ async function handleMetaWebhook(req, res) {
 async function syncHistoricalLeads(req, res) {
   const { account_id } = req.body; 
   try {
-    const { rows } = await db.query(`
-      SELECT bsa.*, c.id as client_id 
-      FROM brand_social_accounts bsa
-      LEFT JOIN clients c ON bsa.brand_name = c.name 
-      WHERE bsa.id = $1
-    `, [account_id]);
+    const account = await BrandSocialAccounts.findOne({ id: account_id }, { _id: 0 }).lean();
+    const rows = account ? await withClientIds([account]) : [];
     
     if (rows.length === 0) return res.status(404).json({ error: 'Account not found' });
     
@@ -250,7 +238,7 @@ async function syncHistoricalLeads(req, res) {
     if (!pageId) return res.status(400).json({ error: 'Not a Facebook Page' });
 
     const masterToken = cryptoHelper.decrypt(acc.lead_ads_access_token);
-    const clientId = (await getLeadOSBrand(db)).id;
+    const clientId = (await getLeadOSBrand()).id;
     
     const pageTokenRes = await axios.get(
       `https://graph.facebook.com/v18.0/${pageId}?fields=access_token&access_token=${masterToken}`
@@ -276,8 +264,7 @@ async function syncHistoricalLeads(req, res) {
         const leadgenId = leadData.id;
         
         // We still want to update existing leads with new campaign details if they are missing
-        const checkRes = await db.query('SELECT id, campaign_id FROM leads WHERE leadgen_id = $1', [leadgenId]);
-        const exists = checkRes.rows.length > 0;
+        const exists = Boolean(await Leads.exists({ leadgen_id: leadgenId }));
 
         let email = '', phone = '', name = '';
         if (leadData.field_data) {
@@ -303,41 +290,29 @@ async function syncHistoricalLeads(req, res) {
         // regardless of client_id, so match by phone alone and refresh with the latest touch —
         // otherwise leads for a phone already attached to a different client get silently dropped.
         if (phone) {
-           const pcRes = await db.query('SELECT id FROM leads WHERE phone = $1', [phone]);
-           if (pcRes.rows.length > 0) {
-              await db.query(
-                `UPDATE leads SET leadgen_id = $1, meta_lead_id = $1,
-                  status = COALESCE(NULLIF(TRIM(status), ''), $2),
-                  lead_ad_form_id = $3,
-                  campaign_id = $4,
-                  campaign_name = $5,
-                  ad_name = $6,
-                  ad_id = $7
-                WHERE id = $8`,
-                [leadgenId, syncedStatus, formIdStr, campaignIdStr, campaignNameStr, adNameStr, adIdStr, pcRes.rows[0].id]
-              );
-              await db.query('UPDATE leads SET client_id=$1, updated_at=NOW() WHERE id=$2', [clientId, pcRes.rows[0].id]);
+           const phoneLead = await Leads.findOne({ phone }, { id: 1, status: 1 }).lean();
+           if (phoneLead) {
+              await Leads.updateOne({ id: phoneLead.id }, { $set: {
+                leadgen_id: leadgenId, meta_lead_id: leadgenId,
+                status: hasStatus(phoneLead.status) ? phoneLead.status : syncedStatus,
+                lead_ad_form_id: formIdStr, campaign_id: campaignIdStr, campaign_name: campaignNameStr, ad_name: adNameStr, ad_id: adIdStr,
+              } });
+              await Leads.updateOne({ id: phoneLead.id }, { $set: { client_id: clientId, updated_at: new Date() } });
               totalSynced++;
               continue;
            }
         }
 
         try {
-          await db.query(`
-            INSERT INTO leads (name, phone, email, source, status, score, client_id, leadgen_id, meta_lead_id, created_at, lead_ad_form_id, campaign_id, campaign_name, ad_name, ad_id)
-            VALUES ($1, $2, $3, 'facebook', $4, 10, $5, $6, $6, $7, $8, $9, $10, $11, $12)
-            ON CONFLICT (leadgen_id) DO UPDATE SET 
-                  status = COALESCE(NULLIF(TRIM(leads.status), ''), EXCLUDED.status),
-                  lead_ad_form_id = COALESCE(EXCLUDED.lead_ad_form_id, leads.lead_ad_form_id),
-                  campaign_id = COALESCE(EXCLUDED.campaign_id, leads.campaign_id),
-                  campaign_name = COALESCE(EXCLUDED.campaign_name, leads.campaign_name),
-                  ad_name = COALESCE(EXCLUDED.ad_name, leads.ad_name),
-                  ad_id = COALESCE(EXCLUDED.ad_id, leads.ad_id)
-          `, [name || 'FB Lead', phone, email, syncedStatus, clientId, leadgenId, new Date(leadData.created_time || Date.now()), formIdStr, campaignIdStr, campaignNameStr, adNameStr, adIdStr]);
+          await upsertMetaLead({
+            name: name || 'FB Lead', phone, email, source: 'facebook', status: syncedStatus, score: 10, client_id: clientId,
+            leadgen_id: leadgenId, meta_lead_id: leadgenId, created_at: new Date(leadData.created_time || Date.now()),
+            lead_ad_form_id: formIdStr, campaign_id: campaignIdStr, campaign_name: campaignNameStr, ad_name: adNameStr, ad_id: adIdStr,
+          });
           totalSynced++;
           if (!exists) {
-            const newLead = await db.query('SELECT id FROM leads WHERE leadgen_id = $1', [leadgenId]); 
-            if(newLead.rows.length) { evaluateLeadBrandAndSchedule(newLead.rows[0].id).catch(console.error); }
+            const newLead = await Leads.findOne({ leadgen_id: leadgenId }, { id: 1 }).lean();
+            if(newLead) { evaluateLeadBrandAndSchedule(newLead.id).catch(console.error); }
           }
 
         } catch(e) {
@@ -355,12 +330,10 @@ async function syncHistoricalLeads(req, res) {
 
 async function syncAllHistoricalLeads(req, res) {
   try {
-    const { rows } = await db.query(`
-      SELECT bsa.*, c.id as client_id 
-      FROM brand_social_accounts bsa
-      LEFT JOIN clients c ON bsa.brand_name = c.name 
-      WHERE bsa.platform = 'facebook' AND bsa.is_active = true AND bsa.facebook_page_id IS NOT NULL
-    `);
+    const rows = await withClientIds(await BrandSocialAccounts.find(
+      { platform: 'facebook', is_active: true, facebook_page_id: { $ne: null } },
+      { _id: 0 }
+    ).lean());
     
     // Respond immediately to the frontend to prevent timeouts
     res.json({ success: true, message: 'Sync started in background. It may take a minute.' });
@@ -371,8 +344,8 @@ async function syncAllHistoricalLeads(req, res) {
       for (const acc of rows) {
         const pageId = acc.facebook_page_id;
         const masterToken = cryptoHelper.decrypt(acc.lead_ads_access_token);
-        const clientId = (await getLeadOSBrand(db)).id;
-        
+        const clientId = (await getLeadOSBrand()).id;
+
         try {
           const pageTokenRes = await axios.get(
             `https://graph.facebook.com/v18.0/${pageId}?fields=access_token&access_token=${masterToken}`
@@ -396,8 +369,7 @@ async function syncAllHistoricalLeads(req, res) {
               const leadgenId = leadData.id;
               
               // Update if exists instead of skip
-              const checkRes = await db.query('SELECT id FROM leads WHERE leadgen_id = $1', [leadgenId]);
-              const exists = checkRes.rows.length > 0;
+              const exists = Boolean(await Leads.exists({ leadgen_id: leadgenId }));
 
               let email = '', phone = '', name = '';
               if (leadData.field_data) {
@@ -425,19 +397,13 @@ async function syncAllHistoricalLeads(req, res) {
               if (phone) {
                  // idx_leads_phone_tenant is unique on (phone, tenant_id), not per-client, so match by
                  // phone alone and refresh with the latest touch instead of dropping the insert on conflict.
-                 const pcRes = await db.query('SELECT id FROM leads WHERE phone = $1', [phone]);
-                 if (pcRes.rows.length > 0) {
-                    await db.query(
-                      `UPDATE leads SET leadgen_id = $1, meta_lead_id = $1,
-                        status = COALESCE(NULLIF(TRIM(status), ''), $2),
-                        lead_ad_form_id = $3,
-                        campaign_id = $4,
-                        campaign_name = $5,
-                        ad_name = $6,
-                        ad_id = $7
-                      WHERE id = $8`,
-                      [leadgenId, syncedStatus, formIdStr, campaignIdStr, campaignNameStr, adNameStr, adIdStr, pcRes.rows[0].id]
-                    );
+                 const phoneLead = await Leads.findOne({ phone }, { id: 1, status: 1 }).lean();
+                 if (phoneLead) {
+                    await Leads.updateOne({ id: phoneLead.id }, { $set: {
+                      leadgen_id: leadgenId, meta_lead_id: leadgenId,
+                      status: hasStatus(phoneLead.status) ? phoneLead.status : syncedStatus,
+                      lead_ad_form_id: formIdStr, campaign_id: campaignIdStr, campaign_name: campaignNameStr, ad_name: adNameStr, ad_id: adIdStr,
+                    } });
                     totalSynced++;
                     continue;
                  }
@@ -445,21 +411,15 @@ async function syncAllHistoricalLeads(req, res) {
 
               if (phone) {
                 try {
-                  await db.query(`
-                    INSERT INTO leads (name, phone, email, source, status, score, client_id, leadgen_id, meta_lead_id, created_at, lead_ad_form_id, campaign_id, campaign_name, ad_name, ad_id)
-                    VALUES ($1, $2, $3, 'facebook', $4, 10, $5, $6, $6, $7, $8, $9, $10, $11, $12)
-                    ON CONFLICT (leadgen_id) DO UPDATE SET 
-                      status = COALESCE(NULLIF(TRIM(leads.status), ''), EXCLUDED.status),
-                      lead_ad_form_id = COALESCE(EXCLUDED.lead_ad_form_id, leads.lead_ad_form_id),
-                      campaign_id = COALESCE(EXCLUDED.campaign_id, leads.campaign_id),
-                      campaign_name = COALESCE(EXCLUDED.campaign_name, leads.campaign_name),
-                      ad_name = COALESCE(EXCLUDED.ad_name, leads.ad_name),
-                      ad_id = COALESCE(EXCLUDED.ad_id, leads.ad_id)
-                  `, [name || 'FB Lead', phone, email, syncedStatus, clientId, leadgenId, new Date(leadData.created_time || Date.now()), formIdStr, campaignIdStr, campaignNameStr, adNameStr, adIdStr]);
+                  await upsertMetaLead({
+                    name: name || 'FB Lead', phone, email, source: 'facebook', status: syncedStatus, score: 10, client_id: clientId,
+                    leadgen_id: leadgenId, meta_lead_id: leadgenId, created_at: new Date(leadData.created_time || Date.now()),
+                    lead_ad_form_id: formIdStr, campaign_id: campaignIdStr, campaign_name: campaignNameStr, ad_name: adNameStr, ad_id: adIdStr,
+                  });
                   totalSynced++;
                   if (!exists) {
-                    const newLead = await db.query('SELECT id FROM leads WHERE leadgen_id = $1', [leadgenId]); 
-                    if(newLead.rows.length) { evaluateLeadBrandAndSchedule(newLead.rows[0].id).catch(console.error); }
+                    const newLead = await Leads.findOne({ leadgen_id: leadgenId }, { id: 1 }).lean();
+                    if(newLead) { evaluateLeadBrandAndSchedule(newLead.id).catch(console.error); }
                   }
                 } catch(e) {
                   console.error("Insert error for lead", leadgenId, e.message);

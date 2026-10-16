@@ -1,15 +1,15 @@
 import React from 'react';
-import { roleStyle } from '../utils/roles';
+import { roleStyle, formatRole } from '../utils/roles';
 
 const RoleFilter = ({ users, value, onChange }) => {
-  const roles = [...new Set(users.map((u) => u.role))];
+  const roles = [...new Set(users.map((u) => u.staff_role || u.role).filter(Boolean))];
 
   const tabs = [
     { key: 'all', label: 'All', count: users.length },
     ...roles.map((role) => ({
       key: role,
-      label: role.replace('_', ' '),
-      count: users.filter((u) => u.role === role).length,
+      label: formatRole(role),
+      count: users.filter((u) => (u.staff_role || u.role) === role).length,
     })),
   ];
 

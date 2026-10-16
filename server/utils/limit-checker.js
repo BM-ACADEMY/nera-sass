@@ -1,4 +1,4 @@
-const pool = require('../db/connection');
+const { MafiyaGmbClients, MafiyaPlanFeatures } = require('../models');
 
 /**
  * Checks if a specific feature limit has been reached for a GMB Client.
@@ -13,16 +13,13 @@ const pool = require('../db/connection');
 async function checkLimit(clientId, featureKey, countGetter, dailyCountGetter = null) {
   try {
     // 1. Fetch GMB Client details
-    const clientRes = await pool.query(
-      'SELECT client_type, plan_id FROM mafiya_gmb_clients WHERE id = $1',
-      [clientId]
-    );
+    const client = await MafiyaGmbClients.findOne({ id: clientId }, { client_type: 1, plan_id: 1 }).lean();
 
-    if (clientRes.rows.length === 0) {
+    if (!client) {
       return { allowed: false, error: 'Client not found', limit: 0, current: 0 };
     }
 
-    const { client_type, plan_id } = clientRes.rows[0];
+    const { client_type, plan_id } = client;
 
     // 2. Internal clients are completely unlimited (bypass limits)
     if (!client_type || client_type === 'internal') {
@@ -35,16 +32,16 @@ async function checkLimit(clientId, featureKey, countGetter, dailyCountGetter = 
     }
 
     // 4. Fetch Plan Feature limit
-    const featureRes = await pool.query(
-      'SELECT limit_value, daily_limit FROM mafiya_plan_features WHERE plan_id = $1 AND feature_key = $2',
-      [plan_id, featureKey]
-    );
+    const feature = await MafiyaPlanFeatures.findOne(
+      { plan_id, feature_key: featureKey },
+      { limit_value: 1, daily_limit: 1 }
+    ).lean();
 
     let limit = 0;
     let daily_limit = -1;
-    if (featureRes.rows.length > 0) {
-      limit = featureRes.rows[0].limit_value;
-      daily_limit = featureRes.rows[0].daily_limit !== undefined ? featureRes.rows[0].daily_limit : -1;
+    if (feature) {
+      limit = feature.limit_value;
+      daily_limit = feature.daily_limit !== undefined && feature.daily_limit !== null ? feature.daily_limit : -1;
     }
 
     // -1 represents unlimited on a paid plan

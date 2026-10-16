@@ -1,0 +1,25 @@
+const { defineModel, Mixed } = require('../db/mongo');
+
+module.exports = defineModel('alliance_inbox_messages', {
+  id: { type: Number },
+  conversation_id: { type: Number },
+  contact_id: { type: Number },
+  wa_msg_id: { type: String },
+  direction: { type: String },
+  msg_type: { type: String, default: "text" },
+  content: { type: String },
+  media_id: { type: String },
+  media_url: { type: String },
+  mime_type: { type: String },
+  filename: { type: String },
+  status: { type: String, default: "received" },
+  reply_to_wa_msg_id: { type: String },
+  reactions: { type: Mixed, default: () => ({}) },
+  is_starred: { type: Boolean, default: false },
+  is_deleted: { type: Boolean, default: false },
+  pinned_until: { type: Date },
+  error_message: { type: String },
+  raw_payload: { type: Mixed, default: () => ({}) },
+  sent_at: { type: Date, default: Date.now },
+  created_at: { type: Date, default: Date.now },
+}, { autoId: true, unique: [['wa_msg_id']], indexes: [['conversation_id'], ['contact_id']] });

@@ -1,8 +1,99 @@
 const express = require('express');
+// internalAuth: customer users and n8n acting for one tenant (x-tenant-id).
+// internalPlatformAuth: cross-tenant reports and maintenance — the internal
+// service key or founder/ops platform staff only, never a customer token.
+const { internalAuth, internalPlatformAuth, staffAuth, hasInternalKey } = require('../middleware/authMiddleware');
+const audit = require('../services/audit');
 const fs = require('fs');
 const path = require('path');
 const router = express.Router();
-const pool = require('../db/connection');
+const {
+  Leads,
+  Clients,
+  Conversations,
+  Messages,
+  SalesTasks,
+  SalesLeadNotes,
+  AiDecisions,
+  BrainDocs,
+  CampaignLogs,
+  Campaigns,
+  Templates,
+  Users,
+  WorkflowLogs,
+  Payments,
+  DemoCallReminders,
+  LeadTags,
+  AllianceInboxTags,
+} = require('../models');
+const { NO_ID, ieq, escapeRegex, insertIgnore, phoneTailRegex, withLock } = require('../db/mongo');
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const startOfUtcDay = () => { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d; };
+const startOfUtcMonth = () => { const d = startOfUtcDay(); d.setUTCDate(1); return d; };
+const lower = (value) => String(value ?? '').toLowerCase();
+const leadConversationIds = (leadId) => Conversations.distinct('id', { lead_id: leadId });
+
+// SELECT l.*, <client columns> FROM leads l LEFT JOIN clients c ON l.client_id = c.id WHERE l.id = $1
+async function leadWithClient(leadId, clientColumns = {}) {
+  const lead = await Leads.findOne({ id: leadId }, NO_ID).lean();
+  if (!lead) return null;
+  const client = lead.client_id != null ? await Clients.findOne({ id: lead.client_id }).lean() : null;
+  const extra = Object.fromEntries(Object.entries(clientColumns).map(([alias, column]) => [alias, client ? client[column] ?? null : null]));
+  return { ...lead, ...extra };
+}
+
+// Messages of every conversation belonging to the lead (JOIN conversations c ON c.lead_id = $1)
+async function leadMessages(leadId, filter = {}, { sort = { sent_at: -1 }, limit, projection = NO_ID } = {}) {
+  const conversationIds = await leadConversationIds(leadId);
+  let query = Messages.find({ conversation_id: { $in: conversationIds }, ...filter }, projection).sort(sort);
+  if (limit) query = query.limit(limit);
+  return query.lean();
+}
+const hasText = { content: { $ne: null, $not: /^\s*$/ } };
+
+// Sales task rows shaped like the former SQL join (task + lead + brand + assignee + tags)
+async function loadSalesTaskRows(tasks, { includeLatestNote = false } = {}) {
+  const leads = new Map((await Leads.find({ id: { $in: tasks.map((t) => t.lead_id) } }, NO_ID).lean()).map((l) => [l.id, l]));
+  const clients = new Map((await Clients.find({ id: { $in: [...leads.values()].map((l) => l.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c]));
+  const users = new Map((await Users.find({ id: { $in: [...leads.values()].map((l) => l.assigned_to).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((u) => [u.id, u]));
+  const leadIds = [...leads.keys()];
+  const lastContact = new Map((await Conversations.aggregate([
+    { $match: { lead_id: { $in: leadIds } } },
+    { $group: { _id: '$lead_id', last: { $max: '$last_message_at' } } },
+  ])).map((row) => [row._id, row.last]));
+  const tagLinks = await LeadTags.find({ lead_id: { $in: leadIds } }, { lead_id: 1, tag_id: 1 }).lean();
+  const tags = new Map((await AllianceInboxTags.find({ id: { $in: tagLinks.map((l) => l.tag_id) } }, { id: 1, name: 1, color: 1 }).lean()).map((t) => [t.id, t]));
+  const latestNotes = new Map();
+  if (includeLatestNote) {
+    const notes = await SalesLeadNotes.find({ lead_id: { $in: leadIds } }, { id: 1, lead_id: 1, note: 1, created_at: 1 }).sort({ created_at: -1 }).lean();
+    for (const note of notes) if (!latestNotes.has(note.lead_id)) latestNotes.set(note.lead_id, note);
+  }
+  return tasks.filter((task) => leads.has(task.lead_id)).map((task) => {
+    const l = leads.get(task.lead_id);
+    const note = latestNotes.get(l.id);
+    return {
+      ...task,
+      lead_id: l.id, name: l.name, phone: l.phone, email: l.email,
+      lead_status: l.status, stage: l.stage, source: l.source, interest: l.interest, score: l.score,
+      sales_status: l.sales_status ?? 'new',
+      sales_followup_stopped: l.sales_followup_stopped, sales_followup_at: l.sales_followup_at,
+      ...(includeLatestNote ? {
+        latest_sales_note_id: note?.id ?? null, latest_sales_note: note?.note ?? null, latest_sales_note_at: note?.created_at ?? null,
+      } : {}),
+      call_booked_at: l.call_booked_at, next_followup_due: l.next_followup_due, booking_status: l.booking_status,
+      calendar_event_url: l.calendar_event_url, google_meet_link: l.google_meet_link,
+      last_contact: lastContact.get(l.id) ?? null,
+      lead_created_at: l.created_at,
+      brand_name: clients.get(l.client_id)?.name ?? null,
+      assigned_name: users.get(l.assigned_to)?.name ?? null,
+      tags: tagLinks.filter((link) => link.lead_id === l.id && tags.has(link.tag_id))
+        .map((link) => ({ id: tags.get(link.tag_id).id, name: tags.get(link.tag_id).name, color: tags.get(link.tag_id).color })),
+    };
+  });
+}
+const TASK_FIELDS = { _id: 0, id: 1, lead_id: 1, task_type: 1, status: 1, unread: 1, created_at: 1 };
 const axios = require('axios');
 const { buildBmAcademyCatalog, findBmAcademyCourseFamily, resolveBmAcademyCourseContext } = require('../services/bmAcademySyllabus');
 const googleCalendar = require('../services/googleCalendar');
@@ -40,64 +131,28 @@ const getApprovedBrandData = (brand) => {
 
 const openRouter = require('../services/openrouter');
 const ai = openRouter.isConfigured ? openRouter : null;
-const demoReminderReady = pool.query(`
-  CREATE TABLE IF NOT EXISTS demo_call_reminders (
-    id BIGSERIAL PRIMARY KEY,
-    lead_id BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
-    booking_time TIMESTAMP NOT NULL,
-    reminder_minutes INTEGER NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'processing',
-    message TEXT,
-    wa_message_id TEXT,
-    sent_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE (lead_id, booking_time, reminder_minutes)
-  )
-`).catch(err => console.error('[Demo Reminders] Table initialization failed:', err.message));
-const salesTasksReady = pool.query(`ALTER TABLE sales_tasks ADD COLUMN IF NOT EXISTS unread BOOLEAN NOT NULL DEFAULT TRUE`)
-  .catch(err => console.error('[Sales Tasks] Unread initialization failed:', err.message));
-const salesTrackingReady = pool.query(`
-  ALTER TABLE leads ADD COLUMN IF NOT EXISTS sales_status VARCHAR(30) DEFAULT 'new';
-  ALTER TABLE leads ADD COLUMN IF NOT EXISTS sales_followup_stopped BOOLEAN NOT NULL DEFAULT FALSE;
-  ALTER TABLE leads ADD COLUMN IF NOT EXISTS sales_followup_at TIMESTAMP;
-  ALTER TABLE leads ADD COLUMN IF NOT EXISTS calendar_event_id TEXT;
-  ALTER TABLE leads ADD COLUMN IF NOT EXISTS calendar_event_url TEXT;
-  ALTER TABLE leads ADD COLUMN IF NOT EXISTS google_meet_link TEXT;
-  ALTER TABLE leads ADD COLUMN IF NOT EXISTS booking_status VARCHAR(30);
-  CREATE TABLE IF NOT EXISTS sales_lead_notes (
-    id BIGSERIAL PRIMARY KEY,
-    lead_id BIGINT NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
-    note TEXT NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-  );
-  CREATE INDEX IF NOT EXISTS idx_sales_lead_notes_lead_created ON sales_lead_notes(lead_id, created_at DESC);
-`).catch(err => console.error('[Sales Tracking] Initialization failed:', err.message));
+// Collections are created on demand by MongoDB; these remain for the awaiting call sites.
+const demoReminderReady = Promise.resolve();
+const salesTasksReady = Promise.resolve();
+const salesTrackingReady = Promise.resolve();
 
 async function emitSalesTaskUpdate(req, event, task = null) {
-  const countResult = await pool.query(`SELECT COUNT(*)::int AS count FROM sales_tasks WHERE unread = TRUE AND status <> 'completed'`);
-  req.app.get('io')?.emit('sales_task_update', { event, task, unread_count: countResult.rows[0].count });
+  const unreadCount = await SalesTasks.countDocuments({ unread: true, status: { $ne: 'completed' } });
+  req.app.get('io')?.emit('sales_task_update', { event, task, unread_count: unreadCount });
 }
 
 async function ensureSalesTask(req, leadId, taskType) {
   await salesTasksReady;
-  const result = await pool.query(`
-    INSERT INTO sales_tasks (lead_id, task_type, unread)
-    SELECT $1::bigint, $2::text, TRUE
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM sales_tasks
-      WHERE lead_id = $1::bigint
-        AND task_type = $2::text
-    )
-    RETURNING id, lead_id, task_type, status, unread, created_at
-  `, [leadId, taskType]);
-  if (result.rows[0]) await emitSalesTaskUpdate(req, 'created', result.rows[0]);
-  return result.rows[0] || null;
+  if (await SalesTasks.exists({ lead_id: leadId, task_type: String(taskType) })) return null;
+  const created = await SalesTasks.create({ lead_id: leadId, task_type: String(taskType), unread: true });
+  const task = Object.fromEntries(Object.keys(TASK_FIELDS).filter((k) => k !== '_id').map((k) => [k, created[k]]));
+  await emitSalesTaskUpdate(req, 'created', task);
+  return task;
 }
 
 // Resolve a raw Meta WhatsApp payload synchronously so n8n can continue the
 // same execution with the spoken text instead of ending on an audio placeholder.
-router.post('/whatsapp/transcribe', async (req, res) => {
+router.post('/whatsapp/transcribe', internalAuth, async (req, res) => {
   const payload = req.body?.payload || req.body;
   const value = payload?.entry?.[0]?.changes?.[0]?.value;
   const audio = value?.messages?.[0]?.audio;
@@ -130,10 +185,10 @@ router.post('/whatsapp/transcribe', async (req, res) => {
     }
 
     const phoneNumberId = value?.metadata?.phone_number_id;
-    const clientResult = phoneNumberId
-      ? await pool.query('SELECT wa_access_token FROM clients WHERE phone_number_id = $1 LIMIT 1', [phoneNumberId])
-      : { rows: [] };
-    const waToken = clientResult.rows[0]?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
+    const tokenClient = phoneNumberId
+      ? await Clients.findOne({ phone_number_id: phoneNumberId }, { wa_access_token: 1 }).lean()
+      : null;
+    const waToken = tokenClient?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
     if (!waToken) {
       console.error('[WhatsApp Transcription] No WhatsApp access token configured for phone_number_id', phoneNumberId);
       return fallbackToTypedRequest();
@@ -323,11 +378,10 @@ const guessBrandWithAI = async (message) => {
   const text = String(message || '').trim();
   if (!text || !ai) return null;
   try {
-    const candidates = (await pool.query(
-      `SELECT id, name, type, wa_category, wa_description
-       FROM clients
-       WHERE status = 'active' AND name <> 'ABM Groups'`
-    )).rows;
+    const candidates = await Clients.find(
+      { status: 'active', name: { $nin: ['ABM Groups', null] } },
+      { _id: 0, id: 1, name: 1, type: 1, wa_category: 1, wa_description: 1 }
+    ).lean();
     if (candidates.length === 0) return null;
 
     const brandList = candidates
@@ -514,38 +568,35 @@ async function generateOpenRouterContent(prompt, temperature, maxOutputTokens) {
 const DEFAULT_TENANT_ID = 1;
 
 async function getOrUpsertConversation(lead_id) {
-  const convRes = await pool.query(`SELECT id FROM conversations WHERE lead_id = $1 LIMIT 1`, [lead_id]);
-  if (convRes.rows.length > 0) return convRes.rows[0].id;
+  const existingConversation = await Conversations.findOne({ lead_id }, { id: 1 }).lean();
+  if (existingConversation) return existingConversation.id;
 
-  const leadRes = await pool.query(`SELECT phone FROM leads WHERE id = $1`, [lead_id]);
-  const phone = leadRes.rows[0]?.phone || '';
+  const leadRow = await Leads.findOne({ id: lead_id }, { phone: 1 }).lean();
+  const phone = leadRow?.phone || '';
   const tenant_id = DEFAULT_TENANT_ID;
-  const leadExists = leadRes.rows.length > 0;
+  const leadExists = Boolean(leadRow);
   const safeLeadId = leadExists ? lead_id : null;
 
   if (phone) {
     const phoneDigits = phone.replace(/\D/g, '');
-    const byPhoneRes = await pool.query(`
-      SELECT id FROM conversations 
-      WHERE tenant_id = $1 AND RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 10) = RIGHT($2, 10) 
-      LIMIT 1
-    `, [tenant_id, phoneDigits]);
-    if (byPhoneRes.rows.length > 0) {
-      const existingId = byPhoneRes.rows[0].id;
+    const byPhone = await Conversations.findOne({ phone: phoneTailRegex(phoneDigits) }, { id: 1 }).lean();
+    if (byPhone) {
       if (safeLeadId) {
-        await pool.query(`UPDATE conversations SET lead_id = $1 WHERE id = $2`, [safeLeadId, existingId]);
+        await Conversations.updateOne({ id: byPhone.id }, { $set: { lead_id: safeLeadId } });
       }
-      return existingId;
+      return byPhone.id;
     }
   }
 
-  const newConv = await pool.query(`
-    INSERT INTO conversations (lead_id, tenant_id, phone, status)
-    VALUES ($1, $2, $3, 'open')
-    ON CONFLICT (phone, tenant_id) DO UPDATE SET lead_id = COALESCE(EXCLUDED.lead_id, conversations.lead_id)
-    RETURNING id
-  `, [safeLeadId, tenant_id, phone]);
-  return newConv.rows[0].id;
+  // ON CONFLICT (phone) DO UPDATE SET lead_id = COALESCE(new, old)
+  const samePhone = await Conversations.findOne({ phone }, { id: 1, lead_id: 1 }).lean();
+  if (samePhone) {
+    if (safeLeadId) await Conversations.updateOne({ id: samePhone.id }, { $set: { lead_id: safeLeadId } });
+    return samePhone.id;
+  }
+  void tenant_id; // tenants were removed from this schema
+  const newConv = await Conversations.create({ lead_id: safeLeadId, phone, status: 'open' });
+  return newConv.id;
 }
 
 // Shared helper: sends a real WhatsApp text to a lead and logs it into
@@ -553,11 +604,7 @@ async function getOrUpsertConversation(lead_id) {
 // WF04 journey-action endpoints so each one does real, verifiable work
 // instead of returning a bare {success:true} mock.
 async function sendWhatsAppText(lead_id, content) {
-  const leadRes = await pool.query(`
-    SELECT l.*, c.phone_number_id, c.wa_access_token as client_wa_token
-    FROM leads l LEFT JOIN clients c ON l.client_id = c.id WHERE l.id = $1
-  `, [lead_id]);
-  const lead = leadRes.rows[0];
+  const lead = await leadWithClient(lead_id, { phone_number_id: 'phone_number_id', client_wa_token: 'wa_access_token' });
   if (!lead) return { delivered: false, reason: 'lead_not_found' };
 
   const phoneNumberId = lead.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
@@ -579,29 +626,26 @@ async function sendWhatsAppText(lead_id, content) {
   }
 
   const conversation_id = await getOrUpsertConversation(lead_id);
-  await pool.query(`UPDATE conversations SET last_message = $1, last_message_at = NOW() WHERE id = $2`, [content, conversation_id]);
-  await pool.query(
-    `INSERT INTO messages (conversation_id, direction, msg_type, content, wa_msg_id, status, is_ai, sent_at) VALUES ($1, 'outbound', 'text', $2, $3, $4, false, NOW())`,
-    [conversation_id, content, waMessageId, delivered ? 'sent' : 'failed']
-  );
+  await Conversations.updateOne({ id: conversation_id }, { $set: { last_message: content, last_message_at: new Date() } });
+  await Messages.create({
+    conversation_id, direction: 'outbound', msg_type: 'text', content, wa_msg_id: waMessageId,
+    status: delivered ? 'sent' : 'failed', is_ai: false, sent_at: new Date(),
+  });
 
   return { delivered, wa_msg_id: waMessageId };
 }
 
 // 1. Deduplicate Lead
-router.post('/leads/deduplicate', async (req, res) => {
+router.post('/leads/deduplicate', internalAuth, async (req, res) => {
   const { phone, email } = req.body;
   try {
-    let query = `SELECT id, name, status, score FROM leads WHERE `;
     const conditions = [];
-    const values = [];
-    if (phone) { conditions.push(`phone = $${values.length + 1}`); values.push(phone); }
-    if (email) { conditions.push(`email = $${values.length + 1}`); values.push(email); }
+    if (phone) conditions.push({ phone });
+    if (email) conditions.push({ email });
 
     if (conditions.length === 0) return res.json({ is_duplicate: false });
 
-    query += conditions.join(' OR ') + ' LIMIT 1';
-    const result = await pool.query(query, values);
+    const result = { rows: await Leads.find({ $or: conditions }, { _id: 0, id: 1, name: 1, status: 1, score: 1 }).limit(1).lean() };
 
     if (result.rows.length > 0) {
       res.json({ ...req.body, is_duplicate: true, lead: result.rows[0] });
@@ -614,7 +658,7 @@ router.post('/leads/deduplicate', async (req, res) => {
 });
 
 // 2. Hybrid Brand Detection
-router.post('/brand/detect', async (req, res) => {
+router.post('/brand/detect', internalAuth, async (req, res) => {
   const { phone_number_id, phone, message } = req.body;
   try {
     // AllianceOS owns this WhatsApp number. It must never enter LeadOS AI,
@@ -628,8 +672,7 @@ router.post('/brand/detect', async (req, res) => {
       if (phone_number_id === process.env.WA_PHONE_NUMBER_ID) {
         isManaged = true;
       } else {
-        const clientCheck = await pool.query('SELECT id FROM clients WHERE phone_number_id = $1 LIMIT 1', [phone_number_id]);
-        if (clientCheck.rows.length > 0) isManaged = true;
+        if (await Clients.exists({ phone_number_id })) isManaged = true;
       }
       if (!isManaged) {
         console.log('🚫 [Brand Detect] Halted n8n workflow for unmanaged phone_number_id:', phone_number_id);
@@ -637,23 +680,17 @@ router.post('/brand/detect', async (req, res) => {
       }
     }
 
-    const leadOSBrand = await getLeadOSBrand(pool);
+    const leadOSBrand = await getLeadOSBrand();
     let brandId = leadOSBrand.id;
     let brandName = leadOSBrand.name;
     const explicitBrand = null;
 
     // An explicit keyword is the only reason to switch an existing session.
     if (explicitBrand) {
-      const explicitRes = await pool.query(
-        `SELECT id, name
-         FROM clients
-         WHERE LOWER(name) = LOWER($1)
-         LIMIT 1`,
-        [explicitBrand]
-      );
-      if (explicitRes.rows.length > 0) {
-        brandId = explicitRes.rows[0].id;
-        brandName = explicitRes.rows[0].name;
+      const explicitClient = await Clients.findOne({ name: ieq(explicitBrand) }, { id: 1, name: 1 }).lean();
+      if (explicitClient) {
+        brandId = explicitClient.id;
+        brandName = explicitClient.name;
       }
     }
 
@@ -661,26 +698,24 @@ router.post('/brand/detect', async (req, res) => {
     // already assigned to this WhatsApp number.
     if (!brandId && phone) {
       const digits = String(phone).replace(/\D/g, '');
-      const existingRes = await pool.query(
-        `SELECT c.id, c.name
-         FROM leads l
-         JOIN clients c ON c.id = l.client_id
-         WHERE RIGHT(REGEXP_REPLACE(l.phone, '[^0-9]', '', 'g'), 10) = RIGHT($1, 10)
-         ORDER BY l.updated_at DESC
-         LIMIT 1`,
-        [digits]
-      );
-      if (existingRes.rows.length > 0) {
-        brandId = existingRes.rows[0].id;
-        brandName = existingRes.rows[0].name;
+      const phoneLeads = await Leads.find({ phone: phoneTailRegex(digits), client_id: { $ne: null } }, { client_id: 1, updated_at: 1 })
+        .sort({ updated_at: -1 }).lean();
+      let existingClient = null;
+      for (const phoneLead of phoneLeads) {
+        existingClient = await Clients.findOne({ id: phoneLead.client_id }, { id: 1, name: 1 }).lean();
+        if (existingClient) break;
+      }
+      if (existingClient) {
+        brandId = existingClient.id;
+        brandName = existingClient.name;
       }
     }
 
     if (!brandId && phone_number_id) {
-      const clientRes = await pool.query(`SELECT id, name FROM clients WHERE phone_number_id = $1 LIMIT 1`, [phone_number_id]);
-      if (clientRes.rows.length > 0) {
-        brandId = clientRes.rows[0].id;
-        brandName = clientRes.rows[0].name;
+      const numberClient = await Clients.findOne({ phone_number_id }, { id: 1, name: 1 }).lean();
+      if (numberClient) {
+        brandId = numberClient.id;
+        brandName = numberClient.name;
       }
     }
 
@@ -715,14 +750,14 @@ router.post('/brand/detect', async (req, res) => {
 });
 
 // 3. Create or Update Lead
-router.post('/leads/createOrUpdate', async (req, res) => {
+router.post('/leads/createOrUpdate', internalAuth, async (req, res) => {
   const { name, phone, email, source } = req.body;
   try {
     if (!phone) {
       return res.json({ ...req.body, success: true, lead_id: null, ignored: true });
     }
 
-    const brand_id = (await getLeadOSBrand(pool)).id;
+    const brand_id = (await getLeadOSBrand()).id;
     // This runs on every inbound webhook. A plain SELECT-then-INSERT here lets
     // two near-simultaneous events for the same new phone number (a fast
     // follow-up message, or Meta retrying a slow webhook — most likely on the
@@ -739,34 +774,25 @@ router.post('/leads/createOrUpdate', async (req, res) => {
     // can't be closed with ON CONFLICT; instead take a transaction-scoped
     // advisory lock keyed by the phone number to serialize concurrent
     // requests for the same person before the check-then-insert runs.
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [phone]);
-
-      const check = await client.query(`SELECT id FROM leads WHERE phone = $1 LIMIT 1`, [phone]);
-      let lead_id;
-      if (check.rows.length > 0) {
-        lead_id = check.rows[0].id;
-        await client.query(
-          `UPDATE leads SET name = COALESCE($1, name), email = COALESCE($2, email), source = COALESCE($3, source), client_id = COALESCE($4, client_id), updated_at = NOW() WHERE id = $5`,
-          [name, email, source, brand_id, lead_id]
-        );
-      } else {
-        const insert = await client.query(
-          `INSERT INTO leads (name, phone, email, source, client_id, status, score, next_followup_due) VALUES ($1, $2, $3, $4, $5, 'new', 10, NOW() + INTERVAL '4 hours') RETURNING id`,
-          [name, phone, email, source, brand_id]
-        );
-        lead_id = insert.rows[0].id;
+    // Serialize concurrent requests for the same phone (replaces pg_advisory_xact_lock)
+    const lead_id = await withLock(`lead-phone:${phone}`, async () => {
+      const existing = await Leads.findOne({ phone }, { id: 1 }).lean();
+      if (existing) {
+        const changes = { updated_at: new Date() };
+        if (name != null) changes.name = name;
+        if (email != null) changes.email = email;
+        if (source != null) changes.source = source;
+        if (brand_id != null) changes.client_id = brand_id;
+        await Leads.updateOne({ id: existing.id }, { $set: changes });
+        return existing.id;
       }
-      await client.query('COMMIT');
-      res.json({ ...req.body, success: true, lead_id });
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
+      const created = await Leads.create({
+        name, phone, email, source, client_id: brand_id, status: 'new', score: 10,
+        next_followup_due: new Date(Date.now() + 4 * HOUR_MS),
+      });
+      return created.id;
+    });
+    res.json({ ...req.body, success: true, lead_id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -777,38 +803,25 @@ router.post('/leads/createOrUpdate', async (req, res) => {
 // ==========================================
 
 // 1. Intent Detection
-router.post('/ai/intent', async (req, res) => {
+router.post('/ai/intent', internalAuth, async (req, res) => {
   const { message, brand, lead_id } = req.body;
   try {
     let effectiveBrand = brand || 'ABM Groups';
     const explicitBrand = null;
 
     if (lead_id) {
-      const currentBrandRes = await pool.query(
-        `SELECT c.name
-         FROM leads l
-         LEFT JOIN clients c ON c.id = l.client_id
-         WHERE l.id = $1
-         LIMIT 1`,
-        [lead_id]
-      );
-      const currentBrand = currentBrandRes.rows[0]?.name;
+      const currentLead = await leadWithClient(lead_id, { client_name: 'name' });
+      const currentBrand = currentLead?.client_name ?? undefined;
       effectiveBrand = currentBrand || effectiveBrand;
 
       // Persist a switch only for an unambiguous keyword. Phrases such as
       // "digital marketing" have no explicit target and therefore remain in the
       // current locked brand (e.g. the BM Academy course conversation).
       if (explicitBrand && explicitBrand !== currentBrand) {
-        const targetBrandRes = await pool.query(
-          `SELECT id, name FROM clients WHERE LOWER(name) = LOWER($1) LIMIT 1`,
-          [explicitBrand]
-        );
-        if (targetBrandRes.rows[0]) {
-          await pool.query(
-            `UPDATE leads SET client_id = $1, updated_at = NOW() WHERE id = $2`,
-            [targetBrandRes.rows[0].id, lead_id]
-          );
-          effectiveBrand = targetBrandRes.rows[0].name;
+        const targetClient = await Clients.findOne({ name: ieq(explicitBrand) }, { id: 1, name: 1 }).lean();
+        if (targetClient) {
+          await Leads.updateOne({ id: lead_id }, { $set: { client_id: targetClient.id, updated_at: new Date() } });
+          effectiveBrand = targetClient.name;
         }
       }
     }
@@ -818,36 +831,30 @@ router.post('/ai/intent', async (req, res) => {
       const conversation_id = await getOrUpsertConversation(lead_id);
       // The WhatsApp webhook normally persists this message before n8n runs.
       // Insert only when no matching inbound event was saved in the last minute.
-      const savedMsg = await pool.query(
-        `INSERT INTO messages (conversation_id, direction, msg_type, content, status, is_ai, sent_at)
-         SELECT $1, 'inbound', 'text', $2, 'delivered', false, NOW()
-         WHERE NOT EXISTS (
-           SELECT 1
-           FROM messages
-           WHERE conversation_id = $1
-             AND direction = 'inbound'
-             AND content = $2
-             AND sent_at >= NOW() - INTERVAL '1 minute'
-         )
-         RETURNING id, direction, content, msg_type as type, status, sent_at as timestamp`,
-        [conversation_id, message]
-      );
+      const recentDuplicate = await Messages.exists({
+        conversation_id, direction: 'inbound', content: message, sent_at: { $gte: new Date(Date.now() - 60 * 1000) },
+      });
+      const savedMsg = { rows: [] };
+      if (!recentDuplicate) {
+        const created = await Messages.create({
+          conversation_id, direction: 'inbound', msg_type: 'text', content: message, status: 'delivered', is_ai: false, sent_at: new Date(),
+        });
+        savedMsg.rows.push({ id: created.id, direction: created.direction, content: created.content, type: created.msg_type, status: created.status, timestamp: created.sent_at });
+      }
       if (savedMsg.rows[0]) {
-        await pool.query(`UPDATE conversations SET last_message = $1, last_message_at = NOW(), unread_count = COALESCE(unread_count, 0) + 1 WHERE id = $2`, [message, conversation_id]);
+        await Conversations.updateOne(
+          { id: conversation_id },
+          [{ $set: { last_message: message, last_message_at: '$$NOW', unread_count: { $add: [{ $ifNull: ['$unread_count', 0] }, 1] } } }]
+        );
       }
       const io = req.app.get('io');
       if (io && savedMsg.rows[0]) {
         io.emit('incoming_message', { lead_id: Number(lead_id), message: savedMsg.rows[0] });
       }
-      await pool.query(`
-        UPDATE leads
-        SET touch_count = 0,
-            next_followup_due = NOW() + INTERVAL '4 hours',
-            updated_at = NOW()
-        WHERE id = $1
-          AND status NOT IN ('converted', 'booked', 'opt-out', 'lost')
-          AND call_booked_at IS NULL
-      `, [lead_id]);
+      await Leads.updateOne(
+        { id: lead_id, status: { $nin: ['converted', 'booked', 'opt-out', 'lost', null] }, call_booked_at: null },
+        { $set: { touch_count: 0, next_followup_due: new Date(Date.now() + 4 * HOUR_MS), updated_at: new Date() } }
+      );
     }
 
     const prompt = `Analyze this message in the locked brand '${effectiveBrand}'. What is the user's core intent? Choose one: [PRICING, MORE_INFO, BOOK_CALL, NOT_INTERESTED, GENERAL_CHAT, COMPLAINT]. Message: "${message}". Reply ONLY with the intent and confidence score separated by a comma (e.g. PRICING, 95).`;
@@ -857,7 +864,7 @@ router.post('/ai/intent', async (req, res) => {
     const confidence = parts[1] ? parseInt(parts[1].trim()) : 50;
 
     if (lead_id) {
-      await pool.query(`INSERT INTO ai_decisions (lead_id, module, input, output, confidence) VALUES ($1, $2, $3, $4, $5)`, [lead_id, 'intent_detection', message, intent, confidence]);
+      await AiDecisions.create({ lead_id, module: 'intent_detection', input: message, output: intent, confidence });
     }
     res.json({ ...req.body, brand: effectiveBrand, brand_locked: true, intent, confidence });
   } catch (err) {
@@ -866,7 +873,7 @@ router.post('/ai/intent', async (req, res) => {
 });
 
 // 2. Objection Detection
-router.post('/ai/objections', async (req, res) => {
+router.post('/ai/objections', internalAuth, async (req, res) => {
   const { message, brand, lead_id } = req.body;
   try {
     const prompt = `Analyze this message. Does the user have any objections? Choose one: [TOO_EXPENSIVE, NO_TIME, NOT_SURE, USING_COMPETITOR, NONE]. Message: "${message}". Reply ONLY with the objection type.`;
@@ -887,19 +894,9 @@ const KB_STOP_WORDS = new Set([
 const getRecentChatHistory = async (leadId, limit = 12) => {
   if (!leadId) return [];
 
-  const result = await pool.query(
-    `SELECT m.direction, m.content
-     FROM messages m
-     JOIN conversations c ON c.id = m.conversation_id
-     WHERE c.lead_id = $1
-       AND m.content IS NOT NULL
-       AND BTRIM(m.content) <> ''
-     ORDER BY m.sent_at DESC
-     LIMIT $2`,
-    [leadId, limit]
-  );
+  const rows = await leadMessages(leadId, hasText, { limit, projection: { _id: 0, direction: 1, content: 1 } });
 
-  return result.rows.reverse().map((row) => ({
+  return rows.reverse().map((row) => ({
     role: row.direction === 'inbound' ? 'user' : 'assistant',
     text: row.content,
   }));
@@ -965,7 +962,7 @@ const getRelevantKnowledge = (documents, query = '') => {
 };
 
 // 3. Knowledge Retrieval
-router.post('/kb/search', async (req, res) => {
+router.post('/kb/search', internalAuth, async (req, res) => {
   const { brand, query, lead_id, chat_history } = req.body;
   try {
     // The database is authoritative. Workflow payloads are sometimes empty or
@@ -983,22 +980,16 @@ router.post('/kb/search', async (req, res) => {
     const isBmTechx = ['bmtechx', 'growwithkamar'].includes(normalizedTargetBrand);
     // AIBrainView stores the master multi-brand knowledge under ABM Groups.
     // Load it as a fallback and combine it with any brand-specific documents.
-    const docsRes = await pool.query(
-      `SELECT c.name AS client_name, bd.doc_type, bd.content
-       FROM brain_docs bd
-       JOIN clients c ON c.id = bd.client_id
-       WHERE (LOWER(c.name) = LOWER($1) OR LOWER(c.name) = LOWER('ABM Groups'))
-         AND bd.doc_type IN ('prompt', 'training', 'product', 'pricing')
-       ORDER BY
-         CASE WHEN LOWER(c.name) = LOWER($1) THEN 1 ELSE 0 END,
-         CASE bd.doc_type
-           WHEN 'prompt' THEN 1
-           WHEN 'product' THEN 2
-           WHEN 'pricing' THEN 3
-           WHEN 'training' THEN 4
-         END`,
-      [targetBrand]
-    );
+    const brainClients = await Clients.find({ $or: [{ name: ieq(targetBrand) }, { name: /^abm groups$/i }] }, { id: 1, name: 1 }).lean();
+    const brainClientById = new Map(brainClients.map((c) => [c.id, c]));
+    const docTypeRank = { prompt: 1, product: 2, pricing: 3, training: 4 };
+    const docsRes = { rows: (await BrainDocs.find(
+      { client_id: { $in: [...brainClientById.keys()] }, doc_type: { $in: ['prompt', 'training', 'product', 'pricing'] } },
+      { client_id: 1, doc_type: 1, content: 1 }
+    ).lean())
+      .map((doc) => ({ client_name: brainClientById.get(doc.client_id).name, doc_type: doc.doc_type, content: doc.content }))
+      .sort((a, b) => (lower(a.client_name) === lower(targetBrand) ? 1 : 0) - (lower(b.client_name) === lower(targetBrand) ? 1 : 0)
+        || docTypeRank[a.doc_type] - docTypeRank[b.doc_type]) };
 
     const knowledgeDocs = docsRes.rows
       .filter((doc) => ['prompt', 'product', 'pricing'].includes(doc.doc_type)
@@ -1059,7 +1050,7 @@ When the user asks for a syllabus, resolve which course(s) they mean from the cu
 });
 
 // 4. Generate AI Response
-router.post('/ai/response', async (req, res) => {
+router.post('/ai/response', internalAuth, async (req, res) => {
   const { brand, intent, message, kb_snippets, system_instructions, lead_id, chat_history, name } = req.body;
   try {
     let leadName = name || '';
@@ -1070,14 +1061,11 @@ router.post('/ai/response', async (req, res) => {
     let effectiveMessage = String(message || '').trim();
     let isFirstLeadInteraction = false;
     if (lead_id) {
-      const leadContext = await pool.query(
-        `SELECT l.name, l.email, l.phone, c.name AS brand_name, c.wa_address AS brand_address
-         FROM leads l
-         LEFT JOIN clients c ON c.id = l.client_id
-         WHERE l.id = $1
-         LIMIT 1`,
-        [lead_id]
-      );
+      const contextLead = await leadWithClient(lead_id, { brand_name: 'name', brand_address: 'wa_address' });
+      const leadContext = { rows: contextLead ? [{
+        name: contextLead.name, email: contextLead.email, phone: contextLead.phone,
+        brand_name: contextLead.brand_name, brand_address: contextLead.brand_address,
+      }] : [] };
       leadName = leadContext.rows[0]?.name || leadName;
       leadEmail = leadContext.rows[0]?.email || '';
       leadPhone = leadContext.rows[0]?.phone || '';
@@ -1087,32 +1075,19 @@ router.post('/ai/response', async (req, res) => {
       // A stale/pinned n8n execution can carry the previous turn (commonly
       // "hi") even after the customer's newer question has been persisted.
       // Prefer that newer inbound text before applying the greeting shortcut.
-      const latestInboundRes = await pool.query(
-        `SELECT m.content
-         FROM messages m
-         JOIN conversations c ON c.id = m.conversation_id
-         WHERE c.lead_id = $1
-           AND m.direction = 'inbound'
-           AND m.content IS NOT NULL
-           AND BTRIM(m.content) <> ''
-         ORDER BY m.sent_at DESC, m.id DESC
-         LIMIT 1`,
-        [lead_id]
-      );
-      const latestInbound = String(latestInboundRes.rows[0]?.content || '').trim();
+      const [latestInboundRow] = await leadMessages(lead_id, { direction: 'inbound', ...hasText }, {
+        sort: { sent_at: -1, id: -1 }, limit: 1, projection: { _id: 0, content: 1 },
+      });
+      const latestInbound = String(latestInboundRow?.content || '').trim();
 
       // Keep the first LeadOS welcome deterministic and contact-aware. This
       // prevents brand training or long form submissions from changing the
       // opening message for each new lead.
-      const interactionCounts = await pool.query(
-        `SELECT
-           COUNT(*) FILTER (WHERE m.direction = 'inbound')::int AS inbound_count,
-           COUNT(*) FILTER (WHERE m.direction = 'outbound')::int AS outbound_count
-         FROM messages m
-         JOIN conversations c ON c.id = m.conversation_id
-         WHERE c.lead_id = $1`,
-        [lead_id]
-      );
+      const interactionConversationIds = await leadConversationIds(lead_id);
+      const interactionCounts = { rows: [{
+        inbound_count: await Messages.countDocuments({ conversation_id: { $in: interactionConversationIds }, direction: 'inbound' }),
+        outbound_count: await Messages.countDocuments({ conversation_id: { $in: interactionConversationIds }, direction: 'outbound' }),
+      }] };
       isFirstLeadInteraction = Number(interactionCounts.rows[0]?.inbound_count || 0) === 1
         && Number(interactionCounts.rows[0]?.outbound_count || 0) === 0;
       const requestIsGreeting = /^(hi+|hello+|hey+|vanakkam)[\s!.,👋😊🙏]*$/iu.test(effectiveMessage);
@@ -1132,13 +1107,10 @@ router.post('/ai/response', async (req, res) => {
       // business can guide response content, but never mutate lead ownership.
       const explicitBrand = null;
       if (explicitBrand && explicitBrand !== persistedBrand) {
-        const targetBrand = await pool.query(
-          `SELECT id,name FROM clients WHERE LOWER(name)=LOWER($1) LIMIT 1`,
-          [explicitBrand]
-        );
-        if (targetBrand.rows[0]) {
-          persistedBrand = targetBrand.rows[0].name;
-          await pool.query(`UPDATE leads SET client_id=$1,updated_at=NOW() WHERE id=$2`, [targetBrand.rows[0].id, lead_id]);
+        const targetBrand = await Clients.findOne({ name: ieq(explicitBrand) }, { id: 1, name: 1 }).lean();
+        if (targetBrand) {
+          persistedBrand = targetBrand.name;
+          await Leads.updateOne({ id: lead_id }, { $set: { client_id: targetBrand.id, updated_at: new Date() } });
         }
       }
     }
@@ -1158,24 +1130,21 @@ router.post('/ai/response', async (req, res) => {
     // on the prompt alone to override that "sticky brand" framing was not
     // reliable, so this is enforced here instead of left to the model.
     if (lead_id) {
-      const lastCampaignRes = await pool.query(`
-        SELECT clg.sent_at
-        FROM campaign_logs clg
-        JOIN campaigns camp ON camp.id = clg.campaign_id
-        JOIN templates t ON t.id = camp.template_id
-        WHERE clg.lead_id = $1 AND clg.status != 'failed' AND t.name = 'hiring_template'
-        ORDER BY clg.sent_at DESC
-        LIMIT 1
-      `, [lead_id]);
+      const hiringTemplateIds = await Templates.distinct('id', { name: 'hiring_template' });
+      const hiringCampaignIds = await Campaigns.distinct('id', { template_id: { $in: hiringTemplateIds } });
+      const lastCampaignLog = await CampaignLogs.findOne(
+        { lead_id, status: { $nin: ['failed', null] }, campaign_id: { $in: hiringCampaignIds } },
+        { sent_at: 1 }
+      ).sort({ sent_at: -1 }).lean();
 
-      if (lastCampaignRes.rows.length > 0) {
-        const replyCountRes = await pool.query(`
-          SELECT COUNT(*) FROM messages m
-          JOIN conversations c ON c.id = m.conversation_id
-          WHERE c.lead_id = $1 AND m.direction = 'inbound' AND m.sent_at > $2
-        `, [lead_id, lastCampaignRes.rows[0].sent_at]);
+      if (lastCampaignLog) {
+        const replyCount = await Messages.countDocuments({
+          conversation_id: { $in: await leadConversationIds(lead_id) },
+          direction: 'inbound',
+          sent_at: { $gt: lastCampaignLog.sent_at },
+        });
 
-        if (parseInt(replyCountRes.rows[0].count, 10) === 1) {
+        if (replyCount === 1) {
           const ai_reply = 'For more details, kindly call this number: 9944940051.';
           return res.json({ ...req.body, brand: persistedBrand, name: leadName, ai_reply });
         }
@@ -1353,11 +1322,11 @@ router.post('/ai/response', async (req, res) => {
 
       if (lead_id) {
          if (extractedData.extracted_name) {
-           await pool.query(`UPDATE leads SET name = $1 WHERE id = $2`, [extractedData.extracted_name, lead_id]);
+           await Leads.updateOne({ id: lead_id }, { $set: { name: extractedData.extracted_name } });
          }
          if (extractedData.extracted_email) {
            leadEmail = String(extractedData.extracted_email).trim();
-           await pool.query(`UPDATE leads SET email = $1, updated_at = NOW() WHERE id = $2`, [leadEmail, lead_id]);
+           await Leads.updateOne({ id: lead_id }, { $set: { email: leadEmail, updated_at: new Date() } });
          }
 
          // The model decided the lead wants to cancel (language understanding);
@@ -1368,11 +1337,10 @@ router.post('/ai/response', async (req, res) => {
            try {
              const cancelResult = await googleCalendar.cancelMeeting(lead_id);
              if (cancelResult.cancelled) {
-               await pool.query(`
-                 UPDATE leads SET booking_status = 'cancelled', calendar_event_id = NULL,
-                   calendar_event_url = NULL, google_meet_link = NULL, call_booked_at = NULL, updated_at = NOW()
-                 WHERE id = $1
-               `, [lead_id]);
+               await Leads.updateOne({ id: lead_id }, { $set: {
+                 booking_status: 'cancelled', calendar_event_id: null, calendar_event_url: null,
+                 google_meet_link: null, call_booked_at: null, updated_at: new Date(),
+               } });
                ai_reply = 'Your meeting has been cancelled.';
              } else {
                ai_reply = "I couldn't find an upcoming meeting booked for you to cancel.";
@@ -1393,7 +1361,7 @@ router.post('/ai/response', async (req, res) => {
          if (extractedData.extracted_booking_time) {
            if (!leadEmail) {
              ai_reply = 'Please share your email address so I can check the slot and send the Calendar and Google Meet invitation.';
-             await pool.query(`UPDATE leads SET booking_status = 'awaiting_email', updated_at = NOW() WHERE id = $1`, [lead_id]);
+             await Leads.updateOne({ id: lead_id }, { $set: { booking_status: 'awaiting_email', updated_at: new Date() } });
              return res.json({ ...req.body, ai_reply, booking_status: 'awaiting_email' });
            }
            try {
@@ -1407,11 +1375,11 @@ router.post('/ai/response', async (req, res) => {
                notes: `Booked from the LeadOS WhatsApp AI conversation.`,
              });
              if (calendarBooking.booked) {
-               await pool.query(`
-                 UPDATE leads SET call_booked_at = $1, status = 'booked', booking_status = 'confirmed',
-                   calendar_event_id = $2, calendar_event_url = $3, google_meet_link = $4, updated_at = NOW()
-                 WHERE id = $5
-               `, [calendarBooking.start, calendarBooking.event_id, calendarBooking.event_url, calendarBooking.meet_link, lead_id]);
+               await Leads.updateOne({ id: lead_id }, { $set: {
+                 call_booked_at: calendarBooking.start, status: 'booked', booking_status: 'confirmed',
+                 calendar_event_id: calendarBooking.event_id, calendar_event_url: calendarBooking.event_url,
+                 google_meet_link: calendarBooking.meet_link, updated_at: new Date(),
+               } });
                await ensureSalesTask(req, lead_id, 'call');
                try {
                  await sendBookingNotification({
@@ -1431,13 +1399,13 @@ router.post('/ai/response', async (req, res) => {
                ai_reply = `Your meeting is confirmed for ${new Date(calendarBooking.start).toLocaleString('en-IN', { timeZone: googleCalendar.TIME_ZONE, dateStyle: 'medium', timeStyle: 'short' })}.${calendarBooking.meet_link ? ` Google Meet: ${calendarBooking.meet_link}` : ''}`;
                console.log(`[AI Booking] Lead ${lead_id} booked in Google Calendar for ${calendarBooking.start}`);
              } else {
-               await pool.query(`UPDATE leads SET booking_status = 'slot_unavailable', updated_at = NOW() WHERE id = $1`, [lead_id]);
+               await Leads.updateOne({ id: lead_id }, { $set: { booking_status: 'slot_unavailable', updated_at: new Date() } });
                ai_reply = 'That time is already occupied. Please share another preferred date and time, and I’ll check availability.';
              }
            } catch (calendarError) {
              const calendarDisconnected = /not connected|oauth is not configured|refresh token/i.test(calendarError.message);
              const failedStatus = calendarDisconnected ? 'calendar_not_connected' : 'calendar_error';
-             await pool.query(`UPDATE leads SET booking_status = $1, updated_at = NOW() WHERE id = $2`, [failedStatus, lead_id]);
+             await Leads.updateOne({ id: lead_id }, { $set: { booking_status: failedStatus, updated_at: new Date() } });
              await ensureSalesTask(req, lead_id, 'hot_lead');
              ai_reply = 'I’m unable to verify Calendar availability right now, so your meeting is not booked yet. Please try again shortly.';
              console.error('[AI Booking] Calendar automation failed:', calendarError.message);
@@ -1481,7 +1449,7 @@ router.post('/ai/response', async (req, res) => {
 });
 
 // 5. Qualify And Score - DETERMINISTIC FORMULA (no LLM involvement)
-router.post('/leads/score', async (req, res) => {
+router.post('/leads/score', internalAuth, async (req, res) => {
   const { lead_id, message, intent, objections } = req.body;
   try {
     let scoreBoost = 0;
@@ -1501,10 +1469,12 @@ router.post('/leads/score', async (req, res) => {
       if (obj.includes('using_competitor')) scoreBoost -= 10;
     }
 
-    const result = await pool.query(
-      `UPDATE leads SET score = LEAST(GREATEST(score + $1, 0), 100), updated_at = NOW() WHERE id = $2 RETURNING score`,
-      [scoreBoost, lead_id]
-    );
+    const scored = await Leads.findOneAndUpdate(
+      { id: lead_id },
+      [{ $set: { score: { $min: [{ $max: [{ $add: ['$score', Number(scoreBoost)] }, 0] }, 100] }, updated_at: '$$NOW' } }],
+      { new: true, projection: { _id: 0, score: 1 } }
+    ).lean();
+    const result = { rows: scored ? [scored] : [] };
 
     console.log(`[Lead Scoring] Lead ${lead_id}: intent=${intent}, objections=${objections}, boost=${scoreBoost}, new_score=${result.rows[0]?.score}`);
     res.json({ ...req.body, lead_score: result.rows[0]?.score || 10 });
@@ -1514,23 +1484,21 @@ router.post('/leads/score', async (req, res) => {
 });
 
 // 6. Assign Owner
-router.post('/leads/assign-owner', async (req, res) => {
+router.post('/leads/assign-owner', internalAuth, async (req, res) => {
   const { lead_id, brand, lead_score, intent } = req.body;
   try {
     let owner = 'System (AI)';
     if (lead_score >= 75) {
       // For hot leads, try to find a real human user; fallback to 'Sales Team' group
-      const userRes = await pool.query(
-        `SELECT id FROM users WHERE role IN ('admin', 'agent', 'sales') AND is_active = true ORDER BY created_at ASC LIMIT 1`
-      );
-      if (userRes.rows.length > 0) {
-        owner = String(userRes.rows[0].id);
+      const salesUser = await Users.findOne({ role: { $in: ['admin', 'agent', 'sales'] }, is_active: true }, { id: 1 }).sort({ created_at: 1 }).lean();
+      if (salesUser) {
+        owner = String(salesUser.id);
       } else {
         owner = 'Sales Team';
       }
     }
 
-    await pool.query(`UPDATE leads SET owner = $1 WHERE id = $2`, [owner, lead_id]);
+    await Leads.updateOne({ id: lead_id }, { $set: { owner } });
     if (lead_score >= 75) await ensureSalesTask(req, lead_id, 'hot_lead');
     res.json({ ...req.body, owner });
   } catch (err) {
@@ -1539,7 +1507,7 @@ router.post('/leads/assign-owner', async (req, res) => {
 });
 
 // 7. Update CRM
-router.post('/leads/update', async (req, res) => {
+router.post('/leads/update', internalAuth, async (req, res) => {
   const { lead_id, stage, owner, lead_score, intent } = req.body;
   try {
     let status = 'new';
@@ -1547,10 +1515,11 @@ router.post('/leads/update', async (req, res) => {
     else if (lead_score >= 40) status = 'warm';
     else if (lead_score < 10) status = 'cold';
 
-    await pool.query(
-      `UPDATE leads SET status = COALESCE($1, status), owner = COALESCE($2, owner), updated_at = NOW() WHERE id = $3`,
-      [status, owner, lead_id]
-    );
+    await Leads.updateOne({ id: lead_id }, { $set: {
+      ...(status != null ? { status } : {}),
+      ...(owner != null ? { owner } : {}),
+      updated_at: new Date(),
+    } });
     if (status === 'hot') await ensureSalesTask(req, lead_id, 'hot_lead');
     res.json({ ...req.body, success: true, status });
   } catch (err) {
@@ -1560,21 +1529,14 @@ router.post('/leads/update', async (req, res) => {
 });
 
 // 8. Send Communication
-router.post('/communication/send', async (req, res) => {
+router.post('/communication/send', internalAuth, async (req, res) => {
   const { lead_id, channel, type, content } = req.body;
   try {
     const safeContent = content || "Thank you for reaching out to ABM Groups! We have received your message and will get back to you shortly.";
     const msgType = type || 'text';
 
     // 1. Fetch lead & client details to get phone number, phone_number_id, and access token for Meta Cloud API
-    const leadRes = await pool.query(`
-      SELECT l.*, c.phone_number_id, c.wa_access_token as client_wa_token
-      FROM leads l
-      LEFT JOIN clients c ON l.client_id = c.id
-      WHERE l.id = $1
-    `, [lead_id]);
-
-    const lead = leadRes.rows[0];
+    const lead = await leadWithClient(lead_id, { phone_number_id: 'phone_number_id', client_wa_token: 'wa_access_token' });
     const phoneNumberId = lead?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
     const waAccessToken = lead?.client_wa_token || process.env.META_PAGE_ACCESS_TOKEN;
 
@@ -1605,18 +1567,17 @@ router.post('/communication/send', async (req, res) => {
 
     // 3. Upsert conversation in DB and update last_message timestamp so it jumps to top of LeadOS Inbox!
     const conversation_id = await getOrUpsertConversation(lead_id);
-    await pool.query(`
-      UPDATE conversations
-      SET last_message = $1,
-          last_message_at = NOW()
-      WHERE id = $2
-    `, [safeContent, conversation_id]);
+    await Conversations.updateOne({ id: conversation_id }, { $set: { last_message: safeContent, last_message_at: new Date() } });
 
     // 4. Insert message into messages table
-    const { rows: savedRows } = await pool.query(
-      `INSERT INTO messages (conversation_id, direction, msg_type, content, wa_msg_id, status, is_ai, sent_at) VALUES ($1, 'outbound', $2, $3, $4, 'sent', true, NOW()) RETURNING id, direction, content, msg_type as type, wa_msg_id, status, is_ai, sent_at as timestamp`,
-      [conversation_id, msgType, safeContent, waMessageId]
-    );
+    const savedMessage = await Messages.create({
+      conversation_id, direction: 'outbound', msg_type: msgType, content: safeContent, wa_msg_id: waMessageId,
+      status: 'sent', is_ai: true, sent_at: new Date(),
+    });
+    const savedRows = [{
+      id: savedMessage.id, direction: savedMessage.direction, content: savedMessage.content, type: savedMessage.msg_type,
+      wa_msg_id: savedMessage.wa_msg_id, status: savedMessage.status, is_ai: savedMessage.is_ai, timestamp: savedMessage.sent_at,
+    }];
 
     // 5. Emit real-time Socket.IO event so LeadOS WhatsApp Inbox UI updates instantly without page refresh
     try {
@@ -1639,7 +1600,7 @@ router.post('/communication/send', async (req, res) => {
 });
 
 // ─── SEND TO FOUNDER (WF06 REPORT) ──────────────────────
-router.post('/communication/send-founder', async (req, res) => {
+router.post('/communication/send-founder', internalAuth, async (req, res) => {
   const { channel, type, content } = req.body;
   try {
     const founderPhone = process.env.FOUNDER_WHATSAPP_PHONE || '8807226257';
@@ -1671,10 +1632,7 @@ router.post('/communication/send-founder', async (req, res) => {
     }
 
     // Automatically log this as a Workflow Log so the UI can display it in FounderReportsView
-    await pool.query(
-      `INSERT INTO workflow_logs (workflow, status, message) VALUES ($1, $2, $3)`,
-      ['WF06', 'success', content]
-    );
+    await WorkflowLogs.create({ workflow: 'WF06', status: 'success', message: content });
 
     res.json({ success: true, delivered: true, content, wa_msg_id: waMessageId });
   } catch (err) {
@@ -1684,60 +1642,60 @@ router.post('/communication/send-founder', async (req, res) => {
 });
 
 // 9. Workflow Logger
-router.post('/workflows/log', async (req, res) => {
+router.post('/workflows/log', internalAuth, async (req, res) => {
   const { workflow, lead_id, status, message } = req.body;
   try {
-    await pool.query(
-      `INSERT INTO workflow_logs (workflow, lead_id, status, message) VALUES ($1, $2, $3, $4)`,
-      [workflow, lead_id, status, message || null]
-    );
+    await WorkflowLogs.create({ workflow, lead_id: lead_id == null ? lead_id : String(lead_id), status, message: message || null });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/workflows/logs', async (req, res) => {
+router.get('/workflows/logs', internalPlatformAuth, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT w.id, w.workflow, w.lead_id, w.status, w.message, w.created_at, 
-             l.name as lead_name, l.source, l.campaign_name, l.campaign_id, 
-             l.ad_name, l.ad_id, l.lead_ad_form_id, l.meta_lead_id, l.phone, l.email
-      FROM workflow_logs w
-      LEFT JOIN leads l ON w.lead_id = CAST(l.id AS TEXT)
-      ORDER BY w.created_at DESC
-      LIMIT 1000
-    `);
-    res.json({ logs: result.rows });
+    const logs = await WorkflowLogs.find({}, { _id: 0, id: 1, workflow: 1, lead_id: 1, status: 1, message: 1, created_at: 1 })
+      .sort({ created_at: -1 }).limit(1000).lean();
+    const logLeadIds = [...new Set(logs.map((w) => Number(w.lead_id)).filter(Number.isFinite))];
+    const logLeads = new Map((await Leads.find({ id: { $in: logLeadIds } }, {
+      id: 1, name: 1, source: 1, campaign_name: 1, campaign_id: 1, ad_name: 1, ad_id: 1, lead_ad_form_id: 1, meta_lead_id: 1, phone: 1, email: 1,
+    }).lean()).map((l) => [String(l.id), l]));
+    const rows = logs.map((w) => {
+      const l = logLeads.get(String(w.lead_id));
+      return {
+        ...w,
+        lead_name: l?.name ?? null, source: l?.source ?? null, campaign_name: l?.campaign_name ?? null, campaign_id: l?.campaign_id ?? null,
+        ad_name: l?.ad_name ?? null, ad_id: l?.ad_id ?? null, lead_ad_form_id: l?.lead_ad_form_id ?? null,
+        meta_lead_id: l?.meta_lead_id ?? null, phone: l?.phone ?? null, email: l?.email ?? null,
+      };
+    });
+    res.json({ logs: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/workflows/logs/:id', async (req, res) => {
+router.delete('/workflows/logs/:id', internalPlatformAuth, async (req, res) => {
   try {
-    const result = await pool.query('DELETE FROM workflow_logs WHERE id = $1 RETURNING id', [req.params.id]);
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Log not found' });
+    const result = await WorkflowLogs.deleteOne({ id: req.params.id });
+    if (result.deletedCount === 0) return res.status(404).json({ error: 'Log not found' });
     res.json({ success: true, deleted_id: req.params.id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/workflows/telemetry', async (req, res) => {
+router.get('/workflows/telemetry', internalPlatformAuth, async (req, res) => {
   try {
     // 1. Total executions
-    const totalRes = await pool.query(`SELECT COUNT(*) as count FROM workflow_logs`);
-    const totalExecutions = parseInt(totalRes.rows[0].count) || 0;
+    const totalExecutions = await WorkflowLogs.countDocuments();
 
     // 2. Success Rate
-    const successRes = await pool.query(`SELECT COUNT(*) as count FROM workflow_logs WHERE status = 'success'`);
-    const successCount = parseInt(successRes.rows[0].count) || 0;
+    const successCount = await WorkflowLogs.countDocuments({ status: 'success' });
     const successRate = totalExecutions > 0 ? Math.round((successCount / totalExecutions) * 100) : 100;
 
     // 3. AI Interventions
-    const aiRes = await pool.query(`SELECT COUNT(*) as count FROM ai_decisions`);
-    const aiInterventions = parseInt(aiRes.rows[0].count) || 0;
+    const aiInterventions = await AiDecisions.countDocuments();
 
     res.json({
       telemetry: {
@@ -1758,67 +1716,52 @@ router.get('/workflows/telemetry', async (req, res) => {
 
 // Authoritative WF06 snapshot. Starting from clients guarantees that every
 // configured brand is present, including brands which currently have no data.
-router.get('/reports/founder-dashboard', async (req, res) => {
+router.get('/reports/founder-dashboard', internalPlatformAuth, async (req, res) => {
   try {
-    const [brandResult, sourceResult] = await Promise.all([
-      pool.query(`
-        SELECT c.id AS brand_id, c.name AS brand, c.status AS brand_status,
-               COALESCE(l.total_leads, 0)::int AS leads,
-               COALESCE(l.new_today, 0)::int AS leads_today,
-               COALESCE(l.conversions, 0)::int AS conversions,
-               COALESCE(l.hot_leads, 0)::int AS hot_leads,
-               COALESCE(l.followups_pending, 0)::int AS followups_pending,
-               COALESCE(cv.conversations, 0)::int AS conversations,
-               COALESCE(cv.conversations_today, 0)::int AS conversations_today,
-               COALESCE(cp.campaigns, 0)::int AS campaigns,
-               COALESCE(cp.active_campaigns, 0)::int AS active_campaigns,
-               COALESCE(p.revenue, 0)::numeric AS revenue,
-               COALESCE(p.revenue_today, 0)::numeric AS revenue_today,
-               COALESCE(p.revenue_month, 0)::numeric AS revenue_month
-        FROM clients c
-        LEFT JOIN LATERAL (
-          SELECT COUNT(*) AS total_leads,
-                 COUNT(*) FILTER (WHERE leads.created_at >= CURRENT_DATE) AS new_today,
-                 COUNT(*) FILTER (WHERE LOWER(COALESCE(leads.status, '')) = 'converted') AS conversions,
-                 COUNT(*) FILTER (WHERE LOWER(COALESCE(leads.status, '')) = 'hot') AS hot_leads,
-                 COUNT(*) FILTER (WHERE leads.next_followup_due IS NOT NULL
-                   AND LOWER(COALESCE(leads.status, '')) NOT IN ('converted', 'closed', 'lost', 'opt-out')) AS followups_pending
-          FROM leads WHERE leads.client_id = c.id
-        ) l ON TRUE
-        LEFT JOIN LATERAL (
-          SELECT COUNT(*) AS conversations,
-                 COUNT(*) FILTER (WHERE conversations.created_at >= CURRENT_DATE) AS conversations_today
-          FROM conversations
-          JOIN leads conversation_leads ON conversation_leads.id = conversations.lead_id
-          WHERE conversation_leads.client_id = c.id
-        ) cv ON TRUE
-        LEFT JOIN LATERAL (
-          SELECT COUNT(*) AS campaigns,
-                 COUNT(*) FILTER (WHERE campaigns.status IN ('scheduled', 'running')) AS active_campaigns
-          FROM campaigns WHERE campaigns.client_id = c.id
-        ) cp ON TRUE
-        LEFT JOIN LATERAL (
-          SELECT COALESCE(SUM(payments.amount) FILTER (WHERE payments.status = 'captured'), 0) AS revenue,
-                 COALESCE(SUM(payments.amount) FILTER (WHERE payments.status = 'captured'
-                   AND payments.created_at >= CURRENT_DATE), 0) AS revenue_today,
-                 COALESCE(SUM(payments.amount) FILTER (WHERE payments.status = 'captured'
-                   AND payments.created_at >= date_trunc('month', CURRENT_DATE)), 0) AS revenue_month
-          FROM payments
-          JOIN leads payment_leads ON payment_leads.id = payments.lead_id
-          WHERE payment_leads.client_id = c.id
-        ) p ON TRUE
-        ORDER BY c.name
-      `),
-      pool.query(`
-        SELECT COALESCE(c.name, 'Unassigned') AS brand,
-               COALESCE(NULLIF(TRIM(l.source), ''), 'Unknown') AS source,
-               COUNT(*)::int AS count
-        FROM leads l
-        LEFT JOIN clients c ON c.id = l.client_id
-        GROUP BY COALESCE(c.name, 'Unassigned'), COALESCE(NULLIF(TRIM(l.source), ''), 'Unknown')
-        ORDER BY brand, count DESC
-      `),
+    const today = startOfUtcDay();
+    const monthStart = startOfUtcMonth();
+    const [allClients, allLeads, allConversations, allCampaigns, allPayments] = await Promise.all([
+      Clients.find({}, { id: 1, name: 1, status: 1 }).sort({ name: 1 }).lean(),
+      Leads.find({}, { id: 1, client_id: 1, status: 1, created_at: 1, next_followup_due: 1, source: 1 }).lean(),
+      Conversations.find({}, { lead_id: 1, created_at: 1 }).lean(),
+      Campaigns.find({}, { client_id: 1, status: 1 }).lean(),
+      Payments.find({ status: 'captured' }, { lead_id: 1, amount: 1, created_at: 1 }).lean(),
     ]);
+    const clientOfLead = new Map(allLeads.map((l) => [l.id, l.client_id]));
+    const brandResult = { rows: allClients.map((c) => {
+      const leads = allLeads.filter((l) => l.client_id === c.id);
+      const conversations = allConversations.filter((cv) => clientOfLead.get(cv.lead_id) === c.id);
+      const campaigns = allCampaigns.filter((cp) => cp.client_id === c.id);
+      const payments = allPayments.filter((p) => clientOfLead.get(p.lead_id) === c.id);
+      const sum = (items) => items.reduce((total, p) => total + (Number(p.amount) || 0), 0);
+      return {
+        brand_id: c.id, brand: c.name, brand_status: c.status,
+        leads: leads.length,
+        leads_today: leads.filter((l) => l.created_at >= today).length,
+        conversions: leads.filter((l) => lower(l.status) === 'converted').length,
+        hot_leads: leads.filter((l) => lower(l.status) === 'hot').length,
+        followups_pending: leads.filter((l) => l.next_followup_due != null && !['converted', 'closed', 'lost', 'opt-out'].includes(lower(l.status))).length,
+        conversations: conversations.length,
+        conversations_today: conversations.filter((cv) => cv.created_at >= today).length,
+        campaigns: campaigns.length,
+        active_campaigns: campaigns.filter((cp) => ['scheduled', 'running'].includes(cp.status)).length,
+        revenue: sum(payments),
+        revenue_today: sum(payments.filter((p) => p.created_at >= today)),
+        revenue_month: sum(payments.filter((p) => p.created_at >= monthStart)),
+      };
+    }) };
+    const clientNames = new Map(allClients.map((c) => [c.id, c.name]));
+    const sourceCounts = new Map();
+    for (const l of allLeads) {
+      const brand = clientNames.get(l.client_id) ?? 'Unassigned';
+      const source = String(l.source ?? '').trim() || 'Unknown';
+      const key = `${brand}\u0000${source}`;
+      sourceCounts.set(key, (sourceCounts.get(key) || 0) + 1);
+    }
+    const sourceResult = { rows: [...sourceCounts].map(([key, count]) => {
+      const [brand, source] = key.split('\u0000');
+      return { brand, source, count };
+    }).sort((a, b) => a.brand.localeCompare(b.brand) || b.count - a.count) };
 
     const brands = brandResult.rows.map(row => ({
       ...row,
@@ -1849,114 +1792,119 @@ router.get('/reports/founder-dashboard', async (req, res) => {
   }
 });
 
-router.get('/reports/revenue-today', async (req, res) => {
+router.get('/reports/revenue-today', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT COUNT(*) * 500 as revenue FROM leads WHERE status = 'converted' AND updated_at >= CURRENT_DATE`);
-    res.json({ revenue: parseInt(result.rows[0].revenue) || 0 });
+    const converted = await Leads.countDocuments({ status: 'converted', updated_at: { $gte: startOfUtcDay() } });
+    res.json({ revenue: converted * 500 });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/revenue-month', async (req, res) => {
+router.get('/reports/revenue-month', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT COUNT(*) * 500 as revenue FROM leads WHERE status = 'converted' AND date_trunc('month', updated_at) = date_trunc('month', CURRENT_DATE)`);
-    res.json({ revenue: parseInt(result.rows[0].revenue) || 0 });
+    const monthStart = startOfUtcMonth();
+    const nextMonth = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 1));
+    const converted = await Leads.countDocuments({ status: 'converted', updated_at: { $gte: monthStart, $lt: nextMonth } });
+    res.json({ revenue: converted * 500 });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/brand-revenue', async (req, res) => {
+router.get('/reports/brand-revenue', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT c.name as brand, (COUNT(l.id) * 500) as revenue 
-      FROM leads l
-      JOIN clients c ON l.client_id = c.id
-      WHERE l.status = 'converted'
-      GROUP BY c.name
-    `);
-    res.json({ data: result.rows });
+    const convertedByClient = await Leads.aggregate([
+      { $match: { status: 'converted', client_id: { $ne: null } } },
+      { $group: { _id: '$client_id', count: { $sum: 1 } } },
+    ]);
+    const revenueClients = new Map((await Clients.find({ id: { $in: convertedByClient.map((r) => r._id) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c.name]));
+    const byBrand = new Map();
+    for (const row of convertedByClient) {
+      if (!revenueClients.has(row._id)) continue;
+      const brand = revenueClients.get(row._id);
+      byBrand.set(brand, (byBrand.get(brand) || 0) + row.count * 500);
+    }
+    res.json({ data: [...byBrand].map(([brand, revenue]) => ({ brand, revenue })) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/lead-sources', async (req, res) => {
+router.get('/reports/lead-sources', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT source, COUNT(*) as count FROM leads GROUP BY source`);
-    res.json({ sources: result.rows });
+    const sources = await Leads.aggregate([
+      { $group: { _id: '$source', count: { $sum: 1 } } },
+      { $project: { _id: 0, source: '$_id', count: 1 } },
+    ]);
+    res.json({ sources });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/conversion-rate', async (req, res) => {
+router.get('/reports/conversion-rate', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT status, COUNT(*) as count FROM leads GROUP BY status`);
-    res.json({ data: result.rows });
+    const data = await Leads.aggregate([
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+      { $project: { _id: 0, status: '$_id', count: 1 } },
+    ]);
+    res.json({ data });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/followups-pending', async (req, res) => {
+router.get('/reports/followups-pending', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT COUNT(*) as count FROM leads WHERE next_followup_due > NOW() AND status != 'converted'`);
-    res.json({ pending: parseInt(result.rows[0].count) || 0 });
+    const pending = await Leads.countDocuments({ next_followup_due: { $gt: new Date() }, status: { $nin: ['converted', null] } });
+    res.json({ pending });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/sla-breaches', async (req, res) => {
+router.get('/reports/sla-breaches', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT COUNT(*) as count FROM leads WHERE next_followup_due < NOW() AND status != 'converted'`);
-    res.json({ breaches: parseInt(result.rows[0].count) || 0 });
+    const breaches = await Leads.countDocuments({ next_followup_due: { $lt: new Date() }, status: { $nin: ['converted', null] } });
+    res.json({ breaches });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/ai-performance', async (req, res) => {
+router.get('/reports/ai-performance', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT AVG(confidence) as avg_confidence FROM ai_decisions`);
-    res.json({ avg_confidence: parseFloat(result.rows[0].avg_confidence) || 0 });
+    const [avg] = await AiDecisions.aggregate([{ $group: { _id: null, avg_confidence: { $avg: '$confidence' } } }]);
+    res.json({ avg_confidence: parseFloat(avg?.avg_confidence) || 0 });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ==========================================
 // WF02 - Followup Engine
 // ==========================================
-router.get('/followups/due', async (req, res) => {
+router.get('/followups/due', internalAuth, async (req, res) => {
   try {
     await salesTrackingReady;
     const MAX_FOLLOWUP_ATTEMPTS = 5; // Stop after 5 attempts
 
-    const result = await pool.query(`
-      SELECT l.id as lead_id, l.name, l.phone,
-             COALESCE(c.name, 'ABM Groups') as brand,
-             l.stage, COALESCE(l.touch_count, 0) as touch_count
-      FROM leads l
-      LEFT JOIN clients c ON l.client_id = c.id
-      WHERE l.next_followup_due <= NOW()
-        AND l.status NOT IN ('converted', 'booked', 'lost', 'opt-out')
-        AND (l.status != 'opt-out' OR l.status IS NULL)
-        AND l.call_booked_at IS NULL
-        AND COALESCE(l.sales_followup_stopped, FALSE) = FALSE
-        AND LOWER(COALESCE(l.sales_status, 'new')) NOT IN ('converted', 'closed', 'not_interested')
-        AND (l.sales_followup_at IS NULL OR l.sales_followup_at <= NOW())
-        AND (l.touch_count IS NULL OR l.touch_count < $1)
-    `, [MAX_FOLLOWUP_ATTEMPTS]);
-    res.json({ followups: result.rows });
+    const dueLeads = await Leads.find({
+      next_followup_due: { $lte: new Date() },
+      status: { $nin: ['converted', 'booked', 'lost', 'opt-out', null] },
+      call_booked_at: null,
+      sales_followup_stopped: { $ne: true },
+      sales_status: { $not: /^(converted|closed|not_interested)$/i },
+      $and: [
+        { $or: [{ sales_followup_at: null }, { sales_followup_at: { $lte: new Date() } }] },
+        { $or: [{ touch_count: null }, { touch_count: { $lt: MAX_FOLLOWUP_ATTEMPTS } }] },
+      ],
+    }, { id: 1, name: 1, phone: 1, client_id: 1, stage: 1, touch_count: 1 }).lean();
+    const dueClients = new Map((await Clients.find({ id: { $in: dueLeads.map((l) => l.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c.name]));
+    res.json({ followups: dueLeads.map((l) => ({
+      lead_id: l.id, name: l.name, phone: l.phone, brand: dueClients.get(l.client_id) ?? 'ABM Groups',
+      stage: l.stage, touch_count: l.touch_count ?? 0,
+    })) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // 2. Fetch Followup Rule
-router.post('/followups/sales-guard', async (req, res) => {
+router.post('/followups/sales-guard', internalAuth, async (req, res) => {
   try {
     await salesTrackingReady;
-    const result = await pool.query(`
-      SELECT l.id AS lead_id, COALESCE(l.sales_status, 'new') AS sales_status,
-             COALESCE(l.sales_followup_stopped, FALSE) AS sales_followup_stopped,
-             l.sales_followup_at,
-             COALESCE(json_agg(json_build_object('note', notes.note, 'created_at', notes.created_at)
-               ORDER BY notes.created_at DESC) FILTER (WHERE notes.id IS NOT NULL), '[]'::json) AS sales_notes
-      FROM leads l
-      LEFT JOIN LATERAL (
-        SELECT id, note, created_at FROM sales_lead_notes
-        WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 5
-      ) notes ON TRUE
-      WHERE l.id = $1
-      GROUP BY l.id
-    `, [req.body.lead_id]);
-    const lead = result.rows[0];
+    const leadRow = await Leads.findOne({ id: req.body.lead_id }, { id: 1, sales_status: 1, sales_followup_stopped: 1, sales_followup_at: 1 }).lean();
+    const lead = leadRow ? {
+      lead_id: leadRow.id,
+      sales_status: leadRow.sales_status ?? 'new',
+      sales_followup_stopped: leadRow.sales_followup_stopped ?? false,
+      sales_followup_at: leadRow.sales_followup_at ?? null,
+      sales_notes: (await SalesLeadNotes.find({ lead_id: leadRow.id }, { _id: 0, note: 1, created_at: 1 }).sort({ created_at: -1 }).limit(5).lean()),
+    } : null;
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
     const stoppedByStatus = ['converted', 'closed', 'not_interested'].includes(String(lead.sales_status).toLowerCase());
     const waitingForScheduledTime = lead.sales_followup_at && new Date(lead.sales_followup_at) > new Date();
@@ -1973,7 +1921,7 @@ router.post('/followups/sales-guard', async (req, res) => {
 });
 
 // 2. Fetch Followup Rule
-router.post('/followups/rule', async (req, res) => {
+router.post('/followups/rule', internalAuth, async (req, res) => {
   const { touch_count } = req.body;
   try {
     const cadenceHours = [4, 8, 12, 24, 72];
@@ -2004,17 +1952,14 @@ router.post('/followups/rule', async (req, res) => {
 });
 
 // Opt-out: Stop follow-ups when lead says "not interested"
-router.post('/leads/opt-out', async (req, res) => {
+router.post('/leads/opt-out', internalAuth, async (req, res) => {
   const { lead_id, reason } = req.body;
   try {
     if (!lead_id) {
       return res.status(400).json({ success: false, error: "Missing lead_id" });
     }
 
-    await pool.query(
-      `UPDATE leads SET status = 'opt-out', updated_at = NOW() WHERE id = $1`,
-      [lead_id]
-    );
+    await Leads.updateOne({ id: lead_id }, { $set: { status: 'opt-out', updated_at: new Date() } });
 
     console.log(`[Opt-Out] Lead ${lead_id} opted out - follow-ups STOPPED`);
     res.json({ success: true, message: "Lead has been opted out. No more follow-ups will be sent." });
@@ -2024,15 +1969,10 @@ router.post('/leads/opt-out', async (req, res) => {
 });
 
 // 3. Check 24h Window
-router.post('/whatsapp/check-24h', async (req, res) => {
+router.post('/whatsapp/check-24h', internalAuth, async (req, res) => {
   const { lead_id, base_channel, template_id, payload_template, ai_prompt_template } = req.body;
   try {
-    const result = await pool.query(`
-      SELECT m.sent_at FROM messages m
-      JOIN conversations c ON m.conversation_id = c.id
-      WHERE c.lead_id = $1 AND m.direction = 'inbound'
-      ORDER BY m.sent_at DESC LIMIT 1
-    `, [lead_id]);
+    const result = { rows: await leadMessages(lead_id, { direction: 'inbound' }, { limit: 1, projection: { _id: 0, sent_at: 1 } }) };
     let within_24h = false;
     if (result.rows.length > 0) {
       const hours = (new Date() - new Date(result.rows[0].sent_at)) / 36e5;
@@ -2053,14 +1993,10 @@ router.post('/whatsapp/check-24h', async (req, res) => {
 });
 
 // 4. Generate & Send Followup AI Text
-router.post('/ai/followup', async (req, res) => {
+router.post('/ai/followup', internalAuth, async (req, res) => {
   const { lead_id } = req.body;
   try {
-    const leadRes = await pool.query(`
-      SELECT l.*, c.name as brand_name, c.phone_number_id, c.wa_access_token as client_wa_token
-      FROM leads l LEFT JOIN clients c ON l.client_id = c.id WHERE l.id = $1
-    `, [lead_id]);
-    const lead = leadRes.rows[0];
+    const lead = await leadWithClient(lead_id, { brand_name: 'name', phone_number_id: 'phone_number_id', client_wa_token: 'wa_access_token' });
     const brandName = lead?.brand_name || 'ABM Groups';
     const touchCount = lead?.touch_count ?? 0;
     const leadName = (lead?.name || '').split(' ')[0] || 'there';
@@ -2071,19 +2007,9 @@ router.post('/ai/followup', async (req, res) => {
       return res.json({ ...req.body, success: true, delivered: false, skipped: true, reason: 'stop_condition' });
     }
 
-    const historyRes = await pool.query(`
-      SELECT m.direction, m.content, m.sent_at
-      FROM messages m
-      JOIN conversations conversation ON conversation.id = m.conversation_id
-      WHERE conversation.lead_id = $1
-        AND m.content IS NOT NULL
-        AND BTRIM(m.content) <> ''
-      ORDER BY m.sent_at DESC
-      LIMIT 10
-    `, [lead_id]);
-    const recentHistory = historyRes.rows.reverse();
-    const notesResult = await pool.query(`SELECT note, created_at FROM sales_lead_notes WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 5`, [lead_id]);
-    const salesNotes = notesResult.rows.map(item => `${item.created_at.toISOString?.() || item.created_at}: ${item.note}`).join('\n') || 'No sales notes';
+    const recentHistory = (await leadMessages(lead_id, hasText, { limit: 10, projection: { _id: 0, direction: 1, content: 1, sent_at: 1 } })).reverse();
+    const notesRows = await SalesLeadNotes.find({ lead_id }, { _id: 0, note: 1, created_at: 1 }).sort({ created_at: -1 }).limit(5).lean();
+    const salesNotes = notesRows.map(item => `${item.created_at.toISOString?.() || item.created_at}: ${item.note}`).join('\n') || 'No sales notes';
     const latestMessage = recentHistory[recentHistory.length - 1];
     if (!latestMessage || latestMessage.direction === 'inbound') {
       return res.json({
@@ -2137,11 +2063,11 @@ Write one natural follow-up that continues the unfinished topic. Reference the s
 
     if (lead) {
       const conversation_id = await getOrUpsertConversation(lead_id);
-      await pool.query(`UPDATE conversations SET last_message = $1, last_message_at = NOW() WHERE id = $2`, [ai_reply, conversation_id]);
-      await pool.query(
-        `INSERT INTO messages (conversation_id, direction, msg_type, content, wa_msg_id, status, is_ai, sent_at) VALUES ($1, 'outbound', 'text', $2, $3, $4, true, NOW())`,
-        [conversation_id, ai_reply, waMessageId, delivered ? 'sent' : 'failed']
-      );
+      await Conversations.updateOne({ id: conversation_id }, { $set: { last_message: ai_reply, last_message_at: new Date() } });
+      await Messages.create({
+        conversation_id, direction: 'outbound', msg_type: 'text', content: ai_reply, wa_msg_id: waMessageId,
+        status: delivered ? 'sent' : 'failed', is_ai: true, sent_at: new Date(),
+      });
     }
 
     res.json({ ...req.body, success: true, ai_reply, delivered });
@@ -2150,39 +2076,44 @@ Write one natural follow-up that continues the unfinished topic. Reference the s
 
 // Demo-call reminder branch used by WF02. Each reminder is claimed with a
 // database uniqueness key, so a repeated n8n execution cannot double-send it.
-router.get('/demo-reminders/due', async (req, res) => {
+router.get('/demo-reminders/due', internalAuth, async (req, res) => {
   try {
     await demoReminderReady;
     await salesTrackingReady;
-    const result = await pool.query(`
-      SELECT l.id AS lead_id, l.name, l.phone, l.call_booked_at AS booking_time,
-             c.name AS brand, reminder.minutes AS reminder_minutes
-      FROM leads l
-      LEFT JOIN clients c ON c.id = l.client_id
-      CROSS JOIN (VALUES (60, 30), (30, 10), (10, 0)) AS reminder(minutes, lower_minutes)
-      WHERE l.call_booked_at > NOW()
-        AND LOWER(COALESCE(l.status, '')) = 'booked'
-        AND COALESCE(l.sales_followup_stopped, FALSE) = FALSE
-        AND LOWER(COALESCE(l.sales_status, 'new')) NOT IN ('converted', 'closed', 'not_interested')
-        AND (l.sales_followup_at IS NULL OR l.sales_followup_at <= NOW())
-        AND EXTRACT(EPOCH FROM (l.call_booked_at - NOW())) / 60 <= reminder.minutes
-        AND EXTRACT(EPOCH FROM (l.call_booked_at - NOW())) / 60 > reminder.lower_minutes
-        AND NOT EXISTS (
-          SELECT 1 FROM demo_call_reminders sent
-          WHERE sent.lead_id = l.id
-            AND sent.booking_time = l.call_booked_at
-            AND sent.reminder_minutes = reminder.minutes
-            AND sent.status IN ('processing', 'sent')
-        )
-      ORDER BY l.call_booked_at ASC
-    `);
-    res.json({ reminders: result.rows });
+    const bookedLeads = await Leads.find({
+        call_booked_at: { $gt: new Date() },
+        status: /^booked$/i,
+        sales_followup_stopped: { $ne: true },
+        sales_status: { $not: /^(converted|closed|not_interested)$/i },
+        $or: [{ sales_followup_at: null }, { sales_followup_at: { $lte: new Date() } }],
+      }, { id: 1, name: 1, phone: 1, call_booked_at: 1, client_id: 1 })
+      .sort({ call_booked_at: 1 }).lean();
+    const reminderClients = new Map((await Clients.find({ id: { $in: bookedLeads.map((l) => l.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c.name]));
+    const sentReminders = await DemoCallReminders.find(
+      { lead_id: { $in: bookedLeads.map((l) => l.id) }, status: { $in: ['processing', 'sent'] } },
+      { lead_id: 1, booking_time: 1, reminder_minutes: 1 }
+    ).lean();
+    const reminders = [];
+    for (const l of bookedLeads) {
+      const minutesUntil = (new Date(l.call_booked_at).getTime() - Date.now()) / 60000;
+      for (const [minutes, lowerMinutes] of [[60, 30], [30, 10], [10, 0]]) {
+        if (!(minutesUntil <= minutes && minutesUntil > lowerMinutes)) continue;
+        const alreadySent = sentReminders.some((r) => r.lead_id === l.id && r.reminder_minutes === minutes
+          && new Date(r.booking_time).getTime() === new Date(l.call_booked_at).getTime());
+        if (alreadySent) continue;
+        reminders.push({
+          lead_id: l.id, name: l.name, phone: l.phone, booking_time: l.call_booked_at,
+          brand: reminderClients.get(l.client_id) ?? null, reminder_minutes: minutes,
+        });
+      }
+    }
+    res.json({ reminders });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/demo-reminders/send', async (req, res) => {
+router.post('/demo-reminders/send', internalAuth, async (req, res) => {
   const { lead_id, booking_time, reminder_minutes } = req.body;
   try {
     await demoReminderReady;
@@ -2191,27 +2122,29 @@ router.post('/demo-reminders/send', async (req, res) => {
       return res.status(400).json({ error: 'Invalid demo reminder' });
     }
 
-    const leadResult = await pool.query(`
-      SELECT l.*, c.name AS brand_name, c.phone_number_id,
-             c.wa_access_token AS client_wa_token
-      FROM leads l LEFT JOIN clients c ON c.id = l.client_id
-      WHERE l.id = $1 AND l.call_booked_at = $2
-        AND l.call_booked_at > NOW() AND LOWER(COALESCE(l.status, '')) = 'booked'
-        AND COALESCE(l.sales_followup_stopped, FALSE) = FALSE
-        AND LOWER(COALESCE(l.sales_status, 'new')) NOT IN ('converted', 'closed', 'not_interested')
-        AND (l.sales_followup_at IS NULL OR l.sales_followup_at <= NOW())
-    `, [lead_id, booking_time]);
-    const lead = leadResult.rows[0];
+    const eligibleLead = await Leads.exists({ id: lead_id, ...{
+        call_booked_at: { $gt: new Date() },
+        status: /^booked$/i,
+        sales_followup_stopped: { $ne: true },
+        sales_status: { $not: /^(converted|closed|not_interested)$/i },
+        $or: [{ sales_followup_at: null }, { sales_followup_at: { $lte: new Date() } }],
+      }, call_booked_at: { $eq: new Date(booking_time), $gt: new Date() } });
+    const lead = eligibleLead
+      ? await leadWithClient(lead_id, { brand_name: 'name', phone_number_id: 'phone_number_id', client_wa_token: 'wa_access_token' })
+      : null;
     if (!lead) return res.json({ success: true, skipped: true, reason: 'booking_changed_or_completed' });
 
-    const claim = await pool.query(`
-      INSERT INTO demo_call_reminders (lead_id, booking_time, reminder_minutes, status)
-      VALUES ($1, $2, $3, 'processing')
-      ON CONFLICT (lead_id, booking_time, reminder_minutes) DO UPDATE
-        SET status = 'processing'
-        WHERE demo_call_reminders.status = 'failed'
-      RETURNING id
-    `, [lead_id, booking_time, Number(reminder_minutes)]);
+    const reminderKey = { lead_id, booking_time: new Date(booking_time), reminder_minutes: Number(reminder_minutes) };
+    let claimedReminder = await insertIgnore(DemoCallReminders, { ...reminderKey, status: 'processing' });
+    if (!claimedReminder) {
+      // Retry only a previously failed reminder
+      claimedReminder = await DemoCallReminders.findOneAndUpdate(
+        { ...reminderKey, status: 'failed' },
+        { $set: { status: 'processing' } },
+        { new: true, projection: { _id: 0, id: 1 } }
+      ).lean();
+    }
+    const claim = { rows: claimedReminder ? [{ id: claimedReminder.id }] : [] };
     if (!claim.rows.length) return res.json({ success: true, skipped: true, reason: 'already_sent_or_processing' });
 
     const firstName = (lead.name || '').split(' ')[0] || 'there';
@@ -2219,16 +2152,9 @@ router.post('/demo-reminders/send', async (req, res) => {
     const scheduledTime = new Date(lead.call_booked_at).toLocaleString('en-IN', {
       timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short',
     });
-    const historyResult = await pool.query(`
-      SELECT m.direction, m.content, m.sent_at
-      FROM messages m
-      JOIN conversations conversation ON conversation.id = m.conversation_id
-      WHERE conversation.lead_id = $1 AND m.content IS NOT NULL AND BTRIM(m.content) <> ''
-      ORDER BY m.sent_at DESC LIMIT 12
-    `, [lead_id]);
-    const history = historyResult.rows.reverse();
-    const demoNotesResult = await pool.query(`SELECT note, created_at FROM sales_lead_notes WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 5`, [lead_id]);
-    const demoSalesNotes = demoNotesResult.rows.map(item => `${item.created_at.toISOString?.() || item.created_at}: ${item.note}`).join('\n') || 'No sales notes';
+    const history = (await leadMessages(lead_id, hasText, { limit: 12, projection: { _id: 0, direction: 1, content: 1, sent_at: 1 } })).reverse();
+    const demoNotes = await SalesLeadNotes.find({ lead_id }, { _id: 0, note: 1, created_at: 1 }).sort({ created_at: -1 }).limit(5).lean();
+    const demoSalesNotes = demoNotes.map(item => `${item.created_at.toISOString?.() || item.created_at}: ${item.note}`).join('\n') || 'No sales notes';
     const latestInbound = [...history].reverse().find(item => item.direction === 'inbound');
     const within24Hours = Boolean(latestInbound)
       && Date.now() - new Date(latestInbound.sent_at).getTime() < 24 * 60 * 60 * 1000;
@@ -2268,18 +2194,15 @@ Naturally reference relevant details already discussed when useful. Do not inven
           messagePayload = { messaging_product: 'whatsapp', to: lead.phone.replace(/\D/g, ''), type: 'text', text: { body: message } };
         } else {
           outboundMessageType = 'template';
-          const templateResult = await pool.query(`
-            SELECT name, language, body
-            FROM templates
-            WHERE LOWER(status) = 'approved'
-              AND UPPER(category) = 'UTILITY'
-              AND (client_id = $1 OR client_id IS NULL)
-              AND (name ILIKE ANY(ARRAY['%demo%', '%appointment%', '%reminder%', '%followup%'])
-                   OR body ILIKE ANY(ARRAY['%demo%', '%appointment%', '%reminder%', '%call%']))
-            ORDER BY (client_id = $1) DESC, approved_at DESC NULLS LAST, created_at DESC
-            LIMIT 1
-          `, [lead.client_id]);
-          const template = templateResult.rows[0];
+          const candidateTemplates = await Templates.find({
+            status: /^approved$/i,
+            category: /^utility$/i,
+            client_id: { $in: [lead.client_id ?? null, null] },
+            $or: [{ name: /demo|appointment|reminder|followup/i }, { body: /demo|appointment|reminder|call/i }],
+          }, { _id: 0, name: 1, language: 1, body: 1, client_id: 1, approved_at: 1, created_at: 1 }).lean();
+          const template = candidateTemplates.sort((a, b) => Number(b.client_id === lead.client_id && lead.client_id != null) - Number(a.client_id === lead.client_id && lead.client_id != null)
+            || (b.approved_at ? new Date(b.approved_at).getTime() : -Infinity) - (a.approved_at ? new Date(a.approved_at).getTime() : -Infinity)
+            || new Date(b.created_at || 0) - new Date(a.created_at || 0))[0];
           if (!template) throw new Error('No approved demo/reminder utility template is available for this brand');
 
           const placeholderNumbers = [...String(template.body || '').matchAll(/\{\{(\d+)\}\}/g)].map(match => Number(match[1]));
@@ -2311,13 +2234,18 @@ Naturally reference relevant details already discussed when useful. Do not inven
     }
 
     const conversationId = await getOrUpsertConversation(lead_id);
-    await pool.query(`UPDATE conversations SET last_message = $1, last_message_at = NOW() WHERE id = $2`, [message, conversationId]);
-    const savedReminder = await pool.query(`
-      INSERT INTO messages (conversation_id, direction, msg_type, content, wa_msg_id, status, is_ai, sent_at)
-      VALUES ($1, 'outbound', $2, $3, $4, $5, $6, NOW())
-      RETURNING id, direction, msg_type AS type, content, wa_msg_id, status, is_ai, sent_at AS timestamp
-    `, [conversationId, outboundMessageType, message, waMessageId, delivered ? 'sent' : 'failed', within24Hours]);
-    await pool.query(`UPDATE demo_call_reminders SET status = $1, message = $2, wa_message_id = $3, sent_at = CASE WHEN $1 = 'sent' THEN NOW() END WHERE id = $4`, [delivered ? 'sent' : 'failed', message, waMessageId, claim.rows[0].id]);
+    await Conversations.updateOne({ id: conversationId }, { $set: { last_message: message, last_message_at: new Date() } });
+    const reminderMessage = await Messages.create({
+      conversation_id: conversationId, direction: 'outbound', msg_type: outboundMessageType, content: message,
+      wa_msg_id: waMessageId, status: delivered ? 'sent' : 'failed', is_ai: within24Hours, sent_at: new Date(),
+    });
+    const savedReminder = { rows: [{
+      id: reminderMessage.id, direction: reminderMessage.direction, type: reminderMessage.msg_type, content: reminderMessage.content,
+      wa_msg_id: reminderMessage.wa_msg_id, status: reminderMessage.status, is_ai: reminderMessage.is_ai, timestamp: reminderMessage.sent_at,
+    }] };
+    await DemoCallReminders.updateOne({ id: claim.rows[0].id }, { $set: {
+      status: delivered ? 'sent' : 'failed', message, wa_message_id: waMessageId, sent_at: delivered ? new Date() : null,
+    } });
 
     if (savedReminder.rows[0]) {
       req.app.get('io')?.emit('outgoing_message', { lead_id: Number(lead_id), message: savedReminder.rows[0] });
@@ -2334,28 +2262,30 @@ Naturally reference relevant details already discussed when useful. Do not inven
 // WF03 - Reminder Engine
 // ==========================================
 
-router.get('/reports/today-calls', async (req, res) => {
+router.get('/reports/today-calls', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT id as lead_id, name, call_booked_at as time FROM leads WHERE call_booked_at >= CURRENT_DATE AND call_booked_at < CURRENT_DATE + INTERVAL '1 day'`);
-    res.json({ calls: result.rows });
+    const today = startOfUtcDay();
+    const calls = await Leads.find({ call_booked_at: { $gte: today, $lt: new Date(today.getTime() + DAY_MS) } }, { id: 1, name: 1, call_booked_at: 1 }).lean();
+    res.json({ calls: calls.map((l) => ({ lead_id: l.id, name: l.name, time: l.call_booked_at })) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/today-followups', async (req, res) => {
+router.get('/reports/today-followups', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT id as lead_id, name, stage FROM leads WHERE next_followup_due >= CURRENT_DATE AND next_followup_due < CURRENT_DATE + INTERVAL '1 day'`);
-    res.json({ followups: result.rows });
+    const today = startOfUtcDay();
+    const followups = await Leads.find({ next_followup_due: { $gte: today, $lt: new Date(today.getTime() + DAY_MS) } }, { id: 1, name: 1, stage: 1 }).lean();
+    res.json({ followups: followups.map((l) => ({ lead_id: l.id, name: l.name, stage: l.stage })) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/hot-leads', async (req, res) => {
+router.get('/reports/hot-leads', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT id, name, score FROM leads WHERE status = 'hot' ORDER BY score DESC LIMIT 10`);
-    res.json({ hot_leads: result.rows });
+    const hotLeads = await Leads.find({ status: 'hot' }, { _id: 0, id: 1, name: 1, score: 1 }).sort({ score: -1 }).limit(10).lean();
+    res.json({ hot_leads: hotLeads });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/ai/report-generator', async (req, res) => {
+router.post('/ai/report-generator', internalAuth, async (req, res) => {
   const data = req.body.data || req.body.metrics || req.body;
   try {
     if (!ai) return res.json({ summary: "Daily Summary generated." });
@@ -2392,7 +2322,7 @@ Use clear headings and bullet points. Use Indian number formatting for all curre
 // WF04 - Customer Journey
 // ==========================================
 
-router.post('/leads/find-by-invoice', async (req, res) => {
+router.post('/leads/find-by-invoice', internalAuth, async (req, res) => {
   const { invoice_id, lead_id, link_id } = req.body;
   try {
     let lead = null;
@@ -2401,24 +2331,16 @@ router.post('/leads/find-by-invoice', async (req, res) => {
 
     // 1. Try cleanLeadId first (fastest, from notes.lead_id)
     if (cleanLeadId && !isNaN(cleanLeadId)) {
-      const lr = await pool.query(
-        `SELECT l.id AS lead_id, l.name, l.phone, c.name AS brand, c.id AS brand_id
-         FROM leads l LEFT JOIN clients c ON c.id = l.client_id
-         WHERE l.id = $1::integer`, [cleanLeadId]
-      );
-      if (lr.rows.length) {
-        lead = lr.rows[0];
+      const invoiceLead = await leadWithClient(parseInt(cleanLeadId, 10), { brand: 'name', brand_id: 'id' });
+      if (invoiceLead) {
+        lead = { lead_id: invoiceLead.id, name: invoiceLead.name, phone: invoiceLead.phone, brand: invoiceLead.brand, brand_id: invoiceLead.brand_id };
         // Capture payment & mark lead converted
         if (invoice_id) {
-          await pool.query(
-            `UPDATE payments SET razorpay_payment_id = $1, status = 'captured'
-             WHERE lead_id = $2 AND razorpay_payment_id IS NULL`,
-            [invoice_id, cleanLeadId]
+          await Payments.updateMany(
+            { lead_id: cleanLeadId, razorpay_payment_id: null },
+            { $set: { razorpay_payment_id: invoice_id, status: 'captured' } }
           ).catch(() => {});
-          await pool.query(
-            `UPDATE leads SET status = 'converted', score = 100 WHERE id = $1`,
-            [cleanLeadId]
-          ).catch(() => {});
+          await Leads.updateOne({ id: cleanLeadId }, { $set: { status: 'converted', score: 100 } }).catch(() => {});
           console.log(`[salesos find-by-invoice] ✅ Lead ${cleanLeadId} marked converted, payment ${invoice_id} saved`);
         }
       }
@@ -2426,50 +2348,40 @@ router.post('/leads/find-by-invoice', async (req, res) => {
 
     // 2. Try by link_id (payment link ID plink_xxx)
     if (!lead && link_id && link_id !== 'null' && link_id !== 'undefined' && link_id !== '') {
-      const pr = await pool.query(
-        `SELECT l.id AS lead_id, l.name, l.phone, c.name AS brand, c.id AS brand_id
-         FROM payments p
-         JOIN leads l ON l.id = p.lead_id
-         LEFT JOIN clients c ON c.id = l.client_id
-         WHERE p.razorpay_link_id = $1
-         LIMIT 1`, [link_id]
-      );
-      if (pr.rows.length) {
-        lead = pr.rows[0];
+      const linkPayments = await Payments.find({ razorpay_link_id: link_id }, { lead_id: 1 }).lean();
+      for (const payment of linkPayments) {
+        const paymentLead = await leadWithClient(payment.lead_id, { brand: 'name', brand_id: 'id' });
+        if (paymentLead) {
+          lead = { lead_id: paymentLead.id, name: paymentLead.name, phone: paymentLead.phone, brand: paymentLead.brand, brand_id: paymentLead.brand_id };
+          break;
+        }
+      }
+      if (lead) {
         if (invoice_id) {
-          await pool.query(
-            `UPDATE payments SET razorpay_payment_id = $1, status = 'captured' WHERE razorpay_link_id = $2`,
-            [invoice_id, link_id]
-          ).catch(() => {});
-          await pool.query(
-            `UPDATE leads SET status = 'converted', score = 100 WHERE id = $1`,
-            [lead.lead_id]
-          ).catch(() => {});
+          await Payments.updateMany({ razorpay_link_id: link_id }, { $set: { razorpay_payment_id: invoice_id, status: 'captured' } }).catch(() => {});
+          await Leads.updateOne({ id: lead.lead_id }, { $set: { status: 'converted', score: 100 } }).catch(() => {});
         }
       }
     }
 
     // 3. Try fallback by invoice_id
     if (!lead && invoice_id && invoice_id !== 'null') {
-      const pr = await pool.query(
-        `SELECT l.id AS lead_id, l.name, l.phone, c.name AS brand, c.id AS brand_id
-         FROM payments p
-         JOIN leads l ON l.id = p.lead_id
-         LEFT JOIN clients c ON c.id = l.client_id
-         WHERE p.razorpay_payment_id = $1
-         ORDER BY p.created_at DESC LIMIT 1`, [invoice_id]
-      );
-      lead = pr.rows[0] || null;
+      lead = null;
+      const invoicePayments = await Payments.find({ razorpay_payment_id: invoice_id }, { lead_id: 1 }).sort({ created_at: -1 }).lean();
+      for (const payment of invoicePayments) {
+        const paymentLead = await leadWithClient(payment.lead_id, { brand: 'name', brand_id: 'id' });
+        if (paymentLead) {
+          lead = { lead_id: paymentLead.id, name: paymentLead.name, phone: paymentLead.phone, brand: paymentLead.brand, brand_id: paymentLead.brand_id };
+          break;
+        }
+      }
     }
 
     // 4. Ultimate fallback: most recently won lead (for manual tests)
     if (!lead) {
-      const fallback = await pool.query(
-        `SELECT l.id as lead_id, l.name, l.phone, c.name as brand, l.client_id as brand_id
-         FROM leads l LEFT JOIN clients c ON l.client_id = c.id
-         WHERE l.status = 'converted' ORDER BY l.updated_at DESC LIMIT 1`
-      );
-      lead = fallback.rows[0] || null;
+      const recentWin = await Leads.findOne({ status: 'converted' }, { id: 1 }).sort({ updated_at: -1 }).lean();
+      const winLead = recentWin ? await leadWithClient(recentWin.id, { brand: 'name' }) : null;
+      lead = winLead ? { lead_id: winLead.id, name: winLead.name, phone: winLead.phone, brand: winLead.brand, brand_id: winLead.client_id ?? null } : null;
     }
 
     res.json({
@@ -2491,7 +2403,7 @@ router.post('/leads/find-by-invoice', async (req, res) => {
 // yet, so this is a fixed sequence rather than per-brand configurable - the
 // delayed nurture steps (feedback/review/referral, sent days/weeks later)
 // need a scheduled trigger like WF02's follow-up engine and aren't included here.
-router.post('/journey/steps', async (req, res) => {
+router.post('/journey/steps', internalAuth, async (req, res) => {
   try {
     const steps = [
       { action: 'send_invoice' },
@@ -2505,11 +2417,10 @@ router.post('/journey/steps', async (req, res) => {
 });
 
 // Journey Actions
-router.post('/invoices/send', async (req, res) => {
+router.post('/invoices/send', internalAuth, async (req, res) => {
   const { lead_id } = req.body;
   try {
-    const payRes = await pool.query(`SELECT amount, currency FROM payments WHERE lead_id = $1 AND status = 'captured' ORDER BY created_at DESC LIMIT 1`, [lead_id]);
-    const payment = payRes.rows[0];
+    const payment = await Payments.findOne({ lead_id, status: 'captured' }, { _id: 0, amount: 1, currency: 1 }).sort({ created_at: -1 }).lean();
     const amountText = payment ? `${payment.currency || 'INR'} ${payment.amount}` : 'your payment';
     const content = `Thank you for your payment of ${amountText}! Your invoice has been recorded. If you need a formal receipt, reply here and our team will send one over.`;
     const sendResult = await sendWhatsAppText(lead_id, content);
@@ -2521,20 +2432,20 @@ router.post('/invoices/send', async (req, res) => {
 // user to a WhatsApp group - that's not something the Business API supports.
 // This sends a real message; an actual group invite link would need to be
 // configured per-client (no such field exists in `clients` yet) and pasted in.
-router.post('/whatsapp/add-to-group', async (req, res) => {
+router.post('/whatsapp/add-to-group', internalAuth, async (req, res) => {
   const { lead_id } = req.body;
   try {
     const content = `Welcome aboard! We'll be sharing your community group invite link shortly - keep an eye on this chat.`;
     const sendResult = await sendWhatsAppText(lead_id, content);
-    await pool.query(`INSERT INTO workflow_logs (workflow, lead_id, status, message) VALUES ('WF04', $1, 'success', $2)`, [lead_id, 'WhatsApp group invite requested (manual link send required - no group-invite API in Meta Cloud API)']);
+    await WorkflowLogs.create({ workflow: 'WF04', lead_id: lead_id == null ? lead_id : String(lead_id), status: 'success', message: 'WhatsApp group invite requested (manual link send required - no group-invite API in Meta Cloud API)' });
     res.json({ ...req.body, success: true, ...sendResult });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/access/grant', async (req, res) => {
+router.post('/access/grant', internalAuth, async (req, res) => {
   const { lead_id } = req.body;
   try {
-    await pool.query(`UPDATE leads SET payment_status = 'access_granted', updated_at = NOW() WHERE id = $1`, [lead_id]);
+    await Leads.updateOne({ id: lead_id }, { $set: { payment_status: 'access_granted', updated_at: new Date() } });
     const content = `You're all set! Your access has been granted - check your email for login details, or reply here if you need help getting started.`;
     const sendResult = await sendWhatsAppText(lead_id, content);
     res.json({ ...req.body, success: true, ...sendResult });
@@ -2543,18 +2454,18 @@ router.post('/access/grant', async (req, res) => {
 
 // NOTE: no dedicated tasks table exists - logged into workflow_logs so it's
 // visible on the Workflow Logs page, same pattern as WF02's internal-note.
-router.post('/tasks/create', async (req, res) => {
+router.post('/tasks/create', internalAuth, async (req, res) => {
   const { lead_id, type } = req.body;
   try {
-    await pool.query(`INSERT INTO workflow_logs (workflow, lead_id, status, message) VALUES ('WF04', $1, 'pending', $2)`, [lead_id, `Task created: ${type || 'general'}`]);
+    await WorkflowLogs.create({ workflow: 'WF04', lead_id: lead_id == null ? lead_id : String(lead_id), status: 'pending', message: `Task created: ${type || 'general'}` });
     res.json({ ...req.body, success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/leads/log-event', async (req, res) => {
+router.post('/leads/log-event', internalAuth, async (req, res) => {
   const { lead_id, event } = req.body;
   try {
-    await pool.query(`INSERT INTO workflow_logs (workflow, lead_id, status, message) VALUES ('WF04', $1, 'success', $2)`, [lead_id, `Event: ${event || 'unknown'}`]);
+    await WorkflowLogs.create({ workflow: 'WF04', lead_id: lead_id == null ? lead_id : String(lead_id), status: 'success', message: `Event: ${event || 'unknown'}` });
     res.json({ ...req.body, success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -2563,40 +2474,42 @@ router.post('/leads/log-event', async (req, res) => {
 // WF05 - Marketing Automation
 // ==========================================
 
-router.get('/campaigns/active', async (req, res) => {
+router.get('/campaigns/active', internalAuth, async (req, res) => {
   try {
     // Due = scheduled to run and either unscheduled (run ASAP) or its time has passed.
     // 'running'/'completed'/'failed' are excluded so a campaign is only ever executed once.
-    const result = await pool.query(`
-      SELECT id as campaign_id, name, client_id FROM campaigns
-      WHERE status = 'scheduled' AND (scheduled_at IS NULL OR scheduled_at <= NOW())
-    `);
-    res.json({ campaigns: result.rows });
+    const dueCampaigns = await Campaigns.find(
+      { status: 'scheduled', $or: [{ scheduled_at: null }, { scheduled_at: { $lte: new Date() } }] },
+      { id: 1, name: 1, client_id: 1 }
+    ).lean();
+    res.json({ campaigns: dueCampaigns.map((c) => ({ campaign_id: c.id, name: c.name, client_id: c.client_id })) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/campaigns/select-leads', async (req, res) => {
+router.post('/campaigns/select-leads', internalAuth, async (req, res) => {
   const { campaign_id, status_filter } = req.body;
   try {
-    let query = `SELECT id, phone, name FROM leads WHERE status != 'converted' AND phone IS NOT NULL LIMIT 500`;
+    const projection = { _id: 0, id: 1, phone: 1, name: 1 };
     if (status_filter) {
-      query = `SELECT id, phone, name FROM leads WHERE status = $1 AND phone IS NOT NULL LIMIT 500`;
-      const result = await pool.query(query, [status_filter]);
-      return res.json({ leads: result.rows });
+      const leads = await Leads.find({ status: status_filter, phone: { $ne: null } }, projection).limit(500).lean();
+      return res.json({ leads });
     }
-    const result = await pool.query(query);
-    res.json({ leads: result.rows });
+    const leads = await Leads.find({ status: { $nin: ['converted', null] }, phone: { $ne: null } }, projection).limit(500).lean();
+    res.json({ leads });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/campaigns/check-frequency', async (req, res) => {
+router.post('/campaigns/check-frequency', internalAuth, async (req, res) => {
   const { lead_id } = req.body;
   try {
-    const convRes = await pool.query(`SELECT id FROM conversations WHERE lead_id = $1 LIMIT 1`, [lead_id]);
-    if (convRes.rows.length === 0) return res.json({ allowed: true });
-    const conversation_id = convRes.rows[0].id;
+    const firstConversation = await Conversations.findOne({ lead_id }, { id: 1 }).lean();
+    if (!firstConversation) return res.json({ allowed: true });
+    const conversation_id = firstConversation.id;
 
-    const result = await pool.query(`SELECT sent_at FROM messages WHERE conversation_id = $1 AND direction = 'outbound' AND msg_type = 'campaign' ORDER BY sent_at DESC LIMIT 1`, [conversation_id]);
+    const result = { rows: await Messages.find(
+      { conversation_id, direction: 'outbound', msg_type: 'campaign' },
+      { _id: 0, sent_at: 1 }
+    ).sort({ sent_at: -1 }).limit(1).lean() };
     let allowed = true;
     if (result.rows.length > 0) {
       const days = (new Date() - new Date(result.rows[0].sent_at)) / (36e5 * 24);
@@ -2606,27 +2519,64 @@ router.post('/campaigns/check-frequency', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/campaigns/log', (req, res) => res.json({ success: true }));
+router.post('/campaigns/log', internalAuth, (req, res) => res.json({ success: true }));
 
 // ==========================================
 // WF07 - Admin & Maintenance
 // ==========================================
 
-router.post('/admin/retry', async (req, res) => {
+// Maintenance operations (retry, cleanup):
+//  - One workspace: the internal service key with x-tenant-id (n8n acting for
+//    that tenant); the tenant scope limits the operation to that workspace.
+//  - All workspaces: founder/ops platform staff only, recorded in the audit log.
+// The service key alone is not enough for a cross-tenant operation, and
+// customer tokens are refused.
+const maintenanceAuth = (operation, code) => (req, res, next) => {
+  if (hasInternalKey(req)) {
+    if (!req.headers['x-tenant-id']) {
+      return res.status(403).json({
+        error: `Cross-tenant ${operation} needs platform staff. Send x-tenant-id to ${operation} one workspace.`,
+        code,
+      });
+    }
+    return internalAuth(req, res, next);
+  }
+  return staffAuth('platform.tenants.manage')(req, res, next);
+};
+const maintenanceTenant = (req) => (req.identity?.kind === 'service' ? req.identity.tenantId : null);
+
+router.post('/admin/retry', maintenanceAuth('retry', 'CROSS_TENANT_RETRY_FORBIDDEN'), async (req, res) => {
   try {
-    const result = await pool.query(`UPDATE messages SET status = 'pending' WHERE status = 'failed' RETURNING id`);
-    res.json({ retried_count: result.rows.length });
+    const tenantId = maintenanceTenant(req);
+    const result = await Messages.updateMany({ status: 'failed' }, { $set: { status: 'pending' } });
+    if (!tenantId) {
+      await audit.record(audit.EVENTS.PLATFORM_MAINTENANCE, {
+        req, targetType: 'messages', meta: { operation: 'retry_failed_messages', scope: 'all_tenants', retried_count: result.modifiedCount },
+      });
+    }
+    res.json({ retried_count: result.modifiedCount, scope: tenantId ? 'tenant' : 'all_tenants' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/admin/cleanup', async (req, res) => {
+// Deletes workflow logs older than the 30-day retention period. In a tenant
+// context the tenant scope adds tenant_id to the filter, so only that
+// workspace's logs can match; platform staff clean up every workspace.
+const WORKFLOW_LOG_RETENTION_DAYS = 30;
+router.post('/admin/cleanup', maintenanceAuth('cleanup', 'CROSS_TENANT_CLEANUP_FORBIDDEN'), async (req, res) => {
   try {
-    const result = await pool.query(`DELETE FROM workflow_logs WHERE created_at < NOW() - INTERVAL '30 days'`);
-    res.json({ deleted_logs: result.rowCount });
+    const tenantId = maintenanceTenant(req);
+    const cutoff = new Date(Date.now() - WORKFLOW_LOG_RETENTION_DAYS * DAY_MS);
+    const result = await WorkflowLogs.deleteMany({ created_at: { $lt: cutoff } });
+    if (!tenantId) {
+      await audit.record(audit.EVENTS.PLATFORM_MAINTENANCE, {
+        req, targetType: 'workflow_logs', meta: { operation: 'cleanup_workflow_logs', scope: 'all_tenants', retention_days: WORKFLOW_LOG_RETENTION_DAYS, deleted_logs: result.deletedCount },
+      });
+    }
+    res.json({ deleted_logs: result.deletedCount, scope: tenantId ? 'tenant' : 'all_tenants' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/admin/refresh-embeddings', async (req, res) => {
+router.post('/admin/refresh-embeddings', internalPlatformAuth, async (req, res) => {
   try {
     // In a real system, you'd trigger a vector DB sync here
     res.json({ success: true, embeddings_updated: 0 });
@@ -2637,17 +2587,16 @@ router.post('/admin/refresh-embeddings', async (req, res) => {
 // Missing Workflows Endpoints Implementation
 // ==========================================
 
-router.post('/communication/send-email', (req, res) => {
+router.post('/communication/send-email', internalAuth, (req, res) => {
   // Mock endpoint for sending emails (could integrate SendGrid here)
   res.json({ ...req.body, success: true, delivered: true, channel: 'email' });
 });
 
-router.post('/communication/send-template', async (req, res) => {
+router.post('/communication/send-template', internalAuth, async (req, res) => {
   try {
     await salesTrackingReady;
     if (req.body.lead_id) {
-      const result = await pool.query(`SELECT sales_status, sales_followup_stopped, sales_followup_at FROM leads WHERE id = $1`, [req.body.lead_id]);
-      const lead = result.rows[0];
+      const lead = await Leads.findOne({ id: req.body.lead_id }, { _id: 0, sales_status: 1, sales_followup_stopped: 1, sales_followup_at: 1 }).lean();
       if (!lead || lead.sales_followup_stopped || ['converted', 'closed', 'not_interested'].includes(lead.sales_status)
         || (lead.sales_followup_at && new Date(lead.sales_followup_at) > new Date())) {
         return res.json({ ...req.body, success: true, delivered: false, skipped: true, reason: 'sales_status_or_note_stop' });
@@ -2658,49 +2607,59 @@ router.post('/communication/send-template', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/leads/internal-note', async (req, res) => {
+router.post('/leads/internal-note', internalAuth, async (req, res) => {
   const { lead_id, note } = req.body;
   try {
-    await pool.query(`INSERT INTO workflow_logs (workflow, lead_id, status, message) VALUES ('WF02', $1, 'success', $2)`, [lead_id, `Internal Note: ${note}`]);
+    await WorkflowLogs.create({ workflow: 'WF02', lead_id: lead_id == null ? lead_id : String(lead_id), status: 'success', message: `Internal Note: ${note}` });
     res.json({ ...req.body, success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/leads/update-followup', async (req, res) => {
+router.post('/leads/update-followup', internalAuth, async (req, res) => {
   const { lead_id, touch_count_increment } = req.body;
   try {
     const increment = touch_count_increment || 1;
-    const query = `
-      UPDATE leads
-      SET touch_count = COALESCE(touch_count, 0) + $1,
-          next_followup_due = CASE COALESCE(touch_count, 0) + $1
-            WHEN 1 THEN NOW() + INTERVAL '8 hours'
-            WHEN 2 THEN NOW() + INTERVAL '12 hours'
-            WHEN 3 THEN NOW() + INTERVAL '24 hours'
-            WHEN 4 THEN NOW() + INTERVAL '72 hours'
-            ELSE NULL
-          END,
-          updated_at = NOW()
-      WHERE id = $2
-        AND status NOT IN ('converted', 'booked', 'opt-out', 'lost')
-        AND call_booked_at IS NULL
-        AND COALESCE(sales_followup_stopped, FALSE) = FALSE
-        AND LOWER(COALESCE(sales_status, 'new')) NOT IN ('converted', 'closed', 'not_interested')
-    `;
-    const updated = await pool.query(query + ' RETURNING next_followup_due', [increment, lead_id]);
-    if (updated.rows[0]?.next_followup_due) await ensureSalesTask(req, lead_id, 'followup');
+    const newTouchCount = { $add: [{ $ifNull: ['$touch_count', 0] }, Number(increment)] };
+    const delayHours = (hours) => ({ $add: ['$$NOW', hours * HOUR_MS] });
+    const updated = await Leads.findOneAndUpdate(
+      {
+        id: lead_id,
+        status: { $nin: ['converted', 'booked', 'opt-out', 'lost', null] },
+        call_booked_at: null,
+        sales_followup_stopped: { $ne: true },
+        sales_status: { $not: /^(converted|closed|not_interested)$/i },
+      },
+      [{ $set: {
+        touch_count: newTouchCount,
+        next_followup_due: { $switch: {
+          branches: [
+            { case: { $eq: [newTouchCount, 1] }, then: delayHours(8) },
+            { case: { $eq: [newTouchCount, 2] }, then: delayHours(12) },
+            { case: { $eq: [newTouchCount, 3] }, then: delayHours(24) },
+            { case: { $eq: [newTouchCount, 4] }, then: delayHours(72) },
+          ],
+          default: null,
+        } },
+        updated_at: '$$NOW',
+      } }],
+      { new: true, projection: { next_followup_due: 1 } }
+    ).lean();
+    if (updated?.next_followup_due) await ensureSalesTask(req, lead_id, 'followup');
     res.json({ ...req.body, success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/overdue-followups', async (req, res) => {
+router.get('/reports/overdue-followups', internalAuth, async (req, res) => {
   try {
-    const result = await pool.query(`SELECT id, name, next_followup_due FROM leads WHERE next_followup_due < NOW() AND status != 'converted' LIMIT 50`);
-    res.json({ overdue: result.rows });
+    const overdue = await Leads.find(
+      { next_followup_due: { $lt: new Date() }, status: { $nin: ['converted', null] } },
+      { _id: 0, id: 1, name: 1, next_followup_due: 1 }
+    ).limit(50).lean();
+    res.json({ overdue });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/pending-payments', async (req, res) => {
+router.get('/reports/pending-payments', internalAuth, async (req, res) => {
   try {
     // We don't have an invoice table, so we fallback to a mock for now
     res.json({ pending: [] });
@@ -2712,14 +2671,19 @@ router.get('/reports/pending-payments', async (req, res) => {
 // NOTE: leads.owner only ever holds the generic bucket 'human_sales' or 'ai_bot' -
 // there is no per-individual sales-rep assignment in the schema today, so this
 // produces one combined "human sales team" summary rather than per-person lists.
-router.get('/reports/reminder-bundle', async (req, res) => {
+router.get('/reports/reminder-bundle', internalAuth, async (req, res) => {
   try {
+    const todayStart = startOfUtcDay();
+    const todayRange = { $gte: todayStart, $lt: new Date(todayStart.getTime() + DAY_MS) };
+    const asRows = async (query) => ({ rows: await query });
     const [calls, followups, payments, overdue, hot] = await Promise.all([
-      pool.query(`SELECT id as lead_id, name, call_booked_at as time, owner FROM leads WHERE call_booked_at >= CURRENT_DATE AND call_booked_at < CURRENT_DATE + INTERVAL '1 day'`),
-      pool.query(`SELECT id as lead_id, name, stage, owner FROM leads WHERE next_followup_due >= CURRENT_DATE AND next_followup_due < CURRENT_DATE + INTERVAL '1 day'`),
+      asRows(Leads.find({ call_booked_at: todayRange }, { id: 1, name: 1, call_booked_at: 1, owner: 1 }).lean()
+        .then((rows) => rows.map((l) => ({ lead_id: l.id, name: l.name, time: l.call_booked_at, owner: l.owner })))),
+      asRows(Leads.find({ next_followup_due: todayRange }, { id: 1, name: 1, stage: 1, owner: 1 }).lean()
+        .then((rows) => rows.map((l) => ({ lead_id: l.id, name: l.name, stage: l.stage, owner: l.owner })))),
       Promise.resolve({ rows: [] }), // no invoice table yet - mirrors /reports/pending-payments
-      pool.query(`SELECT id, name, next_followup_due, owner FROM leads WHERE next_followup_due < NOW() AND status != 'converted' LIMIT 50`),
-      pool.query(`SELECT id, name, score, owner FROM leads WHERE status = 'hot' ORDER BY score DESC LIMIT 10`)
+      asRows(Leads.find({ next_followup_due: { $lt: new Date() }, status: { $nin: ['converted', null] } }, { _id: 0, id: 1, name: 1, next_followup_due: 1, owner: 1 }).limit(50).lean()),
+      asRows(Leads.find({ status: 'hot' }, { _id: 0, id: 1, name: 1, score: 1, owner: 1 }).sort({ score: -1 }).limit(10).lean()),
     ]);
 
     const metrics = {
@@ -2734,8 +2698,9 @@ router.get('/reports/reminder-bundle', async (req, res) => {
 
     // Sync tasks to sales_tasks table
     const insertTask = async (lead_id, type) => {
-       const exists = await pool.query(`SELECT id FROM sales_tasks WHERE lead_id = $1 AND task_type = $2 AND DATE(created_at) = CURRENT_DATE`, [lead_id, type]);
-       if (exists.rows.length === 0) {
+       const todayStart = startOfUtcDay();
+       const exists = await SalesTasks.exists({ lead_id, task_type: type, created_at: { $gte: todayStart, $lt: new Date(todayStart.getTime() + DAY_MS) } });
+       if (!exists) {
          await ensureSalesTask(req, lead_id, type);
        }
     };
@@ -2765,7 +2730,7 @@ router.get('/reports/reminder-bundle', async (req, res) => {
 // since this isn't lead messaging. Requires FOUNDER_WHATSAPP_PHONE (or an explicit
 // `phone`) to actually deliver; otherwise it no-ops with delivered:false so callers
 // can see nothing was sent instead of silently failing.
-router.post('/communication/notify-staff', async (req, res) => {
+router.post('/communication/notify-staff', internalAuth, async (req, res) => {
   const { phone, content, label } = req.body;
   try {
     const targetPhone = phone || process.env.FOUNDER_WHATSAPP_PHONE;
@@ -2800,74 +2765,51 @@ router.post('/communication/notify-staff', async (req, res) => {
 // ==========================================
 // Sales Person Tasks API
 // ==========================================
-router.get('/sales-tasks', async (req, res) => {
+router.get('/sales-tasks', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     await salesTrackingReady;
     // Keep one persistent task for every lead that currently needs sales action.
     // Completed tasks are intentionally not recreated for the same lead/type.
-    const insertedTasks = await pool.query(`
-      INSERT INTO sales_tasks (lead_id, task_type)
-      SELECT l.id, task.task_type
-      FROM leads l
-      CROSS JOIN LATERAL (
-        VALUES
-          (CASE WHEN l.call_booked_at IS NOT NULL AND LOWER(COALESCE(l.status, '')) = 'booked' THEN 'call' END),
-          (CASE WHEN LOWER(COALESCE(l.status, '')) = 'hot' THEN 'hot_lead' END),
-          (CASE WHEN l.next_followup_due IS NOT NULL AND LOWER(COALESCE(l.status, '')) NOT IN ('converted', 'booked', 'lost', 'opt-out') THEN 'followup' END)
-      ) AS task(task_type)
-      WHERE task.task_type IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM sales_tasks existing
-          WHERE existing.lead_id = l.id AND existing.task_type = task.task_type
-        )
-      RETURNING id, lead_id, task_type, status, unread, created_at
-    `);
-    for (const task of insertedTasks.rows) await emitSalesTaskUpdate(req, 'created', task);
+    const allLeads = await Leads.find({}, { id: 1, status: 1, call_booked_at: 1, next_followup_due: 1 }).lean();
+    const existingTasks = new Set((await SalesTasks.find({}, { lead_id: 1, task_type: 1 }).lean()).map((t) => `${t.lead_id}:${t.task_type}`));
+    for (const l of allLeads) {
+      const status = lower(l.status);
+      const wanted = [
+        l.call_booked_at != null && status === 'booked' ? 'call' : null,
+        status === 'hot' ? 'hot_lead' : null,
+        l.next_followup_due != null && !['converted', 'booked', 'lost', 'opt-out'].includes(status) ? 'followup' : null,
+      ].filter(Boolean);
+      for (const taskType of wanted) {
+        if (existingTasks.has(`${l.id}:${taskType}`)) continue;
+        const created = await SalesTasks.create({ lead_id: l.id, task_type: taskType });
+        existingTasks.add(`${l.id}:${taskType}`);
+        await emitSalesTaskUpdate(req, 'created', {
+          id: created.id, lead_id: created.lead_id, task_type: created.task_type, status: created.status, unread: created.unread, created_at: created.created_at,
+        });
+      }
+    }
 
-    const result = await pool.query(`
-      SELECT st.*, l.id AS lead_id, l.name, l.phone, l.email,
-             l.status AS lead_status, l.stage, l.source, l.interest, l.score,
-             COALESCE(l.sales_status, 'new') AS sales_status,
-             l.sales_followup_stopped, l.sales_followup_at,
-             (SELECT id FROM sales_lead_notes WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) AS latest_sales_note_id,
-             (SELECT note FROM sales_lead_notes WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) AS latest_sales_note,
-             (SELECT created_at FROM sales_lead_notes WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) AS latest_sales_note_at,
-             l.call_booked_at, l.next_followup_due, l.booking_status,
-             l.calendar_event_url, l.google_meet_link,
-             (SELECT MAX(conversation.last_message_at) FROM conversations conversation WHERE conversation.lead_id = l.id) AS last_contact,
-             l.created_at AS lead_created_at,
-             c.name AS brand_name, u.name AS assigned_name,
-             lead_tags.tags
-      FROM sales_tasks st
-      JOIN leads l ON st.lead_id = l.id
-      LEFT JOIN clients c ON c.id = l.client_id
-      LEFT JOIN users u ON u.id = l.assigned_to
-      LEFT JOIN LATERAL (
-        SELECT COALESCE(json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color)), '[]'::json) AS tags
-        FROM lead_tags lt
-        JOIN alliance_inbox_tags t ON lt.tag_id = t.id
-        WHERE lt.lead_id = l.id
-      ) lead_tags ON TRUE
-      WHERE st.status = 'completed'
-        OR (
-          COALESCE(l.sales_followup_stopped, FALSE) = FALSE
-          AND LOWER(COALESCE(l.sales_status, 'new')) NOT IN ('converted', 'closed', 'not_interested')
-          AND (
-            (st.task_type = 'call' AND l.call_booked_at IS NOT NULL AND LOWER(COALESCE(l.status, '')) = 'booked')
-            OR (st.task_type = 'hot_lead' AND LOWER(COALESCE(l.status, '')) = 'hot')
-            OR (st.task_type IN ('followup', 'overdue') AND l.next_followup_due IS NOT NULL AND LOWER(COALESCE(l.status, '')) NOT IN ('converted', 'booked', 'lost', 'opt-out'))
-          )
-        )
-      ORDER BY st.created_at DESC, st.id DESC
-    `);
-    res.json({ success: true, tasks: result.rows });
+    const taskRows = await loadSalesTaskRows(
+      await SalesTasks.find({}, NO_ID).sort({ created_at: -1, id: -1 }).lean(),
+      { includeLatestNote: true }
+    );
+    const tasks = taskRows.filter((t) => {
+      if (t.status === 'completed') return true;
+      if (t.sales_followup_stopped === true) return false;
+      if (['converted', 'closed', 'not_interested'].includes(lower(t.sales_status))) return false;
+      const leadStatus = lower(t.lead_status);
+      return (t.task_type === 'call' && t.call_booked_at != null && leadStatus === 'booked')
+        || (t.task_type === 'hot_lead' && leadStatus === 'hot')
+        || (['followup', 'overdue'].includes(t.task_type) && t.next_followup_due != null && !['converted', 'booked', 'lost', 'opt-out'].includes(leadStatus));
+    });
+    res.json({ success: true, tasks });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/sales-tasks/export', async (req, res) => {
+router.post('/sales-tasks/export', internalAuth, async (req, res) => {
   try {
     const ids = Array.isArray(req.body.ids)
       ? [...new Set(req.body.ids.map(Number).filter(Number.isInteger))]
@@ -2877,30 +2819,9 @@ router.post('/sales-tasks/export', async (req, res) => {
       return res.status(400).json({ error: 'No task IDs provided for export' });
     }
 
-    const result = await pool.query(`
-      SELECT st.*, l.id AS lead_id, l.name, l.phone, l.email,
-             l.status AS lead_status, l.stage, l.source, l.interest, l.score,
-             COALESCE(l.sales_status, 'new') AS sales_status,
-             l.sales_followup_stopped, l.sales_followup_at,
-             l.call_booked_at, l.next_followup_due, l.booking_status,
-             l.calendar_event_url, l.google_meet_link,
-             (SELECT MAX(conversation.last_message_at) FROM conversations conversation WHERE conversation.lead_id = l.id) AS last_contact,
-             l.created_at AS lead_created_at,
-             c.name AS brand_name, u.name AS assigned_name,
-             lead_tags.tags
-      FROM sales_tasks st
-      JOIN leads l ON st.lead_id = l.id
-      LEFT JOIN clients c ON c.id = l.client_id
-      LEFT JOIN users u ON u.id = l.assigned_to
-      LEFT JOIN LATERAL (
-        SELECT COALESCE(json_agg(json_build_object('id', t.id, 'name', t.name, 'color', t.color)), '[]'::json) AS tags
-        FROM lead_tags lt
-        JOIN alliance_inbox_tags t ON lt.tag_id = t.id
-        WHERE lt.lead_id = l.id
-      ) lead_tags ON TRUE
-      WHERE st.id = ANY($1::int[])
-      ORDER BY st.created_at DESC, st.id DESC
-    `, [ids]);
+    const result = { rows: await loadSalesTaskRows(
+      await SalesTasks.find({ id: { $in: ids } }, NO_ID).sort({ created_at: -1, id: -1 }).lean()
+    ) };
 
     const xlsx = require('xlsx');
     const exportData = result.rows.map(t => {
@@ -2938,67 +2859,67 @@ router.post('/sales-tasks/export', async (req, res) => {
   }
 });
 
-router.put('/sales-tasks/:id/status', async (req, res) => {
+router.put('/sales-tasks/:id/status', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     const status = String(req.body.status || '').toLowerCase();
     if (!['pending', 'processing', 'completed'].includes(status)) {
       return res.status(400).json({ error: 'Invalid task status' });
     }
-    let query = `UPDATE sales_tasks SET status = $1, updated_at = NOW()`;
-    if (status === 'completed') {
-      query += `, completed_at = NOW()`;
-    } else {
-      query += `, completed_at = NULL`;
-    }
-    query += ` WHERE id = $2 RETURNING *`;
-    const result = await pool.query(query, [status, req.params.id]);
-    await emitSalesTaskUpdate(req, 'status_changed', result.rows[0]);
-    res.json({ success: true, task: result.rows[0] });
+    const task = await SalesTasks.findOneAndUpdate(
+      { id: req.params.id },
+      { $set: { status, updated_at: new Date(), completed_at: status === 'completed' ? new Date() : null } },
+      { new: true, projection: NO_ID }
+    ).lean();
+    await emitSalesTaskUpdate(req, 'status_changed', task || undefined);
+    res.json({ success: true, task: task || undefined });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/sales-tasks/unread-count', async (req, res) => {
+router.get('/sales-tasks/unread-count', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
-    const result = await pool.query(`SELECT COUNT(*)::int AS count FROM sales_tasks WHERE unread = TRUE AND status <> 'completed'`);
-    res.json({ success: true, count: result.rows[0].count });
+    const count = await SalesTasks.countDocuments({ unread: true, status: { $ne: 'completed' } });
+    res.json({ success: true, count });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/sales-tasks/lead/:leadId/read', async (req, res) => {
+router.put('/sales-tasks/lead/:leadId/read', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
-    await pool.query(`UPDATE sales_tasks SET unread = FALSE, updated_at = NOW() WHERE lead_id = $1 AND unread = TRUE`, [req.params.leadId]);
+    await SalesTasks.updateMany({ lead_id: req.params.leadId, unread: true }, { $set: { unread: false, updated_at: new Date() } });
     await emitSalesTaskUpdate(req, 'read', { lead_id: Number(req.params.leadId) });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/sales-tasks/lead/:leadId/sales-status', async (req, res) => {
+router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, async (req, res) => {
   try {
     await salesTrackingReady;
     const allowed = ['new', 'contacted', 'processing', 'follow_up', 'converted', 'not_interested', 'closed'];
     const status = String(req.body.status || '').toLowerCase();
     if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid sales status' });
     const shouldStop = ['converted', 'not_interested', 'closed'].includes(status);
-    const result = await pool.query(`
-      UPDATE leads SET sales_status = $1,
-        sales_followup_stopped = $2,
-        sales_followup_at = CASE WHEN $2 THEN NULL ELSE sales_followup_at END,
-        next_followup_due = CASE WHEN $2 THEN NULL ELSE next_followup_due END,
-        updated_at = NOW()
-      WHERE id = $3 RETURNING id, sales_status, sales_followup_stopped, sales_followup_at
-    `, [status, shouldStop, req.params.leadId]);
+    const statusLead = await Leads.findOneAndUpdate(
+      { id: req.params.leadId },
+      { $set: {
+        sales_status: status,
+        sales_followup_stopped: shouldStop,
+        ...(shouldStop ? { sales_followup_at: null, next_followup_due: null } : {}),
+        updated_at: new Date(),
+      } },
+      { new: true, projection: { _id: 0, id: 1, sales_status: 1, sales_followup_stopped: 1, sales_followup_at: 1 } }
+    ).lean();
+    const result = { rows: statusLead ? [statusLead] : [] };
     if (!result.rows.length) return res.status(404).json({ error: 'Lead not found' });
     await emitSalesTaskUpdate(req, 'lead_status_changed', { lead_id: Number(req.params.leadId), ...result.rows[0] });
     res.json({ success: true, lead: result.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/sales-tasks/lead/:leadId/notes', async (req, res) => {
+router.post('/sales-tasks/lead/:leadId/notes', internalAuth, async (req, res) => {
   try {
     await salesTrackingReady;
     const note = String(req.body.note || '').trim();
@@ -3022,43 +2943,46 @@ Return only JSON: {"stop_followups":boolean,"followup_at":string|null}. Set stop
       }
     }
 
-    const noteResult = await pool.query(`INSERT INTO sales_lead_notes (lead_id, note) VALUES ($1, $2) RETURNING *`, [req.params.leadId, note]);
-    const leadResult = await pool.query(`
-      UPDATE leads SET
-        sales_followup_stopped = $1,
-        sales_followup_at = $2::timestamp,
-        next_followup_due = CASE WHEN $1 THEN NULL WHEN $2::timestamp IS NOT NULL THEN $2::timestamp ELSE next_followup_due END,
-        sales_status = CASE WHEN $1 AND LOWER($3) LIKE '%not interested%' THEN 'not_interested' ELSE sales_status END,
-        updated_at = NOW()
-      WHERE id = $4
-      RETURNING id, sales_status, sales_followup_stopped, sales_followup_at, next_followup_due
-    `, [shouldStop, followupAt, note, req.params.leadId]);
+    const noteResult = { rows: [(await SalesLeadNotes.create({ lead_id: req.params.leadId, note })).toObject()] };
+    const followupDate = followupAt ? new Date(followupAt) : null;
+    const notedLead = await Leads.findOneAndUpdate(
+      { id: req.params.leadId },
+      { $set: {
+        sales_followup_stopped: shouldStop,
+        sales_followup_at: followupDate,
+        ...(shouldStop ? { next_followup_due: null } : followupDate ? { next_followup_due: followupDate } : {}),
+        ...(shouldStop && lower(note).includes('not interested') ? { sales_status: 'not_interested' } : {}),
+        updated_at: new Date(),
+      } },
+      { new: true, projection: { _id: 0, id: 1, sales_status: 1, sales_followup_stopped: 1, sales_followup_at: 1, next_followup_due: 1 } }
+    ).lean();
+    const leadResult = { rows: notedLead ? [notedLead] : [] };
     await emitSalesTaskUpdate(req, 'note_added', { lead_id: Number(req.params.leadId), note: noteResult.rows[0], ...leadResult.rows[0] });
     res.json({ success: true, note: noteResult.rows[0], lead: leadResult.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/sales-tasks/notes/:noteId', async (req, res) => {
+router.put('/sales-tasks/notes/:noteId', internalAuth, async (req, res) => {
   try {
     const note = String(req.body.note || '').trim();
     if (!note) return res.status(400).json({ error: 'Note is required' });
-    const noteResult = await pool.query(`UPDATE sales_lead_notes SET note = $1 WHERE id = $2 RETURNING *`, [note, req.params.noteId]);
-    if (noteResult.rowCount === 0) return res.status(404).json({ error: 'Note not found' });
-    res.json({ success: true, note: noteResult.rows[0] });
+    const updatedNote = await SalesLeadNotes.findOneAndUpdate({ id: req.params.noteId }, { $set: { note } }, { new: true, projection: NO_ID }).lean();
+    if (!updatedNote) return res.status(404).json({ error: 'Note not found' });
+    res.json({ success: true, note: updatedNote });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/sales-tasks/notes/:noteId', async (req, res) => {
+router.delete('/sales-tasks/notes/:noteId', internalAuth, async (req, res) => {
   try {
-    const delRes = await pool.query(`DELETE FROM sales_lead_notes WHERE id = $1 RETURNING lead_id`, [req.params.noteId]);
-    if (delRes.rowCount === 0) return res.status(404).json({ error: 'Note not found' });
-    const leadId = delRes.rows[0].lead_id;
-    const latestRes = await pool.query(`SELECT id, note, created_at FROM sales_lead_notes WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 1`, [leadId]);
-    res.json({ success: true, latest_note: latestRes.rows[0] || null });
+    const deletedNote = await SalesLeadNotes.findOneAndDelete({ id: req.params.noteId }, { projection: { lead_id: 1 } }).lean();
+    if (!deletedNote) return res.status(404).json({ error: 'Note not found' });
+    const leadId = deletedNote.lead_id;
+    const latestNote = await SalesLeadNotes.findOne({ lead_id: leadId }, { _id: 0, id: 1, note: 1, created_at: 1 }).sort({ created_at: -1 }).lean();
+    res.json({ success: true, latest_note: latestNote || null });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/sales-tasks/bulk-delete', async (req, res) => {
+router.post('/sales-tasks/bulk-delete', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     const ids = Array.isArray(req.body.ids)
@@ -3070,18 +2994,18 @@ router.post('/sales-tasks/bulk-delete', async (req, res) => {
     let result;
 
     if (ids.length) {
-      result = await pool.query(
-        `DELETE FROM sales_tasks WHERE id = ANY($1::int[]) RETURNING id, lead_id, task_type`,
-        [ids]
-      );
+      const doomed = await SalesTasks.find({ id: { $in: ids } }, { _id: 0, id: 1, lead_id: 1, task_type: 1 }).lean();
+      await SalesTasks.deleteMany({ id: { $in: doomed.map((t) => t.id) } });
+      result = { rows: doomed, rowCount: doomed.length };
     } else {
       if (!validDate.test(from) || !validDate.test(to) || from > to) {
         return res.status(400).json({ error: 'A valid inclusive from/to date range is required' });
       }
-      result = await pool.query(
-        `DELETE FROM sales_tasks WHERE created_at::date BETWEEN $1::date AND $2::date RETURNING id, lead_id, task_type`,
-        [from, to]
-      );
+      const rangeStart = new Date(`${from}T00:00:00.000Z`);
+      const rangeEnd = new Date(new Date(`${to}T00:00:00.000Z`).getTime() + DAY_MS);
+      const doomed = await SalesTasks.find({ created_at: { $gte: rangeStart, $lt: rangeEnd } }, { _id: 0, id: 1, lead_id: 1, task_type: 1 }).lean();
+      await SalesTasks.deleteMany({ id: { $in: doomed.map((t) => t.id) } });
+      result = { rows: doomed, rowCount: doomed.length };
     }
 
     for (const task of result.rows) await emitSalesTaskUpdate(req, 'deleted', task);
@@ -3091,11 +3015,11 @@ router.post('/sales-tasks/bulk-delete', async (req, res) => {
   }
 });
 
-router.delete('/sales-tasks/:id', async (req, res) => {
+router.delete('/sales-tasks/:id', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
-    const result = await pool.query(`DELETE FROM sales_tasks WHERE id = $1 RETURNING id, lead_id, task_type`, [req.params.id]);
-    await emitSalesTaskUpdate(req, 'deleted', result.rows[0] || null);
+    const deletedTask = await SalesTasks.findOneAndDelete({ id: req.params.id }, { projection: { _id: 0, id: 1, lead_id: 1, task_type: 1 } }).lean();
+    await emitSalesTaskUpdate(req, 'deleted', deletedTask || null);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3124,11 +3048,11 @@ router.get('/auth/google/callback-calender', async (req, res) => {
   }
 });
 
-router.get('/calendar/status', async (req, res) => {
+router.get('/calendar/status', internalAuth, async (req, res) => {
   res.json(await googleCalendar.getConnectionStatus());
 });
 
-router.post('/calendar/availability', async (req, res) => {
+router.post('/calendar/availability', internalAuth, async (req, res) => {
   try {
     const start = new Date(req.body.start);
     const durationMinutes = Math.min(Math.max(Number(req.body.duration_minutes) || 30, 15), 180);
@@ -3141,7 +3065,7 @@ router.post('/calendar/availability', async (req, res) => {
   }
 });
 
-router.post('/leads/book-call', async (req, res) => {
+router.post('/leads/book-call', internalAuth, async (req, res) => {
   try {
     const { lead_id, booking_time, duration_minutes, notes } = req.body;
 
@@ -3149,14 +3073,10 @@ router.post('/leads/book-call', async (req, res) => {
       return res.status(400).json({ success: false, error: "Missing lead_id or booking_time" });
     }
 
-    const leadDetails = await pool.query(`
-      SELECT l.id, l.name, l.phone, l.email, c.name AS brand_name
-      FROM leads l LEFT JOIN clients c ON c.id = l.client_id
-      WHERE l.id = $1 LIMIT 1
-    `, [lead_id]);
-    if (!leadDetails.rows[0]) return res.status(404).json({ success: false, error: 'Lead not found' });
+    const detailedLead = await leadWithClient(lead_id, { brand_name: 'name' });
+    if (!detailedLead) return res.status(404).json({ success: false, error: 'Lead not found' });
 
-    const lead = leadDetails.rows[0];
+    const lead = { id: detailedLead.id, name: detailedLead.name, phone: detailedLead.phone, email: detailedLead.email, brand_name: detailedLead.brand_name };
     const calendarBooking = await googleCalendar.bookMeeting({
       leadId: lead_id,
       brand: lead.brand_name,
@@ -3172,26 +3092,28 @@ router.post('/leads/book-call', async (req, res) => {
     }
 
     // Mark booked only after Google confirms the event, preventing false CRM bookings.
-    const result = await pool.query(
-      `UPDATE leads SET call_booked_at = $1, status = 'booked', booking_status = 'confirmed',
-         calendar_event_id = $2, calendar_event_url = $3, google_meet_link = $4, updated_at = NOW()
-       WHERE id = $5
-       RETURNING id, call_booked_at, status, booking_status, calendar_event_url, google_meet_link`,
-      [calendarBooking.start, calendarBooking.event_id, calendarBooking.event_url, calendarBooking.meet_link, lead_id]
-    );
+    const bookedLead = await Leads.findOneAndUpdate(
+      { id: lead_id },
+      { $set: {
+        call_booked_at: calendarBooking.start, status: 'booked', booking_status: 'confirmed',
+        calendar_event_id: calendarBooking.event_id, calendar_event_url: calendarBooking.event_url,
+        google_meet_link: calendarBooking.meet_link, updated_at: new Date(),
+      } },
+      { new: true, projection: { _id: 0, id: 1, call_booked_at: 1, status: 1, booking_status: 1, calendar_event_url: 1, google_meet_link: 1 } }
+    ).lean();
+    const result = { rows: bookedLead ? [bookedLead] : [] };
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, error: "Lead not found" });
     }
 
     await salesTasksReady;
-    const taskResult = await pool.query(`
-      INSERT INTO sales_tasks (lead_id, task_type, unread)
-      SELECT $1, 'call', TRUE
-      WHERE NOT EXISTS (SELECT 1 FROM sales_tasks WHERE lead_id = $1 AND task_type = 'call')
-      RETURNING id, lead_id, task_type, status, unread, created_at
-    `, [lead_id]);
-    if (taskResult.rows[0]) await emitSalesTaskUpdate(req, 'created', taskResult.rows[0]);
+    if (!(await SalesTasks.exists({ lead_id, task_type: 'call' }))) {
+      const callTask = await SalesTasks.create({ lead_id, task_type: 'call', unread: true });
+      await emitSalesTaskUpdate(req, 'created', {
+        id: callTask.id, lead_id: callTask.lead_id, task_type: callTask.task_type, status: callTask.status, unread: callTask.unread, created_at: callTask.created_at,
+      });
+    }
 
     let support_notification = { sent: false };
     try {

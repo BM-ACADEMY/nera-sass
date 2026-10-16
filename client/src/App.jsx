@@ -19,10 +19,8 @@ import { TemplatesView } from './views/TemplatesView.jsx';
 import { AIBrainView } from './views/AIBrainView.jsx';
 import { AIImageGeneratorView } from './views/AIImageGeneratorView.jsx';
 import { ReportsView } from './views/ReportsView.jsx';
-import { FounderReportsView } from './views/FounderReportsView.jsx';
 import { ClientsView } from './views/ClientsView.jsx';
 import { SettingsView } from './views/SettingsView.jsx';
-import { WorkflowsView } from './views/WorkflowsView.jsx';
 import { IntegrationsView } from './views/IntegrationsView.jsx';
 
 
@@ -187,10 +185,10 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
               <Route path="/brain" element={<AIBrainView />} />
               <Route path="/ai-image" element={<AIImageGeneratorView />} />
               <Route path="/reports" element={<ReportsView />} />
-              <Route path="/founder-reports" element={<FounderReportsView />} />
-              <Route path="/clients" element={<ClientsView />} />
-              <Route path="/settings" element={<SettingsView />} />
-              <Route path="/workflows" element={<WorkflowsView />} />
+              <Route path="/founder-reports" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/clients" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/settings" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/workflows" element={<Navigate to="/dashboard" replace />} />
               <Route path="/integrations" element={<IntegrationsView />} />
               
               <Route path="/alliance-dashboard" element={<AllianceDashboard />} />

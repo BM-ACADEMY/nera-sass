@@ -1,7 +1,7 @@
 // backend/services/openai.js
 const Groq = require('groq-sdk');
 const axios = require('axios');
-const db = require('../db/connection');
+const { KnowledgeBase, PromptTemplates, AiAnalysis, Organisations } = require('../models');
 const groq = new Groq({ apiKey: process.env.OPENAI_API_KEY || 'dummy_key' });
 
 // WEBSITE SCRAPER
@@ -34,21 +34,12 @@ async function getKBContext(orgType) {
     ? ['BM Academy','Core Talents','BM TechX','All']
     : ['Core Talents','BM Academy','All'];
     
-  const { rows } = await db.query(`
-    SELECT title, brand, category,
-           LEFT(content, 2000) AS content
-    FROM knowledge_base
-    WHERE brand = ANY($1)
-    ORDER BY
-      CASE category
-        WHEN 'profile' THEN 1
-        WHEN 'mou' THEN 2
-        WHEN 'faq' THEN 3
-        ELSE 4
-      END,
-      created_at DESC
-    LIMIT 5
-  `, [brandFilter]);
+  const categoryRank = { profile: 1, mou: 2, faq: 3 };
+  const rows = (await KnowledgeBase.find({ brand: { $in: brandFilter } }, { _id: 0, title: 1, brand: 1, category: 1, content: 1, created_at: 1 }).lean())
+    .sort((a, b) => (categoryRank[a.category] || 4) - (categoryRank[b.category] || 4)
+      || new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, 5)
+    .map((r) => ({ ...r, content: r.content == null ? r.content : String(r.content).slice(0, 2000) }));
   
   if (rows.length === 0) {
     return 'Knowledge base is empty. Upload ABM Groups profile PDFs first.';
@@ -61,11 +52,8 @@ async function getKBContext(orgType) {
 
 // PROMPT BUILDER
 async function buildPrompt(org, websiteText, kbContext) {
-  const { rows } = await db.query(
-    `SELECT prompt_text FROM prompt_templates WHERE name = $1 AND active = TRUE`,
-    [`${org.type}_analyzer`]
-  );
-  let prompt = rows[0]?.prompt_text || getHardcodedPrompt(org.type);
+  const template = await PromptTemplates.findOne({ name: `${org.type}_analyzer`, active: true }, { prompt_text: 1 }).lean();
+  let prompt = template?.prompt_text || getHardcodedPrompt(org.type);
   
   prompt = prompt
     .replace('{{org_name}}', org.name || '')
@@ -113,32 +101,21 @@ async function analyzeOrganisation(org) {
   }
   
   // Save analysis to database
-  await db.query(`
-    INSERT INTO ai_analysis
-    (org_id, score, offer_recommended, reason,
-     bm_course_match, core_talents_offer,
-     personalisation_hook, hiring_potential,
-     training_potential, raw_json)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-    ON CONFLICT DO NOTHING
-  `, [
-    org.id,
-    result.score || 50,
-    result.offer_recommended || '',
-    result.reason || '',
-    result.bm_course_match || result.skills_match || '',
-    result.core_talents_offer || '',
-    result.personalisation_hook || '',
-    result.hiring_potential || 'medium',
-    result.training_potential || 'medium',
-    result
-  ]);
+  await AiAnalysis.create({
+    org_id: org.id,
+    score: result.score || 50,
+    offer_recommended: result.offer_recommended || '',
+    reason: result.reason || '',
+    bm_course_match: result.bm_course_match || result.skills_match || '',
+    core_talents_offer: result.core_talents_offer || '',
+    personalisation_hook: result.personalisation_hook || '',
+    hiring_potential: result.hiring_potential || 'medium',
+    training_potential: result.training_potential || 'medium',
+    raw_json: result,
+  }).catch((error) => { if (error.code !== 11000) throw error; }); // ON CONFLICT DO NOTHING
   
   // Update org status
-  await db.query(
-    `UPDATE organisations SET status='analysed', updated_at=NOW() WHERE id=$1`,
-    [org.id]
-  );
+  await Organisations.updateOne({ id: org.id }, { $set: { status: 'analysed', updated_at: new Date() } });
   
   // Telegram alert for HOT leads (score >= 85)
   if ((result.score || 0) >= 85) {
@@ -160,9 +137,9 @@ async function analyzeBatch(orgIds) {
   const results = [];
   const DELAY_MS = 1500;
   for (const id of orgIds) {
-    const { rows } = await db.query('SELECT * FROM organisations WHERE id=$1', [id]);
-    if (rows.length > 0) {
-      const result = await analyzeOrganisation(rows[0]);
+    const org = await Organisations.findOne({ id }).lean();
+    if (org) {
+      const result = await analyzeOrganisation(org);
       results.push({ id, score: result.score });
       await new Promise(r => setTimeout(r, DELAY_MS));
     }

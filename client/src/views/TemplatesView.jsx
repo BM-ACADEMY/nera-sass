@@ -922,7 +922,7 @@ export const TemplatesView = () => {
                       style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 5, color: C.muted, padding: '3px 9px', fontSize: 9, cursor: 'pointer' }}
                     >Preview</button>
                     <a
-                      href={`${api.baseUrl}/api/templates/${t.id}/campaign-sheet`}
+                      href={`${api.baseUrl}/api/templates/${t.id}/campaign-sheet?token=${encodeURIComponent(localStorage.getItem('leados_token') || '')}`}
                       download
                       title="Download an Excel recipient sheet with columns matching this template's parameters"
                       style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 5, color: C.green, padding: '3px 9px', fontSize: 9, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3, textDecoration: 'none' }}

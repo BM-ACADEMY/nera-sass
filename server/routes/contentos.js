@@ -1,6 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../db/connection');
+const { ContentQueue, BrandSocialAccounts, PublishQueue } = require('../models');
+const { escapeRegex } = require('../db/mongo');
+
+const NO_ID = { _id: 0 };
+const startOfUtcDay = () => { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d; };
+const countByStatus = async (match) => (await ContentQueue.aggregate([
+  { $match: match },
+  { $group: { _id: '$status', count: { $sum: 1 } } },
+])).map((row) => ({ status: row._id, count: row.count }));
 const ctrl = require('../controllers/contentController');
 const tb = require('../controllers/thumbnailBrainController');
 
@@ -46,7 +54,7 @@ function safeJsonValue(val) {
 // GET /api/content-os/social-accounts
 router.get('/social-accounts', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM brand_social_accounts WHERE is_active = true ORDER BY brand_name, platform');
+    const rows = await BrandSocialAccounts.find({ is_active: true }, NO_ID).sort({ brand_name: 1, platform: 1 }).lean();
     res.json(rows);
   } catch (err) {
     console.error('Fetch social accounts error:', err);
@@ -58,55 +66,47 @@ router.get('/social-accounts', async (req, res) => {
 router.get('/content-queue', async (req, res) => {
   try {
     const { status, search, brand, startDate, endDate, limit = 100, offset = 0 } = req.query;
-    let q = 'SELECT * FROM content_queue WHERE 1=1';
-    const params = [];
+    const filter = {};
 
     if (status && status !== 'all') {
-      params.push(status);
-      q += ` AND status = $${params.length}`;
+      filter.status = status;
     } else {
-      q += " AND status != 'deleted_from_drive'";
+      filter.status = { $ne: 'deleted_from_drive' };
     }
-    
+
+    const and = [];
     if (brand && brand !== 'All Brands') {
-      params.push(`%${brand}%`);
-      q += ` AND brand_name ILIKE $${params.length}`;
+      filter.brand_name = new RegExp(escapeRegex(brand), 'i');
     }
 
     if (search) {
-      params.push(`%${search}%`);
-      q += ` AND (thumbnail_title ILIKE $${params.length} OR brand_name ILIKE $${params.length} OR caption ILIKE $${params.length} OR file_name ILIKE $${params.length})`;
+      const pattern = new RegExp(escapeRegex(search), 'i');
+      and.push({ $or: [{ thumbnail_title: pattern }, { brand_name: pattern }, { caption: pattern }, { file_name: pattern }] });
     }
 
     if (startDate && endDate) {
-      params.push(startDate, endDate);
-      q += ` AND created_at BETWEEN $${params.length - 1} AND $${params.length}`;
+      filter.created_at = { $gte: new Date(startDate), $lte: new Date(endDate) };
     }
+    if (and.length) filter.$and = and;
 
-    q += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-    params.push(limit, offset);
+    const rows = await ContentQueue.find(filter, NO_ID)
+      .sort({ created_at: -1 })
+      .skip(Number(offset) || 0)
+      .limit(Number(limit) || 100)
+      .lean();
 
-    const { rows } = await pool.query(q, params);
-    
     // Global stats
-    const statsRes = await pool.query(`
-      SELECT status, count(*) 
-      FROM content_queue 
-      GROUP BY status
-    `);
-    
     const stats = { PENDING: 0, APPROVED: 0, REJECTED: 0, PUBLISHED: 0, FAILED: 0 };
-    statsRes.rows.forEach(r => { stats[r.status] = parseInt(r.count); });
+    (await countByStatus({})).forEach(r => { stats[r.status] = parseInt(r.count); });
 
     // Today's stats
-    const todayRes = await pool.query(`
-      SELECT status, count(*) 
-      FROM content_queue 
-      WHERE DATE(updated_at) = CURRENT_DATE AND status IN ('PUBLISHED', 'FAILED')
-      GROUP BY status
-    `);
+    const todayStart = startOfUtcDay();
+    const todayRows = await countByStatus({
+      updated_at: { $gte: todayStart, $lt: new Date(todayStart.getTime() + 24 * 60 * 60 * 1000) },
+      status: { $in: ['PUBLISHED', 'FAILED'] },
+    });
     const todayStats = { PUBLISHED: 0, FAILED: 0 };
-    todayRes.rows.forEach(r => { todayStats[r.status] = parseInt(r.count); });
+    todayRows.forEach(r => { todayStats[r.status] = parseInt(r.count); });
 
     const resolvedRows = rows.map(item => {
       if (ctrl.resolvePublicUrl) {
@@ -138,9 +138,8 @@ router.get('/content-queue', async (req, res) => {
 // GET /api/content-os/content/:id
 router.get('/content/:id', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM content_queue WHERE id = $1', [req.params.id]);
-    if (!rows.length) return res.status(404).json({ error: 'Content not found' });
-    const item = rows[0];
+    const item = await ContentQueue.findOne({ id: req.params.id }, NO_ID).lean();
+    if (!item) return res.status(404).json({ error: 'Content not found' });
     if (ctrl.resolvePublicUrl) {
       item.public_video_url = ctrl.resolvePublicUrl(item.public_video_url, req);
       item.thumbnail_url = ctrl.resolvePublicUrl(item.thumbnail_url, req);
@@ -161,33 +160,21 @@ router.put('/content/:id', async (req, res) => {
       story_1, story_2, story_3, scheduled_at, platforms, selected_accounts 
     } = req.body;
 
-    const { rows } = await pool.query(`
-      UPDATE content_queue 
-      SET 
-        caption = COALESCE($1, caption),
-        x_caption = COALESCE($2, x_caption),
-        linkedin_caption = COALESCE($3, linkedin_caption),
-        thumbnail_title = COALESCE($4, thumbnail_title),
-        story_1 = COALESCE($5, story_1),
-        story_2 = COALESCE($6, story_2),
-        story_3 = COALESCE($7, story_3),
-        scheduled_at = COALESCE($8, scheduled_at),
-        platforms = COALESCE($9, platforms),
-        selected_channels = COALESCE($9, selected_channels),
-        selected_accounts = COALESCE($10, selected_accounts),
-        updated_at = NOW()
-      WHERE id = $11
-      RETURNING *
-    `, [
-      caption, x_caption, linkedin_caption, thumbnail_title, 
-      story_1, story_2, story_3, scheduled_at, 
-      platforms ? JSON.stringify(safeJsonValue(platforms)) : null,
-      selected_accounts ? JSON.stringify(safeJsonValue(selected_accounts)) : null,
-      id
-    ]);
+    // COALESCE(new, old): only provided values overwrite stored ones
+    const changes = Object.fromEntries(Object.entries({
+      caption, x_caption, linkedin_caption, thumbnail_title, story_1, story_2, story_3, scheduled_at,
+    }).filter(([, value]) => value !== undefined && value !== null));
+    if (platforms) {
+      changes.platforms = safeJsonValue(platforms);
+      changes.selected_channels = safeJsonValue(platforms);
+    }
+    if (selected_accounts) changes.selected_accounts = safeJsonValue(selected_accounts);
+    changes.updated_at = new Date();
 
-    if (!rows.length) return res.status(404).json({ error: 'Content not found' });
-    res.json(rows[0]);
+    const updated = await ContentQueue.findOneAndUpdate({ id }, { $set: changes }, { new: true, projection: NO_ID }).lean();
+
+    if (!updated) return res.status(404).json({ error: 'Content not found' });
+    res.json(updated);
   } catch (err) {
     console.error('Update content error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -199,23 +186,16 @@ router.put('/content/:id/edit', ctrl.updateContent);
 // POST /api/content-os/content/:id/approve
 // POST /api/content/:id/approve
 router.post('/content/:id/approve', async (req, res) => {
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
     // 1. Fetch post to validate before approving
-    const postRes = await client.query(`
-      SELECT id, brand_name, platforms, selected_channels 
-      FROM content_queue 
-      WHERE id = $1
-    `, [req.params.id]);
+    const post = await ContentQueue.findOne(
+      { id: req.params.id },
+      { _id: 0, id: 1, brand_name: 1, platforms: 1, selected_channels: 1 }
+    ).lean();
 
-    if (!postRes.rows.length) {
-      await client.query('ROLLBACK');
+    if (!post) {
       return res.status(404).json({ error: 'Content not found' });
     }
-
-    const post = postRes.rows[0];
 
     // Determine channels
     let channels = [];
@@ -232,18 +212,13 @@ router.post('/content/:id/approve', async (req, res) => {
     }
 
     if (!channels || channels.length === 0) {
-      await client.query('ROLLBACK');
       return res.status(400).json({ error: 'Cannot approve content. No publishing channels are selected.' });
     }
 
     // 2. Fetch connected social accounts for this brand
-    const accsRes = await client.query(`
-      SELECT platform 
-      FROM brand_social_accounts 
-      WHERE brand_name = $1 AND is_active = true
-    `, [post.brand_name]);
-    
-    const connectedPlatforms = new Set(accsRes.rows.map(r => r.platform.toLowerCase()));
+    const accounts = await BrandSocialAccounts.find({ brand_name: post.brand_name, is_active: true }, { platform: 1 }).lean();
+
+    const connectedPlatforms = new Set(accounts.map(r => r.platform.toLowerCase()));
 
     // 3. Validate accounts for each selected channel
     for (const channel of channels) {
@@ -253,7 +228,6 @@ router.post('/content/:id/approve', async (req, res) => {
       if (requiredPlatform === 'x_twitter') requiredPlatform = 'x_twitter';
 
       if (!connectedPlatforms.has(requiredPlatform)) {
-        await client.query('ROLLBACK');
         return res.status(400).json({ 
           error: `Cannot approve content. No valid publishing channels are configured for this brand. Missing account for ${channel}.` 
         });
@@ -262,11 +236,11 @@ router.post('/content/:id/approve', async (req, res) => {
 
     // 4. Update status and approve
     const approver = req.user?.name || req.user?.email || 'Admin';
-    const { rows } = await client.query(`
-      UPDATE content_queue 
-      SET status = 'APPROVED', approved_by = $2, approved_at = NOW(), updated_at = NOW() 
-      WHERE id = $1 RETURNING *
-    `, [req.params.id, approver]);
+    const approved = await ContentQueue.findOneAndUpdate(
+      { id: req.params.id },
+      { $set: { status: 'APPROVED', approved_by: approver, approved_at: new Date(), updated_at: new Date() } },
+      { new: true, projection: NO_ID }
+    ).lean();
 
     // Insert pending publishing jobs for each channel
     for (const channel of channels) {
@@ -274,21 +248,19 @@ router.post('/content/:id/approve', async (req, res) => {
       if (normalizedChannel === 'instagram') normalizedChannel = 'instagram_post';
       if (normalizedChannel === 'facebook') normalizedChannel = 'facebook_post';
 
-      await client.query(`
-        INSERT INTO publish_queue (content_id, brand_name, channel, status)
-        VALUES ($1, $2, $3, 'pending')
-        ON CONFLICT (content_id, channel) DO UPDATE SET status = 'pending', updated_at = NOW()
-      `, [post.id, post.brand_name, normalizedChannel]);
+      const job = await PublishQueue.updateOne(
+        { content_id: post.id, channel: normalizedChannel },
+        { $set: { status: 'pending', updated_at: new Date() } }
+      );
+      if (!job.matchedCount) {
+        await PublishQueue.create({ content_id: post.id, brand_name: post.brand_name, channel: normalizedChannel, status: 'pending' });
+      }
     }
 
-    await client.query('COMMIT');
-    res.json(rows[0]);
+    res.json(approved);
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error('Approve content error:', err);
     res.status(500).json({ error: 'Server error' });
-  } finally {
-    client.release();
   }
 });
 
@@ -297,14 +269,14 @@ router.post('/content/:id/reject', async (req, res) => {
   try {
     const { reason } = req.body;
     const rejector = req.user?.name || req.user?.email || 'Admin';
-    const { rows } = await pool.query(`
-      UPDATE content_queue 
-      SET status = 'REJECTED', rejection_reason = $2, rejected_by = $3, rejected_at = NOW(), updated_at = NOW() 
-      WHERE id = $1 RETURNING *
-    `, [req.params.id, reason, rejector]);
+    const updated = await ContentQueue.findOneAndUpdate(
+      { id: req.params.id },
+      { $set: { status: 'REJECTED', rejection_reason: reason, rejected_by: rejector, rejected_at: new Date(), updated_at: new Date() } },
+      { new: true, projection: NO_ID }
+    ).lean();
 
-    if (!rows.length) return res.status(404).json({ error: 'Content not found' });
-    res.json(rows[0]);
+    if (!updated) return res.status(404).json({ error: 'Content not found' });
+    res.json(updated);
   } catch (err) {
     console.error('Reject content error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -317,14 +289,14 @@ router.post('/content/:id/reject', async (req, res) => {
 router.post('/content/:id/publish-success', async (req, res) => {
   try {
     const { platform_post_ids } = req.body;
-    const { rows } = await pool.query(`
-      UPDATE content_queue 
-      SET status = 'published', published_at = NOW(), platform_post_ids = $2, updated_at = NOW() 
-      WHERE id = $1 RETURNING *
-    `, [req.params.id, platform_post_ids ? JSON.stringify(platform_post_ids) : '[]']);
+    const updated = await ContentQueue.findOneAndUpdate(
+      { id: req.params.id },
+      { $set: { status: 'published', published_at: new Date(), platform_post_ids: platform_post_ids || [], updated_at: new Date() } },
+      { new: true, projection: NO_ID }
+    ).lean();
 
-    if (!rows.length) return res.status(404).json({ error: 'Content not found' });
-    res.json(rows[0]);
+    if (!updated) return res.status(404).json({ error: 'Content not found' });
+    res.json(updated);
   } catch (err) {
     console.error('Publish success webhook error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -335,14 +307,14 @@ router.post('/content/:id/publish-success', async (req, res) => {
 router.post('/content/:id/publish-fail', async (req, res) => {
   try {
     const { error_message, error_response } = req.body;
-    const { rows } = await pool.query(`
-      UPDATE content_queue 
-      SET status = 'failed', failed_at = NOW(), error_message = $2, error_response = $3, updated_at = NOW() 
-      WHERE id = $1 RETURNING *
-    `, [req.params.id, error_message, error_response ? JSON.stringify(error_response) : '{}']);
+    const updated = await ContentQueue.findOneAndUpdate(
+      { id: req.params.id },
+      { $set: { status: 'failed', failed_at: new Date(), error_message, error_response: error_response || {}, updated_at: new Date() } },
+      { new: true, projection: NO_ID }
+    ).lean();
 
-    if (!rows.length) return res.status(404).json({ error: 'Content not found' });
-    res.json(rows[0]);
+    if (!updated) return res.status(404).json({ error: 'Content not found' });
+    res.json(updated);
   } catch (err) {
     console.error('Publish fail webhook error:', err);
     res.status(500).json({ error: 'Server error' });

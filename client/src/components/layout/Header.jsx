@@ -35,11 +35,7 @@ const SEARCH_PAGES = [
   { path: '/brain', label: 'AI Brain', desc: 'Configure AI assistant behavior' },
   { path: '/ai-image', label: 'AI Image', desc: 'Generate AI images' },
   { path: '/reports', label: 'Reports', desc: 'Detailed analytics and performance' },
-  { path: '/founder-reports', label: 'Founder Reports', desc: 'Executive summaries and metrics' },
-  { path: '/clients', label: 'Clients', desc: 'Manage client accounts and billing' },
   { path: '/integrations', label: 'Integrations', desc: 'Connect third-party tools' },
-  { path: '/workflows', label: 'Workflow Logs', desc: 'View automated workflow executions' },
-  { path: '/settings', label: 'Settings', desc: 'System configuration and preferences' },
 
   // AllianceOS
   { path: '/alliance-dashboard', label: 'AllianceOS Dashboard', desc: 'Alliance overview' },

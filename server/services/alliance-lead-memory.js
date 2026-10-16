@@ -1,4 +1,4 @@
-const db = require('../db/connection');
+const { AllianceLeadAiMemory } = require('../models');
 
 const emptyMemory = (prospectId) => ({
   lead_key: `prospect:${prospectId}`,
@@ -28,23 +28,28 @@ function normalizeMemory(prospectId, value = {}) {
 
 async function getAllianceLeadMemory(prospectId) {
   if (!prospectId) return emptyMemory('unknown');
-  const result = await db.query(`SELECT lead_key,summary,memory,last_channel,last_message_at,updated_at FROM alliance_lead_ai_memory WHERE prospect_id=$1`, [prospectId]);
-  if (!result.rowCount) return emptyMemory(prospectId);
-  return normalizeMemory(prospectId, { ...result.rows[0].memory, summary: result.rows[0].summary });
+  const row = await AllianceLeadAiMemory.findOne({ prospect_id: prospectId }).lean();
+  if (!row) return emptyMemory(prospectId);
+  return normalizeMemory(prospectId, { ...row.memory, summary: row.summary });
 }
 
 async function saveAllianceLeadMemory(prospectId, value, channel, messageTime = new Date()) {
   if (!prospectId) return null;
   const memory = normalizeMemory(prospectId, value);
-  const result = await db.query(
-    `INSERT INTO alliance_lead_ai_memory (prospect_id,lead_key,summary,memory,last_channel,last_message_at)
-     VALUES ($1,$2,$3,$4::jsonb,$5,$6)
-     ON CONFLICT (prospect_id) DO UPDATE SET summary=EXCLUDED.summary,memory=EXCLUDED.memory,
-       last_channel=EXCLUDED.last_channel,last_message_at=EXCLUDED.last_message_at,updated_at=NOW()
-     RETURNING *`,
-    [prospectId, memory.lead_key, memory.summary, JSON.stringify(memory), channel || null, messageTime]
+  return AllianceLeadAiMemory.findOneAndUpdate(
+    { prospect_id: prospectId },
+    {
+      $set: {
+        summary: memory.summary,
+        memory,
+        last_channel: channel || null,
+        last_message_at: messageTime,
+        updated_at: new Date(),
+      },
+      $setOnInsert: { lead_key: memory.lead_key, created_at: new Date() },
+    },
+    { upsert: true, new: true, lean: true }
   );
-  return result.rows[0];
 }
 
 module.exports = { getAllianceLeadMemory, saveAllianceLeadMemory, normalizeMemory };

@@ -2,7 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const csvParser = require('csv-parser');
 const fs = require('fs');
-const db = require('../db/connection');
+const { Organisations } = require('../models');
 const router = express.Router();
 const upload = multer({ dest: 'uploads/csv/' });
 
@@ -39,15 +39,15 @@ router.post('/csv', upload.single('file'), async (req, res) => {
       const district = row['District'];
       const contact_name = row['Contact Name'] || row['Principal Name'];
       
-      const { rowCount } = await db.query(`
-        INSERT INTO organisations
-        (name, type, website, email, phone, location, district, contact_name, lead_source)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-        ON CONFLICT DO NOTHING
-        RETURNING id
-      `, [name, type, website, email, phone, location, district, contact_name, source || 'CSV Upload']);
-      
-      if (rowCount > 0) inserted++;
+      try {
+        await Organisations.create({
+          name, type, website, email, phone, location, district, contact_name,
+          lead_source: source || 'CSV Upload',
+        });
+        inserted++;
+      } catch (error) {
+        if (error.code !== 11000) throw error; // ON CONFLICT DO NOTHING
+      }
     }
     
     res.json({

@@ -2,7 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 const fs = require('fs');
-const db = require('../db/connection');
+const { KnowledgeBase } = require('../models');
 const { getKBContext } = require('../services/openai');
 const router = express.Router();
 const upload = multer({ dest: 'uploads/kb/' });
@@ -32,16 +32,13 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       });
     }
     
-    const { rows } = await db.query(`
-      INSERT INTO knowledge_base
-      (title, category, brand, content, file_name, char_count)
-      VALUES ($1,$2,$3,$4,$5,$6)
-      RETURNING id
-    `, [title, category, brand, text, req.file.originalname, text.length]);
-    
+    const doc = await KnowledgeBase.create({
+      title, category, brand, content: text, file_name: req.file.originalname, char_count: text.length,
+    });
+
     res.json({
       success: true,
-      id: rows[0].id,
+      id: doc.id,
       chars_extracted: text.length,
       message: `Knowledge base updated: ${title}`
     });
@@ -53,19 +50,15 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 
 // GET /api/knowledge
 router.get('/', async (req, res) => {
-  const { rows } = await db.query(`
-    SELECT id, title, category, brand,
-           char_count, created_at,
-           LEFT(content, 200) AS preview
-    FROM knowledge_base
-    ORDER BY created_at DESC
-  `);
+  const docs = await KnowledgeBase.find({}, { _id: 0, id: 1, title: 1, category: 1, brand: 1, char_count: 1, created_at: 1, content: 1 })
+    .sort({ created_at: -1 }).lean();
+  const rows = docs.map(({ content, ...doc }) => ({ ...doc, preview: content == null ? null : String(content).slice(0, 200) }));
   res.json({ success: true, documents: rows });
 });
 
 // DELETE /api/knowledge/:id
 router.delete('/:id', async (req, res) => {
-  await db.query('DELETE FROM knowledge_base WHERE id=$1', [req.params.id]);
+  await KnowledgeBase.deleteOne({ id: req.params.id });
   res.json({ success: true });
 });
 

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { google } = require('googleapis');
-const pool = require('../db/connection');
+const { MafiyaGmbClients, MafiyaGmbTokens } = require('../models');
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -19,8 +19,8 @@ router.get('/auth/:clientId', async (req, res) => {
 
   try {
     // Verify client exists
-    const clientResult = await pool.query('SELECT id, business_name FROM mafiya_gmb_clients WHERE id = $1', [clientId]);
-    if (clientResult.rowCount === 0) {
+    const gmbClient = await MafiyaGmbClients.findOne({ id: clientId }, { id: 1, business_name: 1 }).lean();
+    if (!gmbClient) {
       return res.status(404).send(`
         <html><body style="background:#0a0f1d;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
           <div style="text-align:center;">
@@ -70,22 +70,17 @@ const handleGoogleCallback = async (req, res) => {
     const expiresAt = tokens.expiry_date ? new Date(tokens.expiry_date) : null;
 
     // Upsert tokens — replace existing if any
-    await pool.query(
-      `DELETE FROM mafiya_gmb_tokens WHERE client_id = $1`,
-      [clientId]
-    );
+    await MafiyaGmbTokens.deleteMany({ client_id: clientId });
 
-    await pool.query(
-      `INSERT INTO mafiya_gmb_tokens (client_id, access_token, refresh_token, expires_at)
-       VALUES ($1, $2, $3, $4)`,
-      [clientId, tokens.access_token, tokens.refresh_token || null, expiresAt]
-    );
+    await MafiyaGmbTokens.create({
+      client_id: clientId,
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token || null,
+      expires_at: expiresAt,
+    });
 
     // Mark client as verified
-    await pool.query(
-      `UPDATE mafiya_gmb_clients SET gmb_verified = true WHERE id = $1`,
-      [clientId]
-    );
+    await MafiyaGmbClients.updateOne({ id: clientId }, { $set: { gmb_verified: true } });
 
     // Emit real-time update event via Socket.io
     const io = req.app.get('io');
@@ -133,13 +128,10 @@ router.get('/auth/callback', handleGoogleCallback);
  */
 router.get('/status/:clientId', async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT id, access_token, refresh_token, expires_at FROM mafiya_gmb_tokens WHERE client_id = $1',
-      [req.params.clientId]
-    );
+    const token = await MafiyaGmbTokens.findOne({ client_id: req.params.clientId }, { refresh_token: 1 }).lean();
     res.json({
-      connected: result.rowCount > 0,
-      has_refresh_token: result.rowCount > 0 && !!result.rows[0].refresh_token,
+      connected: Boolean(token),
+      has_refresh_token: Boolean(token) && !!token.refresh_token,
     });
   } catch (err) {
     console.error('[Mafiya] GMB status check error:', err);
