@@ -4,6 +4,7 @@ const express = require('express');
 // service key or founder/ops platform staff only, never a customer token.
 const { internalAuth, internalPlatformAuth, staffAuth, hasInternalKey } = require('../middleware/authMiddleware');
 const audit = require('../services/audit');
+const { recordTenantWorkflowLog, recordPlatformWorkflowLog, WorkflowLogError } = require('../services/workflowLog');
 const fs = require('fs');
 const path = require('path');
 const router = express.Router();
@@ -1631,8 +1632,8 @@ router.post('/communication/send-founder', internalAuth, async (req, res) => {
       }
     }
 
-    // Automatically log this as a Workflow Log so the UI can display it in FounderReportsView
-    await WorkflowLogs.create({ workflow: 'WF06', status: 'success', message: content });
+    // Founder reports are platform-level: logged with no workspace (FounderReportsView).
+    await recordPlatformWorkflowLog({ workflow: 'WF06', status: 'success', message: content });
 
     res.json({ success: true, delivered: true, content, wa_msg_id: waMessageId });
   } catch (err) {
@@ -1642,13 +1643,38 @@ router.post('/communication/send-founder', internalAuth, async (req, res) => {
 });
 
 // 9. Workflow Logger
+// Workspace workflows (WF00–WF05): the n8n engine with the service key and
+// x-tenant-id, stored in that workspace. Customer sessions cannot write engine
+// logs, and platform workflows (WF06/WF07) are refused here.
 router.post('/workflows/log', internalAuth, async (req, res) => {
-  const { workflow, lead_id, status, message } = req.body;
+  if (req.identity?.kind !== 'service') {
+    return res.status(403).json({ error: 'Workflow logs are written by the workflow engine only', code: 'SERVICE_ONLY' });
+  }
   try {
-    await WorkflowLogs.create({ workflow, lead_id: lead_id == null ? lead_id : String(lead_id), status, message: message || null });
-    res.json({ success: true });
+    const log = await recordTenantWorkflowLog(req.body || {});
+    res.json({ success: true, id: log.id, scope: 'tenant' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (err instanceof WorkflowLogError) return res.status(err.status).json({ error: err.message, code: err.code });
+    res.status(500).json({ error: 'Could not record the workflow log' });
+  }
+});
+
+// Platform workflows (WF06/WF07): the n8n engine with the service key and no
+// workspace. Stored with tenant_id = null so they are never shown as, or mixed
+// with, a workspace's events.
+router.post('/platform/workflows/log', (req, res, next) => {
+  if (!hasInternalKey(req)) return res.status(401).json({ error: 'Service key required', code: 'SERVICE_ONLY' });
+  if (req.headers['x-tenant-id']) {
+    return res.status(400).json({ error: 'Platform workflow logs do not belong to a workspace; omit x-tenant-id', code: 'PLATFORM_LOG_NO_TENANT' });
+  }
+  return next();
+}, async (req, res) => {
+  try {
+    const log = await recordPlatformWorkflowLog(req.body || {});
+    res.json({ success: true, id: log.id, scope: 'platform' });
+  } catch (err) {
+    if (err instanceof WorkflowLogError) return res.status(err.status).json({ error: err.message, code: err.code });
+    res.status(500).json({ error: 'Could not record the workflow log' });
   }
 });
 
@@ -1690,19 +1716,22 @@ router.get('/workflows/telemetry', internalPlatformAuth, async (req, res) => {
     // 1. Total executions
     const totalExecutions = await WorkflowLogs.countDocuments();
 
-    // 2. Success Rate
+    // 2. Success Rate (null when nothing has run: no rate to report yet)
     const successCount = await WorkflowLogs.countDocuments({ status: 'success' });
-    const successRate = totalExecutions > 0 ? Math.round((successCount / totalExecutions) * 100) : 100;
+    const successRate = totalExecutions > 0 ? Math.round((successCount / totalExecutions) * 100) : null;
 
     // 3. AI Interventions
     const aiInterventions = await AiDecisions.countDocuments();
+
+    // 4. Workflows that logged at least once in the last 7 days
+    const activeWorkflows = (await WorkflowLogs.distinct('workflow', { created_at: { $gte: new Date(Date.now() - 7 * 86400000) } })).length;
 
     res.json({
       telemetry: {
         totalExecutions,
         successRate,
         aiInterventions,
-        activeWorkflows: 8
+        activeWorkflows
       }
     });
   } catch (err) {

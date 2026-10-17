@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Statistic, Table, Tag, Button, Empty, Popconfirm, message, Typography } from 'antd';
+import { Card, Row, Col, Statistic, Table, Tag, Button, Empty, Popconfirm, message, Typography, Alert } from 'antd';
 import {
   BarChartOutlined,
   ReloadOutlined,
@@ -13,6 +13,37 @@ import {
 import axiosClient from '../api/axiosClient';
 
 const { Text, Title } = Typography;
+
+// Shown as-is from the API: a missing value is a dash, never a made-up 0.
+const shown = (value) => (value === null || value === undefined ? '—' : value);
+const money = (val) => (val === '—' ? val : Number(val).toLocaleString('en-IN', { maximumFractionDigits: 2 }));
+
+const amounts = (byCurrency) => Object.entries(byCurrency || {})
+  .map(([c, v]) => `${c} ${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`).join(', ');
+
+// Everything reported beside the headline MRR, with the reason it is not in it
+// (rules in server/services/platformMetrics.js). Nothing here is added to MRR.
+function breakdownNotes(snapshot) {
+  if (!snapshot) return [];
+  const notes = [];
+  const manual = snapshot.manual_grant_unverified;
+  if (manual?.workspaces) notes.push(`Manual grants (payment not verified, so not counted as revenue): ${manual.workspaces} workspace(s), ${amounts(manual.mrr_by_currency)}/month`);
+  const grace = snapshot.at_risk_grace;
+  if (grace?.count) notes.push(`At risk: ${grace.count} subscription(s) in the 7-day grace period after expiry, ${amounts(grace.mrr_by_currency)}/month`);
+  const suspended = snapshot.staff_suspended;
+  if (suspended?.count) notes.push(`Included above but suspended by staff: ${suspended.count} workspace(s) (IDs ${suspended.tenant_ids.join(', ')}), ${amounts(suspended.mrr_by_currency)}/month`);
+  const otherPaid = Object.entries(snapshot.paid?.mrr_by_currency || {}).filter(([c]) => c !== snapshot.currency);
+  if (otherPaid.length) notes.push(`Paid MRR in other currencies, not added: ${amounts(Object.fromEntries(otherPaid))}`);
+  const ex = snapshot.excluded || {};
+  if (ex.orphan?.count) notes.push(`Excluded: ${ex.orphan.count} subscription(s) without a valid workspace (IDs ${ex.orphan.subscription_ids.join(', ')})`);
+  if (ex.lapsed?.count) notes.push(`Excluded: ${ex.lapsed.count} expired subscription(s) past grace`);
+  if (ex.contract_unverified?.count) notes.push(`Excluded: ${ex.contract_unverified.count} contract(s) that do not match an authorised term discount (${ex.contract_unverified.items.map((i) => `#${i.subscription_id} ${i.reason}`).join(', ')})`);
+  if (ex.legacy_unconfirmed?.count) notes.push(`Excluded: ${ex.legacy_unconfirmed.count} legacy subscription(s) whose units/currency are unconfirmed (IDs ${ex.legacy_unconfirmed.items.map((i) => i.subscription_id).join(', ')})`);
+  if (ex.undated?.count) notes.push(`Excluded: ${ex.undated.count} subscription(s) with no valid billing period (IDs ${ex.undated.subscription_ids.join(', ')})`);
+  if (ex.duplicate_rows?.count) notes.push(`Duplicate rows counted once: ${ex.duplicate_rows.count}`);
+  if (ex.superseded_overlap?.count) notes.push(`Overlapping subscriptions for a workspace already counted: ${ex.superseded_overlap.count}`);
+  return notes;
+}
 
 const FounderReportsView = () => {
   const [snapshot, setSnapshot] = useState(null);
@@ -86,10 +117,10 @@ const FounderReportsView = () => {
         <Col xs={24} sm={12} md={8}>
           <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
             <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>MONTHLY RECURRING REVENUE (MRR)</span>}
-              value={snapshot?.mrr || 0}
+              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>MRR (VERIFIED PAID CONTRACTS)</span>}
+              value={shown(snapshot?.mrr)}
               prefix="₹"
-              formatter={(val) => Number(val).toLocaleString('en-IN')}
+              formatter={money}
               valueStyle={{ color: '#16a34a', fontWeight: 800 }}
             />
           </Card>
@@ -97,10 +128,10 @@ const FounderReportsView = () => {
         <Col xs={24} sm={12} md={8}>
           <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
             <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>TOTAL CONTRACT VALUE (TCV)</span>}
-              value={snapshot?.totalContractValue || 0}
+              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>TCV (VERIFIED PAID, NOT YET ENDED)</span>}
+              value={shown(snapshot?.totalContractValue)}
               prefix="₹"
-              formatter={(val) => Number(val).toLocaleString('en-IN')}
+              formatter={money}
               valueStyle={{ color: '#2563eb', fontWeight: 800 }}
             />
           </Card>
@@ -108,8 +139,8 @@ const FounderReportsView = () => {
         <Col xs={24} sm={12} md={8}>
           <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
             <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>ACTIVE SUBSCRIPTIONS</span>}
-              value={snapshot?.activeSubscriptions || 0}
+              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>PAYING WORKSPACES</span>}
+              value={shown(snapshot?.activeSubscriptions)}
               prefix={<DollarCircleOutlined style={{ color: '#d97706' }} />}
               valueStyle={{ color: '#d97706', fontWeight: 800 }}
             />
@@ -117,12 +148,22 @@ const FounderReportsView = () => {
         </Col>
       </Row>
 
+      {breakdownNotes(snapshot).length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 24 }}
+          message="Reported separately (not in MRR)"
+          description={<ul style={{ margin: 0, paddingLeft: 18 }}>{breakdownNotes(snapshot).map((n) => <li key={n}>{n}</li>)}</ul>}
+        />
+      )}
+
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={8}>
           <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
             <Statistic
               title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>TOTAL WORKSPACES</span>}
-              value={snapshot?.totalWorkspaces || 0}
+              value={shown(snapshot?.totalWorkspaces)}
               prefix={<ShopOutlined style={{ color: '#3b82f6' }} />}
               valueStyle={{ color: '#0f172a', fontWeight: 800 }}
             />
@@ -132,7 +173,7 @@ const FounderReportsView = () => {
           <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
             <Statistic
               title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>PLATFORM USERS</span>}
-              value={snapshot?.totalUsers || 0}
+              value={shown(snapshot?.totalUsers)}
               prefix={<TeamOutlined style={{ color: '#8b5cf6' }} />}
               valueStyle={{ color: '#0f172a', fontWeight: 800 }}
             />
@@ -142,7 +183,7 @@ const FounderReportsView = () => {
           <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
             <Statistic
               title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>TOTAL LEADS MANAGED</span>}
-              value={snapshot?.totalLeads || 0}
+              value={shown(snapshot?.totalLeads)}
               prefix={<UsergroupAddOutlined style={{ color: '#10b981' }} />}
               valueStyle={{ color: '#0f172a', fontWeight: 800 }}
             />

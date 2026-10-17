@@ -20,6 +20,8 @@ const audit = require('../services/audit');
 const authController = require('../controllers/authController');
 const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
 const createMetaInventoryRouter = require('./adminMetaInventory');
+const { logScope } = require('../services/workflowLog');
+const { computeSubscriptionMetrics } = require('../services/platformMetrics');
 
 function fail(res, error) {
   if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details, code: error.code });
@@ -565,33 +567,51 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   });
 
   // ── Workflows Management ──────────────────────────────────
+  // Every row is labelled: scope "platform" (WF06/WF07, no workspace) or
+  // "tenant" (WF00–WF05, with the workspace it belongs to).
   router.get('/workflows/logs', permit('platform.tenants.view'), async (req, res) => {
     try {
       const filter = {};
       if (req.query.workflow && req.query.workflow !== 'ALL') filter.workflow = { $regex: escapeRegex(String(req.query.workflow)), $options: 'i' };
       if (req.query.status && req.query.status !== 'ALL') filter.status = String(req.query.status).toLowerCase();
+      if (req.query.scope === 'platform') filter.tenant_id = null;
+      if (req.query.scope === 'tenant') filter.tenant_id = { $ne: null };
+      if (req.query.tenant_id) filter.tenant_id = Number(req.query.tenant_id);
       const logs = await WorkflowLogs.find(filter, { _id: 0 }).sort({ created_at: -1 }).limit(500).lean();
-      return res.json({ logs });
+      const tenantIds = [...new Set(logs.map((l) => l.tenant_id).filter((id) => id != null))];
+      const names = new Map((await Tenants.find({ id: { $in: tenantIds } }, { _id: 0, id: 1, name: 1 }).lean()).map((t) => [t.id, t.name]));
+      return res.json({
+        logs: logs.map((l) => ({ ...l, scope: logScope(l), tenant_name: l.tenant_id == null ? null : (names.get(l.tenant_id) ?? null) })),
+      });
     } catch (error) {
       return fail(res, error);
     }
   });
 
+  // Computed from the stored logs only; nothing is assumed when there are none.
   router.get('/workflows/telemetry', permit('platform.tenants.view'), async (req, res) => {
     try {
-      const totalExecutions = await WorkflowLogs.countDocuments();
-      const successCount = await WorkflowLogs.countDocuments({ status: 'success' });
-      const failedCount = await WorkflowLogs.countDocuments({ status: 'failed' });
-      const successRate = totalExecutions > 0 ? Math.round((successCount / totalExecutions) * 100) : 100;
-      const aiInterventions = await AiDecisions.countDocuments();
+      const weekAgo = new Date(Date.now() - 7 * 86400000);
+      const [totalExecutions, successCount, failedCount, platformExecutions, aiInterventions, recentWorkflows] = await Promise.all([
+        WorkflowLogs.countDocuments(),
+        WorkflowLogs.countDocuments({ status: 'success' }),
+        WorkflowLogs.countDocuments({ status: 'failed' }),
+        WorkflowLogs.countDocuments({ tenant_id: null }),
+        AiDecisions.countDocuments(),
+        WorkflowLogs.distinct('workflow', { created_at: { $gte: weekAgo } }),
+      ]);
       return res.json({
         telemetry: {
           totalExecutions,
           successCount,
           failedCount,
-          successRate,
+          // null when nothing has run: there is no rate to report yet.
+          successRate: totalExecutions > 0 ? Math.round((successCount / totalExecutions) * 100) : null,
           aiInterventions,
-          activeWorkflows: 8,
+          // Workflows that logged at least once in the last 7 days.
+          activeWorkflows: recentWorkflows.length,
+          platformExecutions,
+          tenantExecutions: totalExecutions - platformExecutions,
         },
       });
     } catch (error) {
@@ -611,25 +631,39 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   // ── Founder Reports ───────────────────────────────────────
   router.get('/reports/founder-dashboard', permit('platform.tenants.view'), async (req, res) => {
     try {
-      const [totalWorkspaces, totalUsers, totalLeads, activeSubs, wf06Logs] = await Promise.all([
+      const [totalWorkspaces, totalUsers, totalLeads, allTenants, activeSubs, wf06Logs] = await Promise.all([
         Tenants.countDocuments({ status: { $ne: 'deleted' } }),
         Users.countDocuments({ is_active: { $ne: false } }),
         Leads.countDocuments(),
-        Subscriptions.find({ status: 'active' }, { _id: 0, monthly_price: 1, contract_value: 1 }).lean(),
-        WorkflowLogs.find({ workflow: 'WF06' }, { _id: 0 }).sort({ created_at: -1 }).limit(50).lean(),
+        Tenants.find({}, { _id: 0, id: 1, status: 1, deleted_at: 1 }).lean(),
+        Subscriptions.find({ status: 'active' }, {
+          _id: 0, id: 1, tenant_id: 1, status: 1, plan_code: 1, monthly_price: 1, contract_value: 1, term_months: 1, discount_pct: 1,
+          currency: 1, payment_method: 1, current_period_start: 1, current_period_end: 1,
+          price_monthly: 1, starts_at: 1, expires_at: 1,
+        }).lean(),
+        // Platform founder reports only; a workspace cannot appear here.
+        WorkflowLogs.find({ workflow: 'WF06', tenant_id: null }, { _id: 0 }).sort({ created_at: -1 }).limit(50).lean(),
       ]);
 
-      const mrr = activeSubs.reduce((sum, s) => sum + (Number(s.monthly_price) || 0), 0);
-      const totalContractValue = activeSubs.reduce((sum, s) => sum + (Number(s.contract_value) || 0), 0);
+      // MRR / TCV rules (orphans, renewals, expiry, currency): services/platformMetrics.js
+      const metrics = computeSubscriptionMetrics({ tenants: allTenants, subscriptions: activeSubs });
 
       return res.json({
         snapshot: {
           totalWorkspaces,
           totalUsers,
           totalLeads,
-          activeSubscriptions: activeSubs.length,
-          mrr,
-          totalContractValue,
+          activeSubscriptions: metrics.activeSubscriptions,
+          mrr: metrics.mrr,
+          totalContractValue: metrics.totalContractValue,
+          currency: metrics.currency,
+          // Headline mrr/totalContractValue/activeSubscriptions = verified paid
+          // contracts only; everything else is reported beside them.
+          paid: metrics.paid,
+          manual_grant_unverified: metrics.manual_grant_unverified,
+          at_risk_grace: metrics.at_risk_grace,
+          staff_suspended: metrics.staff_suspended,
+          excluded: metrics.excluded,
         },
         reports: wf06Logs,
       });

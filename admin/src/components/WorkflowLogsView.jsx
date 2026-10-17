@@ -17,10 +17,12 @@ const ENGINES = [
 
 const WorkflowLogsView = () => {
   const [logs, setLogs] = useState([]);
-  const [telemetry, setTelemetry] = useState({ totalExecutions: 0, successRate: 100, aiInterventions: 0, activeWorkflows: 8 });
+  // Real values only: no success rate until something has run, no assumed engine count.
+  const [telemetry, setTelemetry] = useState({ totalExecutions: 0, successRate: null, aiInterventions: 0, activeWorkflows: 0 });
   const [loading, setLoading] = useState(false);
   const [selectedEngine, setSelectedEngine] = useState('ALL');
   const [selectedStatus, setSelectedStatus] = useState('ALL');
+  const [selectedScope, setSelectedScope] = useState('ALL');
 
   const fetchWorkflowData = async () => {
     setLoading(true);
@@ -30,6 +32,7 @@ const WorkflowLogsView = () => {
           params: {
             workflow: selectedEngine !== 'ALL' ? selectedEngine : undefined,
             status: selectedStatus !== 'ALL' ? selectedStatus : undefined,
+            scope: selectedScope !== 'ALL' ? selectedScope : undefined,
           },
         }),
         axiosClient.get('/admin/workflows/telemetry'),
@@ -45,7 +48,7 @@ const WorkflowLogsView = () => {
 
   useEffect(() => {
     fetchWorkflowData();
-  }, [selectedEngine, selectedStatus]);
+  }, [selectedEngine, selectedStatus, selectedScope]);
 
   const handleDeleteLog = async (id) => {
     try {
@@ -66,9 +69,23 @@ const WorkflowLogsView = () => {
       render: (wf) => (
         <Tag color="geekblue" style={{ borderRadius: 10, fontWeight: 700, padding: '2px 8px' }}>
           <ThunderboltOutlined style={{ marginRight: 4 }} />
-          {wf || 'WF00'}
+          {wf || 'Unknown'}
         </Tag>
       ),
+    },
+    {
+      // WF06/WF07 are platform events (no workspace); WF00–WF05 belong to one workspace.
+      title: 'Scope',
+      key: 'scope',
+      width: 190,
+      render: (_, r) => (r.scope === 'platform'
+        ? <Tag color="purple" style={{ borderRadius: 10, fontWeight: 600 }}>Platform</Tag>
+        : (
+          <span>
+            <Tag color="blue" style={{ borderRadius: 10, fontWeight: 600 }}>Workspace</Tag>
+            <span style={{ fontSize: 12, color: '#475569' }}>{r.tenant_name || `#${r.tenant_id}`}</span>
+          </span>
+        )),
     },
     {
       title: 'Status',
@@ -128,7 +145,7 @@ const WorkflowLogsView = () => {
         </Col>
         <Col xs={24} sm={12} md={6}>
           <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>SUCCESS RATE</span>} value={telemetry.successRate ?? 100} suffix="%" prefix={<CheckOutlined style={{ color: '#16a34a' }} />} valueStyle={{ color: '#16a34a', fontWeight: 800 }} />
+            <Statistic title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>SUCCESS RATE</span>} value={telemetry.successRate ?? '—'} suffix={telemetry.successRate == null ? undefined : '%'} prefix={<CheckOutlined style={{ color: '#16a34a' }} />} valueStyle={{ color: '#16a34a', fontWeight: 800 }} />
           </Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
@@ -138,7 +155,7 @@ const WorkflowLogsView = () => {
         </Col>
         <Col xs={24} sm={12} md={6}>
           <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>ACTIVE ENGINES</span>} value={telemetry.activeWorkflows || 8} valueStyle={{ color: '#0f172a', fontWeight: 800 }} />
+            <Statistic title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>ACTIVE ENGINES (7 DAYS)</span>} value={telemetry.activeWorkflows ?? 0} valueStyle={{ color: '#0f172a', fontWeight: 800 }} />
           </Card>
         </Col>
       </Row>
@@ -157,6 +174,16 @@ const WorkflowLogsView = () => {
             onChange={setSelectedEngine}
             options={ENGINES.map(e => ({ value: e.id, label: e.name }))}
             style={{ width: 220 }}
+          />
+          <Select
+            value={selectedScope}
+            onChange={setSelectedScope}
+            options={[
+              { value: 'ALL', label: 'All Scopes' },
+              { value: 'tenant', label: 'Workspace (WF00–WF05)' },
+              { value: 'platform', label: 'Platform (WF06–WF07)' },
+            ]}
+            style={{ width: 200 }}
           />
           <Select
             value={selectedStatus}
@@ -180,6 +207,7 @@ const WorkflowLogsView = () => {
         columns={columns}
         loading={loading}
         pagination={{ pageSize: 12, hideOnSinglePage: true }}
+        locale={{ emptyText: 'No workflow executions have been recorded yet.' }}
         style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0' }}
       />
     </div>
