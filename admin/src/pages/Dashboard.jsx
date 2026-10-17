@@ -10,7 +10,8 @@ import {
   FiBriefcase,
   FiActivity,
   FiBarChart2,
-  FiSettings
+  FiSettings,
+  FiSmartphone
 } from 'react-icons/fi';
 import { MdOutlineDashboard, MdOutlineSpaceDashboard } from 'react-icons/md';
 import { useNavigate } from 'react-router-dom';
@@ -26,6 +27,7 @@ import ClientsManagement from '../components/ClientsManagement';
 import WorkflowLogsView from '../components/WorkflowLogsView';
 import FounderReportsView from '../components/FounderReportsView';
 import AdminSettingsView from '../components/AdminSettingsView';
+import MetaInventoryView from '../components/MetaInventoryView';
 import axiosClient from '../api/axiosClient';
 
 const { Content, Sider, Header } = Layout;
@@ -39,6 +41,7 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [userProfile, setUserProfile] = useState(null);
+  const [permissions, setPermissions] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
 
@@ -75,6 +78,7 @@ const Dashboard = () => {
     try {
       const res = await axiosClient.get('/admin/me');
       setUserProfile(res.data?.user || null);
+      setPermissions(res.data?.permissions || {});
     } catch (err) {
       console.error('Failed to fetch admin profile', err);
     }
@@ -193,6 +197,8 @@ const Dashboard = () => {
   const menuItems = [
     { key: 'tenants', icon: <MdOutlineSpaceDashboard size={19} />, label: 'Workspaces' },
     { key: 'clients', icon: <FiBriefcase size={18} />, label: 'Client Brands' },
+    // Founder and ops only (platform.meta).
+    ...(permissions['platform.meta'] ? [{ key: 'meta-inventory', icon: <FiSmartphone size={18} />, label: 'Meta Inventory' }] : []),
     { key: 'workflows', icon: <FiActivity size={18} />, label: 'Workflow Logs' },
     { key: 'founder-reports', icon: <FiBarChart2 size={18} />, label: 'Founder Reports' },
     { key: 'users', icon: <FiUsers size={18} />, label: 'All Users' },
@@ -203,6 +209,7 @@ const Dashboard = () => {
     switch (activeTab) {
       case 'tenants': return 'Workspaces & Tenants';
       case 'clients': return 'Client Brands & WhatsApp Profiles';
+      case 'meta-inventory': return 'Meta WhatsApp Inventory';
       case 'workflows': return 'Workflow Automation Engines';
       case 'founder-reports': return 'Founder Reports & Platform MRR';
       case 'users': return 'User Directory';
@@ -390,6 +397,8 @@ const Dashboard = () => {
             )}
 
             {activeTab === 'clients' && <ClientsManagement />}
+
+            {activeTab === 'meta-inventory' && permissions['platform.meta'] && <MetaInventoryView />}
 
             {activeTab === 'workflows' && <WorkflowLogsView />}
 

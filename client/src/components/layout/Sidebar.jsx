@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { C } from '../../constants/theme.js';
 import { api } from '../../services/api.js';
+import { roleLabel } from '../../views/settings/settingsPolicy.js';
 import { useAuth } from '../../hooks/useAuth.js';
 
 const { Sider } = Layout;
@@ -24,6 +25,7 @@ const NAV = [
   { path: '/brain', Icon: Brain, label: 'AI Brain' },
   { path: '/reports', Icon: BarChart2, label: 'Reports' },
   { path: '/integrations', Icon: Share2, label: 'Integrations' },
+  { path: '/settings', Icon: Settings, label: 'Settings' },
 ];
 
 export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }) => {
@@ -232,7 +234,7 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
               {!collapsed && (
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{user?.name || 'User'}</span>
-                  <span style={{ fontSize: 11, color: C.muted }}>{user?.role === 'admin' ? 'Administrator' : 'Product Manager'}</span>
+                  <span style={{ fontSize: 11, color: C.muted }}>{roleLabel(user?.role)}</span>
                 </div>
               )}
             </div>

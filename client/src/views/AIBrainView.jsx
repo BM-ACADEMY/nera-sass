@@ -74,8 +74,6 @@ export const AIBrainView = () => {
   const [behaviorText, setBehaviorText] = useState(DEFAULT_BOT_BEHAVIOR);
   const [welcomeTemplate, setWelcomeTemplate] = useState('');
   const [migrating, setMigrating] = useState(false);
-  const [dupCheckResult, setDupCheckResult] = useState(null);
-  const [dupChecking, setDupChecking] = useState(false);
 
   useEffect(() => {
     const loadClients = async () => {
@@ -499,68 +497,6 @@ Use only the current BM TechX product/pricing memory. No service facts are store
     }
   };
 
-  const handleCheckDuplicates = async () => {
-    setDupChecking(true);
-    setDupCheckResult(null);
-    try {
-      const res = await api.getClients();
-      const allClients = res.clients || [];
-
-      // Group clients by normalized name (lowercase, strip spaces/hyphens/underscores)
-      const groups = {};
-      allClients.forEach(c => {
-        const key = c.name.toLowerCase().replace(/[\s\-_]+/g, '');
-        if (!groups[key]) groups[key] = [];
-        groups[key].push(c);
-      });
-
-      // Find groups with more than 1 client (duplicates)
-      const duplicateGroups = Object.values(groups).filter(g => g.length > 1);
-
-      if (duplicateGroups.length === 0) {
-        setDupCheckResult({ message: 'No duplicate brands found! All brands are unique.', type: 'ok' });
-        return;
-      }
-
-      // For each duplicate group, check which one has brain docs or leads
-      const results = [];
-      for (const group of duplicateGroups) {
-        const checked = await Promise.all(group.map(async (c) => {
-          let hasBrainDocs = false;
-          let hasLeads = false;
-          try {
-            const brainRes = await api.getBrainDocs(c.id);
-            hasBrainDocs = (brainRes.docs || []).some(d => d.content && d.content.trim().length > 0);
-          } catch (e) { }
-          try {
-            const leadsRes = await api.getLeads({ brand: c.name, limit: 1 });
-            hasLeads = (leadsRes.leads || []).length > 0;
-          } catch (e) { }
-          return { ...c, hasBrainDocs, hasLeads, isActive: hasBrainDocs || hasLeads };
-        }));
-        results.push(checked);
-      }
-
-      setDupCheckResult({ groups: results, type: 'found' });
-    } catch (err) {
-      setDupCheckResult({ message: 'Check failed: ' + err.message, type: 'error' });
-    } finally {
-      setDupChecking(false);
-    }
-  };
-
-  const handleDeleteDuplicate = async (id, name) => {
-    if (!window.confirm(`Are you sure you want to delete "${name}" (ID: ${id})?\n\nThis is the INACTIVE duplicate with no leads or brain data. This action cannot be undone.`)) return;
-    try {
-      await api.deleteClient(id);
-      const res = await api.getClients();
-      setClients(res.clients || []);
-      setDupCheckResult({ message: `"${name}" was successfully deleted. The duplicate has been removed!`, type: 'ok' });
-    } catch (err) {
-      alert('Delete failed: ' + err.message);
-    }
-  };
-
   return (
     <div className="p-mobile" style={{ padding: 26, overflowY: 'auto', height: '100%' }}>
       <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 22 }}>
@@ -644,59 +580,6 @@ Use only the current BM TechX product/pricing memory. No service facts are store
                     style={{ width: '100%', background: C.bg, border: '1px solid ' + C.border, borderRadius: 7, padding: '10px 13px', color: C.text, fontSize: 13, outline: 'none', fontFamily: 'monospace' }}
                   />
                   <p style={{ fontSize: 10, color: C.muted, marginTop: 7 }}>💡 Each brand can have its own unique template. Add a new brand anytime — just set its template name here and save.</p>
-                </div>
-
-                {/* Duplicate Brand Checker */}
-                <div style={{ background: '#1a2a1a', border: '1px solid #16a34a33', borderRadius: 9, padding: 18 }}>
-                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#16a34a', marginBottom: 6 }}>🔍 Check & Remove Duplicate Brands</label>
-                  <p style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
-                    Scans all brands, detects duplicates by similar name, checks which one has active leads or brain data, and marks the safe-to-delete one. The <strong style={{ color: '#16a34a' }}>active brand</strong> is always kept. Only the <strong style={{ color: '#dc2626' }}>empty duplicate</strong> gets a delete button.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleCheckDuplicates}
-                    disabled={dupChecking}
-                    style={{ background: '#16a34a', border: 'none', borderRadius: 7, color: '#fff', padding: '8px 20px', fontSize: 12, fontWeight: 700, cursor: dupChecking ? 'not-allowed' : 'pointer', opacity: dupChecking ? 0.6 : 1 }}
-                  >
-                    {dupChecking ? '⏳ Checking...' : '🔍 Run Duplicate Check'}
-                  </button>
-
-                  {dupCheckResult && dupCheckResult.type !== 'found' && (
-                    <div style={{ marginTop: 14, padding: '10px 14px', borderRadius: 7, background: dupCheckResult.type === 'ok' ? '#16a34a22' : '#dc262622', border: '1px solid ' + (dupCheckResult.type === 'ok' ? '#16a34a55' : '#dc262655') }}>
-                      <p style={{ fontSize: 12, color: dupCheckResult.type === 'ok' ? '#16a34a' : '#dc2626', margin: 0 }}>{dupCheckResult.message}</p>
-                    </div>
-                  )}
-
-                  {dupCheckResult && dupCheckResult.type === 'found' && dupCheckResult.groups.map((group, gi) => (
-                    <div key={gi} style={{ marginTop: 14, background: C.surface, border: '1px solid ' + C.border, borderRadius: 9, overflow: 'hidden' }}>
-                      <div style={{ padding: '8px 14px', background: '#2a1a00', borderBottom: '1px solid ' + C.border }}>
-                        <p style={{ fontSize: 11, color: '#f59e0b', fontWeight: 700 }}>⚠ Duplicate Group Detected</p>
-                      </div>
-                      {group.map(c => (
-                        <div key={c.id} style={{ padding: '12px 14px', borderBottom: '1px solid ' + C.border, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-                          <div>
-                            <p style={{ fontSize: 13, fontWeight: 700, color: c.isActive ? '#16a34a' : '#dc2626' }}>
-                              {c.isActive ? '✅' : '❌'} {c.name} <span style={{ fontSize: 10, color: C.muted, fontWeight: 400 }}>(ID: {c.id})</span>
-                            </p>
-                            <p style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>
-                              {c.hasBrainDocs ? '🧠 Has brain docs' : '🧠 No brain docs'} &nbsp;·&nbsp; {c.hasLeads ? '👤 Has leads' : '👤 No leads'}
-                            </p>
-                          </div>
-                          {!c.isActive ? (
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteDuplicate(c.id, c.name)}
-                              style={{ background: '#dc2626', border: 'none', borderRadius: 6, color: '#fff', padding: '7px 16px', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
-                            >
-                              🗑 Delete (Safe)
-                            </button>
-                          ) : (
-                            <span style={{ fontSize: 10, color: '#16a34a', fontWeight: 700, whiteSpace: 'nowrap', background: '#16a34a22', padding: '4px 10px', borderRadius: 5 }}>KEEP — Active</span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ))}
                 </div>
 
                 {/* DB Migration */}
