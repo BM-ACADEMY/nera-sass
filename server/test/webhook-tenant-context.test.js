@@ -2,10 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert');
 const express = require('express');
 const request = require('supertest');
+const crypto = require('crypto');
 const { startTestDb, stopTestDb, clearCollections } = require('./setup');
 
 test.before(async () => {
   process.env.WA_VERIFY_TOKEN = 'test_verify_token';
+  // Dummy webhook secret: every WhatsApp webhook POST below is signed with it.
+  process.env.NERA_META_APP_SECRET = 'test-dummy-webhook-secret';
   await startTestDb();
 });
 
@@ -25,7 +28,15 @@ test('P0 Webhook Tenant Context & Isolation Suite', async (t) => {
 
   // Set up Express app and mock context with captured socket events
   const app = express();
-  app.use(express.json());
+  // Same raw-body capture as server.js, needed for X-Hub-Signature-256.
+  app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
+
+  // POSTs a WhatsApp webhook signed the way Meta signs it.
+  const signedWebhook = (payload) => {
+    const body = JSON.stringify(payload);
+    const signature = 'sha256=' + crypto.createHmac('sha256', process.env.NERA_META_APP_SECRET).update(body).digest('hex');
+    return request(app).post('/webhook/whatsapp').set('Content-Type', 'application/json').set('X-Hub-Signature-256', signature).send(body);
+  };
 
   const emittedSocketEvents = [];
   const io = {
@@ -146,9 +157,7 @@ test('P0 Webhook Tenant Context & Isolation Suite', async (t) => {
       }],
     };
 
-    const res = await request(app)
-      .post('/webhook/whatsapp')
-      .send(incomingPayload);
+    const res = await signedWebhook(incomingPayload);
 
     assert.strictEqual(res.status, 200);
 
@@ -207,12 +216,12 @@ test('P0 Webhook Tenant Context & Isolation Suite', async (t) => {
     };
 
     // First send
-    await request(app).post('/webhook/whatsapp').send(messagePayload);
+    await signedWebhook(messagePayload);
     const countAfterFirst = await runAsTenant(tenantId, () => Messages.countDocuments({ wa_msg_id: 'wamid.UNIQUE_ID_9999' }));
     assert.strictEqual(countAfterFirst, 1);
 
     // Second send (duplicate delivery from Meta)
-    await request(app).post('/webhook/whatsapp').send(messagePayload);
+    await signedWebhook(messagePayload);
     const countAfterSecond = await runAsTenant(tenantId, () => Messages.countDocuments({ wa_msg_id: 'wamid.UNIQUE_ID_9999' }));
     assert.strictEqual(countAfterSecond, 1, 'Duplicate message must not be inserted twice');
   });
@@ -233,7 +242,7 @@ test('P0 Webhook Tenant Context & Isolation Suite', async (t) => {
       }],
     };
 
-    const res = await request(app).post('/webhook/whatsapp').send(unknownPayload);
+    const res = await signedWebhook(unknownPayload);
     assert.strictEqual(res.status, 200);
 
     // Verify nothing created anywhere in system
@@ -320,7 +329,7 @@ test('P0 Webhook Tenant Context & Isolation Suite', async (t) => {
       }],
     };
 
-    await request(app).post('/webhook/whatsapp').send(payload);
+    await signedWebhook(payload);
 
     // Tenant 2's lead must remain untouched
     const checkLead2 = await runAsTenant(tenant2Id, () => Leads.findOne({ id: lead2.id }).lean());
@@ -360,7 +369,7 @@ test('P0 Webhook Tenant Context & Isolation Suite', async (t) => {
       }],
     };
 
-    const res = await request(app).post('/webhook/whatsapp').send(statusPayload);
+    const res = await signedWebhook(statusPayload);
     assert.strictEqual(res.status, 200);
 
     const updated = await runAsTenant(tenantId, () => Templates.findOne({ id: tpl.id }).lean());
@@ -370,7 +379,7 @@ test('P0 Webhook Tenant Context & Isolation Suite', async (t) => {
 
   await t.test('8. Missing, malformed, or untrusted payload fails safely without TenantContextError', async () => {
     // 1. Missing body
-    const res1 = await request(app).post('/webhook/whatsapp').send({});
+    const res1 = await signedWebhook({});
     assert.strictEqual(res1.status, 200);
 
     // 2. Untrusted tenant_id supplied in body (must be ignored)
@@ -384,7 +393,7 @@ test('P0 Webhook Tenant Context & Isolation Suite', async (t) => {
         }],
       }],
     };
-    const res2 = await request(app).post('/webhook/whatsapp').send(spoofedPayload);
+    const res2 = await signedWebhook(spoofedPayload);
     assert.strictEqual(res2.status, 200);
 
     // 3. Meta lead webhook with unmapped page_id

@@ -26,6 +26,7 @@ const fs = ctxFs || require('fs');
 const axios = ctxAxios || require('axios');
 const SERVER_ROOT = ctx.SERVER_ROOT || path.resolve(__dirname, '../../');
 const { runAsSystem, runAsTenant } = require('../../services/tenantContext');
+const { requireMetaSignature } = require('../../services/metaWebhookSignature');
  // Store timeouts for delayed AI replies
 
 // GET — Meta webhook verification
@@ -38,8 +39,10 @@ app.get('/webhook/whatsapp', (req, res) => {
   res.sendStatus(403);
 });
 
-// POST — incoming WhatsApp messages + template status updates
-app.post('/webhook/whatsapp', async (req, res) => {
+// POST — incoming WhatsApp messages + template status updates. Only requests
+// signed by Meta (X-Hub-Signature-256 over the raw body) get past this point;
+// anything else is refused before it is logged, stored or acted on.
+app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
   try {
     const body = req.body;
     try {
@@ -105,18 +108,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // FORWARD TO N8N WEBHOOK
-    // This allows the Node server to act as a proxy if needed.
-    // If the request is already coming from n8n (source=n8n), we SKIP forwarding to prevent an infinite loop.
-    if (req.query.source !== 'n8n' && process.env.NODE_ENV !== 'test') {
-      try {
-        const n8nUrl = 'https://leados-n8n.abmgroups.org/webhook/whatsapp-inbound';
-        await axios.post(n8nUrl, body);
-        console.log('✅ Successfully forwarded payload to n8n Lead Integrator (WF00)');
-      } catch (n8nErr) {
-        console.error('⚠️ Failed to forward payload to n8n:', n8nErr.message);
-      }
-    }
+    // Customer WhatsApp payloads are never copied to an external system from
+    // here (the former hard-coded forward to a third-party n8n was removed).
 
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {
@@ -366,7 +359,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
               console.log(`[Webhook] ✅ Saved inbound ${msgType} from ${phone} → lead ${lead.id}, msg_id ${savedRows[0].id} (tenant ${client.tenant_id})`);
 
               const shouldTriggerAI = ['text', 'button', 'interactive', 'audio'].includes(msg.type);
-              if (shouldTriggerAI && process.env.N8N_WEBHOOK_URL && req.query.source !== 'n8n' && process.env.NODE_ENV !== 'test') {
+              if (shouldTriggerAI && process.env.N8N_WEBHOOK_URL && process.env.NODE_ENV !== 'test') {
                 if (aiReplyQueue.has(lead.id)) {
                   clearTimeout(aiReplyQueue.get(lead.id));
                 }

@@ -18,9 +18,11 @@ const userAdmin = require('../services/userAdmin');
 const tenantData = require('../services/tenantData');
 const audit = require('../services/audit');
 const authController = require('../controllers/authController');
+const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
+const createMetaInventoryRouter = require('./adminMetaInventory');
 
 function fail(res, error) {
-  if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details });
+  if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details, code: error.code });
   // Deliberate "temporarily unavailable" answers from our services (for
   // example the plan catalogue not being loaded) keep their message.
   if (error.status === 503 && error instanceof provisioning.ProvisioningError) {
@@ -69,13 +71,17 @@ async function tenantSummary(tenant) {
   };
 }
 
-function createAdminRouter({ verifyClientWhatsApp } = {}) {
+function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   const router = express.Router();
 
   router.get('/me', (req, res) => res.json({ user: req.user, permissions: Object.fromEntries(
-    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.billing.grant', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view']
+    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.billing.grant', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view', 'platform.meta', 'platform.meta.admin']
       .map((p) => [p, can(req.identity, p)]),
   ) }));
+
+  // Platform Meta WhatsApp inventory (founder/ops; registration and cache
+  // clearing founder only). Never writes a brand's number or credentials.
+  if (metaInventory) router.use('/meta/whatsapp', createMetaInventoryRouter({ ...metaInventory, permit, fail }));
 
   router.get('/plans', permit('platform.tenants.view'), async (req, res) => {
     try {
@@ -202,8 +208,8 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
       if (!Object.keys(changes).length) return res.status(400).json({ error: 'Nothing to update' });
       const tenantId = tenantIdParam(req);
       if (changes.phone_number_id) {
-        const taken = await runAsSystem(() => Clients.exists({ phone_number_id: changes.phone_number_id, tenant_id: { $ne: tenantId } }), 'admin');
-        if (taken) return res.status(409).json({ error: 'This Meta Phone Number ID is already connected to another workspace' });
+        const current = await runAsTenant(tenantId, () => Clients.findOne({}, { _id: 0, id: 1 }).lean());
+        await assertPhoneNumberAvailable(changes.phone_number_id, { exceptClientId: current?.id ?? null });
       }
       const brand = await runAsTenant(tenantId, () => Clients.findOneAndUpdate(
         {},
@@ -545,6 +551,10 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
       const update = {};
       for (const key of allowed) {
         if (req.body[key] !== undefined) update[key] = req.body[key];
+      }
+      if (update.phone_number_id != null && String(update.phone_number_id).trim()) {
+        update.phone_number_id = String(update.phone_number_id).trim();
+        await assertPhoneNumberAvailable(update.phone_number_id, { exceptClientId: clientId });
       }
       update.updated_at = new Date();
       const updated = await Clients.findOneAndUpdate({ id: clientId }, { $set: update }, { new: true, projection: { _id: 0 } }).lean();
