@@ -2,7 +2,9 @@
  * Phase 2 security regression tests, against the real server.js app on an
  * in-memory MongoDB (setup.js refuses remote hosts).
  *
- *  P. Owner provisioning is invitation-only; no passwords or tokens in responses
+ *  P. Owner provisioning: staff set the owner's password (no email); the
+ *     invitation path remains for callers without one; one login per workspace;
+ *     no passwords or tokens in responses
  *  T. /api/tenant and /api/team/* require a customer login and stay in-tenant
  *  R. /api/admin/retry: one workspace with the service key + x-tenant-id;
  *     all workspaces only for founder/ops staff (audited)
@@ -66,6 +68,7 @@ const tenantPayload = (overrides = {}) => ({
   business_name: 'Kaveri Motors',
   owner_name: 'Kavya Rao',
   owner_email: 'Kavya@Kaveri.test',
+  owner_password: STRONG_PASSWORD,
   plan_code: 'WA-STARTER',
   term_months: 12,
   payment_reference: 'MANUAL-PILOT-001',
@@ -81,89 +84,99 @@ test('Phase 2 security remediation', async (t) => {
   const count = (model, filter = {}) => runAsSystem(() => model.countDocuments(filter));
 
   // ── Owner provisioning ─────────────────────────────────────
-  await t.test('P1. Provisioning invites the Owner; no account, password or token in the response', async () => {
+  await t.test('P1. Provisioning creates the Owner login with the staff-set password; nothing is emailed', async () => {
     await seedTestPlans();
     const founder = await staff(models, 'founder');
     const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(tenantPayload());
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     assert.ok(!SECRET_PATTERN.test(JSON.stringify(res.body)), `secret-looking field in response: ${JSON.stringify(res.body)}`);
-    assert.strictEqual(res.body.user, undefined);
-    assert.strictEqual(res.body.credentials, undefined);
-    assert.strictEqual(res.body.invitation.role, 'owner');
-    assert.strictEqual(res.body.invitation.status, 'pending');
-    assert.strictEqual(res.body.delivery.delivered, true);
+    assert.strictEqual(res.body.invitation, null);
+    assert.strictEqual(res.body.owner.email, 'kavya@kaveri.test');
 
     const tenantId = res.body.tenant.id;
-    assert.strictEqual(await count(Users, { tenant_id: tenantId }), 0, 'no owner account before the invitation is accepted');
-
-    // The owner chooses their own password through the emailed link.
-    const mail = notify.outbox().find((m) => m.to === 'kavya@kaveri.test');
-    assert.ok(mail, 'owner invitation emailed');
-    const token = mail.text.match(/\/invite\/([A-Za-z0-9_-]+)/)[1];
-    const accept = await request(app).post('/api/auth/invitations/accept').send({ token, name: 'Kavya Rao', password: STRONG_PASSWORD });
-    assert.strictEqual(accept.status, 201, JSON.stringify(accept.body));
     const owner = await runAsSystem(() => Users.findOne({ email: 'kavya@kaveri.test' }).lean());
     assert.strictEqual(owner.tenant_id, tenantId);
     assert.strictEqual(owner.role, 'owner');
+    assert.strictEqual(owner.id, res.body.owner.id);
     assert.ok(await bcrypt.compare(STRONG_PASSWORD, owner.password_hash));
     const tenant = await runAsSystem(() => Tenants.findOne({ id: tenantId }).lean());
     assert.strictEqual(tenant.owner_user_id, owner.id);
+    assert.strictEqual(await count(Invitations), 0, 'no invitation created');
+    assert.strictEqual(notify.outbox().length, 0, 'nothing emailed');
   });
 
-  await t.test('P2. A staff-chosen owner password is refused and nothing is created', async () => {
+  await t.test('P2. A missing or weak owner password is refused and nothing is created', async () => {
     await seedTestPlans();
     const founder = await staff(models, 'founder');
-    const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(tenantPayload({ owner_password: 'Welcome@2026' }));
-    assert.strictEqual(res.status, 400);
+    const missing = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(tenantPayload({ owner_password: undefined }));
+    assert.strictEqual(missing.status, 400);
+    const weak = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(tenantPayload({ owner_password: 'short1' }));
+    assert.strictEqual(weak.status, 400);
     assert.strictEqual(await count(Tenants), 0);
     assert.strictEqual(await count(Clients), 0);
     assert.strictEqual(await count(Invitations), 0);
     assert.strictEqual(await count(Users, { tenant_id: { $ne: null } }), 0);
 
-    // The service layer refuses it too, whatever the caller.
+    // The service layer applies the same password rules, whatever the caller.
     const provisioning = require('../services/provisioning');
     await assert.rejects(
-      () => provisioning.provisionTenant({ ...tenantPayload(), owner_password: 'Anything-123', payment: { method: 'manual_grant', reference: 'X-1' } }, {}),
+      () => provisioning.provisionTenant({ ...tenantPayload(), owner_password: 'no-digits-here', payment: { method: 'manual_grant', reference: 'X-1', reason: 'Service layer check' } }, { actorUserId: founder.id }),
       (err) => err.status === 400,
     );
+    assert.strictEqual(await count(Tenants), 0);
   });
 
-  await t.test('P3. If the email fails, the workspace and invitation remain and staff can resend', async () => {
+  await t.test('P3. Without a staff-set password the Owner is invited; a failed email keeps the invitation for resend', async () => {
     await seedTestPlans();
     const founder = await staff(models, 'founder');
+    const provisioning = require('../services/provisioning');
     process.env.EMAIL_DELIVERY = 'off';
-    const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(tenantPayload());
-    assert.strictEqual(res.status, 201);
-    assert.strictEqual(res.body.delivery.delivered, false);
-    const tenantId = res.body.tenant.id;
+    const result = await provisioning.provisionTenant(
+      { ...tenantPayload({ owner_password: undefined }), payment: { method: 'manual_grant', reference: 'MANUAL-PILOT-001', reason: 'Pilot client approved by the founder' } },
+      { actorUserId: founder.id },
+    );
+    assert.strictEqual(result.delivery.delivered, false);
+    assert.strictEqual(result.owner, null);
+    const tenantId = result.tenant.id;
     assert.strictEqual(await count(Tenants, { id: tenantId }), 1, 'workspace kept');
     assert.strictEqual(await count(Invitations, { tenant_id: tenantId, accepted_at: null, revoked_at: null }), 1, 'invitation kept');
+    assert.strictEqual(await count(Users, { tenant_id: tenantId }), 0, 'no owner account before the invitation is accepted');
 
     process.env.EMAIL_DELIVERY = 'memory';
-    const resend = await request(app).post(`/api/admin/tenants/${tenantId}/invitations/${res.body.invitation.id}/resend`).set(bearer(founder));
+    const resend = await request(app).post(`/api/admin/tenants/${tenantId}/invitations/${result.invitation.id}/resend`).set(bearer(founder));
     assert.strictEqual(resend.status, 200, JSON.stringify(resend.body));
     assert.strictEqual(resend.body.delivery.delivered, true);
     assert.ok(!SECRET_PATTERN.test(JSON.stringify(resend.body)));
     assert.ok(notify.outbox().some((m) => m.to === 'kavya@kaveri.test'), 'fresh link emailed');
   });
 
-  await t.test('P4. Invitation routes never return the raw token', async () => {
+  await t.test('P4. Invitation routes never return the raw token; a workspace takes only one login', async () => {
     await seedWorkspace(models, { tenantId: 1, name: 'Acme' });
+    await seedWorkspace(models, { tenantId: 2, name: 'Beta' });
+    await seedWorkspace(models, { tenantId: 3, name: 'Gamma' });
     const founder = await staff(models, 'founder');
-    const owner = await createUser(models, { tenant_id: 1, role: 'owner', email: 'owner@acme.test', name: 'Owner' });
+    const ownerC = await createUser(models, { tenant_id: 3, role: 'owner', email: 'owner@gamma.test', name: 'Owner C' });
 
-    const viaAdmin = await request(app).post('/api/admin/users').set(bearer(founder)).send({ tenant_id: 1, email: 'one@acme.test', role: 'agent' });
-    assert.strictEqual(viaAdmin.status, 201);
+    const viaAdmin = await request(app).post('/api/admin/users').set(bearer(founder)).send({ tenant_id: 1, email: 'one@acme.test', role: 'owner' });
+    assert.strictEqual(viaAdmin.status, 201, JSON.stringify(viaAdmin.body));
     assert.deepStrictEqual(Object.keys(viaAdmin.body).sort(), ['delivery', 'invitation']);
-    const viaAdminTenant = await request(app).post('/api/admin/tenants/1/invitations').set(bearer(founder)).send({ email: 'two@acme.test', role: 'agent' });
-    assert.strictEqual(viaAdminTenant.status, 201);
+    const viaAdminTenant = await request(app).post('/api/admin/tenants/2/invitations').set(bearer(founder)).send({ email: 'two@beta.test', role: 'owner' });
+    assert.strictEqual(viaAdminTenant.status, 201, JSON.stringify(viaAdminTenant.body));
     assert.deepStrictEqual(Object.keys(viaAdminTenant.body).sort(), ['delivery', 'invitation']);
-    const viaTeam = await request(app).post('/api/team/invitations').set(bearer(owner)).send({ email: 'three@acme.test', role: 'agent' });
-    assert.strictEqual(viaTeam.status, 201, JSON.stringify(viaTeam.body));
-    assert.deepStrictEqual(Object.keys(viaTeam.body).sort(), ['delivery', 'invitation']);
     const viaStaff = await request(app).post('/api/admin/staff/invitations').set(bearer(founder)).send({ email: 'new.ops@nera.test', staff_role: 'ops' });
     assert.strictEqual(viaStaff.status, 201);
     assert.deepStrictEqual(Object.keys(viaStaff.body).sort(), ['delivery', 'invitation']);
+
+    // One login per workspace: a second person is refused, wherever the request comes from.
+    const second = await request(app).post('/api/admin/users').set(bearer(founder)).send({ tenant_id: 1, email: 'another@acme.test', role: 'owner' });
+    assert.strictEqual(second.status, 409);
+    const viaTeam = await request(app).post('/api/team/invitations').set(bearer(ownerC)).send({ email: 'three@gamma.test', role: 'agent' });
+    assert.strictEqual(viaTeam.status, 409, JSON.stringify(viaTeam.body));
+    assert.ok(!SECRET_PATTERN.test(JSON.stringify(viaTeam.body)));
+    const legacy = await request(app).post('/api/users').set(bearer(ownerC)).send({ name: 'X', email: 'x@gamma.test', password: 'Some-Pass-123' });
+    assert.strictEqual(legacy.status, 409);
+    assert.strictEqual(await count(Invitations, { tenant_id: 3 }), 0);
+    assert.strictEqual(await count(Users, { tenant_id: 3 }), 1);
   });
 
   // ── Team routes ────────────────────────────────────────────
@@ -204,11 +217,11 @@ test('Phase 2 security remediation', async (t) => {
     assert.strictEqual((await request(app).get('/api/team/users').set(bearer(agentA))).status, 403);
     assert.strictEqual((await request(app).post('/api/team/invitations').set(bearer(agentA)).send({ email: 'x@acme.test', role: 'agent' })).status, 403);
 
-    // An invitation lands in the caller's workspace even if another is named.
+    // A workspace that already has its login takes no invitation, even when
+    // another workspace is named.
     const invite = await request(app).post('/api/team/invitations').set(bearer(ownerA)).send({ email: 'new@acme.test', role: 'agent', tenant_id: 2 });
-    assert.strictEqual(invite.status, 201);
-    const stored = await runAsSystem(() => Invitations.findOne({ email: 'new@acme.test' }).lean());
-    assert.strictEqual(stored.tenant_id, 1);
+    assert.strictEqual(invite.status, 409);
+    assert.strictEqual(await runAsSystem(() => Invitations.countDocuments({ email: 'new@acme.test' })), 0);
   });
 
   await t.test('T3. A workspace cannot manage another workspace\'s users', async () => {

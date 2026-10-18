@@ -102,7 +102,7 @@ export const SettingsView = () => {
       <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 21, fontWeight: 800, color: C.text, marginBottom: 22 }}>Settings</h1>
       <div className="flex-col-mobile" style={{ display: 'flex', gap: 18 }}>
         <div className="w-full-mobile" style={{ width: 180 }}>
-          {[['account', 'Account'], ['whatsapp', 'WhatsApp API'], ['team', 'Team'], ['notifications', 'Alerts'], ['billing', 'Billing']].map(([k, l]) => (
+          {[['account', 'Account'], ['whatsapp', 'WhatsApp API'], ['notifications', 'Alerts'], ['billing', 'Billing']].map(([k, l]) => (
             <button key={k} onClick={() => setTab(k)} style={{ width: '100%', textAlign: 'left', padding: '9px 13px', borderRadius: 7, border: 'none', background: tab === k ? C.accent + '20' : 'transparent', color: tab === k ? C.accent : C.muted, fontSize: 12, fontWeight: tab === k ? 600 : 400, marginBottom: 1, cursor: 'pointer' }}>
               {tab === k && <span style={{ marginRight: 5 }}>›</span>}{l}
             </button>
@@ -204,7 +204,7 @@ export const SettingsView = () => {
             </div>
           )}
 
-          {(tab === 'team' || tab === 'billing') && (
+          {tab === 'billing' && (
             <div style={{ textAlign: 'center', padding: 36, color: C.muted }}>
               <Brain size={28} color={C.muted} style={{ margin: '0 auto 11px' }} />
               <p>Available in full deployment</p>

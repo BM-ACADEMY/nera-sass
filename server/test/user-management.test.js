@@ -67,13 +67,11 @@ test('User Management & Security Lifecycle Suite', async (t) => {
     });
   });
 
-  await t.test('3. One-time expiring invitations & seat limit enforcement', async () => {
+  await t.test('3. One-time expiring invitations & one login per workspace', async () => {
     const tenantId = 20;
 
-    // Create active tenant
+    // Create active tenant with no users yet
     await runAsSystem(() => Tenants.create({ id: tenantId, name: 'Tenant 20 Corp', status: 'active' }));
-
-    // Set up subscription with limit of 2 users
     await runAsTenant(tenantId, () => Subscriptions.create({
       plan_code: 'WA-STARTER',
       limits: { max_users: 2 },
@@ -81,25 +79,17 @@ test('User Management & Security Lifecycle Suite', async (t) => {
       term_months: 12,
     }));
 
-    // Add 1 active user
-    await runAsTenant(tenantId, () => Users.create({
-      name: 'First User',
-      email: 'first@corp.com',
-      role: 'owner',
-      is_active: true,
-    }));
-
-    // Create 1st invitation (allowed: 1 active + 1 invite = 2 max)
+    // The workspace's one login is invited
     const inv1 = await invitations.createInvitation({
       tenantId,
       email: 'invitee1@corp.com',
-      role: 'agent',
+      role: 'owner',
       invitedBy: 1,
     });
     assert.ok(inv1.token);
     assert.strictEqual(inv1.invitation.email, 'invitee1@corp.com');
 
-    // Attempting 2nd invitation must exceed seat limit
+    // A second person is refused while that invitation is pending
     await assert.rejects(async () => {
       await invitations.createInvitation({
         tenantId,
@@ -107,9 +97,7 @@ test('User Management & Security Lifecycle Suite', async (t) => {
         role: 'agent',
         invitedBy: 1,
       });
-    }, (err) => {
-      return err.message.includes('User limit reached') || err.status === 409;
-    });
+    }, (err) => err.status === 409);
 
     // Accept 1st invitation
     const accepted = await invitations.acceptInvitation({
@@ -130,6 +118,12 @@ test('User Management & Security Lifecycle Suite', async (t) => {
     }, (err) => {
       return err.message.includes('already been used') || err.status === 410;
     });
+
+    // ...and once that login exists, no further invitation is accepted either
+    await assert.rejects(
+      () => invitations.createInvitation({ tenantId, email: 'invitee3@corp.com', role: 'agent', invitedBy: 1 }),
+      (err) => err.status === 409,
+    );
   });
 
   await t.test('4. Session Revocation: token_version increment revokes active tokens', async () => {

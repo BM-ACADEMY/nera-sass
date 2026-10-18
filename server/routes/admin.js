@@ -454,9 +454,10 @@ function createAdminRouter({ verifyClientWhatsApp, leados } = {}) {
     try {
       const staff = await Users.find({ tenant_id: null }, userAdmin.PUBLIC_FIELDS).sort({ created_at: 1 }).lean();
       const pending = await Invitations.find({ tenant_id: null, accepted_at: null, revoked_at: null }, { _id: 0 }).sort({ created_at: -1 }).lean();
+      const inviterNames = new Map(staff.map((u) => [u.id, u.name || u.email]));
       return res.json({
         staff: staff.filter((u) => describeUser(u)?.kind === 'staff').map(userAdmin.presentUser),
-        invitations: pending.map(invitations.publicInvitation),
+        invitations: pending.map((inv) => ({ ...invitations.publicInvitation(inv), invited_by_name: inviterNames.get(inv.invited_by) || null })),
       });
     } catch (error) {
       return fail(res, error);
@@ -466,7 +467,7 @@ function createAdminRouter({ verifyClientWhatsApp, leados } = {}) {
   router.post('/staff/invitations', permit('platform.staff.manage'), async (req, res) => {
     try {
       const result = await invitations.createInvitation({
-        tenantId: null, email: req.body?.email, name: req.body?.name, staffRole: String(req.body?.staff_role || 'support').toLowerCase(),
+        tenantId: null, email: req.body?.email, name: req.body?.name, staffRole: String(req.body?.staff_role || 'ops').toLowerCase(), password: req.body?.password,
         invitedBy: { id: req.user.id, name: req.user.name }, req,
       });
       return res.status(201).json({ invitation: result.invitation, delivery: result.delivery }); // never the raw token
@@ -478,6 +479,22 @@ function createAdminRouter({ verifyClientWhatsApp, leados } = {}) {
   router.delete('/staff/invitations/:invitationId', permit('platform.staff.manage'), async (req, res) => {
     try {
       return res.json({ invitation: await invitations.revokeInvitation({ invitationId: req.params.invitationId, tenantId: null, revokedBy: req.user.id, req }) });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  router.post('/staff/invitations/:invitationId/resend', permit('platform.staff.manage'), async (req, res) => {
+    try {
+      return res.json(await invitations.resendInvitation({ invitationId: req.params.invitationId, tenantId: null, invitedBy: { id: req.user.id, name: req.user.name }, req }));
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  router.post('/staff/:userId/revoke-sessions', permit('platform.staff.manage'), async (req, res) => {
+    try {
+      return res.json(await userAdmin.revokeStaffSessions({ userId: req.params.userId, req }));
     } catch (error) {
       return fail(res, error);
     }

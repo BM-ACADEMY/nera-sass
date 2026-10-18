@@ -157,13 +157,13 @@ test('Phase 1 security remediation', async (t) => {
     assert.strictEqual(await count(Invitations), 0);
   });
 
-  await t.test('B3. Invitation respects the plan user limit', async () => {
-    await seedWorkspace(models, { tenantId: 1, name: 'Acme', maxUsers: 1 });
+  await t.test('B3. A workspace that already has its login refuses another one', async () => {
+    await seedWorkspace(models, { tenantId: 1, name: 'Acme' });
     await createUser(models, { tenant_id: 1, role: 'owner', email: 'owner@acme.test', name: 'Owner' });
     const founder = await createUser(models, { tenant_id: null, is_platform_staff: true, staff_role: 'founder', email: 'founder@nera.test', name: 'Founder' });
     const res = await request(app).post('/api/admin/users').set(bearer(founder)).send({ tenant_id: 1, email: 'extra@acme.test', role: 'agent' });
     assert.strictEqual(res.status, 409);
-    assert.strictEqual(res.body.code, 'USER_LIMIT_REACHED');
+    assert.match(res.body.error, /one login/);
     assert.strictEqual(await count(Invitations), 0);
   });
 

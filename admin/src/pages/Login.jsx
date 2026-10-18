@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { toast } from 'sonner';
 import { FiMail, FiLock, FiZap } from 'react-icons/fi';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,7 +10,8 @@ import { Label } from '@/components/ui/label';
 
 const Login = () => {
   const [loading, setLoading] = useState(false);
-  const [values, setValues] = useState({ email: '', password: '' });
+  const location = useLocation();
+  const [values, setValues] = useState({ email: location.state?.email || '', password: '' });
 
   const navigate = useNavigate();
 

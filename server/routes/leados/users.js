@@ -7,7 +7,6 @@ module.exports = function registerUsersRoutes(app, ctx) {
 const {
   Users,
   auth,
-  bcrypt,
 } = ctx;
 // ══════════════════════════════════════════════════════════
 // USERS / TEAM
@@ -21,16 +20,9 @@ app.get('/api/users', auth, async (req, res) => {
   }
 });
 
-app.post('/api/users', auth, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
-  try {
-    const { name, email, password, role } = req.body;
-    const hash = await bcrypt.hash(password, 12);
-    const created = await Users.create({ name, email: email.toLowerCase(), password_hash: hash, role: role || 'user', is_active: true, created_at: new Date() });
-    res.status(201).json({ user: { id: created.id, name: created.name, email: created.email, role: created.role } });
-  } catch (err) {
-    if (err.code === 11000) return res.status(400).json({ error: 'Email already exists' });
-    res.status(500).json({ error: 'Server error' });
-  }
+// Each workspace has one login, created with the workspace by platform staff,
+// so customers cannot add users here.
+app.post('/api/users', auth, (req, res) => {
+  res.status(409).json({ error: 'This workspace already has its login. Each workspace has one login.' });
 });
 };

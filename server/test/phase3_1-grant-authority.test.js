@@ -35,6 +35,7 @@ const grantPayload = (overrides = {}) => ({
   business_name: 'Kaveri Motors',
   owner_name: 'Kavya Rao',
   owner_email: 'kavya@kaveri.test',
+  owner_password: 'Owner-Set-2026',
   plan_code: 'WA-STARTER',
   term_months: 12,
   payment_reference: 'APPROVAL-2026-021',

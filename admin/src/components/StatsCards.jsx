@@ -1,18 +1,19 @@
 import React from 'react';
 import { FiUsers, FiShield, FiUser, FiBriefcase } from 'react-icons/fi';
 import { Card } from '@/components/ui/card';
+import { userType } from '../utils/roles';
 
 const StatsCards = ({ users = [], tenantCount }) => {
   const total = users.length;
-  const admins = users.filter((u) => u.is_platform_staff || ['owner', 'admin', 'superadmin', 'staff_admin'].includes(String(u.role || u.staff_role || '').toLowerCase())).length;
-  const standard = total - admins;
+  const team = users.filter((u) => ['admin', 'staff'].includes(userType(u).key)).length;
+  const customers = users.filter((u) => userType(u).key === 'customer').length;
   const validTenantIds = new Set(users.map((u) => u.tenant_id).filter(id => id !== null && id !== undefined && id > 0));
   const workspaces = typeof tenantCount === 'number' ? tenantCount : validTenantIds.size;
 
   const stats = [
     { key: 'total', label: 'Total Accounts', value: total, icon: <FiUsers size={17} />, className: 'bg-blue-50 text-blue-600' },
-    { key: 'admins', label: 'Staff & Admins', value: admins, icon: <FiShield size={17} />, className: 'bg-sky-100 text-sky-700' },
-    { key: 'users', label: 'Standard Users', value: standard, icon: <FiUser size={17} />, className: 'bg-green-100 text-green-700' },
+    { key: 'admins', label: 'Admin & Staff', value: team, icon: <FiShield size={17} />, className: 'bg-sky-100 text-sky-700' },
+    { key: 'users', label: 'Customers', value: customers, icon: <FiUser size={17} />, className: 'bg-green-100 text-green-700' },
     { key: 'workspaces', label: 'Workspaces', value: workspaces, icon: <FiBriefcase size={17} />, className: 'bg-amber-100 text-amber-700' },
   ];
 

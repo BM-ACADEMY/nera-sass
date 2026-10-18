@@ -10,7 +10,7 @@ import { roleStyle } from '../utils/roles';
 const UserAvatar = ({ name, role, size = 40 }) => {
   const style = roleStyle(role);
   const initial = typeof name === 'string' && name.trim() ? name.trim().charAt(0).toUpperCase() : '?';
-  const isHighRole = ['owner', 'admin', 'superadmin', 'staff_admin'].includes(String(role || '').toLowerCase());
+  const isHighRole = String(role || '').toLowerCase() === 'founder';
   const Icon = isHighRole ? FaCrown : FiUser;
   return (
     <span

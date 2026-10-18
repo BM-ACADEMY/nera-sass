@@ -156,6 +156,14 @@ async function setStaffActive({ userId, active, actor, req }) {
   return presentUser(updated);
 }
 
+async function revokeStaffSessions({ userId, req }) {
+  const target = await runAsSystem(() => Users.findOne({ id: Number(userId) }, { _id: 0 }).lean(), 'user-admin');
+  if (!target || describeUser(target)?.kind !== 'staff') throw new UserAdminError(404, 'Staff member not found');
+  await runAsSystem(() => Users.updateOne({ id: target.id }, { $inc: { token_version: 1 } }), 'user-admin');
+  await audit.record(audit.EVENTS.SESSIONS_REVOKED, { req, targetType: 'staff', targetId: target.id, meta: { email: target.email } });
+  return { success: true };
+}
+
 module.exports = {
   UserAdminError,
   PUBLIC_FIELDS,
@@ -167,4 +175,5 @@ module.exports = {
   resetMfa,
   setStaffRole,
   setStaffActive,
+  revokeStaffSessions,
 };

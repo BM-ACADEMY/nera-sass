@@ -12,14 +12,12 @@ import {
 } from 'react-icons/fi';
 import { MdOutlineSpaceDashboard } from 'react-icons/md';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
-import CreateUserForm from '../components/CreateUserForm';
 import CreateTenantModal from '../components/CreateTenantModal';
 import WhatsAppConfigModal from '../components/WhatsAppConfigModal';
 import TenantsList from '../components/TenantsList';
-import UsersList from '../components/UsersList';
+import UsersPage from '../components/users/UsersPage';
 import AppSidebar from '../components/AppSidebar';
 import StatsCards from '../components/StatsCards';
-import RoleFilter from '../components/RoleFilter';
 import ClientsManagement from '../components/ClientsManagement';
 import WorkflowLogsView from '../components/WorkflowLogsView';
 import FounderReportsView from '../components/FounderReportsView';
@@ -30,18 +28,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
-
-const ROLE_OPTIONS = [
-  { value: 'owner', label: 'Owner (Full workspace access & billing)' },
-  { value: 'admin', label: 'Admin (Team management & settings)' },
-  { value: 'manager', label: 'Manager (Lead & campaign operations)' },
-  { value: 'agent', label: 'Agent (Inbox & customer communication)' },
-];
 
 // Each sidebar section has its own URL (/dashboard/<slug>) so the address bar
 // follows the section and a refresh stays on it.
@@ -64,19 +54,15 @@ const Dashboard = () => {
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
+  const [permissions, setPermissions] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState('all');
 
   // Modals
   const [isTenantModalOpen, setIsTenantModalOpen] = useState(false);
-  const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [whatsappModalTenant, setWhatsappModalTenant] = useState(null);
   const [suspendModalTenant, setSuspendModalTenant] = useState(null);
   const [suspendReason, setSuspendReason] = useState('');
   const [isSuspending, setIsSuspending] = useState(false);
-  const [roleModalUser, setRoleModalUser] = useState(null);
-  const [newRole, setNewRole] = useState('agent');
-  const [isChangingRole, setIsChangingRole] = useState(false);
 
   const fetchTenants = async () => {
     try {
@@ -100,6 +86,7 @@ const Dashboard = () => {
     try {
       const res = await axiosClient.get('/admin/me');
       setUserProfile(res.data?.user || null);
+      setPermissions(res.data?.permissions || {});
     } catch (err) {
       console.error('Failed to fetch admin profile', err);
     }
@@ -118,53 +105,6 @@ const Dashboard = () => {
   const handleLogout = () => {
     localStorage.removeItem('adminToken');
     navigate('/login');
-  };
-
-  // User Actions
-  const handleToggleActive = async (targetUser) => {
-    const action = targetUser.is_active !== false ? 'deactivate' : 'reactivate';
-    try {
-      await axiosClient.post(`/admin/users/${targetUser.id}/${action}`);
-      toast.success(`User ${action}d successfully`);
-      fetchUsers();
-    } catch (err) {
-      toast.error(err.response?.data?.error || `Failed to ${action} user`);
-    }
-  };
-
-  const handleRevokeSessions = async (targetUser) => {
-    try {
-      await axiosClient.post(`/admin/users/${targetUser.id}/revoke-sessions`);
-      toast.success(`Sessions revoked for ${targetUser.name || 'user'}`);
-      fetchUsers();
-    } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to revoke sessions');
-    }
-  };
-
-  const handleResetMfa = async (targetUser) => {
-    try {
-      await axiosClient.post(`/admin/users/${targetUser.id}/reset-mfa`);
-      toast.success(`MFA reset for ${targetUser.name || 'user'}`);
-      fetchUsers();
-    } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to reset MFA');
-    }
-  };
-
-  const handleSaveRole = async () => {
-    if (!roleModalUser) return;
-    setIsChangingRole(true);
-    try {
-      await axiosClient.patch(`/admin/users/${roleModalUser.id}/role`, { role: newRole });
-      toast.success('User role updated successfully');
-      setRoleModalUser(null);
-      fetchUsers();
-    } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to update user role');
-    } finally {
-      setIsChangingRole(false);
-    }
   };
 
   // Tenant Lifecycle Actions
@@ -199,14 +139,6 @@ const Dashboard = () => {
   };
 
   // Filtering
-  const filteredUsers = users
-    .filter((user) => roleFilter === 'all' || (user.staff_role || user.role) === roleFilter)
-    .filter((user) => {
-      const q = searchQuery.trim().toLowerCase();
-      if (!q) return true;
-      return [user.name, user.email, user.role, user.staff_role]
-        .some(field => String(field || '').toLowerCase().includes(q));
-    });
 
   const filteredTenants = tenants.filter((tenant) => {
     const q = searchQuery.trim().toLowerCase();
@@ -220,7 +152,7 @@ const Dashboard = () => {
     { key: 'clients', icon: FiSmartphone, label: 'WhatsApp Numbers' },
     { key: 'workflows', icon: FiActivity, label: 'Workflow Logs' },
     { key: 'founder-reports', icon: FiBarChart2, label: 'Founder Reports' },
-    { key: 'users', icon: FiUsers, label: 'All Users' },
+    { key: 'users', icon: FiUsers, label: 'Users & Team' },
     { key: 'settings', icon: FiSettings, label: 'Settings' },
   ];
 
@@ -230,7 +162,7 @@ const Dashboard = () => {
       case 'clients': return 'WhatsApp Numbers & Meta Inventory';
       case 'workflows': return 'Workflow Automation Engines';
       case 'founder-reports': return 'Founder Reports & Platform MRR';
-      case 'users': return 'User Directory';
+      case 'users': return 'Users & Team';
       case 'settings': return 'Platform Settings & Infrastructure';
       default: return 'Platform Administration';
     }
@@ -257,11 +189,11 @@ const Dashboard = () => {
           <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
           <h1 className="truncate text-lg font-semibold">{getTabTitle()}</h1>
 
-          {(activeTab === 'tenants' || activeTab === 'users') && (
+          {activeTab === 'tenants' && (
             <div className="relative ml-auto w-full max-w-72">
               <FiSearch className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-slate-400" />
               <Input
-                placeholder={activeTab === 'tenants' ? 'Search workspaces...' : 'Search users...'}
+                placeholder="Search workspaces..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="h-9 pr-8 pl-9"
@@ -281,18 +213,12 @@ const Dashboard = () => {
         </header>
 
         <div className="flex-1 p-4 md:p-8">
-          {(activeTab === 'tenants' || activeTab === 'users') && (
+          {activeTab === 'tenants' && (
             <>
               <div className="mb-6 flex justify-end">
-                {activeTab === 'tenants' ? (
-                  <Button size="lg" onClick={() => setIsTenantModalOpen(true)} className="font-semibold">
-                    <FiPlus /> Provision Workspace
-                  </Button>
-                ) : (
-                  <Button size="lg" onClick={() => setIsUserModalOpen(true)} className="font-semibold">
-                    <FiPlus /> Create User
-                  </Button>
-                )}
+                <Button size="lg" onClick={() => setIsTenantModalOpen(true)} className="font-semibold">
+                  <FiPlus /> Provision Workspace
+                </Button>
               </div>
 
               <StatsCards users={users} tenantCount={tenants.length} />
@@ -322,29 +248,7 @@ const Dashboard = () => {
             </Card>
           )}
 
-          {activeTab === 'users' && (
-            <Card className="gap-5">
-              <CardHeader>
-                <div>
-                  <CardTitle>Active Users</CardTitle>
-                  <CardDescription className="mt-1 text-xs">
-                    {filteredUsers.length} of {users.length} account{users.length === 1 ? '' : 's'} shown
-                  </CardDescription>
-                </div>
-                <RoleFilter users={users} value={roleFilter} onChange={setRoleFilter} />
-              </CardHeader>
-              <CardContent className="px-2">
-                <UsersList
-                  users={filteredUsers}
-                  loading={loading}
-                  onChangeRole={(user) => { setRoleModalUser(user); setNewRole(user.role || 'agent'); }}
-                  onToggleActive={handleToggleActive}
-                  onRevokeSessions={handleRevokeSessions}
-                  onResetMfa={handleResetMfa}
-                />
-              </CardContent>
-            </Card>
-          )}
+          {activeTab === 'users' && <UsersPage currentUser={userProfile} permissions={permissions} onChanged={fetchUsers} />}
 
           {activeTab === 'clients' && <ClientsManagement />}
 
@@ -363,18 +267,6 @@ const Dashboard = () => {
           <CreateTenantModal
             onTenantCreated={() => { setIsTenantModalOpen(false); fetchTenants(); fetchUsers(); }}
             onCancel={() => setIsTenantModalOpen(false)}
-          />
-        </DialogContent>
-      </Dialog>
-
-      {/* Create User Modal */}
-      <Dialog open={isUserModalOpen} onOpenChange={setIsUserModalOpen}>
-        <DialogContent className="sm:max-w-[580px]">
-          <DialogTitle className="sr-only">Invite Workspace User</DialogTitle>
-          <CreateUserForm
-            tenants={tenants}
-            onUserCreated={() => { setIsUserModalOpen(false); fetchUsers(); }}
-            onCancel={() => setIsUserModalOpen(false)}
           />
         </DialogContent>
       </Dialog>
@@ -416,30 +308,6 @@ const Dashboard = () => {
             <Button variant="outline" onClick={() => setSuspendModalTenant(null)}>Cancel</Button>
             <Button variant="destructive" onClick={handleConfirmSuspend} disabled={isSuspending}>
               {isSuspending && <Spinner />} Confirm Suspension
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Change Role Modal */}
-      <Dialog open={Boolean(roleModalUser)} onOpenChange={(open) => !open && setRoleModalUser(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Change Role: {roleModalUser?.name || 'User'}</DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-2">
-            <Label className="text-[13px] font-semibold">Select New Role:</Label>
-            <Select value={newRole} onValueChange={setNewRole}>
-              <SelectTrigger size="lg"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {ROLE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRoleModalUser(null)}>Cancel</Button>
-            <Button onClick={handleSaveRole} disabled={isChangingRole}>
-              {isChangingRole && <Spinner />} Save Role
             </Button>
           </DialogFooter>
         </DialogContent>
