@@ -41,7 +41,7 @@ app.post('/webhook/razorpay', async (req, res) => {
             ? await Clients.findOne({ id: leadData.client_id }, { _id: 0, id: 1, name: 1 }).lean() || {}
             : {};
 
-          await axios.post('https://leados-n8n.abmgroups.org/webhook/payment-success', {
+          await axios.post(process.env.N8N_PAYMENT_SUCCESS_WEBHOOK_URL, {
             invoice_id:  paymentId,
             lead_id:     leadId,
             name:        leadData.name   || null,

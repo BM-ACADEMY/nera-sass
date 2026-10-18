@@ -69,7 +69,7 @@ async function tenantSummary(tenant) {
   };
 }
 
-function createAdminRouter({ verifyClientWhatsApp } = {}) {
+function createAdminRouter({ verifyClientWhatsApp, leados } = {}) {
   const router = express.Router();
 
   router.get('/me', (req, res) => res.json({ user: req.user, permissions: Object.fromEntries(
@@ -105,8 +105,10 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
   router.post('/tenants', permit('platform.billing.grant'), async (req, res) => {
     try {
       const body = req.body || {};
-      if (body.owner_password !== undefined) {
-        return res.status(400).json({ error: 'Owner passwords cannot be set by staff. The owner sets their own password from the invitation email.' });
+      // Staff set the owner's password here and hand it over themselves; the
+      // admin panel never sends an invitation email.
+      if (typeof body.owner_password !== 'string' || !body.owner_password) {
+        return res.status(400).json({ error: 'Owner password is required' });
       }
       if (body.payment_method !== undefined && body.payment_method !== 'manual_grant') {
         return res.status(400).json({ error: 'Staff can only record manual grants; verified payments are recorded by the payment system.' });
@@ -115,6 +117,7 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
         business_name: body.business_name,
         owner_email: body.owner_email,
         owner_name: body.owner_name,
+        owner_password: body.owner_password,
         plan_code: body.plan_code,
         term_months: body.term_months,
         payment: { method: 'manual_grant', reference: body.payment_reference, reason: body.grant_reason },
@@ -512,47 +515,8 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
     }
   });
 
-  // ── Clients Management ────────────────────────────────────
-  router.get('/clients', permit('platform.tenants.view'), async (req, res) => {
-    try {
-      const filter = {};
-      if (req.query.tenant_id) filter.tenant_id = Number(req.query.tenant_id);
-      if (req.query.search) {
-        const re = { $regex: escapeRegex(String(req.query.search)), $options: 'i' };
-        filter.$or = [{ name: re }, { city: re }, { whatsapp_number: re }];
-      }
-      const clients = await Clients.find(filter, { _id: 0 }).sort({ created_at: -1 }).limit(200).lean();
-      const tenantIds = [...new Set(clients.map((c) => c.tenant_id).filter((id) => id != null))];
-      const tenantMap = new Map((await Tenants.find({ id: { $in: tenantIds } }, { _id: 0, id: 1, name: 1, status: 1 }).lean()).map((t) => [t.id, t]));
-      return res.json({
-        clients: clients.map((c) => ({
-          ...sanitizeClient(c),
-          tenant_name: tenantMap.get(c.tenant_id)?.name || 'Unknown',
-          tenant_status: tenantMap.get(c.tenant_id)?.status || 'active',
-        })),
-      });
-    } catch (error) {
-      return fail(res, error);
-    }
-  });
-
-  router.patch('/clients/:id', permit('platform.tenants.manage'), async (req, res) => {
-    try {
-      const clientId = Number(req.params.id);
-      const client = await Clients.findOne({ id: clientId }).lean();
-      if (!client) return res.status(404).json({ error: 'Client not found' });
-      const allowed = ['name', 'city', 'phone', 'contact_person', 'whatsapp_number', 'phone_number_id', 'wa_business_id', 'status', 'industry', 'wa_category', 'wa_description', 'wa_address', 'wa_email', 'wa_website'];
-      const update = {};
-      for (const key of allowed) {
-        if (req.body[key] !== undefined) update[key] = req.body[key];
-      }
-      update.updated_at = new Date();
-      const updated = await Clients.findOneAndUpdate({ id: clientId }, { $set: update }, { new: true, projection: { _id: 0 } }).lean();
-      return res.json({ client: sanitizeClient(updated) });
-    } catch (error) {
-      return fail(res, error);
-    }
-  });
+  // ── Clients Management & platform Meta inventory ──────────
+  require('./admin-clients')(router, { permit, fail, leados });
 
   // ── Workflows Management ──────────────────────────────────
   router.get('/workflows/logs', permit('platform.tenants.view'), async (req, res) => {

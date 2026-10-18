@@ -1050,7 +1050,11 @@ const adminPanelAuth = staffAuth();
 app.use(
   '/api/admin',
   (req, res, next) => (req.method === 'POST' && SALESOS_MAINTENANCE_PATHS.has(req.path) ? next() : adminPanelAuth(req, res, next)),
-  require('./routes/admin')({ verifyClientWhatsApp: (client) => verifyClientWhatsApp(client) }),
+  require('./routes/admin')({
+    verifyClientWhatsApp: (client) => verifyClientWhatsApp(client),
+    // Read at request time: leadosRouteContext is defined further down.
+    leados: () => leadosRouteContext,
+  }),
 );
 // SalesOS routes are called by the app (user token) and by n8n / cron jobs
 // (x-internal-key + x-tenant-id); the router checks this itself per route.
@@ -1757,7 +1761,7 @@ if (jobsEnabled() && moduleEnabled('contentos')) cron.schedule('* * * * *', asyn
         const dummyReq = {
           params: { id: post.id },
           headers: {
-            'host': 'leados-api.abmgroups.org',
+            'host': new URL(process.env.PUBLIC_API_URL).host,
             'x-forwarded-proto': 'https'
           },
           get: (header) => dummyReq.headers[header.toLowerCase()] || null,
@@ -1978,7 +1982,7 @@ function startBackgroundJobs() {
 }
 
 function start() {
-  for (const name of ['JWT_SECRET', 'INTERNAL_API_KEY', 'TOKEN_ENCRYPTION_KEY']) {
+  for (const name of ['JWT_SECRET', 'INTERNAL_API_KEY', 'TOKEN_ENCRYPTION_KEY', 'PUBLIC_API_URL', 'PORTAL_URL']) {
     if (!process.env[name]) {
       console.error(`[Startup] ${name} is not set; refusing to start.`);
       process.exit(1);

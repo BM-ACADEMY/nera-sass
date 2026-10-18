@@ -1,123 +1,98 @@
 import React from 'react';
-import { Table, Tag, Button, Empty, Dropdown, Space, Popconfirm } from 'antd';
-import { MoreOutlined, StopOutlined, CheckCircleOutlined, ReloadOutlined, KeyOutlined, EditOutlined } from '@ant-design/icons';
+import { FiMoreHorizontal, FiSlash, FiCheckCircle, FiRefreshCw, FiKey, FiEdit2 } from 'react-icons/fi';
+import DataTable from './DataTable';
 import UserAvatar from './UserAvatar';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { roleStyle, formatRole } from '../utils/roles';
 
 const UsersList = ({ users, loading, onChangeRole, onToggleActive, onRevokeSessions, onResetMfa }) => {
   const columns = [
     {
-      title: 'User',
-      dataIndex: 'name',
       key: 'name',
+      title: 'User',
       sorter: (a, b) => String(a.name || '').localeCompare(String(b.name || '')),
-      render: (_, user) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      render: (user) => (
+        <div className="flex items-center gap-3">
           <UserAvatar name={user.name} role={user.role || user.staff_role} size={38} />
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 13.5, color: '#1e293b', whiteSpace: 'nowrap' }}>
-              {user.name || 'Unnamed User'}
-            </div>
-            <div style={{ fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap' }}>
-              {user.email || 'No email on file'}
-            </div>
+          <div className="min-w-0">
+            <div className="text-[13.5px] font-semibold whitespace-nowrap">{user.name || 'Unnamed User'}</div>
+            <div className="text-xs whitespace-nowrap text-slate-400">{user.email || 'No email on file'}</div>
           </div>
         </div>
       ),
     },
     {
-      title: 'Phone',
-      dataIndex: 'phone',
       key: 'phone',
-      render: (phone) => <span style={{ color: phone ? '#475569' : '#cbd5e1', fontSize: 13 }}>{phone || '—'}</span>,
+      title: 'Phone',
+      render: (user) => <span className={user.phone ? 'text-[13px] text-slate-600' : 'text-[13px] text-slate-300'}>{user.phone || '—'}</span>,
     },
     {
-      title: 'Role',
-      dataIndex: 'role',
       key: 'role',
-      render: (_, user) => {
+      title: 'Role',
+      render: (user) => {
         const displayRole = user.staff_role || user.role || 'agent';
         const style = roleStyle(displayRole);
         return (
-          <Tag style={{ background: style.bg, color: style.color, border: 'none', borderRadius: 20, fontWeight: 700, fontSize: 11, padding: '2px 12px' }}>
+          <Badge className="border-transparent px-3 text-[11px] font-bold" style={{ background: style.bg, color: style.color }}>
             {user.is_platform_staff ? `Staff · ${formatRole(displayRole)}` : formatRole(displayRole)}
-          </Tag>
+          </Badge>
         );
       },
     },
     {
-      title: 'Status',
-      dataIndex: 'is_active',
       key: 'is_active',
-      render: (isActive) => (
-        <Tag color={isActive !== false ? 'success' : 'error'} style={{ borderRadius: 12, fontWeight: 600 }}>
-          {isActive !== false ? 'Active' : 'Deactivated'}
-        </Tag>
+      title: 'Status',
+      render: (user) => (
+        <Badge variant={user.is_active !== false ? 'success' : 'danger'}>
+          {user.is_active !== false ? 'Active' : 'Deactivated'}
+        </Badge>
       ),
     },
     {
-      title: 'Workspace',
-      dataIndex: 'tenant_id',
       key: 'tenant_id',
-      render: (tenantId) => (
-        <span style={{ fontSize: 12, color: tenantId ? '#334155' : '#94a3b8', fontWeight: 500 }}>
-          {tenantId ? `Tenant #${tenantId}` : 'Platform'}
+      title: 'Workspace',
+      render: (user) => (
+        <span className={user.tenant_id ? 'text-xs font-medium text-slate-700' : 'text-xs font-medium text-slate-400'}>
+          {user.tenant_id ? `Tenant #${user.tenant_id}` : 'Platform'}
         </span>
       ),
     },
     {
-      title: 'Actions',
       key: 'actions',
-      render: (_, user) => {
-        const items = [
-          {
-            key: 'role',
-            icon: <EditOutlined />,
-            label: 'Change Role',
-            onClick: () => onChangeRole && onChangeRole(user),
-          },
-          {
-            key: 'active',
-            icon: user.is_active !== false ? <StopOutlined /> : <CheckCircleOutlined />,
-            danger: user.is_active !== false,
-            label: user.is_active !== false ? 'Deactivate User' : 'Reactivate User',
-            onClick: () => onToggleActive && onToggleActive(user),
-          },
-          {
-            key: 'revoke',
-            icon: <ReloadOutlined />,
-            label: 'Revoke All Sessions',
-            onClick: () => onRevokeSessions && onRevokeSessions(user),
-          },
-          {
-            key: 'reset-mfa',
-            icon: <KeyOutlined />,
-            label: 'Reset MFA',
-            disabled: !user.mfa_enabled,
-            onClick: () => onResetMfa && onResetMfa(user),
-          },
-        ];
-
+      title: 'Actions',
+      render: (user) => {
+        const isActive = user.is_active !== false;
         return (
-          <Dropdown menu={{ items }} trigger={['click']}>
-            <Button size="small" type="text" icon={<MoreOutlined />} />
-          </Dropdown>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="size-8" aria-label="User actions">
+                <FiMoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => onChangeRole && onChangeRole(user)}>
+                <FiEdit2 /> Change Role
+              </DropdownMenuItem>
+              <DropdownMenuItem variant={isActive ? 'destructive' : 'default'} onSelect={() => onToggleActive && onToggleActive(user)}>
+                {isActive ? <FiSlash /> : <FiCheckCircle />} {isActive ? 'Deactivate User' : 'Reactivate User'}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => onRevokeSessions && onRevokeSessions(user)}>
+                <FiRefreshCw /> Revoke All Sessions
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={!user.mfa_enabled} onSelect={() => onResetMfa && onResetMfa(user)}>
+                <FiKey /> Reset MFA
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         );
       },
     },
   ];
 
-  return (
-    <Table
-      className="users-table"
-      rowKey="id"
-      loading={loading}
-      dataSource={users}
-      columns={columns}
-      pagination={{ pageSize: 8, hideOnSinglePage: true }}
-      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No users found." style={{ padding: '32px 0' }} /> }}
-    />
-  );
+  return <DataTable columns={columns} data={users} loading={loading} pageSize={8} emptyText="No users found." />;
 };
 
 export default UsersList;

@@ -1,6 +1,6 @@
 import React from 'react';
-import { Avatar } from 'antd';
-import { UserOutlined, CrownOutlined } from '@ant-design/icons';
+import { FiUser } from 'react-icons/fi';
+import { FaCrown } from 'react-icons/fa';
 import { roleStyle } from '../utils/roles';
 
 // One consistent avatar treatment for people across the whole app (sidebar
@@ -11,14 +11,14 @@ const UserAvatar = ({ name, role, size = 40 }) => {
   const style = roleStyle(role);
   const initial = typeof name === 'string' && name.trim() ? name.trim().charAt(0).toUpperCase() : '?';
   const isHighRole = ['owner', 'admin', 'superadmin', 'staff_admin'].includes(String(role || '').toLowerCase());
+  const Icon = isHighRole ? FaCrown : FiUser;
   return (
-    <Avatar
-      size={size}
-      icon={isHighRole ? <CrownOutlined /> : <UserOutlined />}
-      style={{ background: style.bg, color: style.color, border: `1px solid ${style.color}22`, flexShrink: 0, fontWeight: 700 }}
+    <span
+      className="inline-flex shrink-0 items-center justify-center rounded-full font-bold"
+      style={{ width: size, height: size, background: style.bg, color: style.color, border: `1px solid ${style.color}22`, fontSize: size * 0.42 }}
     >
-      {!role && initial ? initial : null}
-    </Avatar>
+      {role ? <Icon /> : initial}
+    </span>
   );
 };
 

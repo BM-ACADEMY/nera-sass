@@ -110,7 +110,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
     // If the request is already coming from n8n (source=n8n), we SKIP forwarding to prevent an infinite loop.
     if (req.query.source !== 'n8n' && process.env.NODE_ENV !== 'test') {
       try {
-        const n8nUrl = 'https://leados-n8n.abmgroups.org/webhook/whatsapp-inbound';
+        const n8nUrl = process.env.N8N_WHATSAPP_INBOUND_WEBHOOK_URL;
         await axios.post(n8nUrl, body);
         console.log('✅ Successfully forwarded payload to n8n Lead Integrator (WF00)');
       } catch (n8nErr) {

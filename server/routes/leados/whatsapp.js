@@ -175,7 +175,7 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
       if (waMediaId) {
         payload[type] = { id: waMediaId };
       } else {
-        const fullMediaUrl = media_url && media_url.startsWith('http') ? media_url : `${process.env.API_URL || 'https://leados-api.abmgroups.org'}${media_url}`;
+        const fullMediaUrl = media_url && media_url.startsWith('http') ? media_url : `${process.env.PUBLIC_API_URL}${media_url}`;
         payload[type] = { link: fullMediaUrl };
       }
       if (message && type !== 'audio') payload[type].caption = message; // Audio doesn't support caption

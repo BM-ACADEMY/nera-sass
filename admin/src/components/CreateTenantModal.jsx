@@ -1,26 +1,79 @@
 import React, { useState, useEffect } from 'react';
-import { Form, Input, Button, Select, Switch, Alert, message } from 'antd';
-import {
-  BankOutlined,
-  MailOutlined,
-  UserOutlined,
-  SafetyCertificateOutlined,
-  CheckCircleFilled,
-  WarningFilled,
-} from '@ant-design/icons';
+import { toast } from 'sonner';
+import { FiBriefcase, FiMail, FiUser, FiShield, FiCheckCircle, FiAlertCircle, FiLock, FiEye, FiEyeOff, FiRefreshCw, FiCopy } from 'react-icons/fi';
 import axiosClient from '../api/axiosClient';
+import { FormField, IconInput } from './FormField';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Spinner } from '@/components/ui/spinner';
+import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 
-// Creates the workspace, brand profile and subscription, and emails the Owner
-// a one-time invitation. The Owner sets their own password from that email;
-// staff never choose or see it.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const TERM_OPTIONS = [
+  { value: '1', label: '1 Month' },
+  { value: '3', label: '3 Months (5% off)' },
+  { value: '6', label: '6 Months (10% off)' },
+  { value: '12', label: '12 Months (15% off)' },
+];
+
+const INITIAL = {
+  business_name: '',
+  owner_name: '',
+  owner_email: '',
+  owner_password: '',
+  plan_code: '',
+  term_months: '12',
+  payment_reference: '',
+  grant_reason: '',
+  is_founding_client: false,
+};
+
+// A strong random password: letters and digits without look-alike characters.
+const PASSWORD_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+function generatePassword(length = 14) {
+  const bytes = crypto.getRandomValues(new Uint32Array(length));
+  let out = Array.from(bytes, (b) => PASSWORD_CHARS[b % PASSWORD_CHARS.length]).join('');
+  if (!/\d/.test(out)) out = out.slice(0, -1) + '7';
+  if (!/[A-Za-z]/.test(out)) out = 'K' + out.slice(1);
+  return out;
+}
+
+const validate = (v) => {
+  const e = {};
+  if (!v.business_name.trim()) e.business_name = 'Business name is required';
+  if (!v.owner_name.trim()) e.owner_name = 'Owner name is required';
+  if (!EMAIL_RE.test(v.owner_email.trim())) e.owner_email = 'A valid owner email is required';
+  const pw = v.owner_password;
+  if (!pw) e.owner_password = 'Set a password for the owner';
+  else if (pw.length < 10) e.owner_password = 'Password must be at least 10 characters';
+  else if (pw.length > 128) e.owner_password = 'Password must be at most 128 characters';
+  else if (!/[A-Za-z]/.test(pw) || !/\d/.test(pw)) e.owner_password = 'Password must contain at least one letter and one number';
+  else if (pw.toLowerCase() === v.owner_email.trim().toLowerCase()) e.owner_password = 'Password cannot be the owner email';
+  if (!v.plan_code) e.plan_code = 'Plan is required';
+  const ref = v.payment_reference.trim();
+  if (!ref) e.payment_reference = 'Enter the approval or bank reference for this grant';
+  else if (ref.length < 3 || ref.length > 120) e.payment_reference = 'Reference must be 3–120 characters';
+  const reason = v.grant_reason.trim();
+  if (!reason) e.grant_reason = 'Explain why this grant is authorized';
+  else if (reason.length < 10 || reason.length > 500) e.grant_reason = 'Reason must be 10–500 characters';
+  return e;
+};
+
+// Creates the workspace, brand profile, subscription and the Owner's login.
+// Staff set the Owner's password here and hand it over themselves; no email
+// is sent.
 const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
-  const [form] = Form.useForm();
+  const [values, setValues] = useState(INITIAL);
+  const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
   // Plans come only from the server's catalogue; there is no built-in list.
   const [availablePlans, setAvailablePlans] = useState([]);
   const [plansState, setPlansState] = useState('loading'); // loading | ready | unavailable
   const [createdResult, setCreatedResult] = useState(null);
-  const [resending, setResending] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     async function loadPlans() {
@@ -39,53 +92,47 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
     loadPlans();
   }, []);
 
-  const onFinish = async (values) => {
+  const set = (key, value) => {
+    setValues((v) => ({ ...v, [key]: value }));
+    setErrors((e) => ({ ...e, [key]: undefined }));
+  };
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    const nextErrors = validate(values);
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) return;
+
     setLoading(true);
     try {
       const payload = {
-        business_name: values.business_name?.trim(),
-        owner_name: values.owner_name?.trim(),
-        owner_email: values.owner_email?.trim().toLowerCase(),
+        business_name: values.business_name.trim(),
+        owner_name: values.owner_name.trim(),
+        owner_email: values.owner_email.trim().toLowerCase(),
+        owner_password: values.owner_password,
         plan_code: values.plan_code,
         term_months: Number(values.term_months || 12),
         // A manual grant: staff record who approved it (their own login), the
         // approval/bank reference and why. Nothing is filled in automatically.
-        payment_reference: values.payment_reference?.trim(),
-        grant_reason: values.grant_reason?.trim(),
+        payment_reference: values.payment_reference.trim(),
+        grant_reason: values.grant_reason.trim(),
         is_founding_client: Boolean(values.is_founding_client),
         settings: {
-          language: values.language || 'en',
-          currency: values.currency || 'INR',
+          language: 'en',
+          currency: 'INR',
           tax_treatment: 'gst',
           timezone: 'Asia/Kolkata',
         },
       };
 
       const res = await axiosClient.post('/admin/tenants', payload);
-      message.success(`Workspace "${payload.business_name}" provisioned`);
-      form.resetFields();
-      setCreatedResult(res.data);
+      toast.success(`Workspace "${payload.business_name}" provisioned`);
+      setCreatedResult({ ...res.data, owner_password: values.owner_password });
+      setValues(INITIAL);
     } catch (err) {
-      message.error(err.response?.data?.error || 'Failed to provision workspace');
+      toast.error(err.response?.data?.error || 'Failed to provision workspace');
     } finally {
       setLoading(false);
-    }
-  };
-
-  // If the invitation email could not be sent, staff send a fresh link (the
-  // previous one stops working). The Owner still sets their own password.
-  const handleResendInvitation = async () => {
-    if (!createdResult?.tenant?.id || !createdResult?.invitation?.id) return;
-    setResending(true);
-    try {
-      const res = await axiosClient.post(`/admin/tenants/${createdResult.tenant.id}/invitations/${createdResult.invitation.id}/resend`);
-      setCreatedResult((current) => ({ ...current, invitation: res.data.invitation, delivery: res.data.delivery }));
-      if (res.data?.delivery?.delivered === false) message.warning('The invitation email still could not be sent. Check the email settings.');
-      else message.success('Invitation email sent');
-    } catch (err) {
-      message.error(err.response?.data?.error || 'Failed to resend invitation');
-    } finally {
-      setResending(false);
     }
   };
 
@@ -97,58 +144,53 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
     }
   };
 
-  // Success view: the workspace exists and the Owner has been invited.
+  const copyCredentials = async () => {
+    const text = `Workspace: ${createdResult.tenant?.name}\nLogin email: ${createdResult.owner?.email}\nPassword: ${createdResult.owner_password}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success('Login details copied');
+    } catch {
+      toast.error('Could not copy. Select and copy the details manually.');
+    }
+  };
+
+  // Success view: the workspace and the Owner's login exist.
   if (createdResult) {
-    const delivered = createdResult.delivery?.delivered !== false;
+    const fieldLabel = 'text-[11px] font-bold tracking-wide text-slate-400 uppercase';
     return (
-      <div style={{ padding: '8px 12px', textAlign: 'center' }}>
-        <div style={{ width: 56, height: 56, borderRadius: '50%', background: delivered ? '#f0fdf4' : '#fffbeb', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
-          {delivered
-            ? <CheckCircleFilled style={{ fontSize: 32, color: '#16a34a' }} />
-            : <WarningFilled style={{ fontSize: 32, color: '#d97706' }} />}
+      <div className="px-3 py-2 text-center">
+        <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-full bg-green-50 text-green-600">
+          <FiCheckCircle size={30} />
         </div>
-        <div style={{ fontSize: 18, fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>
-          Workspace Provisioned
-        </div>
-        <div style={{ fontSize: 13, color: '#64748b', marginBottom: 20 }}>
-          {delivered
-            ? 'The Owner has been emailed an invitation and will set their own password.'
-            : 'The workspace was created, but the invitation email could not be sent. Resend it once email delivery works.'}
+        <div className="mb-1 text-lg font-extrabold">Workspace Provisioned</div>
+        <div className="mb-5 text-[13px] text-muted-foreground">
+          The Owner can sign in now with the email and password below. No email was sent; share these details with the Owner yourself.
         </div>
 
-        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, textAlign: 'left', marginBottom: 20 }}>
-          <div style={{ marginBottom: 10 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Workspace</span>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#1e293b' }}>
-              {createdResult.tenant?.name} <span style={{ color: '#94a3b8', fontWeight: 500, fontSize: 12 }}>(ID: #{createdResult.tenant?.id})</span>
+        <div className="mb-5 rounded-xl border border-border bg-muted/50 p-4 text-left">
+          <div className="mb-3">
+            <span className={fieldLabel}>Workspace</span>
+            <div className="text-sm font-bold">
+              {createdResult.tenant?.name} <span className="text-xs font-medium text-slate-400">(ID: #{createdResult.tenant?.id})</span>
             </div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12, paddingTop: 12, borderTop: '1px solid #e2e8f0' }}>
-            <div>
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Owner Invited</span>
-              <div style={{ fontSize: 13.5, fontWeight: 600, color: '#1e293b', wordBreak: 'break-all' }}>{createdResult.invitation?.email}</div>
+          <div className="grid grid-cols-1 gap-3 border-t border-border pt-3 sm:grid-cols-2">
+            <div className="min-w-0">
+              <span className={fieldLabel}>Owner Login Email</span>
+              <div className="text-[13.5px] font-semibold break-all">{createdResult.owner?.email}</div>
             </div>
-            <div>
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.5 }}>Invitation</span>
-              <div style={{ fontSize: 13.5, fontWeight: 600, color: delivered ? '#15803d' : '#b45309' }}>
-                {delivered ? 'Email sent' : 'Not sent'}
-                {createdResult.invitation?.expires_at && (
-                  <span style={{ display: 'block', fontSize: 11.5, fontWeight: 500, color: '#94a3b8' }}>
-                    Expires {new Date(createdResult.invitation.expires_at).toLocaleString()}
-                  </span>
-                )}
-              </div>
+            <div className="min-w-0">
+              <span className={fieldLabel}>Password</span>
+              <div className="font-mono text-[13.5px] font-semibold break-all">{createdResult.owner_password}</div>
             </div>
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-          {!delivered && (
-            <Button size="large" loading={resending} onClick={handleResendInvitation} style={{ borderRadius: 8 }}>
-              Resend Invitation
-            </Button>
-          )}
-          <Button type="primary" size="large" onClick={handleFinishAndClose} style={{ borderRadius: 8, fontWeight: 600, minWidth: 100 }}>
+        <div className="flex justify-center gap-3">
+          <Button variant="outline" size="lg" onClick={copyCredentials}>
+            <FiCopy /> Copy login details
+          </Button>
+          <Button size="lg" onClick={handleFinishAndClose} className="min-w-24 font-semibold">
             Done
           </Button>
         </div>
@@ -157,138 +199,134 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
   }
 
   return (
-    <div style={{ padding: '4px 8px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid #f1f5f9' }}>
-        <div style={{ width: 44, height: 44, borderRadius: 12, background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <BankOutlined style={{ fontSize: 22, color: '#2563eb' }} />
+    <div>
+      <div className="mb-5 flex items-center gap-3 border-b border-border pb-4 pr-6">
+        <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+          <FiBriefcase size={21} />
         </div>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 800, color: '#1e293b' }}>Provision New Workspace</div>
-          <div style={{ fontSize: 12, color: '#94a3b8' }}>
-            Creates the workspace, brand profile and subscription, and emails the Owner an invitation to set their own password.
+          <div className="text-base font-extrabold">Provision New Workspace</div>
+          <div className="text-xs text-slate-400">
+            Creates the workspace, brand profile, subscription and the Owner's login. No email is sent.
           </div>
         </div>
       </div>
 
-      <Form
-        form={form}
-        layout="vertical"
-        onFinish={onFinish}
-        initialValues={{
-          term_months: 12,
-          language: 'en',
-          currency: 'INR',
-          is_founding_client: false,
-        }}
-      >
+      <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
         {plansState === 'unavailable' && (
-          <Alert
-            type="error"
-            showIcon
-            style={{ marginBottom: 16 }}
-            title="Plan catalogue unavailable"
-            description="The plan catalogue could not be loaded, so workspaces cannot be created right now. Load the catalogue on the server, then reopen this form."
-          />
-        )}
-        <Form.Item
-          name="business_name"
-          label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Business / Brand Name</span>}
-          rules={[{ required: true, message: 'Business name is required' }]}
-        >
-          <Input prefix={<BankOutlined style={{ color: '#94a3b8' }} />} placeholder="e.g. Acme Motors" size="large" />
-        </Form.Item>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          <Form.Item
-            name="owner_name"
-            label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Owner Full Name</span>}
-            rules={[{ required: true, message: 'Owner name is required' }]}
-          >
-            <Input prefix={<UserOutlined style={{ color: '#94a3b8' }} />} placeholder="e.g. Rajesh Kumar" size="large" />
-          </Form.Item>
-
-          <Form.Item
-            name="owner_email"
-            label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Owner Email</span>}
-            rules={[{ required: true, message: 'Owner email is required', type: 'email' }]}
-            extra="The Owner receives a one-time invitation link here."
-          >
-            <Input prefix={<MailOutlined style={{ color: '#94a3b8' }} />} placeholder="owner@company.com" size="large" />
-          </Form.Item>
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
-          <Form.Item
-            name="plan_code"
-            label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Subscription Plan</span>}
-            rules={[{ required: true, message: 'Plan is required' }]}
-          >
-            <Select
-              size="large"
-              placeholder={plansState === 'loading' ? 'Loading plan catalogue…' : 'Select a plan'}
-              disabled={plansState !== 'ready'}
-              options={availablePlans.map(p => ({ value: p.code, label: p.name }))}
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="term_months"
-            label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Term</span>}
-            rules={[{ required: true }]}
-          >
-            <Select
-              size="large"
-              options={[
-                { value: 1, label: '1 Month' },
-                { value: 3, label: '3 Months (5% off)' },
-                { value: 6, label: '6 Months (10% off)' },
-                { value: 12, label: '12 Months (15% off)' },
-              ]}
-            />
-          </Form.Item>
-        </div>
-
-        <Form.Item
-          name="payment_reference"
-          label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Manual Grant Reference</span>}
-          rules={[
-            { required: true, whitespace: true, message: 'Enter the approval or bank reference for this grant' },
-            { min: 3, max: 120, message: 'Reference must be 3–120 characters' },
-          ]}
-          extra="This workspace is created as a manual grant authorized by you. Enter the approval or bank-transfer reference. Razorpay payments are recorded automatically, not here."
-        >
-          <Input prefix={<SafetyCertificateOutlined style={{ color: '#94a3b8' }} />} placeholder="Approval or bank reference" size="large" />
-        </Form.Item>
-
-        <Form.Item
-          name="grant_reason"
-          label={<span style={{ fontWeight: 600, fontSize: 12.5 }}>Reason for Manual Grant</span>}
-          rules={[
-            { required: true, whitespace: true, message: 'Explain why this grant is authorized' },
-            { min: 10, max: 500, message: 'Reason must be 10–500 characters' },
-          ]}
-          extra="Recorded in the audit log with your name."
-        >
-          <Input.TextArea rows={2} placeholder="e.g. Pilot client approved by the founder; paid by bank transfer" maxLength={500} />
-        </Form.Item>
-
-        <Form.Item name="is_founding_client" valuePropName="checked" style={{ marginBottom: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+          <Alert variant="destructive">
+            <FiAlertCircle />
             <div>
-              <div style={{ fontWeight: 600, fontSize: 13, color: '#1e293b' }}>Founding Client Status</div>
-              <div style={{ fontSize: 11.5, color: '#94a3b8' }}>Flag this workspace as a launch pilot founding client</div>
+              <AlertTitle>Plan catalogue unavailable</AlertTitle>
+              <AlertDescription>
+                The plan catalogue could not be loaded, so workspaces cannot be created right now. Load the catalogue on the server, then reopen this form.
+              </AlertDescription>
             </div>
-            <Switch defaultChecked={false} />
-          </div>
-        </Form.Item>
+          </Alert>
+        )}
 
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 24, paddingTop: 16, borderTop: '1px solid #f1f5f9' }}>
-          {onCancel && <Button size="large" onClick={onCancel}>Cancel</Button>}
-          <Button type="primary" htmlType="submit" loading={loading} disabled={plansState !== 'ready'} size="large" style={{ borderRadius: 8, fontWeight: 600 }}>
-            Provision Workspace
+        <FormField label="Business / Brand Name" htmlFor="business_name" error={errors.business_name}>
+          <IconInput id="business_name" icon={FiBriefcase} placeholder="e.g. Acme Motors" value={values.business_name} onChange={(e) => set('business_name', e.target.value)} />
+        </FormField>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <FormField label="Owner Full Name" htmlFor="owner_name" error={errors.owner_name}>
+            <IconInput id="owner_name" icon={FiUser} placeholder="e.g. Rajesh Kumar" value={values.owner_name} onChange={(e) => set('owner_name', e.target.value)} />
+          </FormField>
+          <FormField label="Owner Email" htmlFor="owner_email" error={errors.owner_email} hint="The Owner signs in with this email.">
+            <IconInput id="owner_email" type="email" icon={FiMail} placeholder="owner@company.com" value={values.owner_email} onChange={(e) => set('owner_email', e.target.value)} />
+          </FormField>
+        </div>
+
+        <FormField
+          label="Owner Password"
+          htmlFor="owner_password"
+          error={errors.owner_password}
+          hint="At least 10 characters with a letter and a number. You will share it with the Owner yourself."
+        >
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <IconInput
+                id="owner_password"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="new-password"
+                icon={FiLock}
+                placeholder="Set the owner's password"
+                value={values.owner_password}
+                onChange={(e) => set('owner_password', e.target.value)}
+                className="pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute top-1/2 right-3 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-foreground"
+              >
+                {showPassword ? <FiEyeOff /> : <FiEye />}
+              </button>
+            </div>
+            <Button type="button" variant="outline" className="h-10" onClick={() => { set('owner_password', generatePassword()); setShowPassword(true); }}>
+              <FiRefreshCw /> Generate
+            </Button>
+          </div>
+        </FormField>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[2fr_1fr]">
+          <FormField label="Subscription Plan" error={errors.plan_code}>
+            <Select value={values.plan_code} onValueChange={(v) => set('plan_code', v)} disabled={plansState !== 'ready'}>
+              <SelectTrigger size="lg" className="h-10">
+                <SelectValue placeholder={plansState === 'loading' ? 'Loading plan catalogue…' : 'Select a plan'} />
+              </SelectTrigger>
+              <SelectContent>
+                {availablePlans.map((p) => <SelectItem key={p.code} value={p.code}>{p.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </FormField>
+          <FormField label="Term">
+            <Select value={values.term_months} onValueChange={(v) => set('term_months', v)}>
+              <SelectTrigger size="lg" className="h-10"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {TERM_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </FormField>
+        </div>
+
+        <FormField
+          label="Manual Grant Reference"
+          htmlFor="payment_reference"
+          error={errors.payment_reference}
+          hint="This workspace is created as a manual grant authorized by you. Enter the approval or bank-transfer reference. Razorpay payments are recorded automatically, not here."
+        >
+          <IconInput id="payment_reference" icon={FiShield} placeholder="Approval or bank reference" value={values.payment_reference} onChange={(e) => set('payment_reference', e.target.value)} />
+        </FormField>
+
+        <FormField label="Reason for Manual Grant" htmlFor="grant_reason" error={errors.grant_reason} hint="Recorded in the audit log with your name.">
+          <Textarea
+            id="grant_reason"
+            rows={2}
+            maxLength={500}
+            placeholder="e.g. Pilot client approved by the founder; paid by bank transfer"
+            value={values.grant_reason}
+            onChange={(e) => set('grant_reason', e.target.value)}
+          />
+        </FormField>
+
+        <label htmlFor="is_founding_client" className="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-muted/50 px-3.5 py-2.5">
+          <div>
+            <div className="text-[13px] font-semibold">Founding Client Status</div>
+            <div className="text-[11.5px] text-slate-400">Flag this workspace as a launch pilot founding client</div>
+          </div>
+          <Switch id="is_founding_client" checked={values.is_founding_client} onCheckedChange={(v) => set('is_founding_client', v)} />
+        </label>
+
+        <div className="mt-2 flex justify-end gap-2.5 border-t border-border pt-4">
+          {onCancel && <Button type="button" variant="outline" size="lg" onClick={onCancel}>Cancel</Button>}
+          <Button type="submit" size="lg" disabled={loading || plansState !== 'ready'} className="font-semibold">
+            {loading && <Spinner />} Provision Workspace
           </Button>
         </div>
-      </Form>
+      </form>
     </div>
   );
 };

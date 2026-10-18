@@ -3,14 +3,15 @@
  * Run: node server/scripts/migrate_add_workflow_cols.js
  */
 
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const { Pool } = require('pg');
 
 const pool = new Pool({
-  host: process.env.DB_HOST || 'leados-api.abmgroups.org',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'leados_db',
-  user: process.env.DB_USER || 'leados_user',
-  password: process.env.DB_PASS || 'LeadOS_DB@2026',
+  host: process.env.DB_HOST,
+  port: parseInt(process.env.DB_PORT),
+  database: process.env.DB_NAME,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASS,
 });
 
 async function migrate() {

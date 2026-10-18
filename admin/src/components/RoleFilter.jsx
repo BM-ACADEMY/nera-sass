@@ -1,4 +1,6 @@
 import React from 'react';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { roleStyle, formatRole } from '../utils/roles';
 
 const RoleFilter = ({ users, value, onChange }) => {
@@ -14,21 +16,25 @@ const RoleFilter = ({ users, value, onChange }) => {
   ];
 
   return (
-    <div className="role-filter">
+    <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border bg-muted/60 p-1">
       {tabs.map((tab) => {
         const active = value === tab.key;
         const style = tab.key === 'all' ? null : roleStyle(tab.key);
         return (
-          <button
+          <Button
             key={tab.key}
             type="button"
-            className={`role-filter-tab${active ? ' active' : ''}`}
+            size="sm"
+            variant={active ? 'default' : 'ghost'}
             onClick={() => onChange(tab.key)}
+            className={cn('h-7 rounded-lg text-xs font-semibold', !active && 'text-muted-foreground')}
             style={active && style ? { background: style.bg, color: style.color } : undefined}
           >
-            <span style={{ textTransform: 'capitalize' }}>{tab.label}</span>
-            <span className="role-filter-count">{tab.count}</span>
-          </button>
+            {tab.label}
+            <span className={cn('rounded-full px-1.5 text-[11px] font-bold', active ? 'bg-black/10' : 'bg-black/5')}>
+              {tab.count}
+            </span>
+          </Button>
         );
       })}
     </div>

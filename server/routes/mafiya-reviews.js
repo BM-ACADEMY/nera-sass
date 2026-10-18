@@ -1298,11 +1298,12 @@ router.post('/posts', async (req, res) => {
         const filepath = path.join(uploadDir, filename);
         fs.writeFileSync(filepath, base64Data, 'base64');
 
-        // Dynamically get the exact API domain that this request came from (e.g. leados-api.abmgroups.org)
-        const host = req.headers['x-forwarded-host'] || req.headers.host || 'leados-api.abmgroups.org';
+        // Dynamically get the exact API domain that this request came from (e.g. PUBLIC_API_URL host)
+        const publicApiHost = new URL(process.env.PUBLIC_API_URL).host;
+        const host = req.headers['x-forwarded-host'] || req.headers.host || publicApiHost;
         let protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
         // Force HTTPS for live domains because GMB requires it
-        if (host.includes('leados-api.abmgroups.org') || host.includes('abmgroups.org')) {
+        if (host === publicApiHost) {
           protocol = 'https';
         }
         const apiUrl = `${protocol}://${host}`;
@@ -1768,7 +1769,7 @@ router.put('/posts/:id', async (req, res) => {
         const filepath = path.join(uploadDir, filename);
         fs.writeFileSync(filepath, base64Data, 'base64');
 
-        const host = req.headers['x-forwarded-host'] || req.headers.host || 'leados-api.abmgroups.org';
+        const host = req.headers['x-forwarded-host'] || req.headers.host || new URL(process.env.PUBLIC_API_URL).host;
         const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
         const apiUrl = `${protocol}://${host}`;
 

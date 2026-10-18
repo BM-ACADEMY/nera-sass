@@ -21,7 +21,8 @@ const { describeUser, can } = require('./permissions');
 const invitations = require('./invitations');
 const audit = require('./audit');
 const { sanitizeClient } = require('./clientSecrets');
-const { normalizeEmail, isEmail } = require('../utils/passwordPolicy');
+const bcrypt = require('bcryptjs');
+const { normalizeEmail, isEmail, passwordProblem } = require('../utils/passwordPolicy');
 const { escapeRegex } = require('../db/mongo');
 
 class ProvisioningError extends Error {
@@ -185,10 +186,15 @@ async function provisionTenant(input, { req = null, actorUserId = null, actorNam
   const plan = await requirePlan(input.plan_code);
   priceTerm(plan, termMonths); // validates the term before anything is written
 
-  // The owner always joins through the invitation email and chooses their own
-  // password; staff never set or see it.
-  if (input.owner_password !== undefined) {
-    throw new ProvisioningError(400, 'Owner passwords cannot be set by staff. The owner sets their own password from the invitation email.');
+  // With owner_password the owner account is created directly (staff hand the
+  // credentials over themselves; no email is sent). Without it the owner joins
+  // through an invitation email and chooses their own password.
+  const ownerPassword = input.owner_password;
+  const ownerName = String(input.owner_name || '').trim();
+  if (ownerPassword !== undefined) {
+    const passwordError = passwordProblem(ownerPassword, ownerEmail);
+    if (passwordError) throw new ProvisioningError(400, passwordError);
+    if (!ownerName) throw new ProvisioningError(400, 'Owner name is required');
   }
   const existingTenant = await runAsSystem(() => Tenants.findOne({
     name: { $regex: new RegExp(`^${escapeRegex(businessName)}$`, 'i') },
@@ -256,24 +262,55 @@ async function provisionTenant(input, { req = null, actorUserId = null, actorNam
     if (session) await session.endSession();
   }
 
-  // The invitation is created after the commit so its email is only sent for
-  // a tenant that exists. If it fails, the whole tenant is removed again.
-  let invite;
+  // The owner (account or invitation) is created after the commit so it only
+  // exists for a tenant that exists. If it fails, the whole tenant is removed again.
+  let invite = { invitation: null, delivery: null };
+  let owner = null;
   try {
-    invite = await invitations.createInvitation({
-      tenantId: created.tenant.id,
-      email: ownerEmail,
-      name: input.owner_name || null,
-      role: 'owner',
-      invitedBy: { id: actorUserId, name: actorName },
-      req,
-    });
+    if (ownerPassword !== undefined) {
+      const passwordHash = await bcrypt.hash(ownerPassword, 12);
+      const user = await runAsTenant(created.tenant.id, () => Users.create({
+        name: ownerName,
+        email: ownerEmail,
+        phone: null,
+        password_hash: passwordHash,
+        role: 'owner',
+        is_platform_staff: false,
+        staff_role: null,
+        is_active: true,
+        active: true,
+        token_version: 0,
+        invited_by: actorUserId ?? null,
+        password_changed_at: new Date(),
+        created_at: new Date(),
+      }));
+      created.owner = user;
+      await runAsSystem(() => Tenants.updateOne({ id: created.tenant.id }, { $set: { owner_user_id: user.id, updated_at: new Date() } }), 'provisioning');
+      owner = { id: user.id, name: user.name, email: user.email };
+    } else {
+      invite = await invitations.createInvitation({
+        tenantId: created.tenant.id,
+        email: ownerEmail,
+        name: ownerName || null,
+        role: 'owner',
+        invitedBy: { id: actorUserId, name: actorName },
+        req,
+      });
+    }
   } catch (error) {
+    if (created.owner) await runAsSystem(() => Users.deleteOne({ id: created.owner.id }), 'provisioning-undo').catch(() => {});
     await undo();
+    if (error.code === 11000) throw new ProvisioningError(409, 'A user with the owner email already exists');
     throw error;
   }
 
   const tenantId = created.tenant.id;
+  if (owner) {
+    await audit.record(audit.EVENTS.USER_JOINED, {
+      tenantId, req, targetType: 'user', targetId: owner.id,
+      meta: { email: ownerEmail, role: 'owner', created_by_staff: actorUserId ?? null },
+    });
+  }
   const subscription = created.subscription.toObject();
   await audit.record(audit.EVENTS.TENANT_CREATED, { tenantId, req, targetType: 'tenant', targetId: tenantId, meta: { name: businessName, owner_email: ownerEmail, transactional: useTransaction } });
   await recordPaymentEvent(payment, { tenantId, req, subscriptionId: subscription.id, actorUserId });
@@ -284,6 +321,7 @@ async function provisionTenant(input, { req = null, actorUserId = null, actorNam
     tenant: created.tenant.toObject(),
     client: sanitizeClient(created.client.toObject()),
     subscription,
+    owner,
     invitation: invite.invitation,
     // If the email could not be sent, the workspace and the pending invitation
     // remain; staff resend it with POST /api/admin/tenants/:id/invitations/:invitationId/resend.
