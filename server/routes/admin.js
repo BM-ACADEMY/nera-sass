@@ -73,11 +73,7 @@ async function tenantSummary(tenant) {
   };
 }
 
-<<<<<<< HEAD
-function createAdminRouter({ verifyClientWhatsApp, leados } = {}) {
-=======
 function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
->>>>>>> origin/aakash
   const router = express.Router();
 
   router.get('/me', (req, res) => res.json({ user: req.user, permissions: Object.fromEntries(
@@ -544,10 +540,6 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
     }
   });
 
-<<<<<<< HEAD
-  // ── Clients Management & platform Meta inventory ──────────
-  require('./admin-clients')(router, { permit, fail, leados });
-=======
   // ── Clients Management ────────────────────────────────────
   router.get('/clients', permit('platform.tenants.view'), async (req, res) => {
     try {
@@ -593,7 +585,6 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       return fail(res, error);
     }
   });
->>>>>>> origin/aakash
 
   // ── Workflows Management ──────────────────────────────────
   // Every row is labelled: scope "platform" (WF06/WF07, no workspace) or

@@ -206,10 +206,13 @@ test('Founder Reports API', async (t) => {
       await runAsTenant(10, () => Subscriptions.create({ plan_code: 'T', status: 'active', limits: {}, current_period_start: new Date(Date.now() - DAY), current_period_end: new Date(Date.now() + 30 * DAY) }));
       assert.strictEqual((await request(app).get('/api/admin/reports/founder-dashboard').set(bearer(owner))).status, 403);
       assert.strictEqual((await request(app).get('/api/admin/reports/founder-dashboard')).status, 401);
-      for (const role of ['founder', 'ops', 'support']) {
+      for (const role of ['founder', 'ops']) {
         const staff = await createUser({ tenant_id: null, is_platform_staff: true, staff_role: role, email: `${role}2@nera.test`, name: role });
         assert.strictEqual((await request(app).get('/api/admin/reports/founder-dashboard').set(bearer(staff))).status, 200, role);
       }
+      // The retired "support" role carries no permission.
+      const retired = await createUser({ tenant_id: null, is_platform_staff: true, staff_role: 'support', email: 'support2@nera.test', name: 'support' });
+      assert.strictEqual((await request(app).get('/api/admin/reports/founder-dashboard').set(bearer(retired))).status, 403);
     });
   } finally {
     await stopTestDb();

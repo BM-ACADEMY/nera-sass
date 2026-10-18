@@ -1,20 +1,7 @@
 import React, { useState, useEffect } from 'react';
-<<<<<<< HEAD
 import { toast } from 'sonner';
-import { FiRefreshCw, FiDollarSign, FiShoppingBag, FiUserPlus, FiUsers } from 'react-icons/fi';
-=======
-import { Card, Row, Col, Statistic, Table, Tag, Button, Empty, Popconfirm, message, Typography, Alert } from 'antd';
-import {
-  BarChartOutlined,
-  ReloadOutlined,
-  DeleteOutlined,
-  DollarCircleOutlined,
-  ShopOutlined,
-  UsergroupAddOutlined,
-  TeamOutlined,
-  FileTextOutlined
-} from '@ant-design/icons';
->>>>>>> origin/aakash
+import { FiRefreshCw, FiDollarSign, FiShoppingBag, FiUserPlus, FiUsers, FiAlertTriangle } from 'react-icons/fi';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import axiosClient from '../api/axiosClient';
 import DataTable from './DataTable';
 import StatTile from './StatTile';
@@ -118,97 +105,27 @@ const FounderReportsView = () => {
 
   return (
     <div>
-<<<<<<< HEAD
       <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatTile label="Monthly Recurring Revenue (MRR)" value={inr(snapshot?.mrr)} valueClassName="text-green-600" />
-        <StatTile label="Total Contract Value (TCV)" value={inr(snapshot?.totalContractValue)} valueClassName="text-blue-600" />
-        <StatTile label="Active Subscriptions" value={snapshot?.activeSubscriptions || 0} icon={<FiDollarSign />} valueClassName="text-amber-600" />
+        <StatTile label="MRR (verified paid contracts)" value={snapshot?.mrr == null ? '—' : inr(snapshot.mrr)} valueClassName="text-green-600" />
+        <StatTile label="TCV (verified paid, not yet ended)" value={snapshot?.totalContractValue == null ? '—' : inr(snapshot.totalContractValue)} valueClassName="text-blue-600" />
+        <StatTile label="Paying Workspaces" value={shown(snapshot?.activeSubscriptions)} icon={<FiDollarSign />} valueClassName="text-amber-600" />
       </div>
-
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <StatTile label="Total Workspaces" value={snapshot?.totalWorkspaces || 0} icon={<FiShoppingBag className="text-blue-500" />} />
-        <StatTile label="Platform Users" value={snapshot?.totalUsers || 0} icon={<FiUsers className="text-violet-500" />} />
-        <StatTile label="Total Leads Managed" value={snapshot?.totalLeads || 0} icon={<FiUserPlus className="text-emerald-500" />} />
-      </div>
-=======
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} md={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>MRR (VERIFIED PAID CONTRACTS)</span>}
-              value={shown(snapshot?.mrr)}
-              prefix="₹"
-              formatter={money}
-              valueStyle={{ color: '#16a34a', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>TCV (VERIFIED PAID, NOT YET ENDED)</span>}
-              value={shown(snapshot?.totalContractValue)}
-              prefix="₹"
-              formatter={money}
-              valueStyle={{ color: '#2563eb', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>PAYING WORKSPACES</span>}
-              value={shown(snapshot?.activeSubscriptions)}
-              prefix={<DollarCircleOutlined style={{ color: '#d97706' }} />}
-              valueStyle={{ color: '#d97706', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-      </Row>
 
       {breakdownNotes(snapshot).length > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 24 }}
-          message="Reported separately (not in MRR)"
-          description={<ul style={{ margin: 0, paddingLeft: 18 }}>{breakdownNotes(snapshot).map((n) => <li key={n}>{n}</li>)}</ul>}
-        />
+        <Alert className="mb-4 border-amber-200 bg-amber-50 text-amber-800">
+          <FiAlertTriangle />
+          <AlertTitle>Reported separately (not in MRR)</AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc pl-4">{breakdownNotes(snapshot).map((n) => <li key={n}>{n}</li>)}</ul>
+          </AlertDescription>
+        </Alert>
       )}
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>TOTAL WORKSPACES</span>}
-              value={shown(snapshot?.totalWorkspaces)}
-              prefix={<ShopOutlined style={{ color: '#3b82f6' }} />}
-              valueStyle={{ color: '#0f172a', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>PLATFORM USERS</span>}
-              value={shown(snapshot?.totalUsers)}
-              prefix={<TeamOutlined style={{ color: '#8b5cf6' }} />}
-              valueStyle={{ color: '#0f172a', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>TOTAL LEADS MANAGED</span>}
-              value={shown(snapshot?.totalLeads)}
-              prefix={<UsergroupAddOutlined style={{ color: '#10b981' }} />}
-              valueStyle={{ color: '#0f172a', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-      </Row>
->>>>>>> origin/aakash
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatTile label="Total Workspaces" value={shown(snapshot?.totalWorkspaces)} icon={<FiShoppingBag className="text-blue-500" />} />
+        <StatTile label="Platform Users" value={shown(snapshot?.totalUsers)} icon={<FiUsers className="text-violet-500" />} />
+        <StatTile label="Total Leads Managed" value={shown(snapshot?.totalLeads)} icon={<FiUserPlus className="text-emerald-500" />} />
+      </div>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
         <div>

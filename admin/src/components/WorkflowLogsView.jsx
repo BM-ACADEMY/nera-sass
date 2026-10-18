@@ -29,6 +29,12 @@ const STATUSES = [
   { value: 'failed', label: 'Failed Only' },
 ];
 
+const SCOPES = [
+  { value: 'ALL', label: 'All Scopes' },
+  { value: 'tenant', label: 'Workspace (WF00–WF05)' },
+  { value: 'platform', label: 'Platform (WF06–WF07)' },
+];
+
 const WorkflowLogsView = () => {
   const [logs, setLogs] = useState([]);
   // Real values only: no success rate until something has run, no assumed engine count.
@@ -79,36 +85,23 @@ const WorkflowLogsView = () => {
       key: 'workflow',
       title: 'Engine / Workflow',
       width: 180,
-<<<<<<< HEAD
-      render: (r) => <Badge variant="info" className="font-bold"><FiZap />{r.workflow || 'WF00'}</Badge>,
-    },
-    {
-=======
-      render: (wf) => (
-        <Tag color="geekblue" style={{ borderRadius: 10, fontWeight: 700, padding: '2px 8px' }}>
-          <ThunderboltOutlined style={{ marginRight: 4 }} />
-          {wf || 'Unknown'}
-        </Tag>
-      ),
+      render: (r) => <Badge variant="info" className="font-bold"><FiZap />{r.workflow || 'Unknown'}</Badge>,
     },
     {
       // WF06/WF07 are platform events (no workspace); WF00–WF05 belong to one workspace.
-      title: 'Scope',
       key: 'scope',
+      title: 'Scope',
       width: 190,
-      render: (_, r) => (r.scope === 'platform'
-        ? <Tag color="purple" style={{ borderRadius: 10, fontWeight: 600 }}>Platform</Tag>
+      render: (r) => (r.scope === 'platform'
+        ? <Badge variant="purple">Platform</Badge>
         : (
-          <span>
-            <Tag color="blue" style={{ borderRadius: 10, fontWeight: 600 }}>Workspace</Tag>
-            <span style={{ fontSize: 12, color: '#475569' }}>{r.tenant_name || `#${r.tenant_id}`}</span>
+          <span className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="info">Workspace</Badge>
+            <span className="text-xs text-slate-600">{r.tenant_name || `#${r.tenant_id}`}</span>
           </span>
         )),
     },
     {
-      title: 'Status',
-      dataIndex: 'status',
->>>>>>> origin/aakash
       key: 'status',
       title: 'Status',
       width: 120,
@@ -148,37 +141,12 @@ const WorkflowLogsView = () => {
 
   return (
     <div>
-<<<<<<< HEAD
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile label="Total Executions" value={telemetry.totalExecutions || 0} icon={<FiZap className="text-blue-600" />} />
-        <StatTile label="Success Rate" value={`${telemetry.successRate ?? 100}%`} icon={<FiCheck />} valueClassName="text-green-600" />
+        <StatTile label="Success Rate" value={telemetry.successRate == null ? '—' : `${telemetry.successRate}%`} icon={<FiCheck />} valueClassName="text-green-600" />
         <StatTile label="AI Interventions" value={telemetry.aiInterventions || 0} icon={<FiCpu />} valueClassName="text-violet-600" />
-        <StatTile label="Active Engines" value={telemetry.activeWorkflows || 8} />
+        <StatTile label="Active Engines (7 days)" value={telemetry.activeWorkflows ?? 0} />
       </div>
-=======
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} md={6}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>TOTAL EXECUTIONS</span>} value={telemetry.totalExecutions || 0} prefix={<ThunderboltOutlined style={{ color: '#2563eb' }} />} valueStyle={{ color: '#0f172a', fontWeight: 800 }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>SUCCESS RATE</span>} value={telemetry.successRate ?? '—'} suffix={telemetry.successRate == null ? undefined : '%'} prefix={<CheckOutlined style={{ color: '#16a34a' }} />} valueStyle={{ color: '#16a34a', fontWeight: 800 }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>AI INTERVENTIONS</span>} value={telemetry.aiInterventions || 0} prefix={<RobotOutlined style={{ color: '#7c3aed' }} />} valueStyle={{ color: '#7c3aed', fontWeight: 800 }} />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={6}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>ACTIVE ENGINES (7 DAYS)</span>} value={telemetry.activeWorkflows ?? 0} valueStyle={{ color: '#0f172a', fontWeight: 800 }} />
-          </Card>
-        </Col>
-      </Row>
->>>>>>> origin/aakash
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
         <div>
@@ -188,12 +156,17 @@ const WorkflowLogsView = () => {
           </div>
         </div>
 
-<<<<<<< HEAD
         <div className="flex flex-wrap items-center gap-2">
           <Select value={selectedEngine} onValueChange={setSelectedEngine}>
             <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
             <SelectContent>
               {ENGINES.map((e) => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={selectedScope} onValueChange={setSelectedScope}>
+            <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {SCOPES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={selectedStatus} onValueChange={setSelectedStatus}>
@@ -204,56 +177,13 @@ const WorkflowLogsView = () => {
           </Select>
           <Button variant="outline" onClick={fetchWorkflowData} disabled={loading}>
             <FiRefreshCw className={cn(loading && 'animate-spin')} /> Refresh
-=======
-        <Space>
-          <Select
-            value={selectedEngine}
-            onChange={setSelectedEngine}
-            options={ENGINES.map(e => ({ value: e.id, label: e.name }))}
-            style={{ width: 220 }}
-          />
-          <Select
-            value={selectedScope}
-            onChange={setSelectedScope}
-            options={[
-              { value: 'ALL', label: 'All Scopes' },
-              { value: 'tenant', label: 'Workspace (WF00–WF05)' },
-              { value: 'platform', label: 'Platform (WF06–WF07)' },
-            ]}
-            style={{ width: 200 }}
-          />
-          <Select
-            value={selectedStatus}
-            onChange={setSelectedStatus}
-            options={[
-              { value: 'ALL', label: 'All Statuses' },
-              { value: 'success', label: 'Success Only' },
-              { value: 'failed', label: 'Failed Only' },
-            ]}
-            style={{ width: 140 }}
-          />
-          <Button icon={<ReloadOutlined />} onClick={fetchWorkflowData} loading={loading}>
-            Refresh
->>>>>>> origin/aakash
           </Button>
         </div>
       </div>
 
-<<<<<<< HEAD
       <Card className="py-2">
-        <DataTable columns={columns} data={logs} loading={loading} pageSize={12} emptyText="No workflow logs found." />
+        <DataTable columns={columns} data={logs} loading={loading} pageSize={12} emptyText="No workflow executions have been recorded yet." />
       </Card>
-=======
-      <Table
-        rowKey="id"
-        dataSource={logs}
-        columns={columns}
-        loading={loading}
-        pagination={{ pageSize: 12, hideOnSinglePage: true }}
-        locale={{ emptyText: 'No workflow executions have been recorded yet.' }}
-        style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0' }}
-      />
->>>>>>> origin/aakash
     </div>
   );
 };

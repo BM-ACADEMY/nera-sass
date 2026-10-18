@@ -189,12 +189,13 @@ test('Workflow automation & engine logs', async (t) => {
     assert.strictEqual((await request(app).get('/api/admin/workflows/logs')).status, 401);
   });
 
-  await t.test('R3. Staff permissions unchanged: founder/ops/support read, support cannot delete', async () => {
+  await t.test('R3. Staff permissions: founder/ops read; the retired support role can neither read nor delete', async () => {
     await seedMixed();
-    for (const role of ['founder', 'ops', 'support']) {
+    for (const role of ['founder', 'ops']) {
       assert.strictEqual((await request(app).get('/api/admin/workflows/logs').set(bearer(await staff(role)))).status, 200, role);
     }
-    const support = await sys(() => Users.findOne({ staff_role: 'support' }).lean());
+    const support = await staff('support');
+    assert.strictEqual((await request(app).get('/api/admin/workflows/logs').set(bearer(support))).status, 403);
     const target = (await allLogs())[0];
     const del = await request(app).delete(`/api/admin/workflows/logs/${target.id}`).set(bearer(support));
     assert.strictEqual(del.status, 403);

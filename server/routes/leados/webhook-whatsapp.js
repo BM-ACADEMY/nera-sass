@@ -108,23 +108,8 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
       return res.sendStatus(200);
     }
 
-<<<<<<< HEAD
-    // FORWARD TO N8N WEBHOOK
-    // This allows the Node server to act as a proxy if needed.
-    // If the request is already coming from n8n (source=n8n), we SKIP forwarding to prevent an infinite loop.
-    if (req.query.source !== 'n8n' && process.env.NODE_ENV !== 'test') {
-      try {
-        const n8nUrl = process.env.N8N_WHATSAPP_INBOUND_WEBHOOK_URL;
-        await axios.post(n8nUrl, body);
-        console.log('✅ Successfully forwarded payload to n8n Lead Integrator (WF00)');
-      } catch (n8nErr) {
-        console.error('⚠️ Failed to forward payload to n8n:', n8nErr.message);
-      }
-    }
-=======
     // Customer WhatsApp payloads are never copied to an external system from
     // here (the former hard-coded forward to a third-party n8n was removed).
->>>>>>> origin/aakash
 
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {

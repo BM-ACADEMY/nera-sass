@@ -8,8 +8,7 @@ import {
   FiSmartphone,
   FiActivity,
   FiBarChart2,
-  FiSettings,
-  FiSmartphone
+  FiSettings
 } from 'react-icons/fi';
 import { MdOutlineSpaceDashboard } from 'react-icons/md';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
@@ -23,7 +22,6 @@ import ClientsManagement from '../components/ClientsManagement';
 import WorkflowLogsView from '../components/WorkflowLogsView';
 import FounderReportsView from '../components/FounderReportsView';
 import AdminSettingsView from '../components/AdminSettingsView';
-import MetaInventoryView from '../components/MetaInventoryView';
 import axiosClient from '../api/axiosClient';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -150,34 +148,18 @@ const Dashboard = () => {
   });
 
   const menuItems = [
-<<<<<<< HEAD
     { key: 'tenants', icon: MdOutlineSpaceDashboard, label: 'Workspaces' },
     { key: 'clients', icon: FiSmartphone, label: 'WhatsApp Numbers' },
     { key: 'workflows', icon: FiActivity, label: 'Workflow Logs' },
     { key: 'founder-reports', icon: FiBarChart2, label: 'Founder Reports' },
     { key: 'users', icon: FiUsers, label: 'Users & Team' },
     { key: 'settings', icon: FiSettings, label: 'Settings' },
-=======
-    { key: 'tenants', icon: <MdOutlineSpaceDashboard size={19} />, label: 'Workspaces' },
-    { key: 'clients', icon: <FiBriefcase size={18} />, label: 'Client Brands' },
-    // Founder and ops only (platform.meta).
-    ...(permissions['platform.meta'] ? [{ key: 'meta-inventory', icon: <FiSmartphone size={18} />, label: 'Meta Inventory' }] : []),
-    { key: 'workflows', icon: <FiActivity size={18} />, label: 'Workflow Logs' },
-    { key: 'founder-reports', icon: <FiBarChart2 size={18} />, label: 'Founder Reports' },
-    { key: 'users', icon: <FiUsers size={18} />, label: 'All Users' },
-    { key: 'settings', icon: <FiSettings size={18} />, label: 'Settings' },
->>>>>>> origin/aakash
   ];
 
   const getTabTitle = () => {
     switch (activeTab) {
       case 'tenants': return 'Workspaces & Tenants';
-<<<<<<< HEAD
       case 'clients': return 'WhatsApp Numbers & Meta Inventory';
-=======
-      case 'clients': return 'Client Brands & WhatsApp Profiles';
-      case 'meta-inventory': return 'Meta WhatsApp Inventory';
->>>>>>> origin/aakash
       case 'workflows': return 'Workflow Automation Engines';
       case 'founder-reports': return 'Founder Reports & Platform MRR';
       case 'users': return 'Users & Team';
@@ -270,13 +252,7 @@ const Dashboard = () => {
 
           {activeTab === 'clients' && <ClientsManagement />}
 
-<<<<<<< HEAD
           {activeTab === 'workflows' && <WorkflowLogsView />}
-=======
-            {activeTab === 'meta-inventory' && permissions['platform.meta'] && <MetaInventoryView />}
-
-            {activeTab === 'workflows' && <WorkflowLogsView />}
->>>>>>> origin/aakash
 
           {activeTab === 'founder-reports' && <FounderReportsView />}
 

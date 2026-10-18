@@ -251,7 +251,7 @@ const MetaInventoryCard = ({ inventory, onRefresh }) => {
     if (!clientId) return toast.error('Select a workspace first');
     const workspace = workspaces.find((w) => String(w.client_id) === clientId);
     try {
-      await axiosClient.patch(`/admin/meta/whatsapp/phone-numbers/${phoneId}/map`, { client_id: Number(clientId) });
+      await axiosClient.post(`/admin/meta/whatsapp/phone-numbers/${encodeURIComponent(phoneId)}/assign`, { client_id: Number(clientId) });
       toast.success(`Number assigned to ${workspace?.tenant_name || 'workspace'}`);
       setMapping((m) => ({ ...m, [phoneId]: undefined }));
       await onRefresh();
@@ -263,8 +263,8 @@ const MetaInventoryCard = ({ inventory, onRefresh }) => {
   const unassign = async () => {
     setUnassigning(true);
     try {
-      await axiosClient.patch(`/admin/meta/whatsapp/phone-numbers/${unassignPhone.phone_number_id}/map`, { client_id: null });
-      toast.success(`${unassignPhone.display_phone_number} unassigned from ${unassignPhone.tenant_name || 'its workspace'}`);
+      await axiosClient.post(`/admin/meta/whatsapp/phone-numbers/${encodeURIComponent(unassignPhone.phone_number_id)}/unassign`);
+      toast.success(`${unassignPhone.display_phone_number} unassigned from ${unassignPhone.linked_brand?.tenant_name || 'its workspace'}`);
       setUnassignPhone(null);
       await onRefresh();
     } catch (err) {
@@ -299,9 +299,9 @@ const MetaInventoryCard = ({ inventory, onRefresh }) => {
           <div className="flex flex-wrap items-center gap-2">
             {selectedWaba && (
               <>
-                <Button variant="outline" size="sm" onClick={() => setConfirmDeleteCache(true)} disabled={busy} className="text-red-600 hover:bg-red-50 hover:text-red-700">
+                {inventory.can_administer && <Button variant="outline" size="sm" onClick={() => setConfirmDeleteCache(true)} disabled={busy} className="text-red-600 hover:bg-red-50 hover:text-red-700">
                   {deletingCache ? <Spinner /> : <FiTrash2 />} {deletingCache ? 'Deleting...' : 'Delete cache'}
-                </Button>
+                </Button>}
                 <Button variant="outline" size="sm" onClick={addPhoneToWaba} disabled={busy || onboardingPhone} className="border-green-300 text-green-700 hover:bg-green-50 hover:text-green-800">
                   {onboardingPhone ? <Spinner /> : <FiPlus />} {onboardingPhone ? 'Waiting for Meta...' : 'Add phone number'}
                 </Button>
@@ -319,9 +319,11 @@ const MetaInventoryCard = ({ inventory, onRefresh }) => {
               <FiSmartphone className="mx-auto mb-2 size-7 text-slate-300" />
               <div className="text-sm font-semibold">No WhatsApp Business Accounts loaded yet</div>
               <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-                {inventory.sync_enabled === false
-                  ? 'Meta sync is turned off on this server (META_INVENTORY_SYNC=off in server/.env). Turn it on and restart the server, then click Sync Meta Now.'
-                  : 'Click Sync Meta Now to load the WABAs, phone numbers and templates from Meta.'}
+                {inventory.credential_configured === false
+                  ? 'The Meta inventory credential is not set. Add a new system-user token as META_INVENTORY_ACCESS_TOKEN in server/.env, restart the server, then click Sync Meta Now.'
+                  : inventory.sync_enabled === false
+                    ? 'Meta sync is turned off on this server (META_INVENTORY_SYNC=off in server/.env). Turn it on and restart the server, then click Sync Meta Now.'
+                    : 'Click Sync Meta Now to load the WABAs, phone numbers and templates from Meta.'}
               </p>
             </div>
           ) : (
@@ -415,6 +417,10 @@ const MetaInventoryCard = ({ inventory, onRefresh }) => {
                         <TableCell>
                           {connected ? (
                             <Badge variant="success"><FiCheckCircle /> Registered</Badge>
+                          ) : !(inventory.can_administer && inventory.registration_enabled) ? (
+                            <span className="text-xs text-muted-foreground" title="Registration needs the Admin (Owner) and META_PHONE_REGISTRATION_ENABLED=true on the server">
+                              {inventory.can_administer ? 'Registration off' : 'Admin registers'}
+                            </span>
                           ) : (
                             <Button size="sm" variant="outline" className="h-7 border-green-300 text-xs text-green-700 hover:bg-green-50" onClick={() => { setRegistrationPhone(phone); setPin(''); }}>
                               Register API
@@ -448,8 +454,9 @@ const MetaInventoryCard = ({ inventory, onRefresh }) => {
                       <PhoneCell phone={phone} />
                       <StatusCell phone={phone} onEditName={openDisplayNameEditor} />
                       <TableCell>
-                        <div className="truncate text-[13px] font-semibold">{phone.tenant_name || phone.client_name || 'Unknown workspace'}</div>
-                        {phone.tenant_id != null && <div className="text-[11px] text-muted-foreground">Workspace #{phone.tenant_id}</div>}
+                        <div className="truncate text-[13px] font-semibold">{phone.linked_brand?.tenant_name || phone.linked_brand?.name || 'Unknown workspace'}</div>
+                        {phone.linked_brand?.tenant_id != null && <div className="text-[11px] text-muted-foreground">Workspace #{phone.linked_brand.tenant_id}</div>}
+                        {phone.linked_brand && !phone.linked_brand.identity_matches && <div className="text-[11px] font-semibold text-amber-600">Workspace now uses a different number</div>}
                       </TableCell>
                       <TableCell className="text-right">
                         <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setUnassignPhone(phone)}>
@@ -525,7 +532,7 @@ const MetaInventoryCard = ({ inventory, onRefresh }) => {
           <AlertDialogHeader>
             <AlertDialogTitle>Unassign {unassignPhone?.display_phone_number}?</AlertDialogTitle>
             <AlertDialogDescription>
-              {unassignPhone?.tenant_name || 'This workspace'} will stop sending and receiving WhatsApp messages through this number until another number is assigned. The number stays in Meta.
+              {unassignPhone?.linked_brand?.tenant_name || 'This workspace'} will stop sending and receiving WhatsApp messages through this number until another number is assigned. The number stays in Meta.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

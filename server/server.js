@@ -1076,12 +1076,7 @@ app.use(
   (req, res, next) => (req.method === 'POST' && SALESOS_MAINTENANCE_PATHS.has(req.path) ? next() : adminPanelAuth(req, res, next)),
   require('./routes/admin')({
     verifyClientWhatsApp: (client) => verifyClientWhatsApp(client),
-<<<<<<< HEAD
-    // Read at request time: leadosRouteContext is defined further down.
-    leados: () => leadosRouteContext,
-=======
     metaInventory: { syncMetaWhatsAppInventory, graphPageData, metaGraphVersion: META_GRAPH_VERSION },
->>>>>>> origin/aakash
   }),
 );
 // SalesOS routes are called by the app (user token) and by n8n / cron jobs
