@@ -52,6 +52,10 @@ async function afterPassword(user) {
   return sessionPayload(user, { mfaPassed: false });
 }
 
+// A wrong two-factor code (the session or sign-in step itself is still valid).
+// The code lets apps tell it apart from an expired session, which is also 401.
+const INVALID_MFA_CODE = Object.freeze({ error: 'Invalid verification code', code: 'INVALID_MFA_CODE' });
+
 exports.login = async (req, res) => {
   const { email, password } = req.body || {};
   try {
@@ -105,7 +109,7 @@ exports.verifyMfa = async (req, res) => {
       const updated = await sys(() => Users.updateOne({ id: user.id, mfa_recovery_hashes: hash }, { $pull: { mfa_recovery_hashes: hash } }));
       ok = updated.modifiedCount === 1;
     }
-    if (!ok) return res.status(401).json({ error: 'Invalid verification code' });
+    if (!ok) return res.status(401).json(INVALID_MFA_CODE);
     return res.json(await sessionPayload(user, { mfaPassed: true }));
   } catch (error) {
     return fail(res, error);
@@ -137,7 +141,7 @@ exports.confirmMfaSetup = async (req, res) => {
     const user = await enrolmentUser(req);
     if (!user.mfa_pending_secret_enc) return res.status(400).json({ error: 'Start MFA setup first' });
     const secret = decrypt(user.mfa_pending_secret_enc);
-    if (!mfa.verifyTotp(secret, req.body?.code)) return res.status(401).json({ error: 'Invalid verification code' });
+    if (!mfa.verifyTotp(secret, req.body?.code)) return res.status(401).json(INVALID_MFA_CODE);
     const { codes, hashes } = mfa.generateRecoveryCodes();
     await sys(() => Users.updateOne({ id: user.id }, {
       $set: { mfa_enabled: true, mfa_secret_enc: encrypt(secret), mfa_recovery_hashes: hashes, mfa_enrolled_at: new Date() },

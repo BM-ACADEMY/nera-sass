@@ -397,7 +397,7 @@ export const TemplatesView = () => {
       totalUpdated += mainRes.updated || 0;
 
       for (const client of clients) {
-        if (client.phone_number_id && client.wa_access_token) {
+        if (client.phone_number_id && client.wa_token_configured) {
           try {
             const clientRes = await api.syncAllTemplates(client.id);
             totalImported += clientRes.imported || 0;

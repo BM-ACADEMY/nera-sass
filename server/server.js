@@ -40,6 +40,9 @@ const {
 const { runAsSystem, runAsTenant, currentTenantId, getContext } = require('./services/tenantContext');
 const { tenantCanSend } = require('./services/lifecycle');
 const { sanitizeClient } = require('./services/clientSecrets');
+const { assertPhoneNumberAvailable } = require('./services/whatsappIdentity');
+const { customerResponseGuard } = require('./services/responseGuard');
+const { inventoryAccessToken, requireInventoryAccessToken } = require('./services/metaInventoryCredentials');
 
 // Background jobs (crons, queue processor). Off in tests: JOBS_ENABLED=false.
 const jobsEnabled = () => process.env.JOBS_ENABLED !== 'false';
@@ -266,6 +269,9 @@ async function verifyClientWhatsApp(client) {
   if (!metaConfig.phoneId || !metaConfig.token || !metaConfig.wabaId || !client.whatsapp_number) {
     throw Object.assign(new Error('Real WhatsApp number, Meta Phone Number ID, WABA ID and token are required before verification'), { status: 400 });
   }
+  // A number already connected to another brand (in any workspace) is never
+  // verified or registered for this one.
+  await assertPhoneNumberAvailable(metaConfig.phoneId, { exceptClientId: client.id });
 
   await Clients.updateOne({ id: client.id }, { $set: { whatsapp_status: 'verification_pending', whatsapp_verified_at: null, whatsapp_verification_error: null } });
 
@@ -319,16 +325,17 @@ async function verifyClientWhatsApp(client) {
 // switched off there with META_INVENTORY_SYNC=off.
 const metaInventorySyncEnabled = () => process.env.META_INVENTORY_SYNC !== 'off';
 
+// Uses META_INVENTORY_ACCESS_TOKEN only; with it unset nothing is called or
+// written (see services/metaInventoryCredentials.js).
 async function syncMetaWhatsAppInventory() {
   if (!metaInventorySyncEnabled()) throw new Error('Meta inventory sync is disabled (META_INVENTORY_SYNC=off)');
+  const token = requireInventoryAccessToken();
   await Promise.all([clientsWhatsAppStatusReady, metaInventoryReady]);
   const businessId = process.env.META_BUSINESS_ID || process.env.WA_META_BUSINESS_ID;
   const configuredWabaId = process.env.WA_BUSINESS_ACCOUNT_ID;
-  const token = process.env.META_SYSTEM_USER_ACCESS_TOKEN || process.env.META_PAGE_ACCESS_TOKEN;
   if (!businessId && !configuredWabaId) {
     throw new Error('Configure META_BUSINESS_ID for all WABAs, or WA_BUSINESS_ACCOUNT_ID for single-WABA sync');
   }
-  if (!token) throw new Error('META_SYSTEM_USER_ACCESS_TOKEN or META_PAGE_ACCESS_TOKEN is required');
   const runDoc = await MetaWhatsappSyncRuns.create({ status: 'running' });
   const run = { rows: [{ id: runDoc.id }] };
   try {
@@ -411,13 +418,17 @@ async function syncMetaWhatsAppInventory() {
       await MetaWhatsappTemplates.deleteMany({ waba_id: { $in: staleWabaIds } });
       await deleteCascade('meta_whatsapp_accounts', { business_id: businessId, waba_id: { $nin: activeWabaIds } });
     }
+    // Refresh the verification status of brands linked to an inventory number.
+    // A brand's number, WABA and display number belong to the customer's own
+    // connection and are never written here; the filter matches only while the
+    // brand still uses this exact number.
     for (const phone of await MetaWhatsappPhoneNumbers.find({ client_id: { $ne: null } }).lean()) {
       const verified = String(phone.connection_status ?? '').toUpperCase() === 'CONNECTED'
         || String(phone.verification_status ?? '').toUpperCase() === 'VERIFIED';
-      const linkedClient = await Clients.findOne({ id: phone.client_id }, { whatsapp_verified_at: 1 }).lean();
+      const sameIdentity = { id: phone.client_id, phone_number_id: phone.phone_number_id, wa_business_id: phone.waba_id };
+      const linkedClient = await Clients.findOne(sameIdentity, { whatsapp_verified_at: 1 }).lean();
       if (!linkedClient) continue;
-      await Clients.updateOne({ id: phone.client_id }, { $set: {
-        wa_business_id: phone.waba_id, phone_number_id: phone.phone_number_id, whatsapp_number: phone.display_phone_number,
+      await Clients.updateOne(sameIdentity, { $set: {
         whatsapp_status: verified ? 'verified' : 'verification_pending',
         whatsapp_verified_at: verified ? (linkedClient.whatsapp_verified_at ?? new Date()) : null,
         updated_at: new Date(),
@@ -434,7 +445,18 @@ async function syncMetaWhatsAppInventory() {
   }
 }
 
-if (jobsEnabled() && metaInventorySyncEnabled()) cron.schedule('*/15 * * * *', () => runAsSystem(syncMetaWhatsAppInventory, 'meta-inventory').catch(err =>
+// Scheduled sync: skipped (no call, no write) while META_INVENTORY_ACCESS_TOKEN
+// is unset. Exported for tests.
+let inventoryCredentialWarned = false;
+async function scheduledMetaInventorySync() {
+  if (!inventoryAccessToken()) {
+    if (!inventoryCredentialWarned) console.warn('[Meta Inventory Sync] Skipped: META_INVENTORY_ACCESS_TOKEN is not configured');
+    inventoryCredentialWarned = true;
+    return { skipped: true };
+  }
+  return runAsSystem(syncMetaWhatsAppInventory, 'meta-inventory');
+}
+if (jobsEnabled() && metaInventorySyncEnabled()) cron.schedule('*/15 * * * *', () => scheduledMetaInventorySync().catch(err =>
   console.error('[Meta Inventory Sync]', err.message)));
 const { evaluateLeadBrandAndSchedule, evaluateStuckLeads } = require('./services/aiBrain');
 const { getLeadOSBrand } = require('./services/leadosBrand');
@@ -1009,6 +1031,8 @@ app.use(express.json({
     req.rawBody = buf;
   }
 }));
+// Customer responses never carry a WhatsApp credential (services/responseGuard.js).
+app.use(customerResponseGuard);
 // Media that Meta downloads for outbound messages stays public (unguessable
 // names). Lead exports, archives and logs are never served statically: lead
 // exports are downloaded through the tenant-checked export route.
@@ -1052,8 +1076,12 @@ app.use(
   (req, res, next) => (req.method === 'POST' && SALESOS_MAINTENANCE_PATHS.has(req.path) ? next() : adminPanelAuth(req, res, next)),
   require('./routes/admin')({
     verifyClientWhatsApp: (client) => verifyClientWhatsApp(client),
+<<<<<<< HEAD
     // Read at request time: leadosRouteContext is defined further down.
     leados: () => leadosRouteContext,
+=======
+    metaInventory: { syncMetaWhatsAppInventory, graphPageData, metaGraphVersion: META_GRAPH_VERSION },
+>>>>>>> origin/aakash
   }),
 );
 // SalesOS routes are called by the app (user token) and by n8n / cron jobs
@@ -2002,5 +2030,5 @@ function start() {
 // require.main check would also stop PM2, which loads this file through a wrapper.
 if (process.env.NERA_NO_AUTOSTART !== 'true') start();
 
-module.exports = { app, httpServer, io, socketServer, start };
+module.exports = { app, httpServer, io, socketServer, start, scheduledMetaInventorySync };
   

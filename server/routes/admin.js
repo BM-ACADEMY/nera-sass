@@ -18,9 +18,13 @@ const userAdmin = require('../services/userAdmin');
 const tenantData = require('../services/tenantData');
 const audit = require('../services/audit');
 const authController = require('../controllers/authController');
+const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
+const createMetaInventoryRouter = require('./adminMetaInventory');
+const { logScope } = require('../services/workflowLog');
+const { computeSubscriptionMetrics } = require('../services/platformMetrics');
 
 function fail(res, error) {
-  if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details });
+  if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details, code: error.code });
   // Deliberate "temporarily unavailable" answers from our services (for
   // example the plan catalogue not being loaded) keep their message.
   if (error.status === 503 && error instanceof provisioning.ProvisioningError) {
@@ -69,13 +73,21 @@ async function tenantSummary(tenant) {
   };
 }
 
+<<<<<<< HEAD
 function createAdminRouter({ verifyClientWhatsApp, leados } = {}) {
+=======
+function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
+>>>>>>> origin/aakash
   const router = express.Router();
 
   router.get('/me', (req, res) => res.json({ user: req.user, permissions: Object.fromEntries(
-    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.billing.grant', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view']
+    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.billing.grant', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view', 'platform.meta', 'platform.meta.admin']
       .map((p) => [p, can(req.identity, p)]),
   ) }));
+
+  // Platform Meta WhatsApp inventory (founder/ops; registration and cache
+  // clearing founder only). Never writes a brand's number or credentials.
+  if (metaInventory) router.use('/meta/whatsapp', createMetaInventoryRouter({ ...metaInventory, permit, fail }));
 
   router.get('/plans', permit('platform.tenants.view'), async (req, res) => {
     try {
@@ -205,8 +217,8 @@ function createAdminRouter({ verifyClientWhatsApp, leados } = {}) {
       if (!Object.keys(changes).length) return res.status(400).json({ error: 'Nothing to update' });
       const tenantId = tenantIdParam(req);
       if (changes.phone_number_id) {
-        const taken = await runAsSystem(() => Clients.exists({ phone_number_id: changes.phone_number_id, tenant_id: { $ne: tenantId } }), 'admin');
-        if (taken) return res.status(409).json({ error: 'This Meta Phone Number ID is already connected to another workspace' });
+        const current = await runAsTenant(tenantId, () => Clients.findOne({}, { _id: 0, id: 1 }).lean());
+        await assertPhoneNumberAvailable(changes.phone_number_id, { exceptClientId: current?.id ?? null });
       }
       const brand = await runAsTenant(tenantId, () => Clients.findOneAndUpdate(
         {},
@@ -532,37 +544,103 @@ function createAdminRouter({ verifyClientWhatsApp, leados } = {}) {
     }
   });
 
+<<<<<<< HEAD
   // ── Clients Management & platform Meta inventory ──────────
   require('./admin-clients')(router, { permit, fail, leados });
-
-  // ── Workflows Management ──────────────────────────────────
-  router.get('/workflows/logs', permit('platform.tenants.view'), async (req, res) => {
+=======
+  // ── Clients Management ────────────────────────────────────
+  router.get('/clients', permit('platform.tenants.view'), async (req, res) => {
     try {
       const filter = {};
-      if (req.query.workflow && req.query.workflow !== 'ALL') filter.workflow = { $regex: escapeRegex(String(req.query.workflow)), $options: 'i' };
-      if (req.query.status && req.query.status !== 'ALL') filter.status = String(req.query.status).toLowerCase();
-      const logs = await WorkflowLogs.find(filter, { _id: 0 }).sort({ created_at: -1 }).limit(500).lean();
-      return res.json({ logs });
+      if (req.query.tenant_id) filter.tenant_id = Number(req.query.tenant_id);
+      if (req.query.search) {
+        const re = { $regex: escapeRegex(String(req.query.search)), $options: 'i' };
+        filter.$or = [{ name: re }, { city: re }, { whatsapp_number: re }];
+      }
+      const clients = await Clients.find(filter, { _id: 0 }).sort({ created_at: -1 }).limit(200).lean();
+      const tenantIds = [...new Set(clients.map((c) => c.tenant_id).filter((id) => id != null))];
+      const tenantMap = new Map((await Tenants.find({ id: { $in: tenantIds } }, { _id: 0, id: 1, name: 1, status: 1 }).lean()).map((t) => [t.id, t]));
+      return res.json({
+        clients: clients.map((c) => ({
+          ...sanitizeClient(c),
+          tenant_name: tenantMap.get(c.tenant_id)?.name || 'Unknown',
+          tenant_status: tenantMap.get(c.tenant_id)?.status || 'active',
+        })),
+      });
     } catch (error) {
       return fail(res, error);
     }
   });
 
+  router.patch('/clients/:id', permit('platform.tenants.manage'), async (req, res) => {
+    try {
+      const clientId = Number(req.params.id);
+      const client = await Clients.findOne({ id: clientId }).lean();
+      if (!client) return res.status(404).json({ error: 'Client not found' });
+      const allowed = ['name', 'city', 'phone', 'contact_person', 'whatsapp_number', 'phone_number_id', 'wa_business_id', 'status', 'industry', 'wa_category', 'wa_description', 'wa_address', 'wa_email', 'wa_website'];
+      const update = {};
+      for (const key of allowed) {
+        if (req.body[key] !== undefined) update[key] = req.body[key];
+      }
+      if (update.phone_number_id != null && String(update.phone_number_id).trim()) {
+        update.phone_number_id = String(update.phone_number_id).trim();
+        await assertPhoneNumberAvailable(update.phone_number_id, { exceptClientId: clientId });
+      }
+      update.updated_at = new Date();
+      const updated = await Clients.findOneAndUpdate({ id: clientId }, { $set: update }, { new: true, projection: { _id: 0 } }).lean();
+      return res.json({ client: sanitizeClient(updated) });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+>>>>>>> origin/aakash
+
+  // ── Workflows Management ──────────────────────────────────
+  // Every row is labelled: scope "platform" (WF06/WF07, no workspace) or
+  // "tenant" (WF00–WF05, with the workspace it belongs to).
+  router.get('/workflows/logs', permit('platform.tenants.view'), async (req, res) => {
+    try {
+      const filter = {};
+      if (req.query.workflow && req.query.workflow !== 'ALL') filter.workflow = { $regex: escapeRegex(String(req.query.workflow)), $options: 'i' };
+      if (req.query.status && req.query.status !== 'ALL') filter.status = String(req.query.status).toLowerCase();
+      if (req.query.scope === 'platform') filter.tenant_id = null;
+      if (req.query.scope === 'tenant') filter.tenant_id = { $ne: null };
+      if (req.query.tenant_id) filter.tenant_id = Number(req.query.tenant_id);
+      const logs = await WorkflowLogs.find(filter, { _id: 0 }).sort({ created_at: -1 }).limit(500).lean();
+      const tenantIds = [...new Set(logs.map((l) => l.tenant_id).filter((id) => id != null))];
+      const names = new Map((await Tenants.find({ id: { $in: tenantIds } }, { _id: 0, id: 1, name: 1 }).lean()).map((t) => [t.id, t.name]));
+      return res.json({
+        logs: logs.map((l) => ({ ...l, scope: logScope(l), tenant_name: l.tenant_id == null ? null : (names.get(l.tenant_id) ?? null) })),
+      });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // Computed from the stored logs only; nothing is assumed when there are none.
   router.get('/workflows/telemetry', permit('platform.tenants.view'), async (req, res) => {
     try {
-      const totalExecutions = await WorkflowLogs.countDocuments();
-      const successCount = await WorkflowLogs.countDocuments({ status: 'success' });
-      const failedCount = await WorkflowLogs.countDocuments({ status: 'failed' });
-      const successRate = totalExecutions > 0 ? Math.round((successCount / totalExecutions) * 100) : 100;
-      const aiInterventions = await AiDecisions.countDocuments();
+      const weekAgo = new Date(Date.now() - 7 * 86400000);
+      const [totalExecutions, successCount, failedCount, platformExecutions, aiInterventions, recentWorkflows] = await Promise.all([
+        WorkflowLogs.countDocuments(),
+        WorkflowLogs.countDocuments({ status: 'success' }),
+        WorkflowLogs.countDocuments({ status: 'failed' }),
+        WorkflowLogs.countDocuments({ tenant_id: null }),
+        AiDecisions.countDocuments(),
+        WorkflowLogs.distinct('workflow', { created_at: { $gte: weekAgo } }),
+      ]);
       return res.json({
         telemetry: {
           totalExecutions,
           successCount,
           failedCount,
-          successRate,
+          // null when nothing has run: there is no rate to report yet.
+          successRate: totalExecutions > 0 ? Math.round((successCount / totalExecutions) * 100) : null,
           aiInterventions,
-          activeWorkflows: 8,
+          // Workflows that logged at least once in the last 7 days.
+          activeWorkflows: recentWorkflows.length,
+          platformExecutions,
+          tenantExecutions: totalExecutions - platformExecutions,
         },
       });
     } catch (error) {
@@ -582,25 +660,39 @@ function createAdminRouter({ verifyClientWhatsApp, leados } = {}) {
   // ── Founder Reports ───────────────────────────────────────
   router.get('/reports/founder-dashboard', permit('platform.tenants.view'), async (req, res) => {
     try {
-      const [totalWorkspaces, totalUsers, totalLeads, activeSubs, wf06Logs] = await Promise.all([
+      const [totalWorkspaces, totalUsers, totalLeads, allTenants, activeSubs, wf06Logs] = await Promise.all([
         Tenants.countDocuments({ status: { $ne: 'deleted' } }),
         Users.countDocuments({ is_active: { $ne: false } }),
         Leads.countDocuments(),
-        Subscriptions.find({ status: 'active' }, { _id: 0, monthly_price: 1, contract_value: 1 }).lean(),
-        WorkflowLogs.find({ workflow: 'WF06' }, { _id: 0 }).sort({ created_at: -1 }).limit(50).lean(),
+        Tenants.find({}, { _id: 0, id: 1, status: 1, deleted_at: 1 }).lean(),
+        Subscriptions.find({ status: 'active' }, {
+          _id: 0, id: 1, tenant_id: 1, status: 1, plan_code: 1, monthly_price: 1, contract_value: 1, term_months: 1, discount_pct: 1,
+          currency: 1, payment_method: 1, current_period_start: 1, current_period_end: 1,
+          price_monthly: 1, starts_at: 1, expires_at: 1,
+        }).lean(),
+        // Platform founder reports only; a workspace cannot appear here.
+        WorkflowLogs.find({ workflow: 'WF06', tenant_id: null }, { _id: 0 }).sort({ created_at: -1 }).limit(50).lean(),
       ]);
 
-      const mrr = activeSubs.reduce((sum, s) => sum + (Number(s.monthly_price) || 0), 0);
-      const totalContractValue = activeSubs.reduce((sum, s) => sum + (Number(s.contract_value) || 0), 0);
+      // MRR / TCV rules (orphans, renewals, expiry, currency): services/platformMetrics.js
+      const metrics = computeSubscriptionMetrics({ tenants: allTenants, subscriptions: activeSubs });
 
       return res.json({
         snapshot: {
           totalWorkspaces,
           totalUsers,
           totalLeads,
-          activeSubscriptions: activeSubs.length,
-          mrr,
-          totalContractValue,
+          activeSubscriptions: metrics.activeSubscriptions,
+          mrr: metrics.mrr,
+          totalContractValue: metrics.totalContractValue,
+          currency: metrics.currency,
+          // Headline mrr/totalContractValue/activeSubscriptions = verified paid
+          // contracts only; everything else is reported beside them.
+          paid: metrics.paid,
+          manual_grant_unverified: metrics.manual_grant_unverified,
+          at_risk_grace: metrics.at_risk_grace,
+          staff_suspended: metrics.staff_suspended,
+          excluded: metrics.excluded,
         },
         reports: wf06Logs,
       });

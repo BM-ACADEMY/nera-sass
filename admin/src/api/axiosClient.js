@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { shouldEndSession } from './sessionPolicy';
 
 const axiosClient = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3600/api',
@@ -21,11 +22,12 @@ axiosClient.interceptors.request.use(
   }
 );
 
-// Interceptor to handle auth errors globally
+// Interceptor to handle auth errors globally. Only an unusable session signs
+// the user out (see sessionPolicy.js); a permission denial is left to the view.
 axiosClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+    if (error.response && shouldEndSession(error.response.status, error.response.data)) {
       localStorage.removeItem('adminToken');
       if (window.location.pathname !== '/login') {
         window.location.href = '/login';
