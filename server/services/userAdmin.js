@@ -13,7 +13,6 @@
 const { Users } = require('../models');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
 const { TENANT_ROLES, STAFF_ROLES, canAssignRole, normalizeTenantRole, describeUser } = require('./permissions');
-const { assertSeatAvailable } = require('./entitlements');
 const audit = require('./audit');
 
 class UserAdminError extends Error {
@@ -99,7 +98,6 @@ async function setActive({ tenantId, userId, active, actor, req }) {
   if (!active && normalizeTenantRole(target.role) === 'owner' && (await activeOwnerCount(tenantId)) <= 1) {
     throw new UserAdminError(409, 'A workspace must keep at least one active Owner');
   }
-  if (active) await assertSeatAvailable(tenantId, 1);
   const update = active
     ? { $set: { is_active: true, active: true, updated_at: new Date() }, $unset: { deactivated_at: '', deactivated_by: '' } }
     : { $set: { is_active: false, active: false, deactivated_at: new Date(), deactivated_by: actor.id ?? null, updated_at: new Date() }, $inc: { token_version: 1 } };

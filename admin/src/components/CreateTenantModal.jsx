@@ -1,33 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { toast } from 'sonner';
-import { FiBriefcase, FiMail, FiUser, FiShield, FiCheckCircle, FiAlertCircle, FiLock, FiEye, FiEyeOff, FiRefreshCw, FiCopy } from 'react-icons/fi';
+import { FiBriefcase, FiMail, FiUser, FiCheckCircle, FiLock, FiEye, FiEyeOff, FiRefreshCw, FiCopy } from 'react-icons/fi';
 import axiosClient from '../api/axiosClient';
 import { FormField, IconInput } from './FormField';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
-import { Textarea } from '@/components/ui/textarea';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-const TERM_OPTIONS = [
-  { value: '1', label: '1 Month' },
-  { value: '3', label: '3 Months (5% off)' },
-  { value: '6', label: '6 Months (10% off)' },
-  { value: '12', label: '12 Months (15% off)' },
-];
 
 const INITIAL = {
   business_name: '',
   owner_name: '',
   owner_email: '',
   owner_password: '',
-  plan_code: '',
-  term_months: '12',
-  payment_reference: '',
-  grant_reason: '',
   is_founding_client: false,
 };
 
@@ -52,13 +38,6 @@ const validate = (v) => {
   else if (pw.length > 128) e.owner_password = 'Password must be at most 128 characters';
   else if (!/[A-Za-z]/.test(pw) || !/\d/.test(pw)) e.owner_password = 'Password must contain at least one letter and one number';
   else if (pw.toLowerCase() === v.owner_email.trim().toLowerCase()) e.owner_password = 'Password cannot be the owner email';
-  if (!v.plan_code) e.plan_code = 'Plan is required';
-  const ref = v.payment_reference.trim();
-  if (!ref) e.payment_reference = 'Enter the approval or bank reference for this grant';
-  else if (ref.length < 3 || ref.length > 120) e.payment_reference = 'Reference must be 3–120 characters';
-  const reason = v.grant_reason.trim();
-  if (!reason) e.grant_reason = 'Explain why this grant is authorized';
-  else if (reason.length < 10 || reason.length > 500) e.grant_reason = 'Reason must be 10–500 characters';
   return e;
 };
 
@@ -69,28 +48,8 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
   const [values, setValues] = useState(INITIAL);
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
-  // Plans come only from the server's catalogue; there is no built-in list.
-  const [availablePlans, setAvailablePlans] = useState([]);
-  const [plansState, setPlansState] = useState('loading'); // loading | ready | unavailable
   const [createdResult, setCreatedResult] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
-
-  useEffect(() => {
-    async function loadPlans() {
-      try {
-        const res = await axiosClient.get('/admin/plans');
-        const plans = res.data?.plans || [];
-        setAvailablePlans(plans.map(p => ({
-          code: p.code,
-          name: `${p.name} (₹${p.monthly_price?.toLocaleString('en-IN')}/mo · ${p.limits?.max_users === -1 ? 'unlimited' : p.limits?.max_users} users)`,
-        })));
-        setPlansState(plans.length ? 'ready' : 'unavailable');
-      } catch (err) {
-        setPlansState('unavailable');
-      }
-    }
-    loadPlans();
-  }, []);
 
   const set = (key, value) => {
     setValues((v) => ({ ...v, [key]: value }));
@@ -110,12 +69,6 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
         owner_name: values.owner_name.trim(),
         owner_email: values.owner_email.trim().toLowerCase(),
         owner_password: values.owner_password,
-        plan_code: values.plan_code,
-        term_months: Number(values.term_months || 12),
-        // A manual grant: staff record who approved it (their own login), the
-        // approval/bank reference and why. Nothing is filled in automatically.
-        payment_reference: values.payment_reference.trim(),
-        grant_reason: values.grant_reason.trim(),
         is_founding_client: Boolean(values.is_founding_client),
         settings: {
           language: 'en',
@@ -207,24 +160,12 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
         <div>
           <div className="text-base font-extrabold">Provision New Workspace</div>
           <div className="text-xs text-slate-400">
-            Creates the workspace, brand profile, subscription and the Owner's login. No email is sent.
+            Creates the workspace, brand profile and the Owner's login. Full access with no plan, expiry or limits. No email is sent.
           </div>
         </div>
       </div>
 
       <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
-        {plansState === 'unavailable' && (
-          <Alert variant="destructive">
-            <FiAlertCircle />
-            <div>
-              <AlertTitle>Plan catalogue unavailable</AlertTitle>
-              <AlertDescription>
-                The plan catalogue could not be loaded, so workspaces cannot be created right now. Load the catalogue on the server, then reopen this form.
-              </AlertDescription>
-            </div>
-          </Alert>
-        )}
-
         <FormField label="Business / Brand Name" htmlFor="business_name" error={errors.business_name}>
           <IconInput id="business_name" icon={FiBriefcase} placeholder="e.g. Acme Motors" value={values.business_name} onChange={(e) => set('business_name', e.target.value)} />
         </FormField>
@@ -271,47 +212,6 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
           </div>
         </FormField>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[2fr_1fr]">
-          <FormField label="Subscription Plan" error={errors.plan_code}>
-            <Select value={values.plan_code} onValueChange={(v) => set('plan_code', v)} disabled={plansState !== 'ready'}>
-              <SelectTrigger size="lg" className="h-10">
-                <SelectValue placeholder={plansState === 'loading' ? 'Loading plan catalogue…' : 'Select a plan'} />
-              </SelectTrigger>
-              <SelectContent>
-                {availablePlans.map((p) => <SelectItem key={p.code} value={p.code}>{p.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </FormField>
-          <FormField label="Term">
-            <Select value={values.term_months} onValueChange={(v) => set('term_months', v)}>
-              <SelectTrigger size="lg" className="h-10"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {TERM_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </FormField>
-        </div>
-
-        <FormField
-          label="Manual Grant Reference"
-          htmlFor="payment_reference"
-          error={errors.payment_reference}
-          hint="This workspace is created as a manual grant authorized by you. Enter the approval or bank-transfer reference. Razorpay payments are recorded automatically, not here."
-        >
-          <IconInput id="payment_reference" icon={FiShield} placeholder="Approval or bank reference" value={values.payment_reference} onChange={(e) => set('payment_reference', e.target.value)} />
-        </FormField>
-
-        <FormField label="Reason for Manual Grant" htmlFor="grant_reason" error={errors.grant_reason} hint="Recorded in the audit log with your name.">
-          <Textarea
-            id="grant_reason"
-            rows={2}
-            maxLength={500}
-            placeholder="e.g. Pilot client approved by the founder; paid by bank transfer"
-            value={values.grant_reason}
-            onChange={(e) => set('grant_reason', e.target.value)}
-          />
-        </FormField>
-
         <label htmlFor="is_founding_client" className="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-muted/50 px-3.5 py-2.5">
           <div>
             <div className="text-[13px] font-semibold">Founding Client Status</div>
@@ -322,7 +222,7 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
 
         <div className="mt-2 flex justify-end gap-2.5 border-t border-border pt-4">
           {onCancel && <Button type="button" variant="outline" size="lg" onClick={onCancel}>Cancel</Button>}
-          <Button type="submit" size="lg" disabled={loading || plansState !== 'ready'} className="font-semibold">
+          <Button type="submit" size="lg" disabled={loading} className="font-semibold">
             {loading && <Spinner />} Provision Workspace
           </Button>
         </div>

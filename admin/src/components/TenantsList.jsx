@@ -6,12 +6,9 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
-const LIFECYCLE_TAGS = {
+const STATUS_TAGS = {
   active: { variant: 'success', label: 'Active' },
-  grace: { variant: 'info', label: 'Grace Period (Days 1–7)' },
-  restricted: { variant: 'warning', label: 'Restricted (Read-Only)' },
   suspended: { variant: 'danger', label: 'Suspended (No Login)' },
-  archived: { variant: 'purple', label: 'Archived' },
   deleted: { variant: 'muted', label: 'Deleted' },
 };
 
@@ -64,19 +61,13 @@ const TenantsList = ({
       },
     },
     {
-      key: 'plan',
-      title: 'Plan & Seats',
-      render: (tenant) => {
-        const planName = tenant.plan?.name || 'No Plan';
-        const activeUsers = tenant.users?.active || 0;
-        const maxUsers = tenant.users?.max_users === -1 ? '∞' : (tenant.users?.max_users || 3);
-        return (
-          <div>
-            <div className="text-[13px] font-semibold">{planName}</div>
-            <div className="text-[11.5px] text-muted-foreground">{activeUsers} / {maxUsers} seats used</div>
-          </div>
-        );
-      },
+      key: 'login',
+      title: 'Login',
+      render: (tenant) => (
+        <span className="text-[12.5px] text-muted-foreground">
+          {tenant.users?.active ? 'Active' : tenant.users?.pending_invitations ? 'Invitation pending' : 'No login yet'}
+        </span>
+      ),
     },
     {
       key: 'whatsapp',
@@ -94,11 +85,10 @@ const TenantsList = ({
       },
     },
     {
-      key: 'lifecycle',
-      title: 'Lifecycle',
+      key: 'status',
+      title: 'Status',
       render: (tenant) => {
-        const stateKey = tenant.status === 'suspended' ? 'suspended' : (tenant.lifecycle_state || 'active');
-        const tag = LIFECYCLE_TAGS[stateKey] || LIFECYCLE_TAGS.active;
+        const tag = STATUS_TAGS[tenant.lifecycle_state] || STATUS_TAGS.active;
         return <Badge variant={tag.variant}>{tag.label}</Badge>;
       },
     },

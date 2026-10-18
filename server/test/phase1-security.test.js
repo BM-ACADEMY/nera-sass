@@ -37,15 +37,11 @@ test.beforeEach(async () => {
 const STRONG_PASSWORD = 'Correct-Horse-42';
 
 async function seedWorkspace(models, { tenantId, name, maxUsers = 10 }) {
-  const { Tenants, Clients, Subscriptions } = models;
+  const { Tenants, Clients } = models;
   const { runAsSystem, runAsTenant } = require('../services/tenantContext');
   await runAsSystem(() => Tenants.create({ id: tenantId, name, status: 'active' }));
   await runAsTenant(tenantId, async () => {
     await Clients.create({ name: `${name} Brand` });
-    await Subscriptions.create({
-      plan_code: 'TEST', status: 'active', limits: { max_users: maxUsers },
-      current_period_start: new Date(), current_period_end: new Date(Date.now() + 30 * 86400000),
-    });
   });
 }
 

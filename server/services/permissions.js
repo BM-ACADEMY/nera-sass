@@ -21,8 +21,6 @@ const TENANT_PERMISSIONS = {
   'team.manage': ['owner', 'admin'],
   'tenant.settings': ['owner', 'admin'],
   'whatsapp.manage': ['owner', 'admin'],
-  'billing.view': ['owner', 'admin'],
-  'billing.manage': ['owner'],
   'templates.manage': ['owner', 'admin', 'manager'],
   'campaigns.manage': ['owner', 'admin', 'manager'],
   'ai_brain.manage': ['owner', 'admin', 'manager'],
@@ -35,9 +33,8 @@ const STAFF_PERMISSIONS = {
   'platform.tenants.manage': ['founder', 'ops'],
   'platform.tenants.export': ['founder', 'ops'],
   'platform.tenants.delete': ['founder'],
-  // Authorizing a manual grant (workspace creation or renewal without a
-  // verified payment) is founder-only.
-  'platform.billing.grant': ['founder'],
+  // Creating a workspace is Admin (Owner) only.
+  'platform.tenants.create': ['founder'],
   'platform.users.manage': ['founder', 'ops'],
   'platform.staff.manage': ['founder'],
   // Meta WhatsApp inventory: view, sync and link/unlink reconciliation.

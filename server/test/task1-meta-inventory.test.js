@@ -121,7 +121,7 @@ test.beforeEach(async () => {
 
 test('Task 1A: Meta inventory, customer-owned numbers, cross-tenant uniqueness', async (t) => {
   const models = require('../models');
-  const { Users, Tenants, Clients, Subscriptions, AuditEvents, MetaWhatsappAccounts, MetaWhatsappPhoneNumbers, MetaWhatsappTemplates, MetaWhatsappSyncRuns } = models;
+  const { Users, Tenants, Clients, AuditEvents, MetaWhatsappAccounts, MetaWhatsappPhoneNumbers, MetaWhatsappTemplates, MetaWhatsappSyncRuns } = models;
   const { runAsSystem, runAsTenant } = require('../services/tenantContext');
   const sys = (fn) => runAsSystem(fn, 'test');
   const bearer = (user) => ({ Authorization: `Bearer ${makeToken(user, { mfa: true })}` });
@@ -135,10 +135,6 @@ test('Task 1A: Meta inventory, customer-owned numbers, cross-tenant uniqueness',
   async function workspace(tenantId, brandFields = {}) {
     await sys(() => Tenants.create({ id: tenantId, name: `Workspace ${tenantId}`, status: 'active' }));
     const brand = await runAsTenant(tenantId, async () => {
-      await Subscriptions.create({
-        plan_code: 'TEST', status: 'active', limits: { max_users: 10 },
-        current_period_start: new Date(), current_period_end: new Date(Date.now() + 30 * DAY),
-      });
       return (await Clients.create({ name: `Brand ${tenantId}`, ...brandFields })).toObject();
     });
     const owner = await createUser({ tenant_id: tenantId, role: 'owner', email: `owner${tenantId}@acme.test`, name: 'Owner' });

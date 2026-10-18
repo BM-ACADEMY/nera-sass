@@ -13,7 +13,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const bcrypt = require('bcryptjs');
 const request = require('supertest');
-const { startTestDb, stopTestDb, clearCollections, seedTestPlans, makeToken, TEST_INTERNAL_KEY } = require('./setup');
+const { startTestDb, stopTestDb, clearCollections, makeToken, TEST_INTERNAL_KEY } = require('./setup');
 
 let app;
 
@@ -41,15 +41,11 @@ const bearer = (user) => ({ Authorization: `Bearer ${makeToken(user, { mfa: true
 const SECRET_PATTERN = /password|credentials|"token"|token_hash/i;
 
 async function seedWorkspace(models, { tenantId, name, maxUsers = 10 }) {
-  const { Tenants, Clients, Subscriptions } = models;
+  const { Tenants, Clients } = models;
   const { runAsSystem, runAsTenant } = require('../services/tenantContext');
   await runAsSystem(() => Tenants.create({ id: tenantId, name, status: 'active' }));
   await runAsTenant(tenantId, async () => {
     await Clients.create({ name: `${name} Brand` });
-    await Subscriptions.create({
-      plan_code: 'TEST', status: 'active', limits: { max_users: maxUsers },
-      current_period_start: new Date(), current_period_end: new Date(Date.now() + 30 * 86400000),
-    });
   });
 }
 
@@ -85,7 +81,6 @@ test('Phase 2 security remediation', async (t) => {
 
   // ── Owner provisioning ─────────────────────────────────────
   await t.test('P1. Provisioning creates the Owner login with the staff-set password; nothing is emailed', async () => {
-    await seedTestPlans();
     const founder = await staff(models, 'founder');
     const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(tenantPayload());
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
@@ -106,7 +101,6 @@ test('Phase 2 security remediation', async (t) => {
   });
 
   await t.test('P2. A missing or weak owner password is refused and nothing is created', async () => {
-    await seedTestPlans();
     const founder = await staff(models, 'founder');
     const missing = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(tenantPayload({ owner_password: undefined }));
     assert.strictEqual(missing.status, 400);
@@ -127,7 +121,6 @@ test('Phase 2 security remediation', async (t) => {
   });
 
   await t.test('P3. Without a staff-set password the Owner is invited; a failed email keeps the invitation for resend', async () => {
-    await seedTestPlans();
     const founder = await staff(models, 'founder');
     const provisioning = require('../services/provisioning');
     process.env.EMAIL_DELIVERY = 'off';

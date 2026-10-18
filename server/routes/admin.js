@@ -5,11 +5,11 @@
  * runAsTenant(tenantId) for the one tenant being managed.
  */
 const express = require('express');
-const { Tenants, Users, Clients, Invitations, Subscriptions, Plans, AuditEvents, WorkflowLogs, AiDecisions, Leads } = require('../models');
+const { Tenants, Users, Clients, Invitations, AuditEvents, WorkflowLogs, AiDecisions, Leads } = require('../models');
 const { runAsSystem, runAsTenant } = require('../services/tenantContext');
 const { can, describeUser } = require('../services/permissions');
-const { computeLifecycle, activeSubscription } = require('../services/lifecycle');
-const { seatUsage, limitValue, LimitError } = require('../services/entitlements');
+const { computeLifecycle } = require('../services/lifecycle');
+const { seatUsage } = require('../services/entitlements');
 const { sanitizeClient } = require('../services/clientSecrets');
 const { escapeRegex } = require('../db/mongo');
 const provisioning = require('../services/provisioning');
@@ -21,7 +21,6 @@ const authController = require('../controllers/authController');
 const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
 const createMetaInventoryRouter = require('./adminMetaInventory');
 const { logScope } = require('../services/workflowLog');
-const { computeSubscriptionMetrics } = require('../services/platformMetrics');
 
 function fail(res, error) {
   if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details, code: error.code });
@@ -50,14 +49,12 @@ async function loadTenant(id) {
 }
 
 async function tenantSummary(tenant) {
-  const [subscription, seats, owner, brand] = await Promise.all([
-    activeSubscription(tenant.id),
+  const [seats, owner, brand] = await Promise.all([
     seatUsage(tenant.id),
     tenant.owner_user_id ? runAsSystem(() => Users.findOne({ id: tenant.owner_user_id }, { _id: 0, id: 1, name: 1, email: 1 }).lean(), 'admin') : null,
     runAsTenant(tenant.id, () => Clients.findOne({}, { _id: 0, id: 1, name: 1, whatsapp_status: 1, whatsapp_number: 1, phone_number_id: 1, wa_token_last4: 1, wa_access_token_enc: 1 }).lean()),
   ]);
-  const lifecycle = computeLifecycle(tenant, subscription);
-  const max = limitValue(subscription?.limits, 'max_users');
+  const lifecycle = computeLifecycle(tenant);
   return {
     id: tenant.id,
     name: tenant.name,
@@ -65,8 +62,7 @@ async function tenantSummary(tenant) {
     lifecycle_state: lifecycle.state,
     access: lifecycle.access,
     owner: owner || null,
-    users: { active: seats.activeUsers, pending_invitations: seats.pendingInvitations, max_users: max === Infinity ? -1 : max },
-    plan: subscription ? { code: subscription.plan_code, name: subscription.plan_name, period_end: subscription.current_period_end, term_months: subscription.term_months } : null,
+    users: { active: seats.activeUsers, pending_invitations: seats.pendingInvitations },
     brand: brand ? sanitizeClient(brand) : null,
     is_founding_client: Boolean(tenant.is_founding_client),
     created_at: tenant.created_at,
@@ -77,22 +73,13 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   const router = express.Router();
 
   router.get('/me', (req, res) => res.json({ user: req.user, permissions: Object.fromEntries(
-    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.billing.grant', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view', 'platform.meta', 'platform.meta.admin']
+    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.tenants.create', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view', 'platform.meta', 'platform.meta.admin']
       .map((p) => [p, can(req.identity, p)]),
   ) }));
 
   // Platform Meta WhatsApp inventory (founder/ops; registration and cache
   // clearing founder only). Never writes a brand's number or credentials.
   if (metaInventory) router.use('/meta/whatsapp', createMetaInventoryRouter({ ...metaInventory, permit, fail }));
-
-  router.get('/plans', permit('platform.tenants.view'), async (req, res) => {
-    try {
-      const plans = await Plans.find({ active: true }, { _id: 0 }).sort({ product_line: 1, tier: 1 }).lean();
-      return res.json({ plans });
-    } catch (error) {
-      return fail(res, error);
-    }
-  });
 
   // ── Tenants ───────────────────────────────────────────────
   router.get('/tenants', permit('platform.tenants.view'), async (req, res) => {
@@ -109,8 +96,9 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
     }
   });
 
-  // Creating a workspace is a manual grant: founder only.
-  router.post('/tenants', permit('platform.billing.grant'), async (req, res) => {
+  // Creating a workspace: Admin (Owner) only. There are no plans; the
+  // workspace has full access with no expiry and no limits.
+  router.post('/tenants', permit('platform.tenants.create'), async (req, res) => {
     try {
       const body = req.body || {};
       // Staff set the owner's password here and hand it over themselves; the
@@ -118,17 +106,11 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       if (typeof body.owner_password !== 'string' || !body.owner_password) {
         return res.status(400).json({ error: 'Owner password is required' });
       }
-      if (body.payment_method !== undefined && body.payment_method !== 'manual_grant') {
-        return res.status(400).json({ error: 'Staff can only record manual grants; verified payments are recorded by the payment system.' });
-      }
       const result = await provisioning.provisionTenant({
         business_name: body.business_name,
         owner_email: body.owner_email,
         owner_name: body.owner_name,
         owner_password: body.owner_password,
-        plan_code: body.plan_code,
-        term_months: body.term_months,
-        payment: { method: 'manual_grant', reference: body.payment_reference, reason: body.grant_reason },
         settings: body.settings || {},
         brand: body.brand || {},
         is_founding_client: body.is_founding_client,
@@ -143,11 +125,10 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
     try {
       const tenant = await loadTenant(tenantIdParam(req));
       if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
-      const [summary, users, pending, subscriptions, events] = await Promise.all([
+      const [summary, users, pending, events] = await Promise.all([
         tenantSummary(tenant),
         userAdmin.listTenantUsers(tenant.id),
         runAsTenant(tenant.id, () => Invitations.find({ accepted_at: null, revoked_at: null }, { _id: 0 }).sort({ created_at: -1 }).lean()),
-        runAsTenant(tenant.id, () => Subscriptions.find({}, { _id: 0 }).sort({ created_at: -1 }).limit(20).lean()),
         AuditEvents.find({ tenant_id: tenant.id }, { _id: 0 }).sort({ created_at: -1 }).limit(50).lean(),
       ]);
       const brand = await runAsTenant(tenant.id, () => Clients.findOne({}, { _id: 0 }).lean());
@@ -157,7 +138,6 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
         brand: brand ? sanitizeClient(brand) : null,
         users,
         invitations: pending.map(invitations.publicInvitation),
-        subscriptions,
         audit: events,
       });
     } catch (error) {
@@ -279,26 +259,6 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
     }
   });
 
-  // Renewing or changing a plan is a manual grant: founder only.
-  router.post('/tenants/:id/subscriptions', permit('platform.billing.grant'), async (req, res) => {
-    try {
-      const tenant = await loadTenant(tenantIdParam(req));
-      if (!tenant || tenant.status === 'deleted') return res.status(404).json({ error: 'Tenant not found' });
-      const body = req.body || {};
-      if (body.payment_method !== undefined && body.payment_method !== 'manual_grant') {
-        return res.status(400).json({ error: 'Staff can only record manual grants; verified payments are recorded by the payment system.' });
-      }
-      const subscription = await provisioning.grantSubscription(tenant.id, {
-        plan_code: body.plan_code,
-        term_months: body.term_months,
-        payment: { method: 'manual_grant', reference: body.payment_reference, reason: body.grant_reason },
-      }, { req, actorUserId: req.user.id });
-      return res.status(201).json({ subscription });
-    } catch (error) {
-      return fail(res, error);
-    }
-  });
-
   router.post('/lifecycle/run', permit('platform.tenants.manage'), async (req, res) => {
     try {
       return res.json({ changes: await tenantData.runLifecycleSweep() });
@@ -343,7 +303,6 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       });
       return res.status(201).json({ invitation: result.invitation, delivery: result.delivery }); // never the raw token
     } catch (error) {
-      if (error instanceof LimitError) return res.status(409).json({ error: error.message, details: error.details, code: 'USER_LIMIT_REACHED' });
       return fail(res, error);
     }
   });
@@ -407,7 +366,6 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       });
       return res.status(201).json({ invitation: result.invitation, delivery: result.delivery }); // never the raw token
     } catch (error) {
-      if (error instanceof LimitError) return res.status(409).json({ error: error.message, details: error.details, code: 'USER_LIMIT_REACHED' });
       return fail(res, error);
     }
   });
@@ -434,8 +392,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
         const tenantId = await tenantOfUser(req.params.userId);
         return res.json({ user: await userAdmin.setActive({ tenantId, userId: req.params.userId, active, actor: staffActor(req), req }) });
       } catch (error) {
-        if (error instanceof LimitError) return res.status(409).json({ error: error.message, details: error.details, code: 'USER_LIMIT_REACHED' });
-        return fail(res, error);
+          return fail(res, error);
       }
     });
   }
@@ -651,40 +608,16 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   // ── Founder Reports ───────────────────────────────────────
   router.get('/reports/founder-dashboard', permit('platform.tenants.view'), async (req, res) => {
     try {
-      const [totalWorkspaces, totalUsers, totalLeads, allTenants, activeSubs, wf06Logs] = await Promise.all([
+      const [totalWorkspaces, totalUsers, totalLeads, wf06Logs] = await Promise.all([
         Tenants.countDocuments({ status: { $ne: 'deleted' } }),
         Users.countDocuments({ is_active: { $ne: false } }),
         Leads.countDocuments(),
-        Tenants.find({}, { _id: 0, id: 1, status: 1, deleted_at: 1 }).lean(),
-        Subscriptions.find({ status: 'active' }, {
-          _id: 0, id: 1, tenant_id: 1, status: 1, plan_code: 1, monthly_price: 1, contract_value: 1, term_months: 1, discount_pct: 1,
-          currency: 1, payment_method: 1, current_period_start: 1, current_period_end: 1,
-          price_monthly: 1, starts_at: 1, expires_at: 1,
-        }).lean(),
         // Platform founder reports only; a workspace cannot appear here.
         WorkflowLogs.find({ workflow: 'WF06', tenant_id: null }, { _id: 0 }).sort({ created_at: -1 }).limit(50).lean(),
       ]);
 
-      // MRR / TCV rules (orphans, renewals, expiry, currency): services/platformMetrics.js
-      const metrics = computeSubscriptionMetrics({ tenants: allTenants, subscriptions: activeSubs });
-
       return res.json({
-        snapshot: {
-          totalWorkspaces,
-          totalUsers,
-          totalLeads,
-          activeSubscriptions: metrics.activeSubscriptions,
-          mrr: metrics.mrr,
-          totalContractValue: metrics.totalContractValue,
-          currency: metrics.currency,
-          // Headline mrr/totalContractValue/activeSubscriptions = verified paid
-          // contracts only; everything else is reported beside them.
-          paid: metrics.paid,
-          manual_grant_unverified: metrics.manual_grant_unverified,
-          at_risk_grace: metrics.at_risk_grace,
-          staff_suspended: metrics.staff_suspended,
-          excluded: metrics.excluded,
-        },
+        snapshot: { totalWorkspaces, totalUsers, totalLeads },
         reports: wf06Logs,
       });
     } catch (error) {

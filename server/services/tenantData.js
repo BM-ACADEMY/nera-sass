@@ -17,7 +17,7 @@ const { Tenants } = require('../models');
 const { TENANT_SCOPED } = require('../db/tenantScope');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
 const { stripSecrets } = require('./clientSecrets');
-const { computeLifecycle, activeSubscription } = require('./lifecycle');
+const { computeLifecycle } = require('./lifecycle');
 const audit = require('./audit');
 
 const ARCHIVE_DIR = path.join(__dirname, '..', 'data', 'tenant-archives');
@@ -89,8 +89,7 @@ async function runLifecycleSweep(now = new Date()) {
   const tenants = await runAsSystem(() => Tenants.find({ status: { $ne: 'deleted' } }, { _id: 0 }).lean(), 'lifecycle-sweep');
   const changes = [];
   for (const tenant of tenants) {
-    const subscription = await activeSubscription(tenant.id);
-    const { state } = computeLifecycle(tenant, subscription, now);
+    const { state } = computeLifecycle(tenant);
     if (state === tenant.lifecycle_state) continue;
     const update = { lifecycle_state: state, lifecycle_changed_at: now, updated_at: now };
     if (state === 'archived' && !tenant.archived_at) {

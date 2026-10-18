@@ -64,7 +64,7 @@ test.beforeEach(async () => {
 });
 
 test('Task 2.0: customer brand API security', async (t) => {
-  const { Users, Tenants, Clients, Subscriptions } = require('../models');
+  const { Users, Tenants, Clients } = require('../models');
   const { runAsSystem, runAsTenant } = require('../services/tenantContext');
   const sys = (fn) => runAsSystem(fn, 'test');
   const bearer = (user) => ({ Authorization: `Bearer ${makeToken(user, { mfa: true })}` });
@@ -76,10 +76,6 @@ test('Task 2.0: customer brand API security', async (t) => {
   async function workspace(tenantId, brandFields = {}) {
     await sys(() => Tenants.create({ id: tenantId, name: `Workspace ${tenantId}`, status: 'active' }));
     const brand = await runAsTenant(tenantId, async () => {
-      await Subscriptions.create({
-        plan_code: 'TEST', status: 'active', limits: { max_users: 10 },
-        current_period_start: new Date(), current_period_end: new Date(Date.now() + 30 * DAY),
-      });
       return (await Clients.create({ name: `Brand ${tenantId}`, ...brandFields })).toObject();
     });
     const users = {};

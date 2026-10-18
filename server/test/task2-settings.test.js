@@ -61,7 +61,7 @@ test.beforeEach(async () => {
 });
 
 test('Task 2: customer Settings APIs', async (t) => {
-  const { Users, Tenants, Clients, Subscriptions, AuditEvents } = require('../models');
+  const { Users, Tenants, Clients, AuditEvents } = require('../models');
   const { runAsSystem, runAsTenant } = require('../services/tenantContext');
   const mfa = require('../services/mfa');
   const sys = (fn) => runAsSystem(fn, 'test');
@@ -76,10 +76,6 @@ test('Task 2: customer Settings APIs', async (t) => {
   async function workspace(tenantId, brandFields = {}) {
     await sys(() => Tenants.create({ id: tenantId, name: `Workspace ${tenantId}`, status: 'active', language: 'en', timezone: 'Asia/Kolkata' }));
     const brand = await runAsTenant(tenantId, async () => {
-      await Subscriptions.create({
-        plan_code: 'TEST', plan_name: 'Test Plan', status: 'active', limits: { max_users: 10 },
-        current_period_start: new Date(), current_period_end: new Date(Date.now() + 30 * DAY),
-      });
       return (await Clients.create({ name: `Brand ${tenantId}`, ...brandFields })).toObject();
     });
     const users = {};
@@ -102,7 +98,7 @@ test('Task 2: customer Settings APIs', async (t) => {
   }
 
   // ── Permissions and isolation ────────────────────────────
-  await t.test('W1. /api/tenant reports each role\'s permission flags; plan details only for owner/admin', async () => {
+  await t.test('W1. /api/tenant reports each role\'s permission flags; full access and no plan for everyone', async () => {
     const { users } = await workspace(10);
     const expected = {
       owner: { manage_team: true, manage_settings: true, manage_whatsapp: true },
@@ -115,9 +111,9 @@ test('Task 2: customer Settings APIs', async (t) => {
       assert.strictEqual(res.status, 200, role);
       assert.deepStrictEqual(res.body.permissions, flags, role);
       assert.strictEqual(res.body.tenant.id, 10);
-      const detailed = role === 'owner' || role === 'admin';
-      assert.strictEqual(Boolean(res.body.subscription?.current_period_end), detailed, `${role} plan details`);
-      assert.strictEqual(res.body.subscription?.plan_name, 'Test Plan');
+      assert.strictEqual(res.body.subscription, undefined, `${role}: no plan`);
+      assert.strictEqual(res.body.lifecycle.access, 'full', role);
+      assert.strictEqual(res.body.usage.max_users, -1, role);
     }
   });
 

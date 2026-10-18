@@ -51,7 +51,7 @@ test.beforeEach(async () => {
 });
 
 test('Task 2A: Settings polish', async (t) => {
-  const { Users, Tenants, Clients, Subscriptions } = require('../models');
+  const { Users, Tenants, Clients } = require('../models');
   const { runAsSystem, runAsTenant } = require('../services/tenantContext');
   const mfa = require('../services/mfa');
   const sys = (fn) => runAsSystem(fn, 'test');
@@ -60,7 +60,6 @@ test('Task 2A: Settings polish', async (t) => {
   async function workspace(brandFields = {}) {
     await sys(() => Tenants.create({ id: 10, name: 'Workspace 10', status: 'active' }));
     const brand = await runAsTenant(10, async () => {
-      await Subscriptions.create({ plan_code: 'TEST', status: 'active', limits: { max_users: 10 }, current_period_start: new Date(), current_period_end: new Date(Date.now() + 30 * DAY) });
       return (await Clients.create({ name: 'Brand 10', ...brandFields })).toObject();
     });
     const owner = (await sys(() => Users.create({

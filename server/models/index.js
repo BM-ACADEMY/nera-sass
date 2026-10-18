@@ -120,7 +120,6 @@ module.exports = {
   SchemaTemplates: require('./SchemaTemplates'),
   SeoAudits: require('./SeoAudits'),
   SerpRadarHistory: require('./SerpRadarHistory'),
-  Subscriptions: require('./Subscriptions'),
   TeamMembers: require('./TeamMembers'),
   Templates: require('./Templates'),
   TenantModules: require('./TenantModules'),
@@ -157,5 +156,4 @@ module.exports = {
   WorkflowLogs: require('./WorkflowLogs'),
   AuditEvents: require('./AuditEvents'),
   Invitations: require('./Invitations'),
-  Plans: require('./Plans'),
 };

@@ -16,7 +16,7 @@ test.beforeEach(async () => {
 });
 
 test('User Management & Security Lifecycle Suite', async (t) => {
-  const { Users, Invitations, Tenants, Subscriptions } = require('../models');
+  const { Users, Invitations, Tenants } = require('../models');
   const { runAsTenant, runAsSystem } = require('../services/tenantContext');
   const userAdmin = require('../services/userAdmin');
   const invitations = require('../services/invitations');
@@ -72,12 +72,6 @@ test('User Management & Security Lifecycle Suite', async (t) => {
 
     // Create active tenant with no users yet
     await runAsSystem(() => Tenants.create({ id: tenantId, name: 'Tenant 20 Corp', status: 'active' }));
-    await runAsTenant(tenantId, () => Subscriptions.create({
-      plan_code: 'WA-STARTER',
-      limits: { max_users: 2 },
-      status: 'active',
-      term_months: 12,
-    }));
 
     // The workspace's one login is invited
     const inv1 = await invitations.createInvitation({

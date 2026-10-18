@@ -13,7 +13,6 @@ const bcrypt = require('bcryptjs');
 const { Users, Invitations, Tenants } = require('../models');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
 const { TENANT_ROLES, STAFF_ROLES } = require('./permissions');
-const { assertSeatAvailable } = require('./entitlements');
 const { passwordProblem, normalizeEmail, isEmail } = require('../utils/passwordPolicy');
 const notify = require('./notify');
 const { encrypt, decrypt } = require('../utils/crypto');
@@ -89,7 +88,6 @@ async function createInvitation({ tenantId = null, email, name = null, role = nu
     { $set: { revoked_at: new Date(), revoked_by: invitedBy.id ?? null } },
   ));
   if (!staff) await assertSingleLogin(tenantId, normalized);
-  if (!staff && !skipSeatCheck) await assertSeatAvailable(tenantId, 1);
 
   const token = crypto.randomBytes(32).toString('base64url');
   const invitation = await run(() => Invitations.create({
