@@ -1,6 +1,7 @@
 import React from 'react';
 import { FiLogOut, FiMoreVertical } from 'react-icons/fi';
 import { MdOutlineSpaceDashboard } from 'react-icons/md';
+import { FaWhatsapp } from 'react-icons/fa';
 import UserAvatar from './UserAvatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import {
@@ -12,6 +13,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
@@ -27,6 +29,8 @@ const AppSidebar = ({
   userCount,
   userProfile,
   onLogout,
+  showInbox = false,
+  inboxUnread = 0,
 }) => {
   const { isMobile, setOpenMobile } = useSidebar();
 
@@ -60,17 +64,47 @@ const AppSidebar = ({
           <SidebarGroupLabel>Platform</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {items.map(({ key, icon: Icon, label }) => (
+              {items.map(({ key, icon: Icon, label, badge }) => (
                 <SidebarMenuItem key={key}>
-                  <SidebarMenuButton isActive={activeTab === key} tooltip={label} onClick={() => select(key)}>
+                  <SidebarMenuButton isActive={activeTab === key} tooltip={badge ? `${label} (${badge} unread)` : label} onClick={() => select(key)}>
                     <Icon />
                     <span>{label}</span>
                   </SidebarMenuButton>
+                  {badge > 0 && (
+                    <SidebarMenuBadge className="rounded-full bg-[#25D366] text-white peer-data-[active=true]/menu-button:text-white">{badge > 99 ? '99+' : badge}</SidebarMenuBadge>
+                  )}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {/* The platform's own WhatsApp number: chats open inside the panel. */}
+        {showInbox && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Getnera WhatsApp</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    isActive={activeTab === 'inbox'}
+                    tooltip={inboxUnread ? `WhatsApp Chat (${inboxUnread} unread)` : 'WhatsApp Chat'}
+                    onClick={() => select('inbox')}
+                    className="data-[active=true]:bg-[#25D366]/12 data-[active=true]:font-semibold data-[active=true]:text-[#128C7E]"
+                  >
+                    <FaWhatsapp className="text-[#25D366]" />
+                    <span>WhatsApp Chat</span>
+                  </SidebarMenuButton>
+                  {inboxUnread > 0 && (
+                    <SidebarMenuBadge className="rounded-full bg-[#25D366] text-white peer-data-[active=true]/menu-button:text-white">
+                      {inboxUnread > 99 ? '99+' : inboxUnread}
+                    </SidebarMenuBadge>
+                  )}
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       <SidebarFooter>

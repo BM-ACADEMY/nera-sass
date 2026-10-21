@@ -27,6 +27,7 @@ const axios = ctxAxios || require('axios');
 const SERVER_ROOT = ctx.SERVER_ROOT || path.resolve(__dirname, '../../');
 const { runAsSystem, runAsTenant } = require('../../services/tenantContext');
 const { requireMetaSignature } = require('../../services/metaWebhookSignature');
+const platformInbox = require('../../services/platformInbox');
  // Store timeouts for delayed AI replies
 
 // GET — Meta webhook verification
@@ -45,6 +46,25 @@ app.get('/webhook/whatsapp', (req, res) => {
 app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
   try {
     const body = req.body;
+
+    // The platform's own number goes to the admin inbox only, before anything
+    // is logged to disk or matched to a customer workspace.
+    const platformId = platformInbox.platformPhoneId();
+    if (platformId && body?.object === 'whatsapp_business_account') {
+      const platformValues = [];
+      for (const entry of body.entry || []) {
+        entry.changes = (entry.changes || []).filter((change) => {
+          const mine = change.field === 'messages' && String(change.value?.metadata?.phone_number_id || '') === platformId;
+          if (mine) platformValues.push(change.value);
+          return !mine;
+        });
+      }
+      for (const value of platformValues) {
+        await platformInbox.handleWebhookValue(value).catch((error) => console.error('[Platform inbox] Webhook failed:', error.message));
+      }
+      if (platformValues.length && (body.entry || []).every((entry) => !entry.changes.length)) return res.sendStatus(200);
+    }
+
     try {
       if (fs && fs.appendFileSync) {
         fs.appendFileSync(path.join(SERVER_ROOT, 'uploads', 'incoming_payloads.log'), `[${new Date().toISOString()}] ${JSON.stringify(body, null, 2)}\n\n`);

@@ -72,7 +72,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   const router = express.Router();
 
   router.get('/me', (req, res) => res.json({ user: req.user, permissions: Object.fromEntries(
-    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.tenants.create', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view', 'platform.meta', 'platform.meta.admin']
+    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.tenants.create', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view', 'platform.meta', 'platform.meta.admin', 'platform.inbox']
       .map((p) => [p, can(req.identity, p)]),
   ) }));
 
@@ -81,6 +81,8 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   if (metaInventory) router.use('/meta/whatsapp', createMetaInventoryRouter({ ...metaInventory, permit, fail }));
   // A workspace's WhatsApp Business profile (synced with Meta).
   require('./adminWhatsappProfile')(router, { permit, fail, metaGraphVersion: metaInventory?.metaGraphVersion });
+  // The platform's own WhatsApp inbox (admin panel WhatsApp Chat).
+  require('./adminInbox')(router, { permit, fail });
 
   // ── Tenants ───────────────────────────────────────────────
   router.get('/tenants', permit('platform.tenants.view'), async (req, res) => {

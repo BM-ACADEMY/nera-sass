@@ -41,6 +41,8 @@ const STAFF_PERMISSIONS = {
   'platform.meta': ['founder', 'ops'],
   // Inventory phone registration and cache clearing.
   'platform.meta.admin': ['founder'],
+  // The platform's own WhatsApp inbox (admin panel WhatsApp Chat).
+  'platform.inbox': ['founder', 'ops'],
   'platform.reports': ['founder', 'ops'],
   'platform.audit.view': ['founder', 'ops'],
   'platform.modules': ['founder', 'ops'],

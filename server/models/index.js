@@ -108,6 +108,8 @@ module.exports = {
   Organisations: require('./Organisations'),
   Outreach: require('./Outreach'),
   Payments: require('./Payments'),
+  PlatformWaContacts: require('./PlatformWaContacts'),
+  PlatformWaMessages: require('./PlatformWaMessages'),
   PipelineStages: require('./PipelineStages'),
   PromptTemplates: require('./PromptTemplates'),
   PublishQueue: require('./PublishQueue'),

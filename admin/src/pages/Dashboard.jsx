@@ -17,13 +17,14 @@ import WorkspaceDetail from '../components/workspaces/WorkspaceDetail';
 import TenantsList from '../components/TenantsList';
 import UsersPage from '../components/users/UsersPage';
 import AppSidebar from '../components/AppSidebar';
+import InboxPage from './InboxPage';
 import StatsCards from '../components/StatsCards';
 import ClientsManagement from '../components/ClientsManagement';
 import WorkflowLogsView from '../components/WorkflowLogsView';
 import FounderReportsView from '../components/FounderReportsView';
 import AdminSettingsView from '../components/AdminSettingsView';
 import axiosClient from '../api/axiosClient';
-import { disconnectRealtime, useLiveRefresh, useLiveStatus } from '../api/realtime';
+import { disconnectRealtime, useLiveEvent, useLiveRefresh, useLiveStatus } from '../api/realtime';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -32,12 +33,13 @@ import { Label } from '@/components/ui/label';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
-import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
+import { SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { cn } from '@/lib/utils';
 
 // Each sidebar section has its own URL (/dashboard/<slug>) so the address bar
 // follows the section and a refresh stays on it.
 const TAB_SLUGS = {
+  inbox: 'whatsapp-inbox',
   tenants: 'workspaces',
   clients: 'whatsapp-numbers',
   workflows: 'workflow-logs',
@@ -46,6 +48,25 @@ const TAB_SLUGS = {
   settings: 'settings',
 };
 const TAB_BY_SLUG = Object.fromEntries(Object.entries(TAB_SLUGS).map(([key, slug]) => [slug, key]));
+
+// While the WhatsApp inbox is open the sidebar folds to icons, giving the chat
+// the room; leaving the inbox restores what the admin had before.
+const FoldSidebarWhile = ({ active }) => {
+  const { open, setOpen, isMobile } = useSidebar();
+  const before = React.useRef(null);
+  useEffect(() => {
+    if (isMobile) return undefined;
+    if (active) {
+      if (before.current === null) before.current = open;
+      setOpen(false);
+    } else if (before.current !== null) {
+      setOpen(before.current);
+      before.current = null;
+    }
+    return undefined;
+  }, [active, isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+};
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -115,6 +136,22 @@ const Dashboard = () => {
   });
   const live = useLiveStatus();
 
+  // Unread chats on the platform's own WhatsApp number (sidebar badge).
+  const [inboxUnread, setInboxUnread] = useState(0);
+  const canInbox = Boolean(permissions['platform.inbox']);
+  const fetchInboxUnread = async () => {
+    try {
+      const res = await axiosClient.get('/admin/inbox/status');
+      setInboxUnread(res.data?.unread_conversations || 0);
+    } catch {
+      // the badge is optional
+    }
+  };
+  useEffect(() => {
+    if (canInbox) fetchInboxUnread();
+  }, [canInbox]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLiveEvent('platform_inbox:changed', () => { if (canInbox) fetchInboxUnread(); });
+
   const handleLogout = () => {
     disconnectRealtime();
     localStorage.removeItem('adminToken');
@@ -180,6 +217,7 @@ const Dashboard = () => {
       case 'founder-reports': return 'Founder Reports';
       case 'users': return 'Users & Team';
       case 'settings': return 'Platform Settings & Infrastructure';
+      case 'inbox': return 'WhatsApp Chat';
       default: return 'Platform Administration';
     }
   };
@@ -189,6 +227,7 @@ const Dashboard = () => {
 
   return (
     <SidebarProvider>
+      <FoldSidebarWhile active={activeTab === 'inbox'} />
       <AppSidebar
         items={menuItems}
         activeTab={activeTab}
@@ -197,6 +236,8 @@ const Dashboard = () => {
         userCount={users.length}
         userProfile={userProfile}
         onLogout={handleLogout}
+        showInbox={canInbox}
+        inboxUnread={inboxUnread}
       />
 
       <SidebarInset>
@@ -235,7 +276,15 @@ const Dashboard = () => {
           )}
         </header>
 
-        <div className="flex-1 p-4 md:p-8">
+        {activeTab === 'inbox' && (
+          <div className="h-[calc(100svh-4rem)] min-h-0">
+            {canInbox
+              ? <InboxPage embedded conversationId={itemId} basePath={`/dashboard/${TAB_SLUGS.inbox}`} />
+              : <div className="p-8 text-sm text-muted-foreground">You do not have access to the WhatsApp inbox.</div>}
+          </div>
+        )}
+
+        <div className={cn('flex-1 p-4 md:p-8', activeTab === 'inbox' && 'hidden')}>
           {activeTab === 'tenants' && detailTenantId && (
             <WorkspaceDetail
               tenantId={detailTenantId}

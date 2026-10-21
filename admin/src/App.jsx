@@ -19,6 +19,7 @@ const App = () => {
     <Router>
       <Routes>
         <Route path="/invite/:token" element={<AcceptInvite />} />
+        <Route path="/inbox" element={<Navigate to="/dashboard/whatsapp-inbox" replace />} />
         <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
         <Route path="/dashboard/:tab?/:itemId?" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
         <Route path="/" element={<Navigate to="/dashboard" />} />

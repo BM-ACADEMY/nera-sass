@@ -33,6 +33,19 @@ function ensureSocket() {
   return socket;
 }
 
+// Calls handler for every occurrence of a server event while mounted.
+export function useLiveEvent(event, handler) {
+  const ref = useRef(handler);
+  ref.current = handler;
+  useEffect(() => {
+    const s = ensureSocket();
+    if (!s) return undefined;
+    const listener = (payload) => ref.current?.(payload);
+    s.on(event, listener);
+    return () => s.off(event, listener);
+  }, [event]);
+}
+
 export function disconnectRealtime() {
   if (socket) {
     socket.disconnect();

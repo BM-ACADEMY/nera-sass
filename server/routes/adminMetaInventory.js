@@ -31,6 +31,7 @@ const audit = require('../services/audit');
 const { inventoryAccessToken, phoneRegistrationEnabled, requireInventoryAccessToken } = require('../services/metaInventoryCredentials');
 const { runAsTenant } = require('../services/tenantContext');
 const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
+const { platformPhoneId } = require('../services/platformInbox');
 
 const NO_ID = { _id: 0 };
 
@@ -177,6 +178,9 @@ function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, gr
       if (!Number.isInteger(clientId) || clientId <= 0) return res.status(400).json({ error: 'Choose the workspace to assign this number to' });
       const phone = await MetaWhatsappPhoneNumbers.findOne({ phone_number_id: String(req.params.phoneId) }, NO_ID).lean();
       if (!phone) return res.status(404).json({ error: 'Meta phone number not found in inventory' });
+      if (phone.phone_number_id === platformPhoneId()) {
+        return res.status(409).json({ error: 'This is the platform\'s own number (admin WhatsApp Chat). It cannot be assigned to a workspace.', code: 'PLATFORM_NUMBER' });
+      }
       const brand = await Clients.findOne({ id: clientId }, { _id: 0, id: 1, tenant_id: 1, phone_number_id: 1, wa_business_id: 1 }).lean();
       if (!brand) return res.status(404).json({ error: 'Workspace brand not found' });
       if (phone.client_id != null && phone.client_id !== brand.id) {
