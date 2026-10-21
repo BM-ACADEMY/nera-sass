@@ -64,7 +64,6 @@ async function tenantSummary(tenant) {
     owner: owner || null,
     users: { active: seats.activeUsers, pending_invitations: seats.pendingInvitations },
     brand: brand ? sanitizeClient(brand) : null,
-    is_founding_client: Boolean(tenant.is_founding_client),
     created_at: tenant.created_at,
   };
 }
@@ -80,6 +79,8 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   // Platform Meta WhatsApp inventory (founder/ops; registration and cache
   // clearing founder only). Never writes a brand's number or credentials.
   if (metaInventory) router.use('/meta/whatsapp', createMetaInventoryRouter({ ...metaInventory, permit, fail }));
+  // A workspace's WhatsApp Business profile (synced with Meta).
+  require('./adminWhatsappProfile')(router, { permit, fail, metaGraphVersion: metaInventory?.metaGraphVersion });
 
   // ── Tenants ───────────────────────────────────────────────
   router.get('/tenants', permit('platform.tenants.view'), async (req, res) => {
@@ -113,7 +114,6 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
         owner_password: body.owner_password,
         settings: body.settings || {},
         brand: body.brand || {},
-        is_founding_client: body.is_founding_client,
       }, { req, actorUserId: req.user.id, actorName: req.user.name });
       return res.status(201).json(result);
     } catch (error) {
@@ -166,14 +166,14 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
     }
   });
 
-  const TENANT_FIELDS = ['name', 'language', 'currency', 'tax_treatment', 'timezone', 'is_founding_client'];
+  const TENANT_FIELDS = ['name', 'language', 'currency', 'tax_treatment', 'timezone'];
   router.patch('/tenants/:id', permit('platform.tenants.manage'), async (req, res) => {
     try {
       const changes = {};
       for (const field of TENANT_FIELDS) {
         if (req.body?.[field] === undefined) continue;
-        changes[field] = field === 'is_founding_client' ? Boolean(req.body[field]) : String(req.body[field]).trim();
-        if (field !== 'is_founding_client' && !changes[field]) return res.status(400).json({ error: `Invalid ${field}` });
+        changes[field] = String(req.body[field]).trim();
+        if (!changes[field]) return res.status(400).json({ error: `Invalid ${field}` });
       }
       if (!Object.keys(changes).length) return res.status(400).json({ error: 'Nothing to update' });
       const tenant = await Tenants.findOneAndUpdate({ id: tenantIdParam(req), status: { $ne: 'deleted' } }, { $set: { ...changes, updated_at: new Date() } }, { new: true, projection: { _id: 0 } }).lean();

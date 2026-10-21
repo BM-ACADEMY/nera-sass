@@ -23,7 +23,6 @@ export default defineConfig(({ mode }) => {
         '@radix-ui/react-dropdown-menu',
         '@radix-ui/react-select',
         '@radix-ui/react-slot',
-        '@radix-ui/react-switch',
         '@radix-ui/react-tooltip',
         'sonner',
         'socket.io-client',

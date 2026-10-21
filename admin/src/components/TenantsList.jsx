@@ -32,7 +32,6 @@ const TenantsList = ({
             <button type="button" onClick={() => onViewTenant && onViewTenant(tenant)} className="cursor-pointer text-left text-sm font-bold hover:text-primary hover:underline">
               {tenant.name || 'Unnamed Workspace'}
             </button>
-            {tenant.is_founding_client && <Badge variant="gold" className="text-[10.5px]">Founding Client</Badge>}
           </div>
           <div className="text-[11.5px] text-slate-400">
             ID: #{tenant.id} · Brand: {tenant.brand?.name || tenant.name}

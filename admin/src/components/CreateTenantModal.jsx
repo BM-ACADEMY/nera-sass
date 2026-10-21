@@ -5,7 +5,6 @@ import axiosClient from '../api/axiosClient';
 import { FormField, IconInput } from './FormField';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
-import { Switch } from '@/components/ui/switch';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -14,7 +13,6 @@ const INITIAL = {
   owner_name: '',
   owner_email: '',
   owner_password: '',
-  is_founding_client: false,
 };
 
 // A strong random password: letters and digits without look-alike characters.
@@ -69,7 +67,6 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
         owner_name: values.owner_name.trim(),
         owner_email: values.owner_email.trim().toLowerCase(),
         owner_password: values.owner_password,
-        is_founding_client: Boolean(values.is_founding_client),
         settings: {
           language: 'en',
           currency: 'INR',
@@ -212,13 +209,6 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
           </div>
         </FormField>
 
-        <label htmlFor="is_founding_client" className="flex cursor-pointer items-center justify-between rounded-lg border border-border bg-muted/50 px-3.5 py-2.5">
-          <div>
-            <div className="text-[13px] font-semibold">Founding Client Status</div>
-            <div className="text-[11.5px] text-slate-400">Flag this workspace as a launch pilot founding client</div>
-          </div>
-          <Switch id="is_founding_client" checked={values.is_founding_client} onCheckedChange={(v) => set('is_founding_client', v)} />
-        </label>
 
         <div className="mt-2 flex justify-end gap-2.5 border-t border-border pt-4">
           {onCancel && <Button type="button" variant="outline" size="lg" onClick={onCancel}>Cancel</Button>}

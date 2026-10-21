@@ -28,14 +28,13 @@ test('Client Management & Tenant Lifecycle Suite', async (t) => {
       business_name: 'Apex Global Logistics',
       owner_name: 'Vikram Mehta',
       owner_email: 'vikram@apexlogistics.com',
-      is_founding_client: true,
       settings: { language: 'en', currency: 'INR', timezone: 'Asia/Kolkata', tax_treatment: 'gst' },
       brand: { city: 'Mumbai', phone: '+919876543210' },
     }, { actorUserId: founder.id });
 
     assert.ok(result.tenant?.id);
     assert.strictEqual(result.tenant.name, 'Apex Global Logistics');
-    assert.strictEqual(result.tenant.is_founding_client, true);
+    assert.strictEqual(result.tenant.is_founding_client, undefined);
 
     // Verify 1-to-1 Brand (Client)
     assert.ok(result.client?.id);

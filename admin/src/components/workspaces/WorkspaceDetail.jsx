@@ -9,6 +9,8 @@ import { FaWhatsapp } from 'react-icons/fa';
 import axiosClient from '../../api/axiosClient';
 import ConfirmDialog from '../ConfirmDialog';
 import EditBrandDialog from './EditBrandDialog';
+import WhatsAppProfileDialog from './WhatsAppProfileDialog';
+import BusinessProfileCard from './BusinessProfileCard';
 import { Spinner } from '@/components/ui/spinner';
 import UserAvatar from '../UserAvatar';
 import { Badge } from '@/components/ui/badge';
@@ -68,6 +70,7 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
   const [error, setError] = useState('');
   const [confirm, setConfirm] = useState(null);
   const [editBrandOpen, setEditBrandOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [verifying, setVerifying] = useState(false);
 
   const load = async () => {
@@ -112,6 +115,14 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
   const suspended = tenant.status === 'suspended';
   const connected = Boolean(brand?.phone_number_id);
   const verified = brand?.whatsapp_status === 'verified';
+  // Meta's live state wins over the stored verification flag.
+  const metaState = String(whatsapp?.connection_status || '').toUpperCase();
+  const waBadge = ['BANNED', 'RESTRICTED', 'FLAGGED', 'DISCONNECTED'].includes(metaState)
+    ? { variant: 'danger', label: metaState === 'BANNED' ? 'Banned by Meta' : `${metaState.charAt(0)}${metaState.slice(1).toLowerCase()} by Meta` }
+    : metaState === 'CONNECTED' || verified
+      ? { variant: 'success', label: 'Connected' }
+      : { variant: 'warning', label: 'Not registered yet' };
+  const profileName = whatsapp?.verified_name || brand?.name || '?';
 
   // Asks Meta again whether the number is ready and updates the status.
   const reverify = async () => {
@@ -152,7 +163,6 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate text-xl font-extrabold">{tenant.name}</h2>
               <Badge variant={suspended ? 'danger' : 'success'}>{suspended ? 'Suspended' : 'Active'}</Badge>
-              {tenant.is_founding_client && <Badge variant="gold">Founding Client</Badge>}
             </div>
             <div className="mt-1 text-xs text-muted-foreground">
               Workspace #{tenant.id} · Created {shortDate(tenant.created_at)}{tenant.created_by_name ? ` by ${tenant.created_by_name}` : ''}
@@ -285,7 +295,7 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
                   <div className="font-semibold">{whatsapp?.display_phone_number || brand.whatsapp_number}</div>
                   <div className="truncate text-xs text-muted-foreground">{whatsapp?.verified_name || brand.name}</div>
                 </div>
-                <Badge variant={verified ? 'success' : 'warning'} className="ml-auto">{verified ? 'Connected' : 'Pending verification'}</Badge>
+                <Badge variant={waBadge.variant} className="ml-auto shrink-0">{waBadge.label}</Badge>
               </div>
               <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
                 <Field label="Meta status">{whatsapp?.connection_status ? <span className="capitalize">{whatsapp.connection_status.toLowerCase()}</span> : null}</Field>
@@ -307,41 +317,34 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
         </Section>
 
         {/* Workspace */}
-        <Section icon={FiBriefcase} title="Workspace">
+        <Section
+          icon={FiBriefcase}
+          title="Workspace"
+          action={brand && <Button size="sm" variant="outline" onClick={() => setEditBrandOpen(true)}>Edit details</Button>}
+        >
           <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <Field label="Workspace ID" mono>#{tenant.id}</Field>
             <Field label="Status">{suspended ? 'Suspended' : 'Active'}</Field>
-            <Field label="Founding client">{tenant.is_founding_client ? 'Yes' : 'No'}</Field>
             <Field label="Language">{tenant.language || null}</Field>
             <Field label="Currency">{tenant.currency || null}</Field>
             <Field label="Timezone">{tenant.timezone || null}</Field>
             <Field label="Created">{fullDateTime(tenant.created_at)}</Field>
             <Field label="Created by">{tenant.created_by_name || null}</Field>
             <Field label="Logins">{summary?.users?.active ?? 0} active{summary?.users?.pending_invitations ? `, ${summary.users.pending_invitations} invited` : ''}</Field>
+            <Field label="Business name">{brand?.name || null}</Field>
+            <Field label="Industry">{brand?.industry || null}</Field>
+            <Field label="City">{brand?.city || null}</Field>
+            <Field label="Contact person">{brand?.contact_person || null}</Field>
+            <Field label="Contact phone">{brand?.phone || null}</Field>
           </dl>
         </Section>
 
-        {/* Brand profile */}
-        <Section
-          icon={FiTag}
-          title="Brand profile"
-          description="What customers see on WhatsApp. The workspace can also edit it from its own Settings."
-          action={brand && <Button size="sm" variant="outline" onClick={() => setEditBrandOpen(true)}>Edit brand</Button>}
-        >
-          {brand ? (
-            <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Brand name">{brand.name}</Field>
-              <Field label="Category">{brand.wa_category && brand.wa_category !== 'OTHER' ? brand.wa_category : brand.wa_category ? 'Other' : null}</Field>
-              <Field label={<span className="inline-flex items-center gap-1"><FiMail /> Email</span>}>{brand.wa_email || null}</Field>
-              <Field label={<span className="inline-flex items-center gap-1"><FiGlobe /> Website</span>}>{brand.wa_website || null}</Field>
-              <Field label={<span className="inline-flex items-center gap-1"><FiMapPin /> Address</span>}>{brand.wa_address || null}</Field>
-              <Field label="City">{brand.city || null}</Field>
-              <div className="sm:col-span-2"><Field label="Description">{brand.wa_description || null}</Field></div>
-            </dl>
-          ) : (
-            <div className="text-sm text-muted-foreground">No brand profile.</div>
-          )}
-        </Section>
+        {/* Brand / WhatsApp business profile */}
+        {brand ? (
+          <BusinessProfileCard brand={brand} whatsapp={whatsapp} connected={connected} onEdit={() => setProfileOpen(true)} />
+        ) : (
+          <Section icon={FiTag} title="Brand profile"><div className="text-sm text-muted-foreground">No brand profile.</div></Section>
+        )}
       </div>
 
       {/* Activity */}
@@ -372,6 +375,7 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
 
       <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />
       <EditBrandDialog open={editBrandOpen} onOpenChange={setEditBrandOpen} tenantId={tenant.id} brand={brand} onSaved={load} />
+      <WhatsAppProfileDialog open={profileOpen} onOpenChange={setProfileOpen} tenantId={tenant.id} onSaved={load} />
     </div>
   );
 };

@@ -62,7 +62,7 @@ const pick = (source, fields) => Object.fromEntries(fields.filter((f) => source?
 /**
  * input: { business_name, owner_email, owner_name, owner_password?,
  *          settings: { language, currency, tax_treatment, timezone },
- *          brand: { industry, city, ... }, is_founding_client }
+ *          brand: { industry, city, ... } }
  */
 async function provisionTenant(input, { req = null, actorUserId = null, actorName = null } = {}) {
   const businessName = String(input.business_name || '').trim();
@@ -115,7 +115,6 @@ async function provisionTenant(input, { req = null, actorUserId = null, actorNam
       status: 'active',
       lifecycle_state: 'active',
       ...pick(input.settings, TENANT_SETTING_FIELDS),
-      is_founding_client: Boolean(input.is_founding_client),
       created_by: actorUserId,
       created_at: now,
       updated_at: now,
