@@ -1,0 +1,14 @@
+# Apache config for Hostinger (it ignores _redirects, which is Netlify / Cloudflare only)
+RewriteEngine On
+
+# Force HTTPS
+RewriteCond %{HTTPS} off
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Old .html URLs -> clean routes
+RewriteRule ^privacy-policy\.html$ /privacy-policy [L,R=301]
+RewriteRule ^terms\.html$ /terms [L,R=301]
+
+# Serve /privacy-policy and /terms from their folder index without a trailing-slash redirect
+DirectorySlash Off
+RewriteRule ^(privacy-policy|terms)/?$ /$1/index.html [L]

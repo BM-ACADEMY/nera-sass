@@ -113,6 +113,10 @@ const TenantsList = ({
       render: (tenant) => {
         const isSuspended = tenant.status === 'suspended';
         return (
+          <div className="flex items-center justify-end gap-1">
+          <Button size="sm" variant="outline" className="h-8" onClick={() => onViewTenant && onViewTenant(tenant)}>
+            Manage
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="size-8" aria-label="Workspace actions">
@@ -124,7 +128,7 @@ const TenantsList = ({
                 <FaWhatsapp className="text-[#25D366]" /> {tenant.brand?.phone_number_id ? 'Manage WhatsApp' : 'Connect WhatsApp'}
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => onViewTenant && onViewTenant(tenant)}>
-                <FiSettings /> View Workspace Details
+                <FiSettings /> Manage workspace
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               {isSuspended ? (
@@ -138,6 +142,7 @@ const TenantsList = ({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
         );
       },
     },

@@ -8,6 +8,8 @@ import {
 import { FaWhatsapp } from 'react-icons/fa';
 import axiosClient from '../../api/axiosClient';
 import ConfirmDialog from '../ConfirmDialog';
+import EditBrandDialog from './EditBrandDialog';
+import { Spinner } from '@/components/ui/spinner';
 import UserAvatar from '../UserAvatar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -65,6 +67,8 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [confirm, setConfirm] = useState(null);
+  const [editBrandOpen, setEditBrandOpen] = useState(false);
+  const [verifying, setVerifying] = useState(false);
 
   const load = async () => {
     try {
@@ -108,6 +112,20 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
   const suspended = tenant.status === 'suspended';
   const connected = Boolean(brand?.phone_number_id);
   const verified = brand?.whatsapp_status === 'verified';
+
+  // Asks Meta again whether the number is ready and updates the status.
+  const reverify = async () => {
+    setVerifying(true);
+    try {
+      await axiosClient.post(`/admin/tenants/${tenant.id}/whatsapp/verify`);
+      toast.success('WhatsApp verified with Meta');
+    } catch (err) {
+      toast.error(apiError(err, 'Meta could not verify this number'));
+    } finally {
+      setVerifying(false);
+      await load();
+    }
+  };
 
   const act = (request, success, failure) => async () => {
     try {
@@ -245,9 +263,16 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
           title="WhatsApp"
           description="The workspace's WhatsApp number. A workspace uses one number."
           action={(
-            <Button size="sm" variant="outline" onClick={() => navigate(`/dashboard/whatsapp-numbers?workspace=${tenant.id}`)}>
-              {connected ? 'Change number' : 'Connect a number'}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {connected && (
+                <Button size="sm" variant="outline" onClick={reverify} disabled={verifying}>
+                  {verifying ? <Spinner /> : <FiRefreshCw />} Re-verify with Meta
+                </Button>
+              )}
+              <Button size="sm" variant="outline" onClick={() => navigate(`/dashboard/whatsapp-numbers?workspace=${tenant.id}`)}>
+                {connected ? 'Change number' : 'Connect a number'}
+              </Button>
+            </div>
           )}
         >
           {connected ? (
@@ -297,7 +322,12 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
         </Section>
 
         {/* Brand profile */}
-        <Section icon={FiTag} title="Brand profile" description="What customers see on WhatsApp. The workspace edits it from its own Settings.">
+        <Section
+          icon={FiTag}
+          title="Brand profile"
+          description="What customers see on WhatsApp. The workspace can also edit it from its own Settings."
+          action={brand && <Button size="sm" variant="outline" onClick={() => setEditBrandOpen(true)}>Edit brand</Button>}
+        >
           {brand ? (
             <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label="Brand name">{brand.name}</Field>
@@ -341,6 +371,7 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
       </Section>
 
       <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />
+      <EditBrandDialog open={editBrandOpen} onOpenChange={setEditBrandOpen} tenantId={tenant.id} brand={brand} onSaved={load} />
     </div>
   );
 };
