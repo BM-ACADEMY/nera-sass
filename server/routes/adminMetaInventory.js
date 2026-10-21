@@ -37,23 +37,23 @@ const NO_ID = { _id: 0 };
 function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, graphPageData, metaGraphVersion }) {
   const router = express.Router();
 
+  // The database is remote, so every round trip costs time: all reads run in
+  // one parallel batch, and templates are only counted here (the list of one
+  // account's templates is loaded on demand by GET /templates).
   router.get('/inventory', permit('platform.meta'), async (req, res) => {
     try {
-      const [accounts, phoneRows, templates, lastRun] = await Promise.all([
-        MetaWhatsappAccounts.find({}, NO_ID).sort({ name: 1 }).lean(),
+      const [accounts, phoneRows, templateCounts, lastRun, allBrands, allTenants] = await Promise.all([
+        MetaWhatsappAccounts.find({}, { ...NO_ID, raw_data: 0 }).sort({ name: 1 }).lean(),
         MetaWhatsappPhoneNumbers.find({}, { ...NO_ID, raw_data: 0 }).lean(),
-        MetaWhatsappTemplates.find({}, { _id: 0, template_id: 1, waba_id: 1, name: 1, language: 1, category: 1, status: 1, last_synced_at: 1 }).sort({ name: 1, language: 1 }).lean(),
+        MetaWhatsappTemplates.aggregate([
+          { $group: { _id: { waba_id: '$waba_id', status: '$status' }, n: { $sum: 1 } } },
+        ]),
         MetaWhatsappSyncRuns.findOne({}, NO_ID).sort({ id: -1 }).lean(),
+        Clients.find({}, { _id: 0, id: 1, name: 1, tenant_id: 1, phone_number_id: 1, wa_business_id: 1, whatsapp_number: 1 }).lean(),
+        Tenants.find({ status: { $ne: 'deleted' } }, { _id: 0, id: 1, name: 1, status: 1 }).lean(),
       ]);
-      // Only the brands an inventory row is linked to, with their workspace.
-      const linkedIds = [...new Set(phoneRows.map((p) => p.client_id).filter((id) => id != null))];
-      const brands = linkedIds.length
-        ? await Clients.find({ id: { $in: linkedIds } }, { _id: 0, id: 1, name: 1, tenant_id: 1, phone_number_id: 1, wa_business_id: 1 }).lean()
-        : [];
-      const tenantIds = [...new Set(brands.map((b) => b.tenant_id).filter((id) => id != null))];
-      const tenants = tenantIds.length ? await Tenants.find({ id: { $in: tenantIds } }, { _id: 0, id: 1, name: 1 }).lean() : [];
-      const brandById = new Map(brands.map((b) => [b.id, b]));
-      const tenantName = new Map(tenants.map((t) => [t.id, t.name]));
+      const brandById = new Map(allBrands.map((b) => [b.id, b]));
+      const tenantById = new Map(allTenants.map((t) => [t.id, t]));
       const accountNames = new Map(accounts.map((a) => [a.waba_id, a.name]));
 
       const phones = phoneRows.map((p) => {
@@ -62,36 +62,54 @@ function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, gr
           ...p,
           waba_name: accountNames.get(p.waba_id) ?? null,
           linked_brand: brand ? {
-            id: brand.id, name: brand.name, tenant_id: brand.tenant_id, tenant_name: tenantName.get(brand.tenant_id) ?? null,
+            id: brand.id, name: brand.name, tenant_id: brand.tenant_id, tenant_name: tenantById.get(brand.tenant_id)?.name ?? null,
             // The link is only meaningful while the brand still uses this number.
             identity_matches: brand.phone_number_id === p.phone_number_id && brand.wa_business_id === p.waba_id,
           } : null,
         };
       });
       const summary = new Map();
-      for (const t of templates) {
-        const s = summary.get(t.waba_id) || { waba_id: t.waba_id, total: 0, approved: 0, other: 0 };
-        s.total++;
-        if (t.status === 'APPROVED') s.approved++; else if (t.status != null) s.other++;
-        summary.set(t.waba_id, s);
+      for (const { _id: { waba_id: wabaId, status }, n } of templateCounts) {
+        const s = summary.get(wabaId) || { waba_id: wabaId, total: 0, approved: 0, other: 0 };
+        s.total += n;
+        if (status === 'APPROVED') s.approved += n; else if (status != null) s.other += n;
+        summary.set(wabaId, s);
       }
-      const wabas = accounts.map((a) => ({ ...a, raw_data: undefined, phone_count: phoneRows.filter((p) => p.waba_id === a.waba_id).length }));
+      const wabas = accounts.map((a) => ({ ...a, phone_count: phoneRows.filter((p) => p.waba_id === a.waba_id).length }));
       // Every workspace brand, for the "Assign to workspace" picker.
-      const allBrands = await Clients.find({}, { _id: 0, id: 1, name: 1, tenant_id: 1 }).lean();
-      const allTenants = await Tenants.find({ status: { $ne: 'deleted' } }, { _id: 0, id: 1, name: 1, status: 1 }).lean();
-      const tenantById = new Map(allTenants.map((t) => [t.id, t]));
       const workspaces = allBrands
         .filter((b) => tenantById.has(b.tenant_id))
-        .map((b) => ({ client_id: b.id, brand_name: b.name, tenant_id: b.tenant_id, tenant_name: tenantById.get(b.tenant_id).name, status: tenantById.get(b.tenant_id).status }))
+        .map((b) => ({
+          client_id: b.id, brand_name: b.name, tenant_id: b.tenant_id, tenant_name: tenantById.get(b.tenant_id).name, status: tenantById.get(b.tenant_id).status,
+          // A workspace uses one WhatsApp number; one that has it is not offered again.
+          has_number: Boolean(b.phone_number_id),
+          phone_number_id: b.phone_number_id || null,
+          whatsapp_number: b.whatsapp_number || null,
+        }))
         .sort((a, b) => String(a.tenant_name).localeCompare(String(b.tenant_name)));
       return res.json({
-        wabas, phone_numbers: phones, templates, template_summary: [...summary.values()], last_sync: lastRun || null,
+        wabas, phone_numbers: phones, template_summary: [...summary.values()], last_sync: lastRun || null,
         workspaces,
         sync_enabled: process.env.META_INVENTORY_SYNC !== 'off' && Boolean(inventoryAccessToken()),
         credential_configured: Boolean(inventoryAccessToken()),
         registration_enabled: phoneRegistrationEnabled(),
         can_administer: can(req.identity, 'platform.meta.admin'),
       });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // The templates of one WhatsApp Business Account (Templates tab).
+  router.get('/templates', permit('platform.meta'), async (req, res) => {
+    try {
+      const wabaId = String(req.query.waba_id || '').trim();
+      if (!wabaId) return res.status(400).json({ error: 'waba_id is required' });
+      const templates = await MetaWhatsappTemplates.find(
+        { waba_id: wabaId },
+        { _id: 0, template_id: 1, waba_id: 1, name: 1, language: 1, category: 1, status: 1, last_synced_at: 1 },
+      ).sort({ name: 1, language: 1 }).lean();
+      return res.json({ templates });
     } catch (error) {
       return fail(res, error);
     }

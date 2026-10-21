@@ -6,6 +6,7 @@
 const { AuditEvents } = require('../models');
 const { runAsSystem } = require('./tenantContext');
 const { stripSecrets } = require('./clientSecrets');
+const { notifyStaff } = require('./realtime');
 
 const EVENTS = Object.freeze({
   TENANT_CREATED: 'TENANT_CREATED',
@@ -70,6 +71,9 @@ async function record(event, { tenantId = null, req = null, actor = null, target
       meta: stripSecrets(meta),
       created_at: new Date(),
     }), 'audit');
+    // Every audited change is something the admin panel shows: tell open
+    // admin sessions to refresh (event name and ids only, no details).
+    notifyStaff('admin:changed', { event, tenant_id: tenantId == null ? null : Number(tenantId), target_type: targetType });
   } catch (error) {
     console.error(`[audit] Failed to record ${event}:`, error.message);
   }

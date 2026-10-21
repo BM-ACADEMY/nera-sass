@@ -123,3 +123,26 @@ test('Workspace creation without plans', async (t) => {
     assert.strictEqual((await request(app).get('/api/admin/reports/founder-dashboard').set(bearer(owner))).status, 403);
   });
 });
+
+test('Live admin updates', async (t) => {
+  const realtime = require('../services/realtime');
+  const { Users } = require('../models');
+  const { runAsSystem } = require('../services/tenantContext');
+
+  await t.test('L1. Creating a workspace tells open admin sessions, with ids only', async () => {
+    await clearCollections();
+    const sent = [];
+    realtime.setStaffSender((event, payload) => sent.push({ event, payload }));
+    const founder = (await runAsSystem(() => Users.create({
+      tenant_id: null, is_platform_staff: true, staff_role: 'founder', email: 'live@nera.test', name: 'Live',
+      password_hash: bcrypt.hashSync('Original-Pass-1', 4), is_active: true, token_version: 0,
+    }))).toObject();
+    const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(payload({ owner_email: 'live-owner@kaveri.test' }));
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    const created = sent.find((s) => s.event === 'admin:changed' && s.payload.event === 'TENANT_CREATED');
+    assert.ok(created, `notified: ${JSON.stringify(sent.map((s) => s.payload.event))}`);
+    assert.strictEqual(created.payload.tenant_id, res.body.tenant.id);
+    assert.deepStrictEqual(Object.keys(created.payload).sort(), ['at', 'event', 'target_type', 'tenant_id']);
+    realtime.setStaffSender(null);
+  });
+});

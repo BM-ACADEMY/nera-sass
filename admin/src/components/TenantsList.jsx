@@ -12,12 +12,6 @@ const STATUS_TAGS = {
   deleted: { variant: 'muted', label: 'Deleted' },
 };
 
-const WA_STATUS_TAGS = {
-  verified: { variant: 'success', label: 'Verified' },
-  verification_pending: { variant: 'warning', label: 'Pending' },
-  verification_failed: { variant: 'danger', label: 'Failed' },
-  not_configured: { variant: 'muted', label: 'Not Configured' },
-};
 
 const TenantsList = ({
   tenants,
@@ -35,7 +29,9 @@ const TenantsList = ({
       render: (tenant) => (
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-sm font-bold">{tenant.name || 'Unnamed Workspace'}</span>
+            <button type="button" onClick={() => onViewTenant && onViewTenant(tenant)} className="cursor-pointer text-left text-sm font-bold hover:text-primary hover:underline">
+              {tenant.name || 'Unnamed Workspace'}
+            </button>
             {tenant.is_founding_client && <Badge variant="gold" className="text-[10.5px]">Founding Client</Badge>}
           </div>
           <div className="text-[11.5px] text-slate-400">
@@ -72,15 +68,25 @@ const TenantsList = ({
     {
       key: 'whatsapp',
       title: 'WhatsApp',
+      // Connected = a number is assigned to the workspace; verification is shown beside it.
       render: (tenant) => {
-        const statusKey = tenant.brand?.whatsapp_status || 'not_configured';
-        const tag = WA_STATUS_TAGS[statusKey] || WA_STATUS_TAGS.not_configured;
+        const connected = Boolean(tenant.brand?.phone_number_id);
+        const verified = tenant.brand?.whatsapp_status === 'verified';
         const num = tenant.brand?.whatsapp_number;
         return (
-          <div>
-            <Badge variant={tag.variant}><FaWhatsapp />{tag.label}</Badge>
-            {num && <div className="mt-0.5 text-[11.5px] text-muted-foreground">{num}</div>}
-          </div>
+          <button
+            type="button"
+            onClick={() => onConfigureWhatsApp && onConfigureWhatsApp(tenant)}
+            className="cursor-pointer text-left"
+            title={connected ? 'Manage WhatsApp' : 'Connect WhatsApp'}
+          >
+            {connected ? (
+              <Badge variant={verified ? 'success' : 'warning'}><FaWhatsapp />{verified ? 'Connected' : 'Connected · verifying'}</Badge>
+            ) : (
+              <Badge variant="muted"><FaWhatsapp />Not connected</Badge>
+            )}
+            {connected && num && <div className="mt-0.5 text-[11.5px] text-muted-foreground">+{String(num).replace(/^\+/, '')}</div>}
+          </button>
         );
       },
     },
@@ -115,7 +121,7 @@ const TenantsList = ({
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onSelect={() => onConfigureWhatsApp && onConfigureWhatsApp(tenant)}>
-                <FaWhatsapp className="text-[#25D366]" /> Configure WhatsApp
+                <FaWhatsapp className="text-[#25D366]" /> {tenant.brand?.phone_number_id ? 'Manage WhatsApp' : 'Connect WhatsApp'}
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => onViewTenant && onViewTenant(tenant)}>
                 <FiSettings /> View Workspace Details

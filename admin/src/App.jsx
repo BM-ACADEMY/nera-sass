@@ -20,7 +20,7 @@ const App = () => {
       <Routes>
         <Route path="/invite/:token" element={<AcceptInvite />} />
         <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
-        <Route path="/dashboard/:tab?" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+        <Route path="/dashboard/:tab?/:itemId?" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
         <Route path="/" element={<Navigate to="/dashboard" />} />
       </Routes>
     </Router>

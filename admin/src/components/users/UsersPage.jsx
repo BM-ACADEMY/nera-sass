@@ -5,6 +5,7 @@ import {
   FiRefreshCw, FiX, FiMail, FiClock, FiUsers, FiBriefcase, FiAlertTriangle,
 } from 'react-icons/fi';
 import axiosClient from '../../api/axiosClient';
+import { useLiveRefresh } from '../../api/realtime';
 import DataTable from '../DataTable';
 import UserAvatar from '../UserAvatar';
 import StatTile from '../StatTile';
@@ -83,8 +84,8 @@ const UsersPage = ({ currentUser, permissions = {}, onChanged }) => {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [confirm, setConfirm] = useState(null);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async ({ quiet = false } = {}) => {
+    if (!quiet) setLoading(true);
     try {
       const [staffRes, usersRes] = await Promise.all([axiosClient.get('/admin/staff'), axiosClient.get('/admin/users')]);
       setStaff(staffRes.data?.staff || []);
@@ -100,6 +101,9 @@ const UsersPage = ({ currentUser, permissions = {}, onChanged }) => {
   useEffect(() => {
     load();
   }, []);
+
+  // Invitations accepted, roles changed or logins deactivated by anyone appear live.
+  useLiveRefresh(() => load({ quiet: true }));
 
   const refresh = async () => {
     await load();

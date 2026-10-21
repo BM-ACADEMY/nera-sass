@@ -13,7 +13,7 @@ import {
 import { MdOutlineSpaceDashboard } from 'react-icons/md';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import CreateTenantModal from '../components/CreateTenantModal';
-import WhatsAppConfigModal from '../components/WhatsAppConfigModal';
+import WorkspaceDetail from '../components/workspaces/WorkspaceDetail';
 import TenantsList from '../components/TenantsList';
 import UsersPage from '../components/users/UsersPage';
 import AppSidebar from '../components/AppSidebar';
@@ -23,6 +23,7 @@ import WorkflowLogsView from '../components/WorkflowLogsView';
 import FounderReportsView from '../components/FounderReportsView';
 import AdminSettingsView from '../components/AdminSettingsView';
 import axiosClient from '../api/axiosClient';
+import { disconnectRealtime, useLiveRefresh, useLiveStatus } from '../api/realtime';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -32,6 +33,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
+import { cn } from '@/lib/utils';
 
 // Each sidebar section has its own URL (/dashboard/<slug>) so the address bar
 // follows the section and a refresh stays on it.
@@ -47,7 +49,10 @@ const TAB_BY_SLUG = Object.fromEntries(Object.entries(TAB_SLUGS).map(([key, slug
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const { tab: tabSlug } = useParams();
+  const { tab: tabSlug, itemId } = useParams();
+  // /dashboard/workspaces/<id> opens one workspace's detail page.
+  const detailTenantId = tabSlug === TAB_SLUGS.tenants && itemId ? Number(itemId) : null;
+  const [detailRefresh, setDetailRefresh] = useState(0);
   const activeTab = TAB_BY_SLUG[tabSlug] || 'tenants'; // 'tenants' | 'clients' | 'workflows' | 'founder-reports' | 'users' | 'settings'
   const setActiveTab = (key) => navigate(`/dashboard/${TAB_SLUGS[key]}`);
   const [users, setUsers] = useState([]);
@@ -59,7 +64,6 @@ const Dashboard = () => {
 
   // Modals
   const [isTenantModalOpen, setIsTenantModalOpen] = useState(false);
-  const [whatsappModalTenant, setWhatsappModalTenant] = useState(null);
   const [suspendModalTenant, setSuspendModalTenant] = useState(null);
   const [suspendReason, setSuspendReason] = useState('');
   const [isSuspending, setIsSuspending] = useState(false);
@@ -102,7 +106,17 @@ const Dashboard = () => {
     reloadAll();
   }, []);
 
+  // Live updates: any audited change by anyone, or coming back to this tab,
+  // reloads the workspaces, users and an open workspace detail page.
+  useLiveRefresh(() => {
+    fetchTenants();
+    fetchUsers();
+    setDetailRefresh((n) => n + 1);
+  });
+  const live = useLiveStatus();
+
   const handleLogout = () => {
+    disconnectRealtime();
     localStorage.removeItem('adminToken');
     navigate('/login');
   };
@@ -121,6 +135,7 @@ const Dashboard = () => {
       setSuspendModalTenant(null);
       setSuspendReason('');
       fetchTenants();
+      setDetailRefresh((n) => n + 1);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to suspend workspace');
     } finally {
@@ -133,6 +148,7 @@ const Dashboard = () => {
       await axiosClient.post(`/admin/tenants/${tenant.id}/reinstate`);
       toast.success(`Workspace "${tenant.name}" has been reinstated`);
       fetchTenants();
+      setDetailRefresh((n) => n + 1);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to reinstate workspace');
     }
@@ -158,10 +174,10 @@ const Dashboard = () => {
 
   const getTabTitle = () => {
     switch (activeTab) {
-      case 'tenants': return 'Workspaces & Tenants';
+      case 'tenants': return detailTenantId ? 'Workspace Details' : 'Workspaces & Tenants';
       case 'clients': return 'WhatsApp Numbers & Meta Inventory';
       case 'workflows': return 'Workflow Automation Engines';
-      case 'founder-reports': return 'Founder Reports & Platform MRR';
+      case 'founder-reports': return 'Founder Reports';
       case 'users': return 'Users & Team';
       case 'settings': return 'Platform Settings & Infrastructure';
       default: return 'Platform Administration';
@@ -188,9 +204,16 @@ const Dashboard = () => {
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
           <h1 className="truncate text-lg font-semibold">{getTabTitle()}</h1>
+          <span
+            className={cn('ml-1 hidden shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold sm:inline-flex', live ? 'border-green-200 bg-green-50 text-green-700' : 'border-border bg-muted text-muted-foreground')}
+            title={live ? 'Changes appear here as they happen' : 'Live updates are reconnecting; data refreshes when you return to this tab'}
+          >
+            <span className={cn('size-1.5 rounded-full', live ? 'animate-pulse bg-green-500' : 'bg-slate-400')} />
+            {live ? 'Live' : 'Offline'}
+          </span>
 
-          {activeTab === 'tenants' && (
-            <div className="relative ml-auto w-full max-w-72">
+          {activeTab === 'tenants' && !detailTenantId && (
+            <div className="relative ml-auto hidden w-full max-w-72 sm:block">
               <FiSearch className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-slate-400" />
               <Input
                 placeholder="Search workspaces..."
@@ -213,7 +236,16 @@ const Dashboard = () => {
         </header>
 
         <div className="flex-1 p-4 md:p-8">
-          {activeTab === 'tenants' && (
+          {activeTab === 'tenants' && detailTenantId && (
+            <WorkspaceDetail
+              tenantId={detailTenantId}
+              refreshKey={detailRefresh}
+              onSuspend={(tenant) => { setSuspendModalTenant(tenant); setSuspendReason(''); }}
+              onReinstate={handleReinstate}
+            />
+          )}
+
+          {activeTab === 'tenants' && !detailTenantId && (
             <>
               <div className="mb-6 flex justify-end">
                 <Button size="lg" onClick={() => setIsTenantModalOpen(true)} className="font-semibold">
@@ -225,7 +257,7 @@ const Dashboard = () => {
             </>
           )}
 
-          {activeTab === 'tenants' && (
+          {activeTab === 'tenants' && !detailTenantId && (
             <Card className="gap-5">
               <CardHeader>
                 <div>
@@ -239,10 +271,10 @@ const Dashboard = () => {
                 <TenantsList
                   tenants={filteredTenants}
                   loading={loading}
-                  onConfigureWhatsApp={(tenant) => setWhatsappModalTenant(tenant)}
+                  onConfigureWhatsApp={(tenant) => navigate(`/dashboard/${TAB_SLUGS.clients}?workspace=${tenant.id}`)}
                   onSuspendTenant={(tenant) => { setSuspendModalTenant(tenant); setSuspendReason(''); }}
                   onReinstateTenant={handleReinstate}
-                  onViewTenant={(tenant) => setWhatsappModalTenant(tenant)}
+                  onViewTenant={(tenant) => navigate(`/dashboard/${TAB_SLUGS.tenants}/${tenant.id}`)}
                 />
               </CardContent>
             </Card>
@@ -268,20 +300,6 @@ const Dashboard = () => {
             onTenantCreated={() => { setIsTenantModalOpen(false); fetchTenants(); fetchUsers(); }}
             onCancel={() => setIsTenantModalOpen(false)}
           />
-        </DialogContent>
-      </Dialog>
-
-      {/* WhatsApp Configuration Modal */}
-      <Dialog open={Boolean(whatsappModalTenant)} onOpenChange={(open) => !open && setWhatsappModalTenant(null)}>
-        <DialogContent className="sm:max-w-[600px]">
-          <DialogTitle className="sr-only">WhatsApp Configuration</DialogTitle>
-          {whatsappModalTenant && (
-            <WhatsAppConfigModal
-              tenantId={whatsappModalTenant.id}
-              tenantName={whatsappModalTenant.name}
-              onClose={() => { setWhatsappModalTenant(null); fetchTenants(); }}
-            />
-          )}
         </DialogContent>
       </Dialog>
 

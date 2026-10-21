@@ -74,6 +74,11 @@ test('Meta number assignment', async (t) => {
     assert.ok(await sys(() => AuditEvents.exists({ event: 'META_PHONE_LINKED', tenant_id: 1 })));
 
     const after = await request(app).get('/api/admin/meta/whatsapp/inventory').set(bearer(ops));
+    // The workspace now has its number, so the picker no longer offers it.
+    const acmeRow = after.body.workspaces.find((w) => w.tenant_name === 'Acme');
+    assert.strictEqual(acmeRow.has_number, true);
+    assert.strictEqual(acmeRow.phone_number_id, 'P1');
+    assert.strictEqual(after.body.workspaces.find((w) => w.tenant_name === 'Beta').has_number, false);
     const p1 = after.body.phone_numbers.find((p) => p.phone_number_id === 'P1');
     assert.strictEqual(p1.linked_brand.tenant_name, 'Acme');
     assert.strictEqual(p1.linked_brand.identity_matches, true);
@@ -105,6 +110,37 @@ test('Meta number assignment', async (t) => {
     const re = await request(app).post('/api/admin/meta/whatsapp/phone-numbers/P1/assign').set(bearer(ops)).send({ client_id: beta.id });
     assert.strictEqual(re.status, 200);
     assert.strictEqual((await brand(beta.id, 2)).phone_number_id, 'P1');
+  });
+
+  await t.test('A5. Workspace detail shows its number, usage counts and who did what', async () => {
+    const { ops, acme } = await seed();
+    await request(app).post('/api/admin/meta/whatsapp/phone-numbers/P1/assign').set(bearer(ops)).send({ client_id: acme.id });
+    const res = await request(app).get('/api/admin/tenants/1').set(bearer(ops));
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.strictEqual(res.body.whatsapp.display_phone_number, '+91 98765 43210');
+    assert.strictEqual(res.body.whatsapp.connection_status, 'CONNECTED');
+    assert.deepStrictEqual(Object.keys(res.body.usage).sort(), ['campaigns', 'conversations', 'leads', 'messages']);
+    assert.strictEqual(res.body.usage.leads, 0);
+    const linked = res.body.audit.find((e) => e.event === 'META_PHONE_LINKED');
+    assert.strictEqual(linked.actor_name, 'ops');
+    assert.ok(!JSON.stringify(res.body).includes('wa_access_token'), 'no token in the response');
+  });
+
+  await t.test('A6. Inventory sends template counts only; templates of one account load on demand', async () => {
+    const { ops } = await seed();
+    const { MetaWhatsappTemplates } = require('../models');
+    await sys(() => MetaWhatsappTemplates.create([
+      { template_id: 'T1', waba_id: 'W1', name: 'welcome', language: 'en', status: 'APPROVED' },
+      { template_id: 'T2', waba_id: 'W1', name: 'offer', language: 'en', status: 'REJECTED' },
+    ]));
+    const inv = await request(app).get('/api/admin/meta/whatsapp/inventory').set(bearer(ops));
+    assert.strictEqual(inv.status, 200);
+    assert.strictEqual(inv.body.templates, undefined, 'no template list in the inventory');
+    assert.deepStrictEqual(inv.body.template_summary, [{ waba_id: 'W1', total: 2, approved: 1, other: 1 }]);
+    const list = await request(app).get('/api/admin/meta/whatsapp/templates').query({ waba_id: 'W1' }).set(bearer(ops));
+    assert.strictEqual(list.status, 200);
+    assert.deepStrictEqual(list.body.templates.map((x) => x.name), ['offer', 'welcome']);
+    assert.strictEqual((await request(app).get('/api/admin/meta/whatsapp/templates').set(bearer(ops))).status, 400);
   });
 
   await t.test('A4. Customers and anonymous callers cannot assign', async () => {

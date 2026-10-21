@@ -10,4 +10,4 @@ module.exports = defineModel('meta_whatsapp_templates', {
   components: { type: Mixed, default: () => [] },
   raw_data: { type: Mixed, default: () => ({}) },
   last_synced_at: { type: Date, default: Date.now },
-}, { unique: [['template_id']] });
+}, { unique: [['template_id']], indexes: [['waba_id']] });
