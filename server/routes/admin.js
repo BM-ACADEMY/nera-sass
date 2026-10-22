@@ -657,7 +657,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
           environment: process.env.NODE_ENV || 'development',
           mfaEnforced: process.env.MFA_ENFORCED === 'true',
           emailDelivery: process.env.EMAIL_DELIVERY || 'outbox',
-          port: process.env.PORT || 3600,
+          port: process.env.PORT || 3601,
           uptimeSeconds: Math.round(process.uptime()),
         },
       });

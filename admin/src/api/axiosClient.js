@@ -2,7 +2,7 @@ import axios from 'axios';
 import { shouldEndSession } from './sessionPolicy';
 
 const axiosClient = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3600/api',
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3601/api',
   headers: {
     'Content-Type': 'application/json',
   },

@@ -86,7 +86,7 @@ const AdminSettingsView = ({ userProfile }) => {
       ),
     },
     { label: 'Node Runtime', value: systemInfo?.nodeVersion || 'v22.x' },
-    { label: 'API Port', value: systemInfo?.port || 3600 },
+    { label: 'API Port', value: systemInfo?.port || 3601 },
     { label: 'Email Outbox Mode', value: <Badge variant="info">{systemInfo?.emailDelivery || 'outbox'}</Badge> },
     {
       label: 'MFA Enforcement',

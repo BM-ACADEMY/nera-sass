@@ -35,7 +35,7 @@ const app = express();
 // rate limits and audit rows see the real client, not 127.0.0.1.
 app.set('trust proxy', 'loopback');
 const httpServer = http.createServer(app);
-const PORT = process.env.PORT || 3600;
+const PORT = process.env.PORT || 3601;
 
 const {
   auth, internalAuth, internalPlatformAuth, staffAuth, socketAuth, verifyToken, resolveIdentity,

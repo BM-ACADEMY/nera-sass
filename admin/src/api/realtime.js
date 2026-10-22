@@ -6,7 +6,7 @@ import { io } from 'socket.io-client';
 // a number assigned, a login added or deactivated...). Views subscribe and
 // reload their data. One shared socket for the whole admin panel.
 
-const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:3600/api').replace(/\/api\/?$/, '');
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:3601/api').replace(/\/api\/?$/, '');
 
 let socket = null;
 const changeListeners = new Set();

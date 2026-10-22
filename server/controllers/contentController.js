@@ -3042,7 +3042,7 @@ function getGoogleOAuthClient(req) {
   let apiBase = process.env.API_BASE_URL;
   if (!apiBase) {
     const proto = req.headers['x-forwarded-proto'] || req.protocol;
-    const host = req.headers['x-forwarded-host'] || req.headers['host'] || 'localhost:3600';
+    const host = req.headers['x-forwarded-host'] || req.headers['host'] || 'localhost:3601';
     apiBase = `${proto}://${host}`;
   }
   const redirectUri = `${apiBase}/api/content/youtube/callback`;

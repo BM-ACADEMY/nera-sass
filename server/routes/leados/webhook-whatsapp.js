@@ -85,7 +85,7 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
       )
     );
     if (isAllianceEvent) {
-      const localPort = Number(process.env.PORT) || 3600;
+      const localPort = Number(process.env.PORT) || 3601;
       await axios.post(
         `http://127.0.0.1:${localPort}/api/alliance-inbox/webhook`,
         body,
