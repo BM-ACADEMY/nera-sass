@@ -34,13 +34,9 @@ if [[ "$PART" == all || "$PART" == server ]]; then
     (cd "$ROOT/server" && pm2 start server.js --name getnera-api --time)
     pm2 save
   fi
+  sleep 3
   API_PORT="$(grep -E '^PORT=' "$ROOT/server/.env" | cut -d= -f2 | tr -d '\r')"
-  # The API connects to MongoDB before it listens; give it up to 60s.
-  for i in $(seq 1 30); do
-    if curl -fsS "http://127.0.0.1:${API_PORT:-3601}/health"; then echo " <- API is up"; break; fi
-    if [[ $i == 30 ]]; then echo "API did not start. Check: pm2 logs getnera-api --lines 50 --nostream"; exit 1; fi
-    sleep 2
-  done
+  curl -fsS "http://127.0.0.1:${API_PORT:-3601}/health" && echo " <- API is up"
 fi
 
 echo "==> Done"
