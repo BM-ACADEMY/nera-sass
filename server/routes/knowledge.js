@@ -1,6 +1,5 @@
 const express = require('express');
 const multer = require('multer');
-const pdfParse = require('pdf-parse');
 const fs = require('fs');
 const { KnowledgeBase } = require('../models');
 const { getKBContext } = require('../services/openai');
@@ -14,6 +13,8 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     let text = '';
     if (req.file.mimetype === 'application/pdf') {
       const buffer = fs.readFileSync(req.file.path);
+      // Loaded on use: its native canvas binding must not stop the server from starting.
+      const pdfParse = require('pdf-parse');
       const data = await pdfParse(buffer);
       text = data.text
         .replace(/\n{3,}/g, '\n\n')
