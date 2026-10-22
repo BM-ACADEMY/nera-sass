@@ -1,0 +1,593 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { toast } from 'sonner';
+import {
+  FiSearch, FiSend, FiPlus, FiArrowLeft, FiCheck, FiClock, FiAlertTriangle, FiInfo, FiX,
+  FiLock, FiUnlock, FiExternalLink, FiFileText, FiInbox,
+} from 'react-icons/fi';
+import { FaWhatsapp } from 'react-icons/fa';
+import axiosClient from '../api/axiosClient';
+import { useLiveEvent, useLiveStatus } from '../api/realtime';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
+import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
+import { relativeTime, fullDateTime } from '../utils/time';
+
+const apiError = (err, fallback) => err.response?.data?.error || fallback;
+const FILTERS = [['all', 'All'], ['unread', 'Unread'], ['open', 'Open'], ['closed', 'Closed']];
+
+const formatNumber = (waId) => (waId ? `+${waId}` : '');
+const initials = (name) => String(name || '?').trim().charAt(0).toUpperCase();
+const timeOf = (d) => new Date(d).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+const dayOf = (d) => {
+  const date = new Date(d);
+  const today = new Date();
+  const yesterday = new Date(Date.now() - 86400000);
+  if (date.toDateString() === today.toDateString()) return 'Today';
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+const listTime = (d) => {
+  if (!d) return '';
+  const date = new Date(d);
+  return date.toDateString() === new Date().toDateString() ? timeOf(d) : date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+};
+const hoursLeft = (closesAt) => Math.max(0, Math.ceil((new Date(closesAt).getTime() - Date.now()) / 3600000));
+
+const Ticks = ({ status }) => {
+  if (status === 'failed') return <FiAlertTriangle className="size-3.5 text-red-500" title="Not delivered" />;
+  if (status === 'sending') return <FiClock className="size-3 opacity-70" title="Sending" />;
+  if (status === 'sent') return <FiCheck className="size-3.5 opacity-70" title="Sent" />;
+  const read = status === 'read';
+  return (
+    <span className={cn('inline-flex', read ? 'text-sky-500' : 'opacity-70')} title={read ? 'Read' : 'Delivered'}>
+      <FiCheck className="size-3.5" /><FiCheck className="-ml-2 size-3.5" />
+    </span>
+  );
+};
+
+const Avatar = ({ name, size = 'size-10' }) => (
+  <span className={cn(size, 'flex shrink-0 items-center justify-center rounded-full bg-green-100 font-bold text-green-700')}>{initials(name)}</span>
+);
+
+// The platform's own WhatsApp number as a full-screen inbox (opened in its own
+// tab from the admin panel). All sending goes through the server.
+// `embedded`: shown inside the admin panel (the dashboard owns the header and
+// the URL is /dashboard/whatsapp-inbox/<chat>); otherwise a full-page view.
+const InboxPage = ({ embedded = false, conversationId: conversationIdProp, basePath = '/inbox' }) => {
+  const navigate = useNavigate();
+  const params = useParams();
+  const conversationId = embedded ? conversationIdProp : params.conversationId;
+  const activeId = conversationId ? Number(conversationId) : null;
+  const openChat = (id) => navigate(id ? `${basePath}/${id}` : basePath);
+  const live = useLiveStatus();
+
+  const [status, setStatus] = useState(null);
+  const [allowed, setAllowed] = useState(true);
+  const [conversations, setConversations] = useState([]);
+  const [listLoading, setListLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [detail, setDetail] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [threadLoading, setThreadLoading] = useState(false);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [newChatOpen, setNewChatOpen] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+  const bottomRef = useRef(null);
+
+  useEffect(() => { if (!embedded) document.title = 'WhatsApp Chat · Getnera Admin'; }, [embedded]);
+
+  const loadStatus = async () => {
+    try {
+      setStatus((await axiosClient.get('/admin/inbox/status')).data);
+    } catch (err) {
+      if (err.response?.status === 403) setAllowed(false);
+    }
+  };
+
+  const loadConversations = async ({ quiet = false } = {}) => {
+    if (!quiet) setListLoading(true);
+    try {
+      const res = await axiosClient.get('/admin/inbox/conversations', { params: { search: search.trim() || undefined, filter } });
+      setConversations(res.data.conversations || []);
+    } catch (err) {
+      if (err.response?.status === 403) setAllowed(false);
+      else if (!quiet) toast.error(apiError(err, 'Failed to load chats'));
+    } finally {
+      setListLoading(false);
+    }
+  };
+
+  const loadThread = async (id, { quiet = false } = {}) => {
+    if (!id) return;
+    if (!quiet) setThreadLoading(true);
+    try {
+      const [d, m] = await Promise.all([
+        axiosClient.get(`/admin/inbox/conversations/${id}`),
+        axiosClient.get(`/admin/inbox/conversations/${id}/messages`),
+      ]);
+      setDetail(d.data);
+      setMessages(m.data.messages || []);
+      setHasMore(Boolean(m.data.has_more));
+      if (d.data.conversation.unread_count) {
+        await axiosClient.post(`/admin/inbox/conversations/${id}/read`);
+        setConversations((list) => list.map((c) => (c.id === id ? { ...c, unread_count: 0 } : c)));
+      }
+    } catch (err) {
+      if (!quiet) toast.error(apiError(err, 'Failed to load the chat'));
+    } finally {
+      setThreadLoading(false);
+    }
+  };
+
+  useEffect(() => { loadStatus(); }, []);
+  useEffect(() => {
+    const t = setTimeout(() => loadConversations(), search ? 300 : 0);
+    return () => clearTimeout(t);
+  }, [search, filter]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setDetail(null);
+    setMessages([]);
+    setText('');
+    loadThread(activeId);
+  }, [activeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    axiosClient.get('/admin/inbox/templates').then((r) => setTemplates(r.data.templates || [])).catch(() => {});
+  }, []);
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: 'end' });
+  }, [messages.length, activeId]);
+
+  // New messages and delivery receipts arrive live.
+  useLiveEvent('platform_inbox:changed', (payload) => {
+    loadConversations({ quiet: true });
+    loadStatus();
+    if (activeId && (!payload?.contact_id || payload.contact_id === activeId)) loadThread(activeId, { quiet: true });
+  });
+
+  const loadOlder = async () => {
+    if (!messages.length) return;
+    const res = await axiosClient.get(`/admin/inbox/conversations/${activeId}/messages`, { params: { before: messages[0].id } });
+    setMessages((m) => [...(res.data.messages || []), ...m]);
+    setHasMore(Boolean(res.data.has_more));
+  };
+
+  const conversation = detail?.conversation;
+  const windowOpen = Boolean(conversation?.window_open);
+  const configured = status?.configured !== false;
+
+  const send = async () => {
+    const body = text.trim();
+    if (!body || sending) return;
+    setSending(true);
+    try {
+      const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/messages`, { text: body });
+      setMessages((m) => [...m, res.data.message]);
+      setText('');
+    } catch (err) {
+      if (err.response?.data?.message) setMessages((m) => [...m, err.response.data.message]);
+      toast.error(apiError(err, 'Message not sent'));
+      if (err.response?.data?.code === 'WINDOW_CLOSED') loadThread(activeId, { quiet: true });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const updateConversation = async (changes, success) => {
+    try {
+      const res = await axiosClient.patch(`/admin/inbox/conversations/${activeId}`, changes);
+      setDetail((d) => ({ ...d, conversation: res.data.conversation }));
+      setConversations((list) => list.map((c) => (c.id === activeId ? res.data.conversation : c)));
+      if (success) toast.success(success);
+    } catch (err) {
+      toast.error(apiError(err, 'Failed to update the chat'));
+    }
+  };
+
+  // Messages grouped under a date heading.
+  const grouped = useMemo(() => {
+    const out = [];
+    let day = null;
+    for (const m of messages) {
+      const d = dayOf(m.created_at);
+      if (d !== day) { out.push({ divider: d, key: `d-${d}-${m.id}` }); day = d; }
+      out.push(m);
+    }
+    return out;
+  }, [messages]);
+
+  if (!allowed) {
+    return (
+      <div className={cn('flex items-center justify-center bg-background p-6 text-center', embedded ? 'h-full' : 'h-screen')}>
+        <div className="flex max-w-sm flex-col items-center gap-3">
+          <FiLock className="size-8 text-muted-foreground" />
+          <div className="font-semibold">You do not have access to WhatsApp Chat</div>
+          <p className="text-sm text-muted-foreground">Only the Admin (Owner) and Staff can open the platform inbox.</p>
+          <Button variant="outline" onClick={() => navigate('/dashboard')}>Back to the admin panel</Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={cn('flex flex-col overflow-hidden bg-background', embedded ? 'h-full' : 'h-screen')}>
+      {/* Top bar */}
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-3 sm:px-5">
+        <span className="flex size-8 items-center justify-center rounded-lg bg-[#25D366] text-white"><FaWhatsapp size={18} /></span>
+        <div className="min-w-0">
+          <div className="truncate text-sm font-bold">Getnera WhatsApp Chat</div>
+          <div className="truncate text-[11px] text-muted-foreground">
+            {status?.number?.display_phone_number || (configured ? 'Platform number' : 'Number not configured')}
+            {status?.number?.verified_name ? ` · ${status.number.verified_name}` : ''}
+          </div>
+        </div>
+        <span className={cn('ml-1 hidden items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold', !embedded && 'sm:inline-flex', live ? 'border-green-200 bg-green-50 text-green-700' : 'border-border bg-muted text-muted-foreground')}>
+          <span className={cn('size-1.5 rounded-full', live ? 'animate-pulse bg-green-500' : 'bg-slate-400')} />
+          {live ? 'Live' : 'Offline'}
+        </span>
+        <div className="ml-auto flex items-center gap-2">
+          <Button size="sm" onClick={() => setNewChatOpen(true)} disabled={!configured}><FiPlus /> <span className="hidden sm:inline">New chat</span></Button>
+          {!embedded && <Button size="sm" variant="outline" onClick={() => navigate('/dashboard')} className="hidden sm:inline-flex">Admin panel</Button>}
+        </div>
+      </header>
+
+      {!configured && (
+        <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
+          <FiAlertTriangle className="mt-0.5 shrink-0" />
+          <span>
+            The platform WhatsApp number is not set up. Add {status?.missing?.join(' and ')} to server/.env and restart the server.
+            Existing chats are shown, but nothing can be sent.
+          </span>
+        </div>
+      )}
+
+      <div className="flex min-h-0 flex-1">
+        {/* Conversations */}
+        <aside className={cn('flex w-full shrink-0 flex-col border-r border-border bg-card md:w-80 lg:w-96', activeId && 'hidden md:flex')}>
+          <div className="flex flex-col gap-2 border-b border-border p-3">
+            <div className="relative">
+              <FiSearch className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground" />
+              <Input placeholder="Search name, number or message" value={search} onChange={(e) => setSearch(e.target.value)} className="h-9 pl-9" />
+            </div>
+            <div className="flex gap-1 overflow-x-auto">
+              {FILTERS.map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setFilter(key)}
+                  className={cn('cursor-pointer rounded-full px-3 py-1 text-xs font-semibold whitespace-nowrap transition-colors', filter === key ? 'bg-green-100 text-green-800' : 'text-muted-foreground hover:bg-muted')}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {listLoading ? (
+              <div className="flex flex-col gap-3 p-3">
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <div key={i} className="flex items-center gap-3"><Skeleton className="size-10 rounded-full" /><div className="flex flex-1 flex-col gap-1.5"><Skeleton className="h-3.5 w-32" /><Skeleton className="h-3 w-48" /></div></div>
+                ))}
+              </div>
+            ) : conversations.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 px-6 py-16 text-center text-sm text-muted-foreground">
+                <FiInbox className="size-8 text-slate-300" />
+                {search || filter !== 'all' ? 'No chat matches this search or filter.' : 'No chats yet. Messages to the platform number appear here.'}
+              </div>
+            ) : conversations.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => openChat(c.id)}
+                className={cn('flex w-full cursor-pointer items-center gap-3 border-b border-border px-3 py-3 text-left transition-colors hover:bg-muted/60', c.id === activeId && 'bg-green-50/70 hover:bg-green-50/70')}
+              >
+                <Avatar name={c.name || c.wa_id} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className={cn('truncate text-sm', c.unread_count ? 'font-bold' : 'font-semibold')}>{c.name || formatNumber(c.wa_id)}</span>
+                    <span className={cn('shrink-0 text-[11px]', c.unread_count ? 'font-semibold text-green-700' : 'text-muted-foreground')}>{listTime(c.last_message_at)}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-xs text-muted-foreground">
+                      {c.last_message_direction === 'outbound' && 'You: '}{c.last_message_preview || ' '}
+                    </span>
+                    {c.unread_count > 0 && <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[#25D366] px-1.5 text-[11px] font-bold text-white">{c.unread_count}</span>}
+                    {c.status === 'closed' && !c.unread_count && <FiLock className="size-3 shrink-0 text-muted-foreground" title="Closed" />}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        {/* Thread */}
+        <section className={cn('flex min-w-0 flex-1 flex-col', !activeId && 'hidden md:flex')}>
+          {!activeId ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-[#f0f2f5] p-6 text-center">
+              <span className="flex size-16 items-center justify-center rounded-full bg-white text-[#25D366] shadow-sm"><FaWhatsapp size={30} /></span>
+              <div className="text-lg font-semibold">Getnera WhatsApp Chat</div>
+              <p className="max-w-sm text-sm text-muted-foreground">Pick a chat on the left, or start a new one with an approved template.</p>
+            </div>
+          ) : threadLoading || !conversation ? (
+            <div className="flex flex-1 flex-col gap-3 p-6"><Skeleton className="h-10 w-64" /><Skeleton className="h-16 w-2/3" /><Skeleton className="ml-auto h-12 w-1/2" /></div>
+          ) : (
+            <>
+              <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-3">
+                <Button variant="ghost" size="icon" className="size-8 md:hidden" onClick={() => openChat(null)} aria-label="Back to chats"><FiArrowLeft /></Button>
+                <Avatar name={conversation.name || conversation.wa_id} size="size-9" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold">{conversation.name || formatNumber(conversation.wa_id)}</div>
+                  <div className="truncate text-[11px] text-muted-foreground">{formatNumber(conversation.wa_id)}</div>
+                </div>
+                <Badge variant={windowOpen ? 'success' : 'muted'} className="hidden sm:inline-flex" title="Meta allows free messages for 24 hours after the customer's last message">
+                  <FiClock /> {windowOpen ? `Reply window: ${hoursLeft(conversation.window_closes_at)}h left` : 'Reply window closed'}
+                </Badge>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => updateConversation({ status: conversation.status === 'closed' ? 'open' : 'closed' }, conversation.status === 'closed' ? 'Chat reopened' : 'Chat closed')}
+                >
+                  {conversation.status === 'closed' ? <><FiUnlock /> Reopen</> : <><FiLock /> Close</>}
+                </Button>
+                <Button variant="ghost" size="icon" className="size-8 xl:hidden" onClick={() => setShowInfo((v) => !v)} aria-label="Contact info"><FiInfo /></Button>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto bg-[#efeae2] px-3 py-4 sm:px-8">
+                {hasMore && (
+                  <div className="mb-3 flex justify-center">
+                    <Button size="sm" variant="outline" className="bg-white" onClick={loadOlder}>Load older messages</Button>
+                  </div>
+                )}
+                <div className="flex flex-col gap-1.5">
+                  {grouped.map((item) => (item.divider ? (
+                    <div key={item.key} className="my-2 flex justify-center">
+                      <span className="rounded-md bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-slate-600 shadow-sm">{item.divider}</span>
+                    </div>
+                  ) : (
+                    <div key={item.id} className={cn('flex', item.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
+                      <div className={cn(
+                        'max-w-[85%] rounded-lg px-3 py-1.5 text-sm shadow-sm sm:max-w-[70%]',
+                        item.direction === 'outbound' ? 'rounded-tr-none bg-[#d9fdd3]' : 'rounded-tl-none bg-white',
+                        item.status === 'failed' && 'ring-1 ring-red-300'
+                      )}>
+                        {item.template_name && (
+                          <div className="mb-0.5 inline-flex items-center gap-1 text-[10.5px] font-semibold text-green-800"><FiFileText /> Template · {item.template_name}</div>
+                        )}
+                        <div className="break-words whitespace-pre-wrap">{item.text || ' '}</div>
+                        <div className="mt-0.5 flex items-center justify-end gap-1.5 text-[10.5px] text-slate-500">
+                          {item.direction === 'outbound' && item.sent_by_name && <span>{item.sent_by_name} ·</span>}
+                          <span title={fullDateTime(item.created_at)}>{timeOf(item.created_at)}</span>
+                          {item.direction === 'outbound' && <Ticks status={item.status} />}
+                        </div>
+                        {item.status === 'failed' && <div className="mt-0.5 text-[11px] text-red-600">Not delivered: {item.error || 'Meta refused it'}</div>}
+                      </div>
+                    </div>
+                  )))}
+                  <div ref={bottomRef} />
+                </div>
+              </div>
+
+              {/* Composer */}
+              <div className="shrink-0 border-t border-border bg-card p-3">
+                {!configured ? (
+                  <div className="text-center text-xs text-muted-foreground">Sending is off until the platform number is set up.</div>
+                ) : windowOpen ? (
+                  <div className="flex items-end gap-2">
+                    <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setTemplateOpen(true)} title="Send a template" aria-label="Send a template"><FiFileText /></Button>
+                    <Textarea
+                      value={text}
+                      onChange={(e) => setText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+                      placeholder="Type a message. Enter to send, Shift+Enter for a new line"
+                      rows={1}
+                      maxLength={4096}
+                      className="max-h-36 min-h-10 resize-none"
+                    />
+                    <Button size="icon" className="shrink-0 bg-[#25D366] hover:bg-[#1fb857]" onClick={send} disabled={sending || !text.trim()} aria-label="Send">
+                      {sending ? <Spinner /> : <FiSend />}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-2 text-center sm:flex-row sm:justify-between sm:text-left">
+                    <span className="text-xs text-muted-foreground">
+                      More than 24 hours since this customer last wrote. Meta allows only an approved template until they reply.
+                    </span>
+                    <Button size="sm" onClick={() => setTemplateOpen(true)}><FiFileText /> Send template</Button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </section>
+
+        {/* Contact info */}
+        {activeId && conversation && (
+          <ContactPanel
+            key={conversation.id}
+            conversation={conversation}
+            workspaces={detail.workspaces || []}
+            className={cn(showInfo ? 'fixed inset-y-0 right-0 z-30 flex w-80 shadow-xl xl:static xl:shadow-none' : 'hidden xl:flex')}
+            onClose={() => setShowInfo(false)}
+            onSave={(changes) => updateConversation(changes, 'Saved')}
+          />
+        )}
+      </div>
+
+      <TemplateDialog
+        open={templateOpen}
+        onOpenChange={setTemplateOpen}
+        templates={templates}
+        onSend={async (template) => {
+          const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/template`, { name: template.name, language: template.language });
+          setMessages((m) => [...m, res.data.message]);
+        }}
+      />
+      <NewChatDialog
+        open={newChatOpen}
+        onOpenChange={setNewChatOpen}
+        templates={templates}
+        onStarted={(id) => { loadConversations({ quiet: true }); openChat(id); }}
+      />
+    </div>
+  );
+};
+
+const ContactPanel = ({ conversation, workspaces, className, onClose, onSave }) => {
+  const [name, setName] = useState(conversation.name || '');
+  const [note, setNote] = useState(conversation.note || '');
+  const dirty = name !== (conversation.name || '') || note !== (conversation.note || '');
+  return (
+    <aside className={cn('w-80 shrink-0 flex-col gap-5 overflow-y-auto border-l border-border bg-card p-4', className)}>
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold">Contact info</span>
+        <Button variant="ghost" size="icon" className="size-7 xl:hidden" onClick={onClose} aria-label="Close"><FiX /></Button>
+      </div>
+      <div className="flex flex-col items-center gap-2 text-center">
+        <Avatar name={conversation.name || conversation.wa_id} size="size-16 text-xl" />
+        <div className="font-semibold">{conversation.name || formatNumber(conversation.wa_id)}</div>
+        <div className="text-xs text-muted-foreground">{formatNumber(conversation.wa_id)}</div>
+        {conversation.profile_name && conversation.profile_name !== conversation.name && (
+          <div className="text-[11px] text-muted-foreground">WhatsApp name: {conversation.profile_name}</div>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <div className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Getnera customer</div>
+        {workspaces.length ? workspaces.map((w) => (
+          <a key={w.tenant_id} href={`/dashboard/workspaces/${w.tenant_id}`} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
+            <span className="min-w-0">
+              <span className="block truncate font-semibold">{w.name}</span>
+              <span className="block text-[11px] text-muted-foreground">{w.matched_by} · {w.status}</span>
+            </span>
+            <FiExternalLink className="shrink-0 text-muted-foreground" />
+          </a>
+        )) : <div className="text-xs text-muted-foreground">This number is not linked to any workspace.</div>}
+      </div>
+
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="ci-name" className="text-xs">Name</Label>
+          <Input id="ci-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={conversation.profile_name || 'Add a name'} maxLength={80} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="ci-note" className="text-xs">Internal note</Label>
+          <Textarea id="ci-note" rows={4} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Only staff see this" maxLength={2000} />
+        </div>
+        <Button size="sm" disabled={!dirty} onClick={() => onSave({ name, note })}>Save</Button>
+      </div>
+      <div className="text-[11px] text-muted-foreground">
+        Reply window {conversation.window_open ? `closes ${relativeTime(conversation.window_closes_at)}` : 'is closed'}.
+      </div>
+    </aside>
+  );
+};
+
+const TemplatePicker = ({ templates, value, onChange }) => (
+  <div className="flex flex-col gap-1.5">
+    <Label className="text-xs">Approved template</Label>
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger className="h-10"><SelectValue placeholder={templates.length ? 'Choose a template' : 'No approved templates'} /></SelectTrigger>
+      <SelectContent>
+        {templates.map((t) => <SelectItem key={`${t.name}|${t.language}`} value={`${t.name}|${t.language}`}>{t.name} · {t.language}</SelectItem>)}
+      </SelectContent>
+    </Select>
+  </div>
+);
+
+const TemplateDialog = ({ open, onOpenChange, templates, onSend }) => {
+  const [value, setValue] = useState('');
+  const [sending, setSending] = useState(false);
+  const template = templates.find((t) => `${t.name}|${t.language}` === value);
+  useEffect(() => { if (open) setValue(''); }, [open]);
+  return (
+    <Dialog open={open} onOpenChange={(o) => !sending && onOpenChange(o)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Send a template</DialogTitle>
+          <DialogDescription>Approved templates can be sent at any time. Templates that need values are not listed yet.</DialogDescription>
+        </DialogHeader>
+        <TemplatePicker templates={templates} value={value} onChange={setValue} />
+        {template && <div className="rounded-lg bg-[#d9fdd3] px-3 py-2 text-sm whitespace-pre-wrap">{template.body || template.name}</div>}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>Cancel</Button>
+          <Button
+            disabled={!template || sending}
+            onClick={async () => {
+              setSending(true);
+              try { await onSend(template); toast.success('Template sent'); onOpenChange(false); } catch (err) { toast.error(apiError(err, 'Template not sent')); } finally { setSending(false); }
+            }}
+          >
+            {sending && <Spinner />} Send
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const NewChatDialog = ({ open, onOpenChange, templates, onStarted }) => {
+  const [phone, setPhone] = useState('');
+  const [name, setName] = useState('');
+  const [value, setValue] = useState('');
+  const [sending, setSending] = useState(false);
+  const template = templates.find((t) => `${t.name}|${t.language}` === value);
+  useEffect(() => { if (open) { setPhone(''); setName(''); setValue(''); } }, [open]);
+  const valid = phone.replace(/\D/g, '').length >= 10 && template;
+  return (
+    <Dialog open={open} onOpenChange={(o) => !sending && onOpenChange(o)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>New chat</DialogTitle>
+          <DialogDescription>A new conversation must start with an approved template (Meta rule).</DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="nc-phone" className="text-xs">WhatsApp number with country code</Label>
+            <Input id="nc-phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="91 98765 43210" inputMode="tel" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="nc-name" className="text-xs">Name · optional</Label>
+            <Input id="nc-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
+          </div>
+          <TemplatePicker templates={templates} value={value} onChange={setValue} />
+          {template && <div className="rounded-lg bg-[#d9fdd3] px-3 py-2 text-sm whitespace-pre-wrap">{template.body || template.name}</div>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>Cancel</Button>
+          <Button
+            disabled={!valid || sending}
+            onClick={async () => {
+              setSending(true);
+              try {
+                const res = await axiosClient.post('/admin/inbox/conversations', { phone, name: name.trim() || undefined, template_name: template.name, language: template.language });
+                toast.success('Chat started');
+                onOpenChange(false);
+                onStarted(res.data.contact_id);
+              } catch (err) {
+                toast.error(apiError(err, 'Could not start the chat'));
+              } finally {
+                setSending(false);
+              }
+            }}
+          >
+            {sending && <Spinner />} <FaWhatsapp /> Start chat
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+export default InboxPage;

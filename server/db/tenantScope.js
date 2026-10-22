@@ -22,7 +22,6 @@ const TENANT_SCOPED = new Map([
   ['users', { optional: true }],
   ['invitations', { optional: true }],
   ['audit_events', { optional: true }],
-  ['subscriptions', {}],
   // brand profile and WhatsApp
   ['clients', {}],
   ['brand_social_accounts', {}],

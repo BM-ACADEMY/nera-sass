@@ -21,8 +21,25 @@ const productName = () => process.env.NERA_PRODUCT_NAME || 'Nera';
 const appUrl = () => (process.env.NERA_APP_URL || process.env.PORTAL_URL || 'http://localhost:5173').replace(/\/+$/, '');
 const adminUrl = () => (process.env.NERA_ADMIN_URL || process.env.ADMIN_PANEL_URL || 'http://localhost:5174').replace(/\/+$/, '');
 
+// NERA_SMTP_* wins; otherwise the EMAIL_* settings the rest of the server
+// already uses (bookings, Mafiya) are reused.
+function smtpSettings() {
+  const env = process.env;
+  const host = env.NERA_SMTP_HOST || env.EMAIL_HOST;
+  const user = env.NERA_SMTP_USER || env.EMAIL_USER;
+  return {
+    host,
+    port: Number(env.NERA_SMTP_PORT || env.EMAIL_PORT || 587),
+    secure: (env.NERA_SMTP_SECURE || env.EMAIL_SECURE) === 'true',
+    user,
+    pass: env.NERA_SMTP_PASS || env.EMAIL_PASS,
+    from: env.NERA_MAIL_FROM || env.EMAIL_FROM || (user ? `${productName()} <${user}>` : null),
+  };
+}
+
 function smtpConfigured() {
-  return Boolean(process.env.NERA_SMTP_HOST && process.env.NERA_SMTP_USER && process.env.NERA_SMTP_PASS && process.env.NERA_MAIL_FROM);
+  const s = smtpSettings();
+  return Boolean(s.host && s.user && s.pass && s.from);
 }
 
 function deliveryMode() {
@@ -39,7 +56,7 @@ async function send({ to, subject, text, html }) {
   const mode = deliveryMode();
   if (mode === 'off') return { delivered: false, mode };
   if (mode === 'unconfigured') throw new Error('Email delivery is not configured (set NERA_SMTP_* and NERA_MAIL_FROM)');
-  const message = { from: process.env.NERA_MAIL_FROM || `${productName()} <no-reply@localhost>`, to, subject, text, html };
+  const message = { from: smtpSettings().from || `${productName()} <no-reply@localhost>`, to, subject, text, html };
 
   if (mode === 'memory') {
     memoryOutbox.push({ ...message, at: new Date() });
@@ -50,12 +67,8 @@ async function send({ to, subject, text, html }) {
     fs.writeFileSync(file, JSON.stringify({ ...message, at: new Date() }, null, 2));
   } else {
     if (!transport) {
-      transport = nodemailer.createTransport({
-        host: process.env.NERA_SMTP_HOST,
-        port: Number(process.env.NERA_SMTP_PORT || 587),
-        secure: process.env.NERA_SMTP_SECURE === 'true',
-        auth: { user: process.env.NERA_SMTP_USER, pass: process.env.NERA_SMTP_PASS },
-      });
+      const s = smtpSettings();
+      transport = nodemailer.createTransport({ host: s.host, port: s.port, secure: s.secure, auth: { user: s.user, pass: s.pass } });
     }
     await transport.sendMail(message);
   }
@@ -73,16 +86,50 @@ function layout(title, paragraphs, button) {
 <p style="color:#64748b;font-size:13px">If the button does not work, copy this link into your browser:<br>${escapeHtml(button.url)}</p></div>`;
 }
 
-function invitationEmail({ to, inviteeName, workspaceName, inviterName, role, url, expiresAt, staff }) {
+function invitationEmail({ to, inviteeName, workspaceName, inviterName, role, url, expiresAt, staff, passwordPreset = false }) {
   const product = productName();
-  const where = staff ? `${product} platform staff` : `the ${workspaceName} workspace on ${product}`;
+  const where = staff ? `the ${product} admin panel` : `the ${workspaceName} workspace on ${product}`;
+  const roleName = staff ? ({ founder: 'Admin (Owner)', ops: 'Staff' }[role] || role) : role;
   const title = `You're invited to ${staff ? product : workspaceName}`;
   const lines = [
     `Hi ${inviteeName || 'there'},`,
-    `${inviterName || 'An administrator'} invited you to join ${where} as ${role}.`,
-    `Open the link below to set your own password. It works once and expires on ${new Date(expiresAt).toUTCString()}.`,
+    `${inviterName || 'An administrator'} invited you to join ${where} as ${roleName}.`,
+    passwordPreset
+      ? `Open the link below and accept the invitation. We then email you your login details. The link works once and expires on ${new Date(expiresAt).toUTCString()}.`
+      : `Open the link below to set your own password. It works once and expires on ${new Date(expiresAt).toUTCString()}.`,
   ];
   return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: 'Accept invitation' }) });
+}
+
+const STAFF_ROLE_OVERVIEW = {
+  founder: {
+    name: 'Admin (Owner)',
+    access: 'Full access: workspaces and billing, customers, WhatsApp numbers, reports, settings and managing the team.',
+  },
+  ops: {
+    name: 'Staff',
+    access: 'Workspaces, customers, WhatsApp numbers and reports. Billing and team changes stay with the Admin.',
+  },
+};
+
+// Sent after a team member accepts an invitation whose password the Admin
+// chose: what they can do, where to sign in, and the login details.
+function staffWelcomeEmail({ to, name, role, password }) {
+  const product = productName();
+  const overview = STAFF_ROLE_OVERVIEW[role] || { name: role, access: '' };
+  const loginUrl = `${adminUrl()}/login`;
+  const title = `Welcome to the ${product} admin panel`;
+  const lines = [
+    `Hi ${name || 'there'},`,
+    `Your account is ready. You joined the ${product} admin panel as ${overview.name}.`,
+    `What you can do: ${overview.access}`,
+    'Your login details:',
+    `Login page: ${loginUrl}`,
+    `Email: ${to}`,
+    `Password: ${password}`,
+    'For your safety, change this password after you sign in (Settings > Change Administrator Password) and delete this email.',
+  ];
+  return send({ to, subject: title, text: `${lines.join('\n\n')}\n`, html: layout(title, lines, { url: loginUrl, label: 'Sign in' }) });
 }
 
 function passwordResetEmail({ to, name, url, expiresMinutes }) {
@@ -99,6 +146,7 @@ module.exports = {
   send,
   deliveryMode,
   invitationEmail,
+  staffWelcomeEmail,
   passwordResetEmail,
   appUrl,
   adminUrl,

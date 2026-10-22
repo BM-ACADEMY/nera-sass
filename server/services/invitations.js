@@ -13,9 +13,9 @@ const bcrypt = require('bcryptjs');
 const { Users, Invitations, Tenants } = require('../models');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
 const { TENANT_ROLES, STAFF_ROLES } = require('./permissions');
-const { assertSeatAvailable } = require('./entitlements');
 const { passwordProblem, normalizeEmail, isEmail } = require('../utils/passwordPolicy');
 const notify = require('./notify');
+const { encrypt, decrypt } = require('../utils/crypto');
 const audit = require('./audit');
 
 const ttlHours = () => Number(process.env.INVITATION_TTL_HOURS || 72);
@@ -51,10 +51,29 @@ async function emailTaken(email) {
  * { tenantId | null (staff), email, name, role | staffRole, invitedBy: { id, name }, req }
  * Returns { invitation, delivery } — the raw token is never returned.
  */
-async function createInvitation({ tenantId = null, email, name = null, role = null, staffRole = null, invitedBy = {}, req = null, skipSeatCheck = false }) {
+// Each workspace has exactly one login (its owner). A workspace that already
+// has an account, or a pending invitation for someone else, takes no more.
+async function assertSingleLogin(tenantId, email) {
+  const [users, pending] = await runAsTenant(tenantId, () => Promise.all([
+    Users.countDocuments({}),
+    Invitations.countDocuments({ email: { $ne: email }, accepted_at: null, revoked_at: null, expires_at: { $gt: new Date() } }),
+  ]));
+  if (users > 0 || pending > 0) {
+    throw new InvitationError(409, 'This workspace already has its login. Each workspace has one login.');
+  }
+}
+
+async function createInvitation({ tenantId = null, email, name = null, role = null, staffRole = null, password = undefined, invitedBy = {}, req = null, skipSeatCheck = false }) {
   const normalized = normalizeEmail(email);
   if (!isEmail(normalized)) throw new InvitationError(400, 'A valid email address is required');
   const staff = tenantId == null;
+  // An Admin may choose a staff member's password up front. It is stored
+  // encrypted only until the invitation is accepted, then mailed and erased.
+  if (password !== undefined) {
+    if (!staff) throw new InvitationError(400, 'A password can only be set when inviting a team member');
+    const passwordError = passwordProblem(password, normalized);
+    if (passwordError) throw new InvitationError(400, passwordError);
+  }
   if (staff && !STAFF_ROLES.includes(staffRole)) throw new InvitationError(400, `Staff role must be one of: ${STAFF_ROLES.join(', ')}`);
   if (!staff && !TENANT_ROLES.includes(role)) throw new InvitationError(400, `Role must be one of: ${TENANT_ROLES.join(', ')}`);
   if (await emailTaken(normalized)) throw new InvitationError(409, 'A user with this email already exists');
@@ -68,7 +87,7 @@ async function createInvitation({ tenantId = null, email, name = null, role = nu
     { email: normalized, tenant_id: staff ? null : Number(tenantId), accepted_at: null, revoked_at: null },
     { $set: { revoked_at: new Date(), revoked_by: invitedBy.id ?? null } },
   ));
-  if (!staff && !skipSeatCheck) await assertSeatAvailable(tenantId, 1);
+  if (!staff) await assertSingleLogin(tenantId, normalized);
 
   const token = crypto.randomBytes(32).toString('base64url');
   const invitation = await run(() => Invitations.create({
@@ -78,6 +97,7 @@ async function createInvitation({ tenantId = null, email, name = null, role = nu
     role: staff ? null : role,
     is_platform_staff: staff,
     staff_role: staff ? staffRole : null,
+    password_enc: password !== undefined ? encrypt(password) : null,
     token_hash: hashToken(token),
     expires_at: new Date(Date.now() + ttlHours() * 3600 * 1000),
     invited_by: invitedBy.id ?? null,
@@ -114,6 +134,7 @@ async function sendInvitationEmail(invitation, token, { tenant, inviterName }) {
       url: `${base}/invite/${token}`,
       expiresAt: invitation.expires_at,
       staff: invitation.is_platform_staff,
+      passwordPreset: Boolean(invitation.password_enc),
     });
   } catch (error) {
     console.error('[invitations] Email not sent:', error.message);
@@ -178,6 +199,7 @@ async function previewInvitation(token) {
     role: invitation.is_platform_staff ? invitation.staff_role : invitation.role,
     workspace_name: tenant?.name || null,
     is_platform_staff: Boolean(invitation.is_platform_staff),
+    password_preset: Boolean(invitation.password_enc),
     expires_at: invitation.expires_at,
   };
 }
@@ -190,6 +212,9 @@ async function acceptInvitation({ token, name, password, phone = null }) {
   const invitation = await findUsableInvitation(token);
   const problem = invitationProblem(invitation);
   if (problem) throw new InvitationError(410, problem);
+  const presetPassword = invitation.password_enc ? decrypt(invitation.password_enc) : null;
+  if (invitation.password_enc && !presetPassword) throw new InvitationError(500, 'This invitation could not be read; ask for a new one');
+  if (presetPassword) password = presetPassword;
   const passwordError = passwordProblem(password, invitation.email);
   if (passwordError) throw new InvitationError(400, passwordError);
   const displayName = String(name || invitation.name || '').trim();
@@ -225,7 +250,7 @@ async function acceptInvitation({ token, name, password, phone = null }) {
     const user = staff
       ? await runAsSystem(() => Users.create({ ...doc, tenant_id: null }), 'invitations')
       : await runAsTenant(claimed.tenant_id, () => Users.create(doc));
-    await runAsSystem(() => Invitations.updateOne({ id: claimed.id }, { $set: { accepted_user_id: user.id } }), 'invitations');
+    await runAsSystem(() => Invitations.updateOne({ id: claimed.id }, { $set: { accepted_user_id: user.id }, $unset: { password_enc: '' } }), 'invitations');
     if (!staff && claimed.role === 'owner') {
       await runAsSystem(() => Tenants.updateOne({ id: claimed.tenant_id, owner_user_id: null }, { $set: { owner_user_id: user.id, updated_at: new Date() } }), 'invitations');
     }
@@ -236,7 +261,13 @@ async function acceptInvitation({ token, name, password, phone = null }) {
       targetId: user.id,
       meta: { email: claimed.email, role: staff ? claimed.staff_role : claimed.role, invitation_id: claimed.id },
     });
-    return user.toObject();
+    const created = user.toObject();
+    if (presetPassword) {
+      // Sends the overview and login details; a failed email does not undo the account.
+      created.welcome_delivery = await notify.staffWelcomeEmail({ to: claimed.email, name: displayName, role: claimed.staff_role, password: presetPassword })
+        .catch((error) => ({ delivered: false, mode: 'error', error: error.message }));
+    }
+    return created;
   } catch (error) {
     // Release the claim so the person can try again with the same link.
     await runAsSystem(() => Invitations.updateOne({ id: claimed.id, accepted_user_id: null }, { $set: { accepted_at: null } }), 'invitations');

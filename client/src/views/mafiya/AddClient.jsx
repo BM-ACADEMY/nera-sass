@@ -165,7 +165,7 @@ export default function AddClient() {
   // ── Listen to real-time GMB connection updates ──
   useEffect(() => {
     const isLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    const SOCKET_URL = isLocalDev ? window.location.origin : (import.meta.env.VITE_API_URL || 'https://leados-api.abmgroups.org');
+    const SOCKET_URL = isLocalDev ? window.location.origin : import.meta.env.VITE_API_URL;
     
     const socket = socketIO(SOCKET_URL, {
       auth: { token: localStorage.getItem('leados_token') },

@@ -37,15 +37,11 @@ test.beforeEach(async () => {
 const STRONG_PASSWORD = 'Correct-Horse-42';
 
 async function seedWorkspace(models, { tenantId, name, maxUsers = 10 }) {
-  const { Tenants, Clients, Subscriptions } = models;
+  const { Tenants, Clients } = models;
   const { runAsSystem, runAsTenant } = require('../services/tenantContext');
   await runAsSystem(() => Tenants.create({ id: tenantId, name, status: 'active' }));
   await runAsTenant(tenantId, async () => {
     await Clients.create({ name: `${name} Brand` });
-    await Subscriptions.create({
-      plan_code: 'TEST', status: 'active', limits: { max_users: maxUsers },
-      current_period_start: new Date(), current_period_end: new Date(Date.now() + 30 * 86400000),
-    });
   });
 }
 
@@ -157,13 +153,13 @@ test('Phase 1 security remediation', async (t) => {
     assert.strictEqual(await count(Invitations), 0);
   });
 
-  await t.test('B3. Invitation respects the plan user limit', async () => {
-    await seedWorkspace(models, { tenantId: 1, name: 'Acme', maxUsers: 1 });
+  await t.test('B3. A workspace that already has its login refuses another one', async () => {
+    await seedWorkspace(models, { tenantId: 1, name: 'Acme' });
     await createUser(models, { tenant_id: 1, role: 'owner', email: 'owner@acme.test', name: 'Owner' });
     const founder = await createUser(models, { tenant_id: null, is_platform_staff: true, staff_role: 'founder', email: 'founder@nera.test', name: 'Founder' });
     const res = await request(app).post('/api/admin/users').set(bearer(founder)).send({ tenant_id: 1, email: 'extra@acme.test', role: 'agent' });
     assert.strictEqual(res.status, 409);
-    assert.strictEqual(res.body.code, 'USER_LIMIT_REACHED');
+    assert.match(res.body.error, /one login/);
     assert.strictEqual(await count(Invitations), 0);
   });
 

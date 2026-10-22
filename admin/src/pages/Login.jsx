@@ -1,17 +1,24 @@
 import React, { useState } from 'react';
-import { Form, Input, Button, Typography, message } from 'antd';
-import { MailOutlined, LockOutlined, ApiOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
+import { FiMail, FiLock, FiZap } from 'react-icons/fi';
+import { useLocation, useNavigate } from 'react-router-dom';
 import axiosClient from '../api/axiosClient';
-
-const { Title, Text } = Typography;
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 const Login = () => {
   const [loading, setLoading] = useState(false);
+  const location = useLocation();
+  const [values, setValues] = useState({ email: location.state?.email || '', password: '' });
 
   const navigate = useNavigate();
 
-  const onFinish = async (values) => {
+  const handleChange = (e) => setValues((v) => ({ ...v, [e.target.name]: e.target.value }));
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
     setLoading(true);
     try {
       const res = await axiosClient.post('/auth/login', values);
@@ -19,79 +26,82 @@ const Login = () => {
         const user = res.data.user;
         const isStaff = Boolean(user?.is_platform_staff || user?.staff_role);
         if (!isStaff) {
-          message.error('Access restricted to platform staff. Customer accounts cannot sign in to the platform admin panel.');
+          toast.error('Access restricted to platform staff. Customer accounts cannot sign in to the platform admin panel.');
           return;
         }
         localStorage.setItem('adminToken', res.data.token);
         navigate('/dashboard');
       } else if (res.data.mfa_setup_required || res.data.mfa_required) {
-        message.warning('MFA is required for this account.');
+        toast.warning('MFA is required for this account.');
       } else {
-        message.error('Authentication response missing session token');
+        toast.error('Authentication response missing session token');
       }
     } catch (err) {
-      message.error(err.response?.data?.error || 'Failed to sign in');
+      toast.error(err.response?.data?.error || 'Failed to sign in');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ 
-      display: 'flex', 
-      alignItems: 'center', 
-      justifyContent: 'center', 
-      height: '100vh', 
-      backgroundColor: '#f8fafc' 
-    }}>
-      <div style={{
-        background: '#ffffff',
-        padding: '40px 32px',
-        borderRadius: '12px',
-        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)',
-        width: '100%',
-        maxWidth: '440px',
-        textAlign: 'center',
-        border: '1px solid #f1f5f9'
-      }}>
-        <div style={{ marginBottom: '24px' }}>
-          <ApiOutlined style={{ fontSize: '42px', color: '#f97316', marginBottom: '16px' }} />
-          <Title level={3} style={{ margin: 0, fontWeight: 600, color: '#0f172a' }}>Sign in to your account</Title>
-          <Text style={{ color: '#64748b' }}>Welcome back! Please enter your details.</Text>
-        </div>
-        
+    <div className="flex min-h-screen w-full items-center justify-center bg-background px-4">
+      <Card className="w-full max-w-[440px] gap-8 py-10">
+        <CardHeader className="flex-col justify-center gap-2 text-center">
+          <div className="mb-2 flex size-12 items-center justify-center rounded-xl bg-orange-50 text-orange-500">
+            <FiZap size={24} />
+          </div>
+          <CardTitle className="text-xl">Sign in to your account</CardTitle>
+          <CardDescription>Welcome back! Please enter your details.</CardDescription>
+        </CardHeader>
 
-        
-        <Form name="login" onFinish={onFinish} layout="vertical" style={{ textAlign: 'left' }}>
-          <Form.Item 
-            label={<span style={{ fontWeight: 500, color: '#334155' }}>Email</span>}
-            name="email" 
-            rules={[{ required: true, message: 'Please input your Email!' }]}
-          >
-            <Input prefix={<MailOutlined style={{ color: '#94a3b8' }} />} placeholder="Enter your email" size="large" />
-          </Form.Item>
-          
-          <Form.Item 
-            label={<span style={{ fontWeight: 500, color: '#334155' }}>Password</span>}
-            name="password" 
-            rules={[{ required: true, message: 'Please input your Password!' }]}
-          >
-            <Input.Password prefix={<LockOutlined style={{ color: '#94a3b8' }} />} placeholder="••••••••" size="large" />
-          </Form.Item>
-          
-          <Form.Item style={{ marginTop: '32px', marginBottom: '24px' }}>
-            <Button type="primary" htmlType="submit" loading={loading} block size="large" style={{ fontWeight: 600, height: '44px' }}>
-              Sign in
+        <CardContent className="px-8">
+          <form onSubmit={onSubmit} className="flex flex-col gap-5">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="email">Email</Label>
+              <div className="relative">
+                <FiMail className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  placeholder="Enter your email"
+                  value={values.email}
+                  onChange={handleChange}
+                  className="h-11 pl-9"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="password">Password</Label>
+              <div className="relative">
+                <FiLock className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="password"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  placeholder="••••••••"
+                  value={values.password}
+                  onChange={handleChange}
+                  className="h-11 pl-9"
+                />
+              </div>
+            </div>
+
+            <Button type="submit" size="lg" disabled={loading} className="mt-3 h-11 w-full font-semibold">
+              {loading ? 'Signing in…' : 'Sign in'}
             </Button>
-          </Form.Item>
-        </Form>
+          </form>
+        </CardContent>
 
-        <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #f1f5f9' }}>
-          <Text style={{ color: '#94a3b8', fontSize: '13px' }}>
-            Protected by <a href="#" style={{ color: '#2563eb' }}>Privacy Policy</a>
-          </Text>
-        </div>
-      </div>
+        <CardFooter className="justify-center border-t border-border px-8 pt-6 text-[13px] text-muted-foreground">
+          Protected by&nbsp;<a href="#" className="text-primary hover:underline">Privacy Policy</a>
+        </CardFooter>
+      </Card>
     </div>
   );
 };

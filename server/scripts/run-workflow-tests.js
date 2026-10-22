@@ -15,7 +15,7 @@ const axios = require('axios');
 // SalesOS routes require the internal key (or a user token).
 axios.defaults.headers.common['x-internal-key'] = process.env.INTERNAL_API_KEY;
 
-const API_BASE = process.env.API_URL || 'https://leados-api.abmgroups.org/api';
+const API_BASE = process.env.API_URL || `${process.env.PUBLIC_API_URL}/api`;
 
 const tests = {
   // Test 1: Lead Integrator - Deduplication

@@ -1,49 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Statistic, Table, Tag, Button, Empty, Popconfirm, message, Typography, Alert } from 'antd';
-import {
-  BarChartOutlined,
-  ReloadOutlined,
-  DeleteOutlined,
-  DollarCircleOutlined,
-  ShopOutlined,
-  UsergroupAddOutlined,
-  TeamOutlined,
-  FileTextOutlined
-} from '@ant-design/icons';
+import { toast } from 'sonner';
+import { FiRefreshCw, FiShoppingBag, FiUserPlus, FiUsers } from 'react-icons/fi';
 import axiosClient from '../api/axiosClient';
-
-const { Text, Title } = Typography;
+import DataTable from './DataTable';
+import StatTile from './StatTile';
+import ConfirmDeleteButton from './ConfirmDeleteButton';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 
 // Shown as-is from the API: a missing value is a dash, never a made-up 0.
 const shown = (value) => (value === null || value === undefined ? '—' : value);
-const money = (val) => (val === '—' ? val : Number(val).toLocaleString('en-IN', { maximumFractionDigits: 2 }));
-
-const amounts = (byCurrency) => Object.entries(byCurrency || {})
-  .map(([c, v]) => `${c} ${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`).join(', ');
-
-// Everything reported beside the headline MRR, with the reason it is not in it
-// (rules in server/services/platformMetrics.js). Nothing here is added to MRR.
-function breakdownNotes(snapshot) {
-  if (!snapshot) return [];
-  const notes = [];
-  const manual = snapshot.manual_grant_unverified;
-  if (manual?.workspaces) notes.push(`Manual grants (payment not verified, so not counted as revenue): ${manual.workspaces} workspace(s), ${amounts(manual.mrr_by_currency)}/month`);
-  const grace = snapshot.at_risk_grace;
-  if (grace?.count) notes.push(`At risk: ${grace.count} subscription(s) in the 7-day grace period after expiry, ${amounts(grace.mrr_by_currency)}/month`);
-  const suspended = snapshot.staff_suspended;
-  if (suspended?.count) notes.push(`Included above but suspended by staff: ${suspended.count} workspace(s) (IDs ${suspended.tenant_ids.join(', ')}), ${amounts(suspended.mrr_by_currency)}/month`);
-  const otherPaid = Object.entries(snapshot.paid?.mrr_by_currency || {}).filter(([c]) => c !== snapshot.currency);
-  if (otherPaid.length) notes.push(`Paid MRR in other currencies, not added: ${amounts(Object.fromEntries(otherPaid))}`);
-  const ex = snapshot.excluded || {};
-  if (ex.orphan?.count) notes.push(`Excluded: ${ex.orphan.count} subscription(s) without a valid workspace (IDs ${ex.orphan.subscription_ids.join(', ')})`);
-  if (ex.lapsed?.count) notes.push(`Excluded: ${ex.lapsed.count} expired subscription(s) past grace`);
-  if (ex.contract_unverified?.count) notes.push(`Excluded: ${ex.contract_unverified.count} contract(s) that do not match an authorised term discount (${ex.contract_unverified.items.map((i) => `#${i.subscription_id} ${i.reason}`).join(', ')})`);
-  if (ex.legacy_unconfirmed?.count) notes.push(`Excluded: ${ex.legacy_unconfirmed.count} legacy subscription(s) whose units/currency are unconfirmed (IDs ${ex.legacy_unconfirmed.items.map((i) => i.subscription_id).join(', ')})`);
-  if (ex.undated?.count) notes.push(`Excluded: ${ex.undated.count} subscription(s) with no valid billing period (IDs ${ex.undated.subscription_ids.join(', ')})`);
-  if (ex.duplicate_rows?.count) notes.push(`Duplicate rows counted once: ${ex.duplicate_rows.count}`);
-  if (ex.superseded_overlap?.count) notes.push(`Overlapping subscriptions for a workspace already counted: ${ex.superseded_overlap.count}`);
-  return notes;
-}
 
 const FounderReportsView = () => {
   const [snapshot, setSnapshot] = useState(null);
@@ -57,7 +24,7 @@ const FounderReportsView = () => {
       setSnapshot(res.data?.snapshot || null);
       setReports(res.data?.reports || []);
     } catch (err) {
-      message.error(err.response?.data?.error || 'Failed to load founder reports');
+      toast.error(err.response?.data?.error || 'Failed to load founder reports');
     } finally {
       setLoading(false);
     }
@@ -70,148 +37,64 @@ const FounderReportsView = () => {
   const handleDeleteReport = async (id) => {
     try {
       await axiosClient.delete(`/admin/workflows/logs/${id}`);
-      message.success('Report removed');
+      toast.success('Report removed');
       fetchFounderData();
     } catch (err) {
-      message.error('Failed to remove report');
+      toast.error('Failed to remove report');
     }
   };
 
   const columns = [
     {
-      title: 'Report Date',
-      dataIndex: 'created_at',
       key: 'created_at',
+      title: 'Report Date',
       width: 180,
-      render: (d) => (
-        <span style={{ fontWeight: 600, color: '#334155' }}>
-          {d ? new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+      render: (r) => (
+        <span className="font-semibold text-slate-700">
+          {r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
         </span>
       ),
     },
     {
-      title: 'Daily AI Intelligence / Executive Summary',
-      dataIndex: 'message',
       key: 'message',
-      render: (msg) => (
-        <div style={{ background: '#f8fafc', padding: '12px 16px', borderRadius: 8, border: '1px solid #f1f5f9', whiteSpace: 'pre-wrap', fontSize: 13, color: '#1e293b', lineHeight: 1.6 }}>
-          {msg || 'Automated daily report generated without narrative.'}
+      title: 'Daily AI Intelligence / Executive Summary',
+      render: (r) => (
+        <div className="rounded-lg border border-border bg-muted/50 px-4 py-3 text-[13px] leading-relaxed whitespace-pre-wrap">
+          {r.message || 'Automated daily report generated without narrative.'}
         </div>
       ),
     },
     {
-      title: 'Action',
       key: 'action',
+      title: 'Action',
       width: 80,
-      render: (_, r) => (
-        <Popconfirm title="Delete this report?" onConfirm={() => handleDeleteReport(r.id)} okText="Delete" cancelText="Cancel">
-          <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
-      ),
+      render: (r) => <ConfirmDeleteButton title="Delete this report?" onConfirm={() => handleDeleteReport(r.id)} />,
     },
   ];
 
   return (
     <div>
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} md={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>MRR (VERIFIED PAID CONTRACTS)</span>}
-              value={shown(snapshot?.mrr)}
-              prefix="₹"
-              formatter={money}
-              valueStyle={{ color: '#16a34a', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>TCV (VERIFIED PAID, NOT YET ENDED)</span>}
-              value={shown(snapshot?.totalContractValue)}
-              prefix="₹"
-              formatter={money}
-              valueStyle={{ color: '#2563eb', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>PAYING WORKSPACES</span>}
-              value={shown(snapshot?.activeSubscriptions)}
-              prefix={<DollarCircleOutlined style={{ color: '#d97706' }} />}
-              valueStyle={{ color: '#d97706', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-      </Row>
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatTile label="Total Workspaces" value={shown(snapshot?.totalWorkspaces)} icon={<FiShoppingBag className="text-blue-500" />} />
+        <StatTile label="Platform Users" value={shown(snapshot?.totalUsers)} icon={<FiUsers className="text-violet-500" />} />
+        <StatTile label="Total Leads Managed" value={shown(snapshot?.totalLeads)} icon={<FiUserPlus className="text-emerald-500" />} />
+      </div>
 
-      {breakdownNotes(snapshot).length > 0 && (
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 24 }}
-          message="Reported separately (not in MRR)"
-          description={<ul style={{ margin: 0, paddingLeft: 18 }}>{breakdownNotes(snapshot).map((n) => <li key={n}>{n}</li>)}</ul>}
-        />
-      )}
-
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>TOTAL WORKSPACES</span>}
-              value={shown(snapshot?.totalWorkspaces)}
-              prefix={<ShopOutlined style={{ color: '#3b82f6' }} />}
-              valueStyle={{ color: '#0f172a', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>PLATFORM USERS</span>}
-              value={shown(snapshot?.totalUsers)}
-              prefix={<TeamOutlined style={{ color: '#8b5cf6' }} />}
-              valueStyle={{ color: '#0f172a', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={8}>
-          <Card bordered={false} style={{ borderRadius: 12, background: '#fff', border: '1px solid #e2e8f0' }}>
-            <Statistic
-              title={<span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>TOTAL LEADS MANAGED</span>}
-              value={shown(snapshot?.totalLeads)}
-              prefix={<UsergroupAddOutlined style={{ color: '#10b981' }} />}
-              valueStyle={{ color: '#0f172a', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-      </Row>
-
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div style={{ fontSize: 16, fontWeight: 800, color: '#1e293b' }}>Founder Daily Intelligence Reports</div>
-          <div style={{ fontSize: 12, color: '#94a3b8' }}>
+          <div className="text-base font-extrabold">Founder Daily Intelligence Reports</div>
+          <div className="text-xs text-slate-400">
             Automated executive digests generated by WF06 with revenue, team SLA, and conversation velocity.
           </div>
         </div>
-        <Button icon={<ReloadOutlined />} onClick={fetchFounderData} loading={loading}>
-          Refresh
+        <Button variant="outline" onClick={fetchFounderData} disabled={loading}>
+          <FiRefreshCw className={cn(loading && 'animate-spin')} /> Refresh
         </Button>
       </div>
 
-      <Table
-        rowKey="id"
-        dataSource={reports}
-        columns={columns}
-        loading={loading}
-        pagination={{ pageSize: 8, hideOnSinglePage: true }}
-        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No daily founder reports recorded yet." style={{ padding: '32px 0' }} /> }}
-        style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0' }}
-      />
+      <Card className="py-2">
+        <DataTable columns={columns} data={reports} loading={loading} pageSize={8} emptyText="No daily founder reports recorded yet." />
+      </Card>
     </div>
   );
 };

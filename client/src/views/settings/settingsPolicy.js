@@ -6,18 +6,14 @@ export const ROLE_LABELS = { owner: 'Owner', admin: 'Admin', manager: 'Manager',
 
 export const roleLabel = (role) => ROLE_LABELS[role] || '';
 
-// Billing details are owner/admin only (billing.view); the server returns
-// full plan details only to them.
-const canViewBilling = (role) => role === 'owner' || role === 'admin';
-
-export function settingsTabs({ role } = {}) {
+// There are no plans, so there is no Billing tab.
+export function settingsTabs() {
   const tabs = [
     { key: 'workspace', label: 'Workspace' },
     { key: 'brand', label: 'Brand Profile' },
     { key: 'whatsapp', label: 'WhatsApp' },
     { key: 'account', label: 'Account' },
   ];
-  if (canViewBilling(role)) tabs.push({ key: 'billing', label: 'Billing' });
   return tabs;
 }
 

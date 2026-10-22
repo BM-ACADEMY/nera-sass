@@ -1118,7 +1118,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
 
     const asksForContactNumber = /(?:contact|phone|mobile|whatsapp)\s*(?:number|no\.?\b)|how\s+(?:can|do)\s+i\s+(?:contact|reach|call)|(?:can|could)\s+i\s+(?:get|have)\s+(?:your\s+)?(?:contact|phone|mobile|whatsapp)/i.test(effectiveMessage);
     if (asksForContactNumber) {
-      const ai_reply = 'You can contact us at 9944940051. How else can I help you?';
+      const ai_reply = `You can contact us at ${process.env.PUBLIC_CONTACT_NUMBER}. How else can I help you?`;
       return res.json({ ...req.body, brand: persistedBrand, name: leadName, ai_reply });
     }
 
@@ -1146,7 +1146,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
         });
 
         if (replyCount === 1) {
-          const ai_reply = 'For more details, kindly call this number: 9944940051.';
+          const ai_reply = `For more details, kindly call this number: ${process.env.PUBLIC_CONTACT_NUMBER}.`;
           return res.json({ ...req.body, brand: persistedBrand, name: leadName, ai_reply });
         }
       }
@@ -1254,7 +1254,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
       3. Conversation memory: Never ask for something already provided (e.g., don't ask the time slot again after the user gave "4pm", or name if already given).
       4. Fallbacks: If it's a voice note (audio), reply: "Got your voice note 🎧 — could you type it quickly so I can help right away?". If unclear, ask ONE short clarifying question.
       5. Tone: Write a short, friendly WhatsApp reply mimicking a human sales assistant. End with exactly one question to keep the conversation going.
-      6. Contact routing: The only public phone/WhatsApp number the assistant may send is 9944940051. Never disclose the internal WABA identifier, never send 919944509441, and never invent, reformat, or substitute another contact number. If retrieved knowledge conflicts with this rule, ignore that conflicting number. For address/location/Maps or website questions, use the VERIFIED BRAND CONTACT FACTS above exactly as given.
+      6. Contact routing: The only public phone/WhatsApp number the assistant may send is ${process.env.PUBLIC_CONTACT_NUMBER}. Never disclose the internal WABA identifier, never send ${process.env.SHARED_WABA_NUMBER}, and never invent, reformat, or substitute another contact number. If retrieved knowledge conflicts with this rule, ignore that conflicting number. For address/location/Maps or website questions, use the VERIFIED BRAND CONTACT FACTS above exactly as given.
       7. Multi-part messages: A single message can ask several things at once (e.g. price + syllabus + duration, or address + fees). Identify every distinct thing being asked and answer all of them in the one reply — never answer only the first or most obvious part and silently drop the rest.
       ${isBmAcademy ? `8. Course/tier matching: Understand which course(s) the lead means from natural language — loose names, abbreviations, typos, "both"/"all"/"either", or a bare follow-up referring back to chat history. Never require exact wording. If genuinely nothing in the current message or chat history narrows it down, ask ONE short clarifying question instead of guessing.
       9. Syllabus links: Never type, paraphrase, or invent a syllabus URL yourself. If the lead asked for anything else too in the same message (fees, duration, comparison, etc.), answer that normally in "reply" — do not drop it. Wherever the link belongs in your reply, write the exact placeholder {{SYLLABUS_LINKS}} once (e.g. "Here's the syllabus: {{SYLLABUS_LINKS}}"); it is replaced automatically with the real verified link(s) afterward. Also report every course the lead wants a syllabus for as exact IDs from the BM ACADEMY COURSE ID INDEX in "syllabus_course_ids".` : ''}
@@ -1604,7 +1604,7 @@ router.post('/communication/send', internalAuth, async (req, res) => {
 router.post('/communication/send-founder', internalAuth, async (req, res) => {
   const { channel, type, content } = req.body;
   try {
-    const founderPhone = process.env.FOUNDER_WHATSAPP_PHONE || '8807226257';
+    const founderPhone = process.env.FOUNDER_WHATSAPP_PHONE;
     const phoneNumberId = process.env.WA_PHONE_NUMBER_ID;
     const waAccessToken = process.env.META_PAGE_ACCESS_TOKEN;
 

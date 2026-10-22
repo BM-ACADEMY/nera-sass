@@ -27,6 +27,15 @@ axiosClient.interceptors.request.use(
 axiosClient.interceptors.response.use(
   (response) => response,
   (error) => {
+    // No answer at all: the API server is down or still starting (it waits for
+    // the database). Every view shows this instead of its generic failure text.
+    if (!error.response && !axios.isCancel(error)) {
+      error.response = {
+        status: 0,
+        data: { error: 'Cannot reach the API server. It may be starting or unable to connect to the database. Wait a moment and refresh.', code: 'API_UNREACHABLE' },
+      };
+      return Promise.reject(error);
+    }
     if (error.response && shouldEndSession(error.response.status, error.response.data)) {
       localStorage.removeItem('adminToken');
       if (window.location.pathname !== '/login') {

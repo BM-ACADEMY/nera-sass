@@ -8,8 +8,14 @@
  * connection (or the audited admin credential update). Nothing here writes to
  * a brand.
  *
- *   platform.meta        founder, ops   view, sync, link/unlink reconciliation
+ *   platform.meta        founder, ops   view, sync, link/unlink reconciliation,
+ *                                       assign/unassign a number to a workspace
  *   platform.meta.admin  founder        phone registration, cache clearing
+ *
+ * Assign is the one place an inventory number reaches a brand: an explicit,
+ * audited admin action (like the admin credential update) for numbers the
+ * platform holds in its own portfolio for a workspace. It never copies a token,
+ * and a number already used by another brand is refused.
  *
  * Every route checks its permission before reading the database or calling
  * Meta. Live Meta calls use META_INVENTORY_ACCESS_TOKEN only.
@@ -23,29 +29,32 @@ const { deleteCascade } = require('../db/cascade');
 const { can } = require('../services/permissions');
 const audit = require('../services/audit');
 const { inventoryAccessToken, phoneRegistrationEnabled, requireInventoryAccessToken } = require('../services/metaInventoryCredentials');
+const { runAsTenant } = require('../services/tenantContext');
+const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
+const { platformPhoneId } = require('../services/platformInbox');
 
 const NO_ID = { _id: 0 };
 
 function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, graphPageData, metaGraphVersion }) {
   const router = express.Router();
 
+  // The database is remote, so every round trip costs time: all reads run in
+  // one parallel batch, and templates are only counted here (the list of one
+  // account's templates is loaded on demand by GET /templates).
   router.get('/inventory', permit('platform.meta'), async (req, res) => {
     try {
-      const [accounts, phoneRows, templates, lastRun] = await Promise.all([
-        MetaWhatsappAccounts.find({}, NO_ID).sort({ name: 1 }).lean(),
+      const [accounts, phoneRows, templateCounts, lastRun, allBrands, allTenants] = await Promise.all([
+        MetaWhatsappAccounts.find({}, { ...NO_ID, raw_data: 0 }).sort({ name: 1 }).lean(),
         MetaWhatsappPhoneNumbers.find({}, { ...NO_ID, raw_data: 0 }).lean(),
-        MetaWhatsappTemplates.find({}, { _id: 0, waba_id: 1, status: 1 }).lean(),
+        MetaWhatsappTemplates.aggregate([
+          { $group: { _id: { waba_id: '$waba_id', status: '$status' }, n: { $sum: 1 } } },
+        ]),
         MetaWhatsappSyncRuns.findOne({}, NO_ID).sort({ id: -1 }).lean(),
+        Clients.find({}, { _id: 0, id: 1, name: 1, tenant_id: 1, phone_number_id: 1, wa_business_id: 1, whatsapp_number: 1 }).lean(),
+        Tenants.find({ status: { $ne: 'deleted' } }, { _id: 0, id: 1, name: 1, status: 1 }).lean(),
       ]);
-      // Only the brands an inventory row is linked to, with their workspace.
-      const linkedIds = [...new Set(phoneRows.map((p) => p.client_id).filter((id) => id != null))];
-      const brands = linkedIds.length
-        ? await Clients.find({ id: { $in: linkedIds } }, { _id: 0, id: 1, name: 1, tenant_id: 1, phone_number_id: 1, wa_business_id: 1 }).lean()
-        : [];
-      const tenantIds = [...new Set(brands.map((b) => b.tenant_id).filter((id) => id != null))];
-      const tenants = tenantIds.length ? await Tenants.find({ id: { $in: tenantIds } }, { _id: 0, id: 1, name: 1 }).lean() : [];
-      const brandById = new Map(brands.map((b) => [b.id, b]));
-      const tenantName = new Map(tenants.map((t) => [t.id, t.name]));
+      const brandById = new Map(allBrands.map((b) => [b.id, b]));
+      const tenantById = new Map(allTenants.map((t) => [t.id, t]));
       const accountNames = new Map(accounts.map((a) => [a.waba_id, a.name]));
 
       const phones = phoneRows.map((p) => {
@@ -54,26 +63,54 @@ function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, gr
           ...p,
           waba_name: accountNames.get(p.waba_id) ?? null,
           linked_brand: brand ? {
-            id: brand.id, name: brand.name, tenant_id: brand.tenant_id, tenant_name: tenantName.get(brand.tenant_id) ?? null,
+            id: brand.id, name: brand.name, tenant_id: brand.tenant_id, tenant_name: tenantById.get(brand.tenant_id)?.name ?? null,
             // The link is only meaningful while the brand still uses this number.
             identity_matches: brand.phone_number_id === p.phone_number_id && brand.wa_business_id === p.waba_id,
           } : null,
         };
       });
       const summary = new Map();
-      for (const t of templates) {
-        const s = summary.get(t.waba_id) || { waba_id: t.waba_id, total: 0, approved: 0, other: 0 };
-        s.total++;
-        if (t.status === 'APPROVED') s.approved++; else if (t.status != null) s.other++;
-        summary.set(t.waba_id, s);
+      for (const { _id: { waba_id: wabaId, status }, n } of templateCounts) {
+        const s = summary.get(wabaId) || { waba_id: wabaId, total: 0, approved: 0, other: 0 };
+        s.total += n;
+        if (status === 'APPROVED') s.approved += n; else if (status != null) s.other += n;
+        summary.set(wabaId, s);
       }
-      const wabas = accounts.map((a) => ({ ...a, raw_data: undefined, phone_count: phoneRows.filter((p) => p.waba_id === a.waba_id).length }));
+      const wabas = accounts.map((a) => ({ ...a, phone_count: phoneRows.filter((p) => p.waba_id === a.waba_id).length }));
+      // Every workspace brand, for the "Assign to workspace" picker.
+      const workspaces = allBrands
+        .filter((b) => tenantById.has(b.tenant_id))
+        .map((b) => ({
+          client_id: b.id, brand_name: b.name, tenant_id: b.tenant_id, tenant_name: tenantById.get(b.tenant_id).name, status: tenantById.get(b.tenant_id).status,
+          // A workspace uses one WhatsApp number; one that has it is not offered again.
+          has_number: Boolean(b.phone_number_id),
+          phone_number_id: b.phone_number_id || null,
+          whatsapp_number: b.whatsapp_number || null,
+        }))
+        .sort((a, b) => String(a.tenant_name).localeCompare(String(b.tenant_name)));
       return res.json({
         wabas, phone_numbers: phones, template_summary: [...summary.values()], last_sync: lastRun || null,
+        workspaces,
+        sync_enabled: process.env.META_INVENTORY_SYNC !== 'off' && Boolean(inventoryAccessToken()),
         credential_configured: Boolean(inventoryAccessToken()),
         registration_enabled: phoneRegistrationEnabled(),
         can_administer: can(req.identity, 'platform.meta.admin'),
       });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // The templates of one WhatsApp Business Account (Templates tab).
+  router.get('/templates', permit('platform.meta'), async (req, res) => {
+    try {
+      const wabaId = String(req.query.waba_id || '').trim();
+      if (!wabaId) return res.status(400).json({ error: 'waba_id is required' });
+      const templates = await MetaWhatsappTemplates.find(
+        { waba_id: wabaId },
+        { _id: 0, template_id: 1, waba_id: 1, name: 1, language: 1, category: 1, status: 1, last_synced_at: 1 },
+      ).sort({ name: 1, language: 1 }).lean();
+      return res.json({ templates });
     } catch (error) {
       return fail(res, error);
     }
@@ -126,6 +163,75 @@ function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, gr
       await audit.record(audit.EVENTS.META_PHONE_UNLINKED, {
         req, targetType: 'meta_phone_number', targetId: phone.phone_number_id,
         meta: { previous_client_id: phone.client_id ?? null, waba_id: phone.waba_id },
+      });
+      return res.json({ success: true });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // Assigns a platform number to one workspace's brand: writes the brand's
+  // number, WABA and display number (never a token) and links the inventory row.
+  router.post('/phone-numbers/:phoneId/assign', permit('platform.meta'), async (req, res) => {
+    try {
+      const clientId = Number(req.body?.client_id);
+      if (!Number.isInteger(clientId) || clientId <= 0) return res.status(400).json({ error: 'Choose the workspace to assign this number to' });
+      const phone = await MetaWhatsappPhoneNumbers.findOne({ phone_number_id: String(req.params.phoneId) }, NO_ID).lean();
+      if (!phone) return res.status(404).json({ error: 'Meta phone number not found in inventory' });
+      if (phone.phone_number_id === platformPhoneId()) {
+        return res.status(409).json({ error: 'This is the platform\'s own number (admin WhatsApp Chat). It cannot be assigned to a workspace.', code: 'PLATFORM_NUMBER' });
+      }
+      const brand = await Clients.findOne({ id: clientId }, { _id: 0, id: 1, tenant_id: 1, phone_number_id: 1, wa_business_id: 1 }).lean();
+      if (!brand) return res.status(404).json({ error: 'Workspace brand not found' });
+      if (phone.client_id != null && phone.client_id !== brand.id) {
+        return res.status(409).json({ error: 'This number is assigned to another workspace. Unassign it first.', code: 'PHONE_ASSIGNED' });
+      }
+      if (brand.phone_number_id && brand.phone_number_id !== phone.phone_number_id) {
+        return res.status(409).json({ error: 'This workspace already uses another WhatsApp number. Unassign that number first.', code: 'BRAND_HAS_NUMBER' });
+      }
+      await assertPhoneNumberAvailable(phone.phone_number_id, { exceptClientId: brand.id });
+
+      const verified = String(phone.connection_status || '').toUpperCase() === 'CONNECTED'
+        || String(phone.verification_status || '').toUpperCase() === 'VERIFIED';
+      await runAsTenant(brand.tenant_id, () => Clients.updateOne({ id: brand.id }, { $set: {
+        phone_number_id: phone.phone_number_id,
+        wa_business_id: phone.waba_id,
+        whatsapp_number: String(phone.display_phone_number || '').replace(/\D/g, '') || null,
+        whatsapp_status: verified ? 'verified' : 'verification_pending',
+        whatsapp_verified_at: verified ? new Date() : null,
+        whatsapp_verification_error: null,
+        updated_at: new Date(),
+      } }));
+      await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: phone.phone_number_id }, { $set: { client_id: brand.id } });
+      await audit.record(audit.EVENTS.META_PHONE_LINKED, {
+        tenantId: brand.tenant_id, req, targetType: 'meta_phone_number', targetId: phone.phone_number_id,
+        meta: { client_id: brand.id, waba_id: phone.waba_id, assigned: true, previous_client_id: phone.client_id ?? null },
+      });
+      return res.json({ success: true });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // Unassigns a number: the brand stops using it (its number and WABA are
+  // cleared when they point at this number) and the inventory link is removed.
+  router.post('/phone-numbers/:phoneId/unassign', permit('platform.meta'), async (req, res) => {
+    try {
+      const phone = await MetaWhatsappPhoneNumbers.findOne({ phone_number_id: String(req.params.phoneId) }, NO_ID).lean();
+      if (!phone) return res.status(404).json({ error: 'Meta phone number not found in inventory' });
+      const brand = phone.client_id != null
+        ? await Clients.findOne({ id: phone.client_id }, { _id: 0, id: 1, tenant_id: 1, phone_number_id: 1 }).lean()
+        : null;
+      if (brand && brand.phone_number_id === phone.phone_number_id) {
+        await runAsTenant(brand.tenant_id, () => Clients.updateOne({ id: brand.id }, { $set: {
+          phone_number_id: null, wa_business_id: null, whatsapp_number: null,
+          whatsapp_status: 'not_configured', whatsapp_verified_at: null, whatsapp_verification_error: null, updated_at: new Date(),
+        } }));
+      }
+      await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: phone.phone_number_id }, { $set: { client_id: null } });
+      await audit.record(audit.EVENTS.META_PHONE_UNLINKED, {
+        tenantId: brand?.tenant_id ?? null, req, targetType: 'meta_phone_number', targetId: phone.phone_number_id,
+        meta: { previous_client_id: phone.client_id ?? null, waba_id: phone.waba_id, unassigned: true },
       });
       return res.json({ success: true });
     } catch (error) {

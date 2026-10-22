@@ -3,8 +3,6 @@
  * in-memory MongoDB (setup.js refuses remote hosts).
  *
  *  A. No staff workspace bypass, in development or production configurations
- *  B. Workspace provisioning: explicit, audited manual grants; plans only from
- *     the server-side catalogue; client-supplied prices ignored
  *  C. Workflow-log cleanup: one workspace with the service key; all workspaces
  *     only for founder/ops staff (audited); retention period preserved
  */
@@ -12,7 +10,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const bcrypt = require('bcryptjs');
 const request = require('supertest');
-const { startTestDb, stopTestDb, clearCollections, seedTestPlans, makeToken, TEST_INTERNAL_KEY } = require('./setup');
+const { startTestDb, stopTestDb, clearCollections, makeToken, TEST_INTERNAL_KEY } = require('./setup');
 
 let app;
 
@@ -61,10 +59,6 @@ async function seedWorkspace(models, { tenantId, name }) {
   await runAsSystem(() => models.Tenants.create({ id: tenantId, name, status: 'active' }));
   await runAsTenant(tenantId, async () => {
     await models.Clients.create({ name: `${name} Brand` });
-    await models.Subscriptions.create({
-      plan_code: 'TEST', status: 'active', limits: { max_users: 10 },
-      current_period_start: new Date(), current_period_end: new Date(Date.now() + 30 * DAY),
-    });
   });
 }
 
@@ -79,20 +73,9 @@ const staff = (models, role) => createUser(models, {
   tenant_id: null, is_platform_staff: true, staff_role: role, email: `${role}@nera.test`, name: role,
 });
 
-const grantPayload = (overrides = {}) => ({
-  business_name: 'Kaveri Motors',
-  owner_name: 'Kavya Rao',
-  owner_email: 'kavya@kaveri.test',
-  plan_code: 'WA-STARTER',
-  term_months: 12,
-  payment_reference: 'APPROVAL-2026-014',
-  grant_reason: 'Pilot client approved by the founder; paid by bank transfer',
-  ...overrides,
-});
-
 test('Phase 3 security remediation', async (t) => {
   const models = require('../models');
-  const { Tenants, Clients, Subscriptions, Invitations, Leads, Plans, WorkflowLogs, AuditEvents } = models;
+  const { Tenants, Clients, Invitations, Leads, WorkflowLogs, AuditEvents } = models;
   const { runAsSystem, runAsTenant } = require('../services/tenantContext');
   const count = (model, filter = {}) => runAsSystem(() => model.countDocuments(filter));
 
@@ -154,107 +137,6 @@ test('Phase 3 security remediation', async (t) => {
     const me = await request(app).get('/api/auth/me').set(bearer(founder));
     assert.strictEqual(me.status, 200);
     assert.strictEqual(me.body.is_platform_staff, true);
-  });
-
-  // ── B. Provisioning: manual grants and plan catalogue ─────
-  await t.test('B1. Missing or blank grant reference/reason is refused; nothing is created', async () => {
-    await seedTestPlans();
-    const founder = await staff(models, 'founder');
-    const cases = [
-      grantPayload({ payment_reference: undefined }),
-      grantPayload({ payment_reference: '  ' }),
-      grantPayload({ grant_reason: undefined }),
-      grantPayload({ grant_reason: 'too short' }),
-    ];
-    for (const body of cases) {
-      const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(body);
-      assert.strictEqual(res.status, 400, JSON.stringify(body));
-    }
-    assert.strictEqual(await count(Tenants), 0);
-    assert.strictEqual(await count(Subscriptions), 0);
-    assert.strictEqual(await count(Invitations), 0);
-  });
-
-  await t.test('B2. Unknown plan is refused', async () => {
-    await seedTestPlans();
-    const founder = await staff(models, 'founder');
-    const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(grantPayload({ plan_code: 'GOLD-UNLIMITED' }));
-    assert.strictEqual(res.status, 400);
-    assert.match(res.body.error, /not in the plan catalogue/);
-    assert.strictEqual(await count(Tenants), 0);
-  });
-
-  await t.test('B3. With no plan catalogue, workspace creation is unavailable (503)', async () => {
-    const founder = await staff(models, 'founder');
-    assert.strictEqual(await count(Plans), 0);
-    const plans = await request(app).get('/api/admin/plans').set(bearer(founder));
-    assert.strictEqual(plans.status, 200);
-    assert.deepStrictEqual(plans.body.plans, []);
-    const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(grantPayload());
-    assert.strictEqual(res.status, 503);
-    assert.match(res.body.error, /plan catalogue is not loaded/);
-    assert.strictEqual(await count(Tenants), 0);
-  });
-
-  await t.test('B4. An authorized manual grant is recorded as a manual grant, with who and why', async () => {
-    await seedTestPlans();
-    const founder = await staff(models, 'founder');
-    const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(grantPayload());
-    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
-    const tenantId = res.body.tenant.id;
-    const sub = await runAsTenant(tenantId, () => Subscriptions.findOne({}).lean());
-    assert.strictEqual(sub.payment_method, 'manual_grant');
-    assert.strictEqual(sub.payment_reference, 'APPROVAL-2026-014');
-    assert.strictEqual(sub.grant_reason, 'Pilot client approved by the founder; paid by bank transfer');
-    assert.strictEqual(sub.granted_by, founder.id);
-
-    const grantEvent = await runAsSystem(() => AuditEvents.findOne({ event: 'MANUAL_GRANT_AUTHORIZED', tenant_id: tenantId }).lean());
-    assert.ok(grantEvent, 'manual grant audited');
-    assert.strictEqual(grantEvent.actor_user_id, founder.id);
-    assert.strictEqual(grantEvent.meta.reason, sub.grant_reason);
-    assert.strictEqual(grantEvent.meta.reference, sub.payment_reference);
-    assert.strictEqual(await count(AuditEvents, { event: 'PAYMENT_VERIFIED', tenant_id: tenantId }), 0, 'not recorded as a verified payment');
-  });
-
-  await t.test('B5. Prices and limits come from the catalogue, never from the request', async () => {
-    await seedTestPlans();
-    const founder = await staff(models, 'founder');
-    const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(grantPayload({
-      monthly_price: 1, contract_value: 1, discount_pct: 99, limits: { max_users: 999 }, plan: { monthly_price: 1 },
-    }));
-    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
-    const plan = await runAsSystem(() => Plans.findOne({ code: 'WA-STARTER' }).lean());
-    const sub = await runAsTenant(res.body.tenant.id, () => Subscriptions.findOne({}).lean());
-    assert.strictEqual(sub.monthly_price, plan.monthly_price);
-    assert.strictEqual(sub.discount_pct, plan.pricing_rules.term_discount_pct['12']);
-    assert.strictEqual(sub.contract_value, Math.round(plan.monthly_price * 12 * (1 - sub.discount_pct / 100)));
-    assert.strictEqual(sub.limits.max_users, plan.limits.max_users);
-  });
-
-  await t.test('B6. Staff cannot record a Razorpay payment; renewals follow the same rules', async () => {
-    await seedTestPlans();
-    const founder = await staff(models, 'founder');
-    const support = await staff(models, 'support');
-    const asRazorpay = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(grantPayload({ payment_method: 'razorpay', payment_reference: 'pay_fake123' }));
-    assert.strictEqual(asRazorpay.status, 400);
-    assert.strictEqual((await request(app).post('/api/admin/tenants').set(bearer(support)).send(grantPayload())).status, 403);
-    assert.strictEqual(await count(Tenants), 0);
-
-    const provisioning = require('../services/provisioning');
-    assert.throws(() => provisioning.validatePayment({ method: 'razorpay', reference: 'pay_fake123' }, founder.id), (err) => err.status === 400);
-
-    const created = await request(app).post('/api/admin/tenants').set(bearer(founder)).send(grantPayload());
-    const tenantId = created.body.tenant.id;
-    const renew = (body, who = founder) => request(app).post(`/api/admin/tenants/${tenantId}/subscriptions`).set(bearer(who)).send(body);
-    assert.strictEqual((await renew({ plan_code: 'WA-STARTER', term_months: 1, payment_reference: 'APPROVAL-2026-015' })).status, 400, 'reason required');
-    assert.strictEqual((await renew({ plan_code: 'WA-STARTER', term_months: 1, grant_reason: 'Renewal approved by founder' })).status, 400, 'reference required');
-    assert.strictEqual((await renew({ plan_code: 'WA-STARTER', term_months: 1, payment_reference: 'pay_x', grant_reason: 'Renewal approved by founder', payment_method: 'razorpay' })).status, 400);
-    assert.strictEqual((await renew({ plan_code: 'WA-STARTER', term_months: 1, payment_reference: 'APPROVAL-2026-015', grant_reason: 'Renewal approved by founder' }, support)).status, 403);
-    const ok = await renew({ plan_code: 'WA-STARTER', term_months: 1, payment_reference: 'APPROVAL-2026-015', grant_reason: 'Renewal approved by founder' });
-    assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
-    assert.strictEqual(ok.body.subscription.payment_method, 'manual_grant');
-    assert.strictEqual(ok.body.subscription.grant_reason, 'Renewal approved by founder');
-    assert.strictEqual(await count(AuditEvents, { event: 'MANUAL_GRANT_AUTHORIZED', tenant_id: tenantId }), 2);
   });
 
   // ── C. Workflow-log cleanup ────────────────────────────────

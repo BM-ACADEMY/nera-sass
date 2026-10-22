@@ -1,14 +1,24 @@
 import React, { useEffect, useState } from 'react';
-import { Form, Input, Button, message, Select, Spin, Divider } from 'antd';
-import { PhoneOutlined, KeyOutlined, IdcardOutlined, SafetyCertificateOutlined, CheckCircleFilled, ClockCircleFilled, CloseCircleFilled, MinusCircleFilled } from '@ant-design/icons';
+import { toast } from 'sonner';
+import { FiPhone, FiKey, FiHash, FiShield, FiCheckCircle, FiClock, FiXCircle, FiMinusCircle } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import axiosClient from '../api/axiosClient';
+import { FormField, IconInput } from './FormField';
+import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
+import { cn } from '@/lib/utils';
 
 const STATUS_META = {
-  verified: { label: 'Verified · service enabled', bg: '#f0fdf4', border: '#bbf7d0', color: '#15803d', icon: <CheckCircleFilled /> },
-  verification_pending: { label: 'Verification pending', bg: '#fffbeb', border: '#fde68a', color: '#b45309', icon: <ClockCircleFilled /> },
-  verification_failed: { label: 'Verification failed', bg: '#fef2f2', border: '#fecaca', color: '#b91c1c', icon: <CloseCircleFilled /> },
-  not_configured: { label: 'Not configured', bg: '#f8fafc', border: '#e2e8f0', color: '#64748b', icon: <MinusCircleFilled /> },
+  verified: { label: 'Verified · service enabled', className: 'border-green-200 bg-green-50 text-green-700', icon: <FiCheckCircle /> },
+  verification_pending: { label: 'Verification pending', className: 'border-amber-200 bg-amber-50 text-amber-700', icon: <FiClock /> },
+  verification_failed: { label: 'Verification failed', className: 'border-red-200 bg-red-50 text-red-700', icon: <FiXCircle /> },
+  not_configured: { label: 'Not configured', className: 'border-slate-200 bg-slate-50 text-slate-500', icon: <FiMinusCircle /> },
+};
+
+const REQUIRED = {
+  whatsapp_number: 'WhatsApp number is required',
+  phone_number_id: 'Meta Phone Number ID is required',
+  wa_business_id: 'WABA ID is required',
 };
 
 // Workspaces own their WhatsApp credentials through the same `clients` row
@@ -16,11 +26,11 @@ const STATUS_META = {
 // its verified Meta WhatsApp flow, so this reuses that flow instead of a
 // separate config store per tenant.
 const WhatsAppConfigModal = ({ tenantId, tenantName, onClose }) => {
-  const [form] = Form.useForm();
+  const [values, setValues] = useState({ whatsapp_number: '', phone_number_id: '', wa_access_token: '', wa_business_id: '' });
+  const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [verifying, setVerifying] = useState(false);
-  const [clients, setClients] = useState([]);
   const [activeClient, setActiveClient] = useState(null);
 
   const loadClient = async () => {
@@ -29,14 +39,14 @@ const WhatsAppConfigModal = ({ tenantId, tenantName, onClose }) => {
       const res = await axiosClient.get(`/admin/tenants/${tenantId}`);
       const brand = res.data.brand || null;
       setActiveClient(brand);
-      form.setFieldsValue({
+      setValues({
         whatsapp_number: brand?.whatsapp_number || '',
         phone_number_id: brand?.phone_number_id || '',
         wa_access_token: '',
         wa_business_id: brand?.wa_business_id || '',
       });
     } catch (err) {
-      message.error('Failed to load workspace WhatsApp config');
+      toast.error('Failed to load workspace WhatsApp config');
     } finally {
       setLoading(false);
     }
@@ -47,8 +57,20 @@ const WhatsAppConfigModal = ({ tenantId, tenantName, onClose }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantId]);
 
-  const handleSave = async () => {
-    const values = await form.validateFields();
+  const set = (key, value) => {
+    setValues((v) => ({ ...v, [key]: value }));
+    setErrors((e) => ({ ...e, [key]: undefined }));
+  };
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    const nextErrors = {};
+    Object.entries(REQUIRED).forEach(([key, msg]) => {
+      if (!String(values[key] || '').trim()) nextErrors[key] = msg;
+    });
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) return;
+
     setSaving(true);
     try {
       const payload = {
@@ -61,10 +83,10 @@ const WhatsAppConfigModal = ({ tenantId, tenantName, onClose }) => {
       }
       const res = await axiosClient.put(`/admin/tenants/${tenantId}/whatsapp`, payload);
       setActiveClient(res.data.brand);
-      form.setFieldsValue({ wa_access_token: '' });
-      message.success('WhatsApp credentials updated and encrypted for this workspace');
+      set('wa_access_token', '');
+      toast.success('WhatsApp credentials updated and encrypted for this workspace');
     } catch (err) {
-      message.error(err.response?.data?.error || 'Failed to save WhatsApp config');
+      toast.error(err.response?.data?.error || 'Failed to save WhatsApp config');
     } finally {
       setSaving(false);
     }
@@ -75,71 +97,76 @@ const WhatsAppConfigModal = ({ tenantId, tenantName, onClose }) => {
     try {
       const res = await axiosClient.post(`/admin/tenants/${tenantId}/whatsapp/verify`);
       setActiveClient(res.data.brand);
-      message.success('WhatsApp verified and enabled for this workspace');
+      toast.success('WhatsApp verified and enabled for this workspace');
     } catch (err) {
-      message.error(err.response?.data?.error || 'Meta verification failed');
+      toast.error(err.response?.data?.error || 'Meta verification failed');
     } finally {
       setVerifying(false);
     }
   };
 
   if (loading) {
-    return <div style={{ textAlign: 'center', padding: 48 }}><Spin size="large" /></div>;
+    return <div className="flex justify-center py-12"><Spinner className="size-7 text-primary" /></div>;
   }
 
   const status = STATUS_META[activeClient?.whatsapp_status] || STATUS_META.not_configured;
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid #f1f5f9' }}>
-        <div style={{ width: 38, height: 38, borderRadius: 10, background: '#f0fdf4', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+      <div className="mb-5 flex items-center gap-2.5 border-b border-border pb-4 pr-6">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-green-50">
           <FaWhatsapp size={19} color="#25D366" />
         </div>
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>{tenantName}</div>
-          <div style={{ fontSize: 11.5, color: '#94a3b8' }}>Own credentials for this workspace — never the shared platform .env</div>
+          <div className="text-[13px] font-semibold">{tenantName}</div>
+          <div className="text-[11.5px] text-slate-400">Own credentials for this workspace — never the shared platform .env</div>
         </div>
       </div>
 
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20,
-        background: status.bg, border: `1px solid ${status.border}`, color: status.color,
-        borderRadius: 10, padding: '9px 14px', fontSize: 12.5, fontWeight: 600,
-      }}>
+      <div className={cn('mb-5 flex items-center gap-2 rounded-lg border px-3.5 py-2 text-[12.5px] font-semibold', status.className)}>
         {status.icon}
         {status.label}
       </div>
 
-      <Form form={form} layout="vertical">
-        <Form.Item name="whatsapp_number" label="WhatsApp Number" rules={[{ required: true, message: 'WhatsApp number is required' }]}>
-          <Input prefix={<PhoneOutlined style={{ color: '#94a3b8' }} />} placeholder="+91 98765 43210" size="large" />
-        </Form.Item>
-        <Form.Item name="phone_number_id" label="Meta Phone Number ID" rules={[{ required: true, message: 'Meta Phone Number ID is required' }]}>
-          <Input prefix={<IdcardOutlined style={{ color: '#94a3b8' }} />} placeholder="15-digit ID from Meta" size="large" />
-        </Form.Item>
-        <Form.Item
-          name="wa_access_token"
+      <form onSubmit={handleSave} noValidate className="flex flex-col gap-4">
+        <FormField label="WhatsApp Number" htmlFor="wa-number" error={errors.whatsapp_number}>
+          <IconInput id="wa-number" icon={FiPhone} placeholder="+91 98765 43210" value={values.whatsapp_number} onChange={(e) => set('whatsapp_number', e.target.value)} />
+        </FormField>
+        <FormField label="Meta Phone Number ID" htmlFor="wa-phone-id" error={errors.phone_number_id}>
+          <IconInput id="wa-phone-id" icon={FiHash} placeholder="15-digit ID from Meta" value={values.phone_number_id} onChange={(e) => set('phone_number_id', e.target.value)} />
+        </FormField>
+        <FormField
           label="Meta Access Token"
-          extra={activeClient?.wa_token_configured ? `Token is saved and encrypted (ends in ${activeClient.wa_token_last4 || '••••'}). Leave blank to keep current token.` : 'Enter system user access token'}
+          htmlFor="wa-token"
+          hint={activeClient?.wa_token_configured ? `Token is saved and encrypted (ends in ${activeClient.wa_token_last4 || '••••'}). Leave blank to keep current token.` : 'Enter system user access token'}
         >
-          <Input.Password prefix={<KeyOutlined style={{ color: '#94a3b8' }} />} placeholder={activeClient?.wa_token_configured ? '••••••••••••••••' : 'EAAG...'} size="large" />
-        </Form.Item>
-        <Form.Item name="wa_business_id" label="WABA ID" rules={[{ required: true, message: 'WABA ID is required' }]}>
-          <Input prefix={<SafetyCertificateOutlined style={{ color: '#94a3b8' }} />} placeholder="WhatsApp Business Account ID" size="large" />
-        </Form.Item>
+          <IconInput
+            id="wa-token"
+            type="password"
+            autoComplete="off"
+            icon={FiKey}
+            placeholder={activeClient?.wa_token_configured ? '••••••••••••••••' : 'EAAG...'}
+            value={values.wa_access_token}
+            onChange={(e) => set('wa_access_token', e.target.value)}
+          />
+        </FormField>
+        <FormField label="WABA ID" htmlFor="wa-waba" error={errors.wa_business_id}>
+          <IconInput id="wa-waba" icon={FiShield} placeholder="WhatsApp Business Account ID" value={values.wa_business_id} onChange={(e) => set('wa_business_id', e.target.value)} />
+        </FormField>
 
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
-          <Button onClick={onClose}>Close</Button>
+        <div className="mt-1 flex flex-wrap justify-end gap-2.5">
+          <Button type="button" variant="outline" onClick={onClose}>Close</Button>
           {activeClient?.phone_number_id && activeClient?.whatsapp_number && (
-            <Button onClick={handleVerify} loading={verifying}>
+            <Button type="button" variant="outline" onClick={handleVerify} disabled={verifying}>
+              {verifying && <Spinner />}
               {activeClient.whatsapp_status === 'verified' ? 'Re-verify with Meta' : 'Verify & Enable'}
             </Button>
           )}
-          <Button type="primary" onClick={handleSave} loading={saving} style={{ background: '#25D366', borderColor: '#25D366' }}>
-            Save Config
+          <Button type="submit" disabled={saving} className="bg-[#25D366] text-white hover:bg-[#1fb857]">
+            {saving && <Spinner />} Save Config
           </Button>
         </div>
-      </Form>
+      </form>
     </div>
   );
 };

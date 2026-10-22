@@ -1,26 +1,28 @@
-export const ROLE_STYLES = {
-  // Customer Roles
-  owner: { bg: '#fef3c7', color: '#b45309', label: 'Owner' },
-  admin: { bg: '#e0f2fe', color: '#0369a1', label: 'Admin' },
-  manager: { bg: '#ede9fe', color: '#6d28d9', label: 'Manager' },
-  agent: { bg: '#dcfce7', color: '#15803d', label: 'Agent' },
-
-  // Platform Staff Roles
-  superadmin: { bg: '#fce7f3', color: '#be185d', label: 'Super Admin' },
-  staff_admin: { bg: '#ffe4e6', color: '#e11d48', label: 'Staff Admin' },
-  staff_support: { bg: '#e0e7ff', color: '#4338ca', label: 'Staff Support' },
-  staff_billing: { bg: '#ecfdf5', color: '#047857', label: 'Staff Billing' },
-  founder: { bg: '#fef3c7', color: '#b45309', label: 'Founder' },
+// Every account falls in one of three groups:
+//  - Admin (Owner): platform staff with the founder role, full access
+//  - Staff: platform staff with the ops role, everything except billing
+//  - Customer: the single login of a workspace
+export const USER_TYPES = {
+  admin: { key: 'admin', label: 'Admin (Owner)', bg: '#fef3c7', color: '#b45309' },
+  staff: { key: 'staff', label: 'Staff', bg: '#e0e7ff', color: '#4338ca' },
+  customer: { key: 'customer', label: 'Customer', bg: '#dcfce7', color: '#15803d' },
+  unknown: { key: 'unknown', label: 'No access', bg: '#f1f5f9', color: '#475569' },
 };
 
-export const formatRole = (role) => {
-  if (!role) return 'None';
-  const str = String(role).trim().replace(/[_-]/g, ' ');
-  return str.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+export const userType = (user) => {
+  if (!user) return USER_TYPES.unknown;
+  if (user.is_platform_staff || user.tenant_id == null) {
+    if (user.staff_role === 'founder') return USER_TYPES.admin;
+    if (user.staff_role === 'ops') return USER_TYPES.staff;
+    return USER_TYPES.unknown;
+  }
+  return USER_TYPES.customer;
 };
 
+// Colours for a staff role on its own (the signed-in admin's avatar).
 export const roleStyle = (role) => {
-  if (!role) return { bg: '#f1f5f9', color: '#475569', label: 'Unknown' };
-  const key = String(role).toLowerCase().trim();
-  return ROLE_STYLES[key] || { bg: '#f1f5f9', color: '#475569', label: formatRole(role) };
+  const key = String(role || '').toLowerCase().trim();
+  if (key === 'founder') return USER_TYPES.admin;
+  if (key === 'ops') return USER_TYPES.staff;
+  return USER_TYPES.customer;
 };

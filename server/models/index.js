@@ -108,6 +108,8 @@ module.exports = {
   Organisations: require('./Organisations'),
   Outreach: require('./Outreach'),
   Payments: require('./Payments'),
+  PlatformWaContacts: require('./PlatformWaContacts'),
+  PlatformWaMessages: require('./PlatformWaMessages'),
   PipelineStages: require('./PipelineStages'),
   PromptTemplates: require('./PromptTemplates'),
   PublishQueue: require('./PublishQueue'),
@@ -120,7 +122,6 @@ module.exports = {
   SchemaTemplates: require('./SchemaTemplates'),
   SeoAudits: require('./SeoAudits'),
   SerpRadarHistory: require('./SerpRadarHistory'),
-  Subscriptions: require('./Subscriptions'),
   TeamMembers: require('./TeamMembers'),
   Templates: require('./Templates'),
   TenantModules: require('./TenantModules'),
@@ -157,5 +158,4 @@ module.exports = {
   WorkflowLogs: require('./WorkflowLogs'),
   AuditEvents: require('./AuditEvents'),
   Invitations: require('./Invitations'),
-  Plans: require('./Plans'),
 };

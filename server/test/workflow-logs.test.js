@@ -46,7 +46,7 @@ test.beforeEach(async () => {
 });
 
 test('Workflow automation & engine logs', async (t) => {
-  const { Users, Tenants, Subscriptions, WorkflowLogs, AiDecisions } = require('../models');
+  const { Users, Tenants, WorkflowLogs, AiDecisions } = require('../models');
   const { runAsSystem, runAsTenant } = require('../services/tenantContext');
   const sys = (fn) => runAsSystem(fn, 'test');
   const bearer = (user) => ({ Authorization: `Bearer ${makeToken(user, { mfa: true })}` });
@@ -55,7 +55,6 @@ test('Workflow automation & engine logs', async (t) => {
   const staff = (role) => createUser({ tenant_id: null, is_platform_staff: true, staff_role: role, email: `${role}@nera.test`, name: role });
   async function workspace(id) {
     await sys(() => Tenants.create({ id, name: `Workspace ${id}`, status: 'active' }));
-    await runAsTenant(id, () => Subscriptions.create({ plan_code: 'TEST', status: 'active', limits: { max_users: 10 }, current_period_start: new Date(), current_period_end: new Date(Date.now() + 30 * DAY) }));
     return {
       owner: await createUser({ tenant_id: id, role: 'owner', email: `owner${id}@acme.test`, name: 'Owner' }),
       agent: await createUser({ tenant_id: id, role: 'agent', email: `agent${id}@acme.test`, name: 'Agent' }),
@@ -189,12 +188,13 @@ test('Workflow automation & engine logs', async (t) => {
     assert.strictEqual((await request(app).get('/api/admin/workflows/logs')).status, 401);
   });
 
-  await t.test('R3. Staff permissions unchanged: founder/ops/support read, support cannot delete', async () => {
+  await t.test('R3. Staff permissions: founder/ops read; the retired support role can neither read nor delete', async () => {
     await seedMixed();
-    for (const role of ['founder', 'ops', 'support']) {
+    for (const role of ['founder', 'ops']) {
       assert.strictEqual((await request(app).get('/api/admin/workflows/logs').set(bearer(await staff(role)))).status, 200, role);
     }
-    const support = await sys(() => Users.findOne({ staff_role: 'support' }).lean());
+    const support = await staff('support');
+    assert.strictEqual((await request(app).get('/api/admin/workflows/logs').set(bearer(support))).status, 403);
     const target = (await allLogs())[0];
     const del = await request(app).delete(`/api/admin/workflows/logs/${target.id}`).set(bearer(support));
     assert.strictEqual(del.status, 403);

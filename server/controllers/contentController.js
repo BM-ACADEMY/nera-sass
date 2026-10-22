@@ -1117,7 +1117,7 @@ async function checkNewDriveVideos() {
           try {
             const localTranscodedPath = path.join(__dirname, '../uploads', `transcoded_${file.id}.mp4`);
             await transcodeVideo(tempFilePath, localTranscodedPath);
-            const baseUrl = process.env.API_BASE_URL || 'https://leados-api.abmgroups.org';
+            const baseUrl = process.env.API_BASE_URL || process.env.PUBLIC_API_URL;
             publicVideoUrl = `${baseUrl}/uploads/transcoded_${file.id}.mp4`;
             console.log(`DrivePoller: Transcoding succeeded! Public URL: ${publicVideoUrl}`);
 
@@ -1139,7 +1139,7 @@ async function checkNewDriveVideos() {
             try {
               const localThumbnailPath = path.join(__dirname, '../uploads', `thumbnail_${file.id}.jpg`);
               await generateThumbnail(tempFilePath, localThumbnailPath);
-              const baseUrl = process.env.API_BASE_URL || 'https://leados-api.abmgroups.org';
+              const baseUrl = process.env.API_BASE_URL || process.env.PUBLIC_API_URL;
               publicThumbnailUrl = `${baseUrl}/uploads/thumbnail_${file.id}.jpg`;
               console.log(`DrivePoller: Thumbnail generated from temp file! Public URL: ${publicThumbnailUrl}`);
             } catch (thumbErr) {
@@ -1320,7 +1320,7 @@ async function generateStoryCard(postId, slideNum, brandName, slideText, req = n
     const outputPath = path.join(uploadsDir, filename);
     await image.writeAsync(outputPath);
 
-    const baseUrl = (process.env.API_BASE_URL || 'https://leados-api.abmgroups.org').replace(/\/+$/, '');
+    const baseUrl = (process.env.API_BASE_URL || process.env.PUBLIC_API_URL).replace(/\/+$/, '');
     return resolvePublicUrl(`${baseUrl}/uploads/${filename}`, req, true);
   } catch (err) {
     console.error('generateStoryCard error:', err);
@@ -1416,11 +1416,11 @@ function resolvePublicUrl(url, req = null, forcePublic = false) {
   }
 
   // 2. Determine base URL
-  let baseUrl = process.env.API_BASE_URL || 'https://leados-api.abmgroups.org';
+  let baseUrl = process.env.API_BASE_URL || process.env.PUBLIC_API_URL;
 
   // Self-healing: if baseUrl is localhost, but portal is live (only when no request context exists)
-  if (!req && baseUrl.includes('localhost') && process.env.PORTAL_URL && process.env.PORTAL_URL.includes('abmgroups.org')) {
-    baseUrl = 'https://leados-api.abmgroups.org';
+  if (!req && baseUrl.includes('localhost') && process.env.PORTAL_URL && !process.env.PORTAL_URL.includes('localhost')) {
+    baseUrl = process.env.PUBLIC_API_URL;
   }
 
   // Dynamic host overriding if headers contain request context
@@ -1429,7 +1429,10 @@ function resolvePublicUrl(url, req = null, forcePublic = false) {
     if (host) {
       let protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
       // Force https for production domain to prevent Mixed Content blocks
-      if (host.includes('abmgroups.org')) {
+      const publicHosts = [process.env.PUBLIC_API_URL, process.env.PORTAL_URL]
+        .filter(Boolean)
+        .map((u) => new URL(u).host);
+      if (publicHosts.includes(host)) {
         protocol = 'https';
       }
       baseUrl = `${protocol}://${host}`;
@@ -1438,7 +1441,7 @@ function resolvePublicUrl(url, req = null, forcePublic = false) {
 
   // Fallback to production API URL if forcePublic is true and baseUrl resolved to localhost/127.0.0.1 (so Facebook/Instagram crawler can access it)
   if (forcePublic && (baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1'))) {
-    baseUrl = 'https://leados-api.abmgroups.org';
+    baseUrl = process.env.PUBLIC_API_URL;
   }
 
   // 3. Rewrite any path containing '/uploads/' to use the determined baseUrl
@@ -1942,9 +1945,12 @@ async function handleMetaCallback(req, res) {
     return res.status(400).json({ success: false, error: 'Auth code is required' });
   }
 
-  const appId = process.env.META_CONTENT_OS_APP_ID || process.env.META_APP_ID || '953749850406150';
-  const appSecret = process.env.META_CONTENT_OS_APP_SECRET || process.env.META_APP_SECRET || 'dSSnlAoUGreiJ61yHAU3kSvJ';
-  const redirectUri = reqRedirectUri || process.env.META_CONTENT_OS_REDIRECT_URI || process.env.META_REDIRECT_URI || `${process.env.PORTAL_URL || 'https://leados-app.abmgroups.org'}/settings/meta-callback`;
+  const appId = process.env.META_CONTENT_OS_APP_ID || process.env.META_APP_ID;
+  const appSecret = process.env.META_CONTENT_OS_APP_SECRET || process.env.META_APP_SECRET;
+  if (!appId || !appSecret) {
+    return res.status(500).json({ success: false, error: 'Meta app is not configured (set META_CONTENT_OS_APP_ID and META_CONTENT_OS_APP_SECRET)' });
+  }
+  const redirectUri = reqRedirectUri || process.env.META_CONTENT_OS_REDIRECT_URI || process.env.META_REDIRECT_URI || `${process.env.PORTAL_URL}/settings/meta-callback`;
 
 
   try {
@@ -2585,11 +2591,6 @@ async function runBackgroundPublish(postId, jobs, publicUrl, accounts, reqInfo) 
   console.log(`[BackgroundPublish] Async publishing complete for post ${postId}.`);
 }
 
-const BRAND_CTA_CONFIG = {
-  "bm_academy": "WhatsApp: 94038 92971",
-  "bm_techx": "WhatsApp: 99442 88271"
-};
-
 
 const suggestionRateLimits = new Map();
 
@@ -3072,7 +3073,7 @@ function handleYoutubeAuth(req, res) {
 
 async function handleYoutubeCallback(req, res) {
   const { code, state: brandName } = req.query;
-  const portalUrl = process.env.PORTAL_URL || 'https://leados-app.abmgroups.org';
+  const portalUrl = process.env.PORTAL_URL;
 
   if (!code) {
     return res.redirect(`${portalUrl}/admin/content-os/social-connection?youtube_error=missing_code`);
@@ -3450,7 +3451,7 @@ async function handleLinkedInCallback(req, res) {
       );
     }
 
-    const portalUrl = process.env.PORTAL_URL || 'https://leados-app.abmgroups.org';
+    const portalUrl = process.env.PORTAL_URL;
     res.redirect(
       `${portalUrl}/admin/content-os/social-connection?linkedin_success=1&channel=${encodeURIComponent(accountName)}&brand=${encodeURIComponent(brand_name)}`
     );
@@ -3587,7 +3588,7 @@ async function publishToLinkedIn(authorUrn, accessToken, { caption, videoUrl, co
 async function generateThumbnails(req, res) {
   const { id } = req.params;
   const uploadsDir = path.join(__dirname, '../uploads');
-  const baseUrl = process.env.API_BASE_URL || 'https://leados-api.abmgroups.org';
+  const baseUrl = process.env.API_BASE_URL || process.env.PUBLIC_API_URL;
 
   try {
     const rows = await ContentQueue.find({ id }, { _id: 0, video_url: 1, public_video_url: 1 }).lean();
@@ -3725,7 +3726,7 @@ async function generatePoster(req, res) {
   const { id } = req.params;
   const { frame_url, prompt: clientPrompt, model: clientModel, config: clientConfig } = req.body;
   const uploadsDir = path.join(__dirname, '../uploads');
-  const baseUrl = process.env.API_BASE_URL || 'https://leados-api.abmgroups.org';
+  const baseUrl = process.env.API_BASE_URL || process.env.PUBLIC_API_URL;
 
   if (!frame_url) return res.status(400).json({ error: 'frame_url is required' });
 
@@ -4057,7 +4058,7 @@ async function uploadPosterOverlay(req, res) {
     const filename = `poster_overlay_${id}_${Date.now()}.${ext}`;
     fs.writeFileSync(path.join(uploadsDir, filename), imgBuffer);
 
-    const baseUrl = process.env.API_BASE_URL || 'https://leados-api.abmgroups.org';
+    const baseUrl = process.env.API_BASE_URL || process.env.PUBLIC_API_URL;
     const posterUrl = `${baseUrl}/uploads/${filename}`;
 
     await ContentQueue.updateOne({ id }, { $set: { thumbnail_url: posterUrl, updated_at: new Date() } });
@@ -4171,7 +4172,7 @@ async function generateAIImage(req, res) {
     const uploadsDir = path.join(__dirname, '../uploads');
     fs.writeFileSync(path.join(uploadsDir, filename), Buffer.from(imageData, 'base64'));
 
-    const baseUrl = process.env.API_BASE_URL || 'https://leados-api.abmgroups.org';
+    const baseUrl = process.env.API_BASE_URL || process.env.PUBLIC_API_URL;
     console.log(`[generateAIImage] ✅ Image saved: ${filename} (gemini-2.0-flash-exp)`);
 
     res.json({ success: true, image_url: `${baseUrl}/uploads/${filename}?t=${Date.now()}`, filename });

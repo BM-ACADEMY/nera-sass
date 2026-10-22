@@ -31,6 +31,9 @@ require('dotenv').config({ path: path.join(__dirname, '.env'), override: process
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
+// nginx on the same machine forwards the visitor's IP; trust only that hop so
+// rate limits and audit rows see the real client, not 127.0.0.1.
+app.set('trust proxy', 'loopback');
 const httpServer = http.createServer(app);
 const PORT = process.env.PORT || 3600;
 
@@ -106,6 +109,8 @@ const io = {
 };
 
 app.set('io', io);
+// Admin panel live updates go to the platform staff room only.
+require('./services/realtime').setStaffSender((event, payload) => socketServer.to('platform').emit(event, payload));
 
 socketServer.on('connection', (socket) => {
   console.log(`[Socket.io] Client connected: ${socket.id}`);
@@ -116,6 +121,19 @@ socketServer.on('connection', (socket) => {
 
 // ── DB CONNECTION ─────────────────────────────────────────
 const { connectMongo, mongoose } = require('./db/connection');
+
+// The database may be unreachable at startup (network, or this machine's IP
+// not allowed by the database firewall). Nothing below may crash the process
+// or run against a missing connection while start() keeps retrying.
+const dbConnected = () => mongoose.connection.readyState === 1;
+const whenDbConnected = () => (dbConnected()
+  ? Promise.resolve()
+  : new Promise((resolve) => mongoose.connection.once('connected', resolve)));
+// Scheduled jobs skip their run while the database is not connected.
+const scheduleJob = (expression, task, options) => cron.schedule(expression, (...args) => {
+  if (!dbConnected()) return undefined;
+  return task(...args);
+}, options);
 const {
   NO_ID, ieq, escapeRegex, upsertOne, insertIgnore, withLock, phoneTailRegex, allocIds,
 } = require('./db/mongo');
@@ -456,7 +474,7 @@ async function scheduledMetaInventorySync() {
   }
   return runAsSystem(syncMetaWhatsAppInventory, 'meta-inventory');
 }
-if (jobsEnabled() && metaInventorySyncEnabled()) cron.schedule('*/15 * * * *', () => scheduledMetaInventorySync().catch(err =>
+if (jobsEnabled() && metaInventorySyncEnabled()) scheduleJob('*/15 * * * *', () => scheduledMetaInventorySync().catch(err =>
   console.error('[Meta Inventory Sync]', err.message)));
 const { evaluateLeadBrandAndSchedule, evaluateStuckLeads } = require('./services/aiBrain');
 const { getLeadOSBrand } = require('./services/leadosBrand');
@@ -1202,7 +1220,9 @@ const mediaUpload = multer({ storage: mediaStorage });
 
 const LEAD_EXPORT_DIR = path.join(__dirname, 'uploads', 'lead-exports');
 const activeLeadExports = new Set();
-const leadExportReady = LeadExportJobs.createIndexes();
+const leadExportReady = whenDbConnected()
+  .then(() => LeadExportJobs.createIndexes())
+  .catch((error) => console.error('[Lead Export] Index setup failed:', error.message));
 
 const FACEBOOK_SOURCE = /(facebook|instagram|meta[_ ]?ads)/i;
 // Mongo filter for a lead export (source / created_at range)
@@ -1325,7 +1345,7 @@ function resumeLeadExports() {
 }
 
 // Export files are temporary. Clean up completed/failed jobs after 48 hours.
-if (jobsEnabled()) cron.schedule('17 */6 * * *', () => runAsSystem(async () => {
+if (jobsEnabled()) scheduleJob('17 */6 * * *', () => runAsSystem(async () => {
   try {
     await leadExportReady;
     const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
@@ -1677,7 +1697,7 @@ async function leadFunnel(filter) {
 // ── CRON JOBS ─────────────────────────────────────────────
 // Re-enabled internal campaign execution cron and added logging for WF05 Dashboard
 let scheduledCampaignCronRunning = false;
-if (jobsEnabled()) cron.schedule('* * * * *', async () => {
+if (jobsEnabled()) scheduleJob('* * * * *', async () => {
   if (scheduledCampaignCronRunning) return;
   scheduledCampaignCronRunning = true;
   try {
@@ -1708,7 +1728,7 @@ if (jobsEnabled()) cron.schedule('* * * * *', async () => {
 // n8n is paused or temporarily unavailable. The reminder table's unique claim
 // prevents duplicate sends when both runners execute at the same minute.
 let demoReminderFallbackRunning = false;
-if (jobsEnabled()) cron.schedule('* * * * *', async () => {
+if (jobsEnabled()) scheduleJob('* * * * *', async () => {
   if (process.env.DEMO_REMINDER_FALLBACK_ENABLED === 'false' || demoReminderFallbackRunning) return;
   demoReminderFallbackRunning = true;
   try {
@@ -1743,7 +1763,7 @@ if (jobsEnabled()) cron.schedule('* * * * *', async () => {
 
 // Tenant lifecycle (plan U6): stores each workspace's state daily and archives
 // workspaces that reach day 90. Access rules are also applied live per request.
-if (jobsEnabled()) cron.schedule('30 0 * * *', () => {
+if (jobsEnabled()) scheduleJob('30 0 * * *', () => {
   require('./services/tenantData').runLifecycleSweep()
     .then((changes) => { if (changes.length) console.log('[Lifecycle] State changes:', JSON.stringify(changes)); })
     .catch((error) => console.error('[Lifecycle] Sweep failed:', error.message));
@@ -1752,7 +1772,7 @@ if (jobsEnabled()) cron.schedule('30 0 * * *', () => {
 // Run every 1 minute to poll Google Drive folders for new videos
 let drivePollerRunning = false;
 if (jobsEnabled() && moduleEnabled('contentos') && process.env.DISABLE_DRIVE_POLLER !== 'true') {
-  cron.schedule('* * * * *', async () => {
+  scheduleJob('* * * * *', async () => {
     if (drivePollerRunning) return;
     drivePollerRunning = true;
     try {
@@ -1768,7 +1788,7 @@ if (jobsEnabled() && moduleEnabled('contentos') && process.env.DISABLE_DRIVE_POL
 }
 
 // Run every minute to auto-publish scheduled approved posts (acting as a fallback for n8n)
-if (jobsEnabled() && moduleEnabled('contentos')) cron.schedule('* * * * *', async () => {
+if (jobsEnabled() && moduleEnabled('contentos')) scheduleJob('* * * * *', async () => {
   console.log('Cron: Checking for scheduled approved content due for publishing...');
   try {
     const now = Date.now();
@@ -1784,7 +1804,7 @@ if (jobsEnabled() && moduleEnabled('contentos')) cron.schedule('* * * * *', asyn
         const dummyReq = {
           params: { id: post.id },
           headers: {
-            'host': 'leados-api.abmgroups.org',
+            'host': new URL(process.env.PUBLIC_API_URL).host,
             'x-forwarded-proto': 'https'
           },
           get: (header) => dummyReq.headers[header.toLowerCase()] || null,
@@ -1812,7 +1832,7 @@ if (jobsEnabled() && moduleEnabled('contentos')) cron.schedule('* * * * *', asyn
 });
 
 // Run every Sunday at 2 AM automatically to refresh citations for all GMB clients
-if (jobsEnabled() && moduleEnabled('mafiya')) cron.schedule('0 2 * * 0', async () => {
+if (jobsEnabled() && moduleEnabled('mafiya')) scheduleJob('0 2 * * 0', async () => {
   console.log('Cron: Starting weekly Mafiya citation check for all active clients...');
   try {
     const clients = await models.MafiyaGmbClients.find({ status: 'active' }, { _id: 0, id: 1 }).lean();
@@ -2004,21 +2024,33 @@ function startBackgroundJobs() {
   });
 }
 
+// A promise rejection nobody handled (for example a database call made while
+// the connection is down) is logged; it must not take the whole API down.
+process.on('unhandledRejection', (reason) => {
+  console.error('[Unhandled rejection]', reason?.message || reason);
+});
+
 function start() {
-  for (const name of ['JWT_SECRET', 'INTERNAL_API_KEY', 'TOKEN_ENCRYPTION_KEY']) {
+  for (const name of ['JWT_SECRET', 'INTERNAL_API_KEY', 'TOKEN_ENCRYPTION_KEY', 'PUBLIC_API_URL', 'PORTAL_URL']) {
     if (!process.env[name]) {
       console.error(`[Startup] ${name} is not set; refusing to start.`);
       process.exit(1);
     }
   }
-  return connectMongo().then(() => httpServer.listen(PORT, () => {
+  // The API listens only once MongoDB is connected. If the database cannot be
+  // reached (network down, or this machine's IP not allowed by the database
+  // firewall), keep retrying instead of exiting, so a dev server under nodemon
+  // comes up on its own as soon as the database is reachable again.
+  const RETRY_MS = Number(process.env.MONGO_RETRY_MS || 10000);
+  const attempt = (n = 1) => connectMongo().then(() => httpServer.listen(PORT, () => {
     console.log(`Nera LeadOS API running on port ${PORT} (Socket.io enabled)`);
     if (DISABLED_MODULES.size) console.log(`[Startup] Disabled modules: ${[...DISABLED_MODULES].join(', ')}`);
     startBackgroundJobs();
   })).catch((error) => {
-    console.error('[Startup] MongoDB connection failed:', error.message);
-    process.exit(1);
+    console.error(`[Startup] MongoDB connection failed (attempt ${n}): ${error.message}. The API is not listening yet; retrying in ${RETRY_MS / 1000}s. Check the network and that this machine's IP is allowed by the database firewall.`);
+    setTimeout(() => attempt(n + 1), RETRY_MS);
   });
+  return attempt();
 }
 
 // Tests import the app without starting it (NERA_NO_AUTOSTART=true). A plain

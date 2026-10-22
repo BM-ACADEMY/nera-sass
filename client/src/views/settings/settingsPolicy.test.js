@@ -12,9 +12,9 @@ const FLAGS = {
 };
 const keys = (role) => settingsTabs({ role, permissions: FLAGS[role] }).map((t) => t.key);
 
-test('tab visibility by role; no Team tab (Task 2B)', () => {
-  assert.deepStrictEqual(keys('owner'), ['workspace', 'brand', 'whatsapp', 'account', 'billing']);
-  assert.deepStrictEqual(keys('admin'), ['workspace', 'brand', 'whatsapp', 'account', 'billing']);
+test('same tabs for every role; no Team tab, no Billing tab (no plans)', () => {
+  assert.deepStrictEqual(keys('owner'), ['workspace', 'brand', 'whatsapp', 'account']);
+  assert.deepStrictEqual(keys('admin'), ['workspace', 'brand', 'whatsapp', 'account']);
   assert.deepStrictEqual(keys('manager'), ['workspace', 'brand', 'whatsapp', 'account']);
   assert.deepStrictEqual(keys('agent'), ['workspace', 'brand', 'whatsapp', 'account']);
   assert.deepStrictEqual(settingsTabs({}).map((t) => t.key), ['workspace', 'brand', 'whatsapp', 'account']);

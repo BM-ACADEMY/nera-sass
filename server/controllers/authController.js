@@ -267,7 +267,11 @@ exports.acceptInvitation = async (req, res) => {
   try {
     const { token, name, password, phone } = req.body || {};
     const user = await invitations.acceptInvitation({ token, name, password, phone });
-    return res.status(201).json({ success: true, user: { id: user.id, email: user.email, name: user.name } });
+    return res.status(201).json({
+      success: true,
+      user: { id: user.id, email: user.email, name: user.name },
+      welcome_email_sent: user.welcome_delivery ? user.welcome_delivery.delivered !== false : undefined,
+    });
   } catch (error) {
     return fail(res, error);
   }

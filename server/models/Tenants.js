@@ -18,7 +18,6 @@ module.exports = defineModel('tenants', {
   currency: { type: String, default: 'INR' },
   tax_treatment: { type: String, default: 'gst' },
   timezone: { type: String, default: 'Asia/Kolkata' },
-  is_founding_client: { type: Boolean, default: false },
   suspended_at: { type: Date },
   suspended_reason: { type: String },
   suspended_by: { type: Number },

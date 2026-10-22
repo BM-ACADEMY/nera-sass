@@ -2,13 +2,16 @@
  * Roles and permissions (plan A1).
  *
  * Customer roles come from the Full Scope document (p2): owner, admin,
- * manager, agent. Platform staff are separate accounts (is_platform_staff,
- * tenant_id = null) with their own roles; the names founder / ops / support
- * follow the implementation plan's proposal (decision D4, pending approval).
+ * manager, agent. Each workspace now has a single login (its owner, full
+ * access; see invitations.assertSingleLogin), so in practice only "owner" is
+ * issued; the other roles stay for older accounts.
+ * Platform staff are separate accounts (is_platform_staff, tenant_id = null):
+ * founder (shown as "Admin (Owner)", full access) and ops (shown as "Staff",
+ * everything except billing grants, staff management and data deletion).
  * A customer role never grants a platform permission.
  */
 const TENANT_ROLES = ['owner', 'admin', 'manager', 'agent'];
-const STAFF_ROLES = ['founder', 'ops', 'support'];
+const STAFF_ROLES = ['founder', 'ops'];
 
 // Legacy role values from the original single-company app.
 const LEGACY_TENANT_ROLES = { user: 'agent', ops: 'agent' };
@@ -18,8 +21,6 @@ const TENANT_PERMISSIONS = {
   'team.manage': ['owner', 'admin'],
   'tenant.settings': ['owner', 'admin'],
   'whatsapp.manage': ['owner', 'admin'],
-  'billing.view': ['owner', 'admin'],
-  'billing.manage': ['owner'],
   'templates.manage': ['owner', 'admin', 'manager'],
   'campaigns.manage': ['owner', 'admin', 'manager'],
   'ai_brain.manage': ['owner', 'admin', 'manager'],
@@ -28,19 +29,20 @@ const TENANT_PERMISSIONS = {
 };
 
 const STAFF_PERMISSIONS = {
-  'platform.tenants.view': ['founder', 'ops', 'support'],
+  'platform.tenants.view': ['founder', 'ops'],
   'platform.tenants.manage': ['founder', 'ops'],
   'platform.tenants.export': ['founder', 'ops'],
   'platform.tenants.delete': ['founder'],
-  // Authorizing a manual grant (workspace creation or renewal without a
-  // verified payment) is founder-only.
-  'platform.billing.grant': ['founder'],
+  // Creating a workspace is Admin (Owner) only.
+  'platform.tenants.create': ['founder'],
   'platform.users.manage': ['founder', 'ops'],
   'platform.staff.manage': ['founder'],
   // Meta WhatsApp inventory: view, sync and link/unlink reconciliation.
   'platform.meta': ['founder', 'ops'],
   // Inventory phone registration and cache clearing.
   'platform.meta.admin': ['founder'],
+  // The platform's own WhatsApp inbox (admin panel WhatsApp Chat).
+  'platform.inbox': ['founder', 'ops'],
   'platform.reports': ['founder', 'ops'],
   'platform.audit.view': ['founder', 'ops'],
   'platform.modules': ['founder', 'ops'],
@@ -64,7 +66,9 @@ function describeUser(user) {
   if (!user) return null;
   const legacyPlatformAdmin = !user.is_platform_staff && user.tenant_id == null && user.role === 'admin';
   if (user.is_platform_staff || legacyPlatformAdmin) {
-    const staffRole = STAFF_ROLES.includes(user.staff_role) ? user.staff_role : (legacyPlatformAdmin ? 'founder' : 'support');
+    // A staff account with no known role (for example the retired "support")
+    // keeps its login but gets no platform permission.
+    const staffRole = STAFF_ROLES.includes(user.staff_role) ? user.staff_role : (legacyPlatformAdmin ? 'founder' : null);
     return { kind: 'staff', staffRole, role: null, tenantId: null };
   }
   if (user.tenant_id == null) return { kind: 'none' };
