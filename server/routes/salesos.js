@@ -189,7 +189,7 @@ router.post('/whatsapp/transcribe', internalAuth, async (req, res) => {
     const tokenClient = phoneNumberId
       ? await Clients.findOne({ phone_number_id: phoneNumberId }, { wa_access_token: 1 }).lean()
       : null;
-    const waToken = tokenClient?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
+    const waToken = tokenClient?.wa_access_token;
     if (!waToken) {
       console.error('[WhatsApp Transcription] No WhatsApp access token configured for phone_number_id', phoneNumberId);
       return fallbackToTypedRequest();
@@ -608,8 +608,9 @@ async function sendWhatsAppText(lead_id, content) {
   const lead = await leadWithClient(lead_id, { phone_number_id: 'phone_number_id', client_wa_token: 'wa_access_token' });
   if (!lead) return { delivered: false, reason: 'lead_not_found' };
 
-  const phoneNumberId = lead.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-  const waAccessToken = lead.client_wa_token || process.env.META_PAGE_ACCESS_TOKEN;
+  const phoneNumberId = lead.phone_number_id;
+  const waAccessToken = lead.client_wa_token;
+  if (!phoneNumberId || !waAccessToken) return { delivered: false, reason: 'whatsapp_not_connected' };
   let delivered = false, waMessageId = null;
   if (lead.phone && phoneNumberId && waAccessToken) {
     try {
@@ -1538,8 +1539,11 @@ router.post('/communication/send', internalAuth, async (req, res) => {
 
     // 1. Fetch lead & client details to get phone number, phone_number_id, and access token for Meta Cloud API
     const lead = await leadWithClient(lead_id, { phone_number_id: 'phone_number_id', client_wa_token: 'wa_access_token' });
-    const phoneNumberId = lead?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-    const waAccessToken = lead?.client_wa_token || process.env.META_PAGE_ACCESS_TOKEN;
+    const phoneNumberId = lead?.phone_number_id;
+    const waAccessToken = lead?.client_wa_token;
+    if (channel === 'whatsapp' && lead && (!phoneNumberId || !waAccessToken)) {
+      return res.status(409).json({ error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
+    }
 
     // 2. Send real outbound message via Meta WhatsApp Cloud API (`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`)
     let waMessageId = null;
@@ -2073,8 +2077,8 @@ Write one natural follow-up that continues the unfinished topic. Reference the s
     let delivered = false;
     let waMessageId = null;
     let outboundMessageType = 'text';
-    const phoneNumberId = lead?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-    const waAccessToken = lead?.client_wa_token || process.env.META_PAGE_ACCESS_TOKEN;
+    const phoneNumberId = lead?.phone_number_id;
+    const waAccessToken = lead?.client_wa_token;
     if (lead && lead.phone && phoneNumberId && waAccessToken) {
       try {
         const phoneDigits = lead.phone.replace(/\D/g, '');
@@ -2214,8 +2218,8 @@ Naturally reference relevant details already discussed when useful. Do not inven
     let delivered = false;
     let waMessageId = null;
     let outboundMessageType = 'text';
-    const phoneNumberId = lead.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-    const waAccessToken = lead.client_wa_token || process.env.META_PAGE_ACCESS_TOKEN;
+    const phoneNumberId = lead.phone_number_id;
+    const waAccessToken = lead.client_wa_token;
     if (lead.phone && phoneNumberId && waAccessToken) {
       try {
         let messagePayload;

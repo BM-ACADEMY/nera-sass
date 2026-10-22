@@ -303,7 +303,7 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
             // Audio transcription
             if (msg.type === 'audio' && msg.audio?.id && openRouter.isConfigured) {
               try {
-                const waToken = lead.client_wa_token || client?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
+                const waToken = lead.client_wa_token || client?.wa_access_token;
                 if (waToken) {
                   console.log(`[Audio] Fetching media URL for ${msg.audio.id}`);
                   const mediaRes = await axios.get(`https://graph.facebook.com/v18.0/${msg.audio.id}`, {

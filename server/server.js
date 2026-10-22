@@ -1588,8 +1588,8 @@ async function executeCampaign(campaign_id) {
       return;
     }
 
-    const waToken = campaign.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
-    const phoneId = campaign.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
+    const waToken = campaign.wa_access_token;
+    const phoneId = campaign.phone_number_id;
 
     // Validate credentials
     if (!waToken || !phoneId) {

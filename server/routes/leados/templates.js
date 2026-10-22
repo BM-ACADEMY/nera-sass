@@ -50,11 +50,11 @@ app.post('/api/templates/sync-all', auth, async (req, res) => {
   try {
     const { client_id } = req.body;
     const client = client_id ? await Clients.findOne({ id: client_id }, NO_ID).lean() : null;
-    const waToken = client?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
-    const waBusinessId = client?.wa_business_id || process.env.WA_BUSINESS_ACCOUNT_ID;
+    const waToken = client?.wa_access_token;
+    const waBusinessId = client?.wa_business_id;
 
     if (!waBusinessId || !waToken) {
-      return res.status(400).json({ error: 'Meta Business ID or Access Token is missing' });
+      return res.status(409).json({ error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
     }
 
     console.log(`[Templates Sync] Fetching from Meta for business account: ${waBusinessId}`);
@@ -139,8 +139,11 @@ app.post('/api/templates/:id/submit', auth, async (req, res) => {
       ? await Clients.findOne({ id: tpl.client_id }, NO_ID).lean()
       : null;
 
-    const waToken = client?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
-    const waBusinessId = client?.wa_business_id || process.env.WA_BUSINESS_ACCOUNT_ID;
+    const waToken = client?.wa_access_token;
+    const waBusinessId = client?.wa_business_id;
+    if (!waToken || !waBusinessId) {
+      return res.status(409).json({ error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
+    }
 
     // Construct Meta components
     const components = [];
@@ -250,8 +253,8 @@ app.get('/api/templates/:id/sync', auth, async (req, res) => {
     const client = tpl.client_id ? await Clients.findOne({ id: tpl.client_id }, NO_ID).lean() : null;
     const sharedWaToken = process.env.META_SYSTEM_USER_ACCESS_TOKEN || process.env.META_PAGE_ACCESS_TOKEN;
     const isAllianceTemplate = ['alliance', 'shared'].includes(String(tpl.template_scope || '').toLowerCase());
-    const waToken = isAllianceTemplate ? (sharedWaToken || client?.wa_access_token) : (client?.wa_access_token || sharedWaToken);
-    const waBusinessId = isAllianceTemplate ? (process.env.WA_BUSINESS_ACCOUNT_ID || client?.wa_business_id) : (client?.wa_business_id || process.env.WA_BUSINESS_ACCOUNT_ID);
+    const waToken = isAllianceTemplate ? (sharedWaToken || client?.wa_access_token) : client?.wa_access_token;
+    const waBusinessId = isAllianceTemplate ? (process.env.WA_BUSINESS_ACCOUNT_ID || client?.wa_business_id) : client?.wa_business_id;
 
     if (!waToken) {
       return res.status(409).json({
@@ -363,7 +366,8 @@ app.put('/api/templates/:id', auth, async (req, res) => {
 
     if (current.status !== 'draft' && current.meta_template_id) {
       const client = current.client_id ? await Clients.findOne({ id: current.client_id }, NO_ID).lean() : null;
-      const waToken = client?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
+      const waToken = client?.wa_access_token;
+      if (!waToken) return res.status(409).json({ error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
 
       await axios.post(
         `https://graph.facebook.com/v18.0/${current.meta_template_id}`,
@@ -410,8 +414,9 @@ app.delete('/api/templates/:id', auth, async (req, res) => {
 
     if (tpl.status !== 'draft') {
       const client = tpl.client_id ? await Clients.findOne({ id: tpl.client_id }, NO_ID).lean() : null;
-      const waToken = client?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
-      const waBusinessId = client?.wa_business_id || process.env.WA_BUSINESS_ACCOUNT_ID;
+      const waToken = client?.wa_access_token;
+      const waBusinessId = client?.wa_business_id;
+      if (!waToken || !waBusinessId) return res.status(409).json({ error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
 
       try {
         await axios.delete(

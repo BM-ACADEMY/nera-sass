@@ -119,11 +119,11 @@ app.post('/api/communication/send-template', auth, async (req, res) => {
     if (lead.client_id && lead.whatsapp_status !== 'verified') {
       return res.status(403).json({ error: 'WhatsApp is disabled for this brand until verification succeeds' });
     }
-    const waToken = lead.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
-    const phoneId = lead.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
+    const waToken = lead.wa_access_token;
+    const phoneId = lead.phone_number_id;
 
     if (!waToken || !phoneId) {
-      return res.status(400).json({ error: 'WhatsApp credentials not configured' });
+      return res.status(409).json({ error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
     }
 
     // Build template payload

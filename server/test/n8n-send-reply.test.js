@@ -83,6 +83,25 @@ test('n8n AI reply relay', async (t) => {
     assert.strictEqual(metaCalls.length, 0);
   });
 
+  await t.test('R5. A brand without WhatsApp never falls back to the platform number', async () => {
+    await seed();
+    const bare = (await runAsTenant(2, () => Clients.create({ name: 'No WhatsApp Brand' }))).toObject();
+    const lead = (await runAsTenant(2, () => Leads.create({ name: 'Meena', phone: '919000000001', client_id: bare.id, status: 'new' }))).toObject();
+    process.env.WA_PHONE_NUMBER_ID = 'PLATFORM_PN';
+    process.env.META_PAGE_ACCESS_TOKEN = 'test-dummy-platform-token';
+    try {
+      const relay = await request(app).post('/api/internal/send-reply').set(service(2)).send({ lead_id: lead.id, message: 'Hi' });
+      assert.strictEqual(relay.status, 409);
+      const direct = await request(app).post('/api/communication/send').set(service(2)).send({ lead_id: lead.id, channel: 'whatsapp', type: 'text', content: 'Hi' });
+      assert.strictEqual(direct.status, 409, JSON.stringify(direct.body));
+      assert.strictEqual(direct.body.code, 'WHATSAPP_NOT_CONNECTED');
+      assert.strictEqual(metaCalls.length, 0, 'no call with the platform number or token');
+    } finally {
+      delete process.env.WA_PHONE_NUMBER_ID;
+      delete process.env.META_PAGE_ACCESS_TOKEN;
+    }
+  });
+
   await t.test('R4. A template is sent with its body values; bad names are refused before Meta', async () => {
     const { lead } = await seed();
     const bad = await request(app).post('/api/internal/send-template').set(service(1)).send({ lead_id: lead.id, template: 'Bad Name!' });
