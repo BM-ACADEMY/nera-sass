@@ -5,7 +5,10 @@
 | getnera.in | Landing page (`/login` redirects to the app) | `/var/www/getnera/landing` |
 | app.getnera.in | Customer panel | `/var/www/getnera/app` |
 | admin.getnera.in | Admin panel | `/var/www/getnera/admin` |
-| api.getnera.in | Node API, socket.io, Meta webhooks | pm2 `getnera-api` on 127.0.0.1:3600 |
+| api.getnera.in | Node API, socket.io, Meta webhooks | pm2 `getnera-api` on 127.0.0.1:3601 |
+
+The VPS (82.25.85.114) is shared with other client sites. Port 3600 belongs to the old
+`leados-api`. Never remove other nginx sites, never run `ufw enable/reset`, never `pm2 delete all`.
 
 Assumes Ubuntu 22.04/24.04 and a sudo user.
 
@@ -40,7 +43,7 @@ Copy the local `server/.env` to `/opt/getnera/server/.env` (scp, never through g
 
 ```
 NODE_ENV=production
-PORT=3600
+PORT=3601
 PORTAL_URL=https://app.getnera.in
 ADMIN_PANEL_URL=https://admin.getnera.in
 API_BASE_URL=https://api.getnera.in
@@ -67,7 +70,6 @@ chmod 600 /opt/getnera/server/.env
 ```bash
 sudo cp /opt/getnera/deploy/nginx/getnera.conf /etc/nginx/sites-available/getnera
 sudo ln -sf /etc/nginx/sites-available/getnera /etc/nginx/sites-enabled/getnera
-sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 sudo certbot --nginx -d getnera.in -d www.getnera.in -d app.getnera.in -d admin.getnera.in -d api.getnera.in
 ```
