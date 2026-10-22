@@ -4,6 +4,7 @@
  * arrive through `ctx`.
  */
 const { currentTenantId } = require('../../services/tenantContext');
+const { postToN8n } = require('../../services/n8n');
 module.exports = function registerLeadsImportRoutes(app, ctx) {
 const {
   CampaignImportRecipients,
@@ -212,7 +213,7 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
             const delay = inserted * 1000;
             const welcome = { lead_id: importedLeadId, tenant_id: currentTenantId(), name, phone, client_id: rowClientId };
             setTimeout(() => {
-              axios.post(process.env.N8N_NEW_LEAD_WEBHOOK_URL, welcome, { timeout: 15000 })
+              postToN8n(process.env.N8N_NEW_LEAD_WEBHOOK_URL, welcome)
                 .catch(e => console.error(`[Import Welcome] Failed for lead ${importedLeadId}:`, e.message));
             }, delay);
           }

@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { postToN8n } = require('../../services/n8n');
 module.exports = function registerWebhookWhatsappRoutes(app, ctx) {
 const {
   CampaignLogs,
@@ -392,13 +393,13 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
 
                   // No WhatsApp credential leaves the server: n8n returns its
                   // reply to /api/internal/send-reply, which sends it.
-                  axios.post(process.env.N8N_WEBHOOK_URL, {
+                  postToN8n(process.env.N8N_WEBHOOK_URL, {
                     lead_id: lead.id,
                     tenant_id: client.tenant_id,
                     phone,
                     message: text,
                     brand: client.name || null,
-                  }, { timeout: 15000 }).catch(e => console.error('[n8n forward error]', e.message));
+                  }).catch(e => console.error('[n8n forward error]', e.message));
                 }, 60000);
 
                 if (typeof timer.unref === 'function') timer.unref();

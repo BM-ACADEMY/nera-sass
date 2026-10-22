@@ -4,6 +4,7 @@
  * arrive through `ctx`.
  */
 const { currentTenantId } = require('../../services/tenantContext');
+const { postToN8n } = require('../../services/n8n');
 module.exports = function registerLeadsCrudRoutes(app, ctx) {
 const {
   Clients,
@@ -41,13 +42,13 @@ app.post('/api/leads', auth, async (req, res) => {
     // n8n sends the welcome template back through /api/internal/send-template;
     // it never receives a WhatsApp credential.
     if (process.env.N8N_NEW_LEAD_WEBHOOK_URL) {
-      axios.post(process.env.N8N_NEW_LEAD_WEBHOOK_URL, {
+      postToN8n(process.env.N8N_NEW_LEAD_WEBHOOK_URL, {
         lead_id: rows[0].id,
         tenant_id: currentTenantId(),
         name: rows[0].name,
         phone: rows[0].phone,
         client_id: rows[0].client_id,
-      }, { timeout: 15000 }).catch(e => console.error('[n8n Webhook Error]', e.message));
+      }).catch(e => console.error('[n8n Webhook Error]', e.message));
     }
 
     evaluateLeadBrandAndSchedule(rows[0].id).catch(console.error);

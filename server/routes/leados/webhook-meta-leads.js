@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { postToN8n } = require('../../services/n8n');
 module.exports = function registerWebhookMetaLeadsRoutes(app, ctx) {
 const {
   Clients,
@@ -139,13 +140,13 @@ app.post('/webhook/meta-leads', async (req, res) => {
 
           // Trigger n8n webhook for Meta leads to send welcome template
           if (process.env.N8N_NEW_LEAD_WEBHOOK_URL && newLead && process.env.NODE_ENV !== 'test') {
-            axios.post(process.env.N8N_NEW_LEAD_WEBHOOK_URL, {
+            postToN8n(process.env.N8N_NEW_LEAD_WEBHOOK_URL, {
               lead_id: newLead.id,
               name: newLead.name,
               phone: newLead.phone,
               client_id: newLead.client_id || null,
               tenant_id: tenantId,
-            }, { timeout: 15000 }).catch(e => console.error('[n8n Webhook Error - Meta Lead]', e.message));
+            }).catch(e => console.error('[n8n Webhook Error - Meta Lead]', e.message));
           }
         });
       }

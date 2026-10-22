@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { postToN8n } = require('../../services/n8n');
 module.exports = function registerWebhookRazorpayRoutes(app, ctx) {
 const {
   Clients,
@@ -41,7 +42,7 @@ app.post('/webhook/razorpay', async (req, res) => {
             ? await Clients.findOne({ id: leadData.client_id }, { _id: 0, id: 1, name: 1 }).lean() || {}
             : {};
 
-          await axios.post(process.env.N8N_PAYMENT_SUCCESS_WEBHOOK_URL, {
+          await postToN8n(process.env.N8N_PAYMENT_SUCCESS_WEBHOOK_URL, {
             invoice_id:  paymentId,
             lead_id:     leadId,
             tenant_id:   leadData.tenant_id ?? null,
