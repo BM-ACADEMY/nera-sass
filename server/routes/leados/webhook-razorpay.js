@@ -36,7 +36,7 @@ app.post('/webhook/razorpay', async (req, res) => {
         // Hand off to n8n's WF04 (Customer Journey) - same forwarding pattern as the WhatsApp webhook.
         try {
           // Fetch lead data to pass full context to WF04
-          const leadData = await Leads.findOne({ id: leadId }, { _id: 0, id: 1, name: 1, phone: 1, client_id: 1 }).lean() || {};
+          const leadData = await Leads.findOne({ id: leadId }, { _id: 0, id: 1, tenant_id: 1, name: 1, phone: 1, client_id: 1 }).lean() || {};
           const clientData = leadData.client_id
             ? await Clients.findOne({ id: leadData.client_id }, { _id: 0, id: 1, name: 1 }).lean() || {}
             : {};
@@ -44,6 +44,7 @@ app.post('/webhook/razorpay', async (req, res) => {
           await axios.post(process.env.N8N_PAYMENT_SUCCESS_WEBHOOK_URL, {
             invoice_id:  paymentId,
             lead_id:     leadId,
+            tenant_id:   leadData.tenant_id ?? null,
             name:        leadData.name   || null,
             phone:       leadData.phone  || null,
             brand_id:    clientData.id   || null,

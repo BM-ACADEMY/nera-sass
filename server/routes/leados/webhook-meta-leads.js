@@ -145,9 +145,7 @@ app.post('/webhook/meta-leads', async (req, res) => {
               phone: newLead.phone,
               client_id: newLead.client_id || null,
               tenant_id: tenantId,
-              phone_number_id: process.env.WA_PHONE_NUMBER_ID,
-              wa_access_token: process.env.META_PAGE_ACCESS_TOKEN
-            }).catch(e => console.error('[n8n Webhook Error - Meta Lead]', e.message));
+            }, { timeout: 15000 }).catch(e => console.error('[n8n Webhook Error - Meta Lead]', e.message));
           }
         });
       }

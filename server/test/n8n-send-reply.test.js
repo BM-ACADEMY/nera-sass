@@ -82,4 +82,18 @@ test('n8n AI reply relay', async (t) => {
     assert.ok([403].includes(blocked.status), `expected 403, got ${blocked.status}`);
     assert.strictEqual(metaCalls.length, 0);
   });
+
+  await t.test('R4. A template is sent with its body values; bad names are refused before Meta', async () => {
+    const { lead } = await seed();
+    const bad = await request(app).post('/api/internal/send-template').set(service(1)).send({ lead_id: lead.id, template: 'Bad Name!' });
+    assert.strictEqual(bad.status, 400);
+    assert.strictEqual(metaCalls.length, 0);
+    const res = await request(app).post('/api/internal/send-template').set(service(1))
+      .send({ lead_id: lead.id, template: 'getnera_welcome', language: 'en', body_params: ['Ravi'] });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.strictEqual(metaCalls[0].auth, 'Bearer test-dummy-acme-token');
+    assert.deepStrictEqual(metaCalls[0].body.template, {
+      name: 'getnera_welcome', language: { code: 'en' }, components: [{ type: 'body', parameters: [{ type: 'text', text: 'Ravi' }] }],
+    });
+  });
 });

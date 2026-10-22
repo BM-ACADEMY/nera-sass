@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { currentTenantId } = require('../../services/tenantContext');
 module.exports = function registerLeadsImportRoutes(app, ctx) {
 const {
   CampaignImportRecipients,
@@ -209,30 +210,10 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
           if (!isCampaignImport && process.env.N8N_NEW_LEAD_WEBHOOK_URL) {
             // Stagger by 1s per lead to avoid WhatsApp rate limits on bulk import
             const delay = inserted * 1000;
+            const welcome = { lead_id: importedLeadId, tenant_id: currentTenantId(), name, phone, client_id: rowClientId };
             setTimeout(() => {
-              // Fetch client-specific credentials for this lead (if client_id set)
-              Clients.findOne({ id: rowClientId }, { _id: 0, phone_number_id: 1, wa_access_token: 1 }).lean().then(clientRow => {
-                const phoneNumberId = clientRow?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-                const waAccessToken = clientRow?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
-                axios.post(process.env.N8N_NEW_LEAD_WEBHOOK_URL, {
-                  lead_id: importedLeadId,
-                  name,
-                  phone,
-                  client_id: rowClientId,
-                  phone_number_id: phoneNumberId,
-                  wa_access_token: waAccessToken,
-                }).catch(e => console.error(`[Import Welcome] Failed for lead ${importedLeadId}:`, e.message));
-              }).catch(() => {
-                // fallback to default credentials
-                axios.post(process.env.N8N_NEW_LEAD_WEBHOOK_URL, {
-                  lead_id: importedLeadId,
-                  name,
-                  phone,
-                  client_id: rowClientId,
-                  phone_number_id: process.env.WA_PHONE_NUMBER_ID,
-                  wa_access_token: process.env.META_PAGE_ACCESS_TOKEN,
-                }).catch(e => console.error(`[Import Welcome Fallback] Failed for lead ${importedLeadId}:`, e.message));
-              });
+              axios.post(process.env.N8N_NEW_LEAD_WEBHOOK_URL, welcome, { timeout: 15000 })
+                .catch(e => console.error(`[Import Welcome] Failed for lead ${importedLeadId}:`, e.message));
             }, delay);
           }
         }

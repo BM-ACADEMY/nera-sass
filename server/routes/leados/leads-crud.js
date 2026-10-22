@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { currentTenantId } = require('../../services/tenantContext');
 module.exports = function registerLeadsCrudRoutes(app, ctx) {
 const {
   Clients,
@@ -37,25 +38,16 @@ app.post('/api/leads', auth, async (req, res) => {
     });
     const rows = [createdLead.toObject()];
 
-    // Trigger n8n webhook for new leads to send welcome template.
-    // Prefer this brand's own WhatsApp credentials (kept current via the
-    // integrations/reconnect flow) over the static .env pair, which can go
-    // stale — matches the lookup already done for bulk import (see /api/leads/import).
+    // n8n sends the welcome template back through /api/internal/send-template;
+    // it never receives a WhatsApp credential.
     if (process.env.N8N_NEW_LEAD_WEBHOOK_URL) {
-      Clients.findOne({ id: rows[0].client_id }, { phone_number_id: 1, wa_access_token: 1 }).lean()
-        .then(webhookClient => {
-          const phoneNumberId = webhookClient?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-          const waAccessToken = webhookClient?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
-          return axios.post(process.env.N8N_NEW_LEAD_WEBHOOK_URL, {
-            lead_id: rows[0].id,
-            name: rows[0].name,
-            phone: rows[0].phone,
-            client_id: rows[0].client_id,
-            phone_number_id: phoneNumberId,
-            wa_access_token: waAccessToken
-          });
-        })
-        .catch(e => console.error('[n8n Webhook Error]', e.message));
+      axios.post(process.env.N8N_NEW_LEAD_WEBHOOK_URL, {
+        lead_id: rows[0].id,
+        tenant_id: currentTenantId(),
+        name: rows[0].name,
+        phone: rows[0].phone,
+        client_id: rows[0].client_id,
+      }, { timeout: 15000 }).catch(e => console.error('[n8n Webhook Error]', e.message));
     }
 
     evaluateLeadBrandAndSchedule(rows[0].id).catch(console.error);
