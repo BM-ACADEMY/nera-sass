@@ -24,6 +24,7 @@ test.before(async () => {
   process.env.NERA_META_APP_SECRET = SECRET;
   process.env.PLATFORM_WA_PHONE_NUMBER_ID = PLATFORM_PHONE;
   process.env.PLATFORM_WA_ACCESS_TOKEN = 'dummy-platform-token';
+  process.env.PLATFORM_WA_BUSINESS_ACCOUNT_ID = 'WABA_P'; // ignore the real one in server/.env
   axiosModule.Axios.prototype.request = async function stub(config) {
     const url = String(config.url || '');
     metaCalls.push({ url, data: typeof config.data === 'string' ? JSON.parse(config.data) : config.data, auth: config.headers?.Authorization });

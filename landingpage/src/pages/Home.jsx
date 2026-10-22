@@ -10,6 +10,7 @@ import Contact from '../sections/Contact'
 const links = [
   { href: '#features', label: 'Features', minor: true },
   { href: '#flow', label: 'How it works', minor: true },
+  { href: 'https://app.getnera.in/login', label: 'Login' },
   { href: '#contact', label: 'Request a demo', cta: true },
 ]
 

@@ -31,6 +31,9 @@ require('dotenv').config({ path: path.join(__dirname, '.env'), override: process
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
+// nginx on the same machine forwards the visitor's IP; trust only that hop so
+// rate limits and audit rows see the real client, not 127.0.0.1.
+app.set('trust proxy', 'loopback');
 const httpServer = http.createServer(app);
 const PORT = process.env.PORT || 3600;
 

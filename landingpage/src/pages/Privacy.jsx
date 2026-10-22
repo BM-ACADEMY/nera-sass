@@ -3,6 +3,7 @@ import LegalPage from '../components/LegalPage'
 const links = [
   { href: '/', label: 'Home', minor: true },
   { href: '/terms', label: 'Terms', minor: true },
+  { href: 'https://app.getnera.in/login', label: 'Login' },
   { href: '/#contact', label: 'Request a demo', cta: true },
 ]
 
