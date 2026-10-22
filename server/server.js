@@ -381,6 +381,7 @@ async function syncMetaWhatsAppInventory() {
     client.forEach(item => wabaMap.set(String(item.id), { ...item, ownership_type: 'client' }));
     let phoneCount = 0;
     let templateCount = 0;
+    const seenPhoneIds = [];
     for (const waba of wabaMap.values()) {
       const wabaFields = {
         business_id: businessId || null, name: waba.name ?? null, currency: waba.currency ?? null, timezone_id: waba.timezone_id ?? null,
@@ -415,6 +416,7 @@ async function syncMetaWhatsAppInventory() {
           raw_data: { ...phone, business_profile: profile }, last_synced_at: new Date(),
         };
         await upsertOne(MetaWhatsappPhoneNumbers, { phone_number_id: String(phone.id) }, { $set: phoneFields }, phoneFields);
+        seenPhoneIds.push(String(phone.id));
       }
       for (const template of templates) {
         const templateFields = {
@@ -431,10 +433,16 @@ async function syncMetaWhatsAppInventory() {
       // longer returns (for example, an account removed from the portfolio).
       // Do not do this in single-WABA fallback mode because that response says
       // nothing about the portfolio's other valid WABAs.
+      // Rows left over from a previously configured business are stale too.
+      // A WABA or number still linked to a workspace is kept until unassigned.
       const activeWabaIds = [...wabaMap.keys()];
-      const staleWabaIds = await MetaWhatsappAccounts.distinct('waba_id', { business_id: businessId, waba_id: { $nin: activeWabaIds } });
+      const linkedWabaIds = await MetaWhatsappPhoneNumbers.distinct('waba_id', { client_id: { $ne: null } });
+      const staleFilter = { waba_id: { $nin: [...activeWabaIds, ...linkedWabaIds] } };
+      const staleWabaIds = await MetaWhatsappAccounts.distinct('waba_id', staleFilter);
       await MetaWhatsappTemplates.deleteMany({ waba_id: { $in: staleWabaIds } });
-      await deleteCascade('meta_whatsapp_accounts', { business_id: businessId, waba_id: { $nin: activeWabaIds } });
+      await deleteCascade('meta_whatsapp_accounts', staleFilter);
+      // Numbers Meta no longer lists under a WABA that is still returned.
+      await MetaWhatsappPhoneNumbers.deleteMany({ waba_id: { $in: activeWabaIds }, phone_number_id: { $nin: seenPhoneIds }, client_id: null });
     }
     // Refresh the verification status of brands linked to an inventory number.
     // A brand's number, WABA and display number belong to the customer's own

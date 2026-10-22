@@ -270,6 +270,32 @@ test('Task 1A: Meta inventory, customer-owned numbers, cross-tenant uniqueness',
     assert.strictEqual(await sys(() => AuditEvents.countDocuments({ event: 'META_INVENTORY_SYNCED' })), 1);
   });
 
+  await t.test('M7b. Portfolio sync drops WABAs and numbers Meta no longer returns, even from an old business; linked ones stay', async () => {
+    const ops = await staff('ops');
+    await sys(() => MetaWhatsappAccounts.create([
+      { waba_id: 'waba-1', name: 'Platform WABA', business_id: 'biz-new' },
+      { waba_id: 'old-waba', name: 'Old business WABA', business_id: 'biz-old' },
+      { waba_id: 'linked-waba', name: 'Old but in use', business_id: 'biz-old' },
+    ]));
+    await sys(() => MetaWhatsappPhoneNumbers.create([
+      { phone_number_id: 'gone-p', waba_id: 'waba-1' },
+      { phone_number_id: 'old-p', waba_id: 'old-waba' },
+      { phone_number_id: 'linked-p', waba_id: 'linked-waba', client_id: 77 },
+    ]));
+    await sys(() => MetaWhatsappTemplates.create({ template_id: 'old-t', waba_id: 'old-waba', name: 'old' }));
+    metaRoutes['GET biz-new/owned_whatsapp_business_accounts'] = { data: [{ id: 'waba-1', name: 'Platform WABA' }] };
+    metaRoutes['GET biz-new/client_whatsapp_business_accounts'] = { data: [] };
+    stubInventorySync([{ id: 'p-1', display_phone_number: '911111111111', status: 'CONNECTED' }]);
+
+    const res = await withEnv({ ...WITH_TOKEN, META_BUSINESS_ID: 'biz-new' }, () => request(app).post('/api/admin/meta/whatsapp/sync').set(bearer(ops)));
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    const wabas = (await sys(() => MetaWhatsappAccounts.find({}).lean())).map((w) => w.waba_id).sort();
+    assert.deepStrictEqual(wabas, ['linked-waba', 'waba-1']);
+    const phones = (await sys(() => MetaWhatsappPhoneNumbers.find({}).lean())).map((p) => p.phone_number_id).sort();
+    assert.deepStrictEqual(phones, ['linked-p', 'p-1']);
+    assert.strictEqual(await sys(() => MetaWhatsappTemplates.countDocuments({ waba_id: 'old-waba' })), 0);
+  });
+
   await t.test('M8. The scheduled sync is skipped without the inventory credential', async () => {
     stubInventorySync([]);
     const result = await scheduledMetaInventorySync();
