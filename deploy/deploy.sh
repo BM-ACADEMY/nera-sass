@@ -35,8 +35,7 @@ if [[ "$PART" == all || "$PART" == server ]]; then
     pm2 save
   fi
   sleep 3
-  API_PORT="$(grep -E "^PORT=" "$ROOT/server/.env" | cut -d= -f2 | tr -d "
-")"
+  API_PORT="$(grep -E '^PORT=' "$ROOT/server/.env" | cut -d= -f2 | tr -d '\r')"
   curl -fsS "http://127.0.0.1:${API_PORT:-3601}/health" && echo " <- API is up"
 fi
 
