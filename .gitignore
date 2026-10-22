@@ -8,3 +8,6 @@ server/data/gsc_tokens.json
 
 # Local development mailbox written by server/services/notify.js
 server/.dev-outbox/
+
+# User uploads and exports (customer data): never commit
+server/uploads/
