@@ -27,7 +27,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Edit these four values once per n8n instance.\nreturn [{ json: {\n  api: 'https://YOUR-API-HOST',\n  llmUrl: 'https://api.openai.com/v1/chat/completions',\n  model: 'gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
+        "jsCode": "// Edit these values once per n8n instance.\nreturn [{ json: {\n  api: 'https://api.getnera.in',\n  llmUrl: 'https://api.openai.com/v1/chat/completions',\n  model: 'gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
       },
       "id": "e9372407-6573-4e5c-9e1d-435e560aa7e4",
       "name": "Config",
@@ -111,7 +111,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, reason: 'Welcome template could not be sent', draft: '' }) }}"
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, reason: 'Welcome template could not be sent', mode: 'notify' }) }}"
       },
       "id": "8a17c0de-8beb-4183-9d02-08e435302168",
       "name": "Handover (welcome failed)",

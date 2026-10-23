@@ -27,7 +27,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Edit these four values once per n8n instance.\nreturn [{ json: {\n  api: 'https://YOUR-API-HOST',\n  llmUrl: 'https://api.openai.com/v1/chat/completions',\n  model: 'gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
+        "jsCode": "// Edit these values once per n8n instance.\nreturn [{ json: {\n  api: 'https://api.getnera.in',\n  llmUrl: 'https://api.openai.com/v1/chat/completions',\n  model: 'gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
       },
       "id": "d198163f-342b-4f40-8a01-3f5f08db8855",
       "name": "Config",
@@ -93,7 +93,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const body = $('Webhook').first().json.body;\nconst cfg = $('Config').first().json;\nconst ctx = $('Get context').first().json;\n\nconst business = ctx.business_name || 'this business';\nconst brain = (ctx.brain || []).map(b => `[${b.doc_type}] ${b.content}`).join('\\n\\n').slice(0, 12000);\nconst system = [\n  `You are the WhatsApp sales assistant for ${business}.`,\n  `Language: ${ctx.language || 'reply in the language the customer uses'}. Tone: ${ctx.tone || 'friendly, short, professional'}.`,\n  'Answer ONLY from the business knowledge below. If the answer is not there, say the team will confirm and set needs_human to true.',\n  'Never invent prices, offers, dates, links or policies. Never mention any other business.',\n  `Rules:\\n${ctx.rules || '- Keep replies under 80 words.\\n- Ask at most one question at a time.'}`,\n  `Business knowledge:\\n${brain || '(empty)'}`\n].join('\\n\\n');\nconst history = (ctx.messages || []).slice(-10).map(m => ({ role: m.direction === 'inbound' ? 'user' : 'assistant', content: m.content }));\nconst instruction = 'Return JSON only: {\"reply\": string, \"confidence\": number 0 to 1, \"needs_human\": boolean, \"reason\": string, \"lead\": {\"name\": string|null, \"need\": string|null, \"budget\": string|null, \"timeline\": string|null}, \"score\": number 0 to 100}';\nreturn [{ json: { llmBody: { model: cfg.model, temperature: 0.3, response_format: { type: 'json_object' },\n  messages: [{ role: 'system', content: system + '\\n\\n' + instruction }, ...history, { role: 'user', content: body.message }] } } }];"
+        "jsCode": "const body = $('Webhook').first().json.body;\nconst cfg = $('Config').first().json;\nconst ctx = $('Get context').first().json;\n// A person took over this chat (or the customer opted out): stay quiet.\nif (ctx.ai_paused) return [];\n\nconst business = ctx.business_name || 'this business';\nconst brain = (ctx.brain || []).map(b => `[${b.doc_type}] ${b.content}`).join('\\n\\n').slice(0, 12000);\nconst system = [\n  `You are the WhatsApp sales assistant for ${business}.`,\n  `Language: ${ctx.language || 'reply in the language the customer uses'}. Tone: ${ctx.tone || 'friendly, short, professional'}.`,\n  'Answer ONLY from the business knowledge below. If the answer is not there, say the team will confirm and set needs_human to true.',\n  'Never invent prices, offers, dates, links or policies. Never mention any other business.',\n  `Rules:\\n${ctx.rules || '- Keep replies under 80 words.\\n- Ask at most one question at a time.'}`,\n  `Business knowledge:\\n${brain || '(empty)'}`\n].join('\\n\\n');\nconst history = (ctx.messages || []).slice(-10).map(m => ({ role: m.direction === 'inbound' ? 'user' : 'assistant', content: m.content }));\nconst instruction = 'Return JSON only: {\"reply\": string, \"confidence\": number 0 to 1, \"needs_human\": boolean, \"reason\": string, \"lead\": {\"name\": string|null, \"need\": string|null, \"budget\": string|null, \"timeline\": string|null}, \"score\": number 0 to 100}';\nreturn [{ json: { llmBody: { model: cfg.model, temperature: 0.3, response_format: { type: 'json_object' },\n  messages: [{ role: 'system', content: system + '\\n\\n' + instruction }, ...history, { role: 'user', content: body.message }] } } }];"
       },
       "id": "10d7bedb-2cc6-4d9a-a0a2-8aa37fa5aadd",
       "name": "Build prompt",
@@ -138,7 +138,7 @@
     },
     {
       "parameters": {
-        "jsCode": "\nconst cfg = $('Config').first().json;\nconst ctx = $('Get context').first().json;\nlet out;\ntry { out = JSON.parse($json.choices[0].message.content); }\ncatch (e) { return [{ json: { route: 'handover', reason: 'AI returned invalid output', draft: '' } }]; }\nconst reply = String(out.reply || '').trim();\nconst problems = [];\nif (!reply) problems.push('empty reply');\nif (reply.length > 1000) problems.push('reply too long');\nif (out.needs_human) problems.push(out.reason || 'AI asked for a person');\nif (!(Number(out.confidence) >= cfg.minConfidence)) problems.push('low confidence');\nconst known = JSON.stringify(ctx).toLowerCase();\nconst badLinks = (reply.match(/https?:\\/\\/\\S+/g) || []).filter(u => !known.includes(u.toLowerCase()));\nif (badLinks.length) problems.push('link not in knowledge');\nconst badNums = (reply.match(/\\+?\\d[\\d\\s-]{8,}\\d/g) || []).filter(n => !known.includes(n.replace(/[\\s-]/g, '')) && !known.includes(n));\nif (badNums.length) problems.push('phone number not in knowledge');\nconst lead = out.lead || {};\nconst score = Math.max(0, Math.min(100, Math.round(Number(out.score) || 0)));\nconst interest = [lead.need, lead.budget && ('budget ' + lead.budget), lead.timeline].filter(Boolean).join(' | ') || null;\nlet route = problems.length ? 'handover' : 'send';\nif (!problems.length && ctx.supervised) { route = 'handover'; problems.push('Supervised mode: approve this draft'); }\nreturn [{ json: { route, reason: problems.join('; '), reply, draft: reply, score, interest } }];\n"
+        "jsCode": "\nconst cfg = $('Config').first().json;\nconst ctx = $('Get context').first().json;\nlet out;\ntry { out = JSON.parse($json.choices[0].message.content); }\ncatch (e) { return [{ json: { route: 'handover', reason: 'AI returned invalid output', draft: '' } }]; }\nconst reply = String(out.reply || '').trim();\nconst problems = [];\nif (!reply) problems.push('empty reply');\nif (reply.length > 1000) problems.push('reply too long');\nif (out.needs_human) problems.push(out.reason || 'AI asked for a person');\nif (!(Number(out.confidence) >= cfg.minConfidence)) problems.push('low confidence');\nconst known = JSON.stringify(ctx).toLowerCase();\nconst badLinks = (reply.match(/https?:\\/\\/\\S+/g) || []).filter(u => !known.includes(u.toLowerCase()));\nif (badLinks.length) problems.push('link not in knowledge');\nconst badNums = (reply.match(/\\+?\\d[\\d\\s-]{8,}\\d/g) || []).filter(n => !known.includes(n.replace(/[\\s-]/g, '')) && !known.includes(n));\nif (badNums.length) problems.push('phone number not in knowledge');\nconst lead = out.lead || {};\nconst score = Math.max(0, Math.min(100, Math.round(Number(out.score) || 0)));\nconst interest = [lead.need, lead.budget && ('budget ' + lead.budget), lead.timeline].filter(Boolean).join(' | ') || null;\nlet route = problems.length ? 'handover' : 'send';\nif (!problems.length && ctx.supervised) { route = 'handover'; problems.push('Supervised mode: approve this draft'); }\nreturn [{ json: { route, reason: problems.join('; '), reply, draft: reply, score, interest, hot: score >= 70 } }];\n"
       },
       "id": "f59b6f93-313f-40b1-bc38-bbfd275a8912",
       "name": "Parse and guard",
@@ -206,7 +206,8 @@
       },
       "retryOnFail": true,
       "maxTries": 2,
-      "waitBetweenTries": 2000
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -226,7 +227,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, score: $('Parse and guard').first().json.score, interest: $('Parse and guard').first().json.interest, status: $('Parse and guard').first().json.score >= 70 ? 'hot' : null }) }}"
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, score: $('Parse and guard').first().json.score, interest: $('Parse and guard').first().json.interest, status: $('Parse and guard').first().json.hot ? 'hot' : null }) }}"
       },
       "id": "5e3a313f-2b64-4796-8db2-7edc7e05ab0f",
       "name": "Update lead",
@@ -241,7 +242,8 @@
           "id": "",
           "name": "Nera Internal Key"
         }
-      }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
@@ -296,7 +298,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, reason: 'AI failed', draft: '' }) }}"
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, reason: 'AI could not answer (technical error): please reply', mode: 'notify' }) }}"
       },
       "id": "5a99e277-ac9b-439e-a4cd-d66aba792506",
       "name": "Handover (AI failed)",
@@ -305,6 +307,96 @@
       "position": [
         2400,
         300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/handover",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, reason: 'The AI reply could not be sent: please reply', mode: 'notify' }) }}"
+      },
+      "id": "handover-send-failed",
+      "name": "Handover (send failed)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1920,
+        560
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $('Parse and guard').first().json.hot }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "hot-lead",
+      "name": "Hot lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/handover",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, reason: 'Hot lead', mode: 'hot' }) }}"
+      },
+      "id": "notify-hot-lead",
+      "name": "Notify hot lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        180
       ],
       "credentials": {
         "httpHeaderAuth": {
@@ -421,7 +513,37 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Handover (send failed)",
+            "type": "main",
+            "index": 0
+          }
         ]
+      ]
+    },
+    "Update lead": {
+      "main": [
+        [
+          {
+            "node": "Hot lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hot lead?": {
+      "main": [
+        [
+          {
+            "node": "Notify hot lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
       ]
     }
   },

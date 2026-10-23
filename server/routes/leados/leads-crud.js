@@ -5,6 +5,7 @@
  */
 const { currentTenantId } = require('../../services/tenantContext');
 const { postToN8n } = require('../../services/n8n');
+const aiAutomation = require('../../services/aiAutomation');
 module.exports = function registerLeadsCrudRoutes(app, ctx) {
 const {
   Clients,
@@ -79,6 +80,20 @@ app.patch('/api/leads/:id', auth, async (req, res) => {
 
     const lead = await Leads.findOneAndUpdate({ id: req.params.id }, { $set: { ...updates, updated_at: new Date() } }, { new: true, projection: NO_ID }).lean();
     res.json({ lead: lead || undefined });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/leads/:id/ai   { paused: boolean }
+// A person takes over a chat (paused) or hands it back to the AI, which also
+// clears the handover flag and draft.
+app.post('/api/leads/:id/ai', auth, async (req, res) => {
+  try {
+    if (typeof req.body?.paused !== 'boolean') return res.status(400).json({ error: 'paused must be true or false' });
+    const found = await aiAutomation.setAiPaused(req.params.id, req.body.paused);
+    if (!found) return res.status(404).json({ error: 'Lead not found' });
+    res.json({ success: true, ai_paused: req.body.paused });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }

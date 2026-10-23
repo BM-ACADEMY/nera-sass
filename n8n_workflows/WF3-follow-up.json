@@ -1,5 +1,5 @@
 {
-  "name": "Nera WF3 - Follow-up (Pro and above)",
+  "name": "Nera WF3 - Follow-up",
   "nodes": [
     {
       "parameters": {
@@ -23,7 +23,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Edit these four values once per n8n instance.\nreturn [{ json: {\n  api: 'https://YOUR-API-HOST',\n  llmUrl: 'https://api.openai.com/v1/chat/completions',\n  model: 'gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
+        "jsCode": "// Edit these values once per n8n instance.\nreturn [{ json: {\n  api: 'https://api.getnera.in',\n  llmUrl: 'https://api.openai.com/v1/chat/completions',\n  model: 'gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
       },
       "id": "35a6649f-b93b-4ada-a5a4-a7e239f0869a",
       "name": "Config",
@@ -102,7 +102,7 @@
           "parameters": [
             {
               "name": "x-tenant-id",
-              "value": "={{ $('Split due').item.json.tenant_id }}"
+              "value": "={{ $('Loop Over Items').first().json.tenant_id }}"
             }
           ]
         },
@@ -111,7 +111,7 @@
           "parameters": [
             {
               "name": "lead_id",
-              "value": "={{ $('Split due').item.json.lead_id }}"
+              "value": "={{ $('Loop Over Items').first().json.lead_id }}"
             },
             {
               "name": "limit",
@@ -136,11 +136,12 @@
       },
       "retryOnFail": true,
       "maxTries": 2,
-      "waitBetweenTries": 2000
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "jsCode": "const cfg = $('Config').first().json;\nconst item = $('Split due').item.json;\nconst ctx = $('Get context').first().json;\n\nconst business = ctx.business_name || 'this business';\nconst brain = (ctx.brain || []).map(b => `[${b.doc_type}] ${b.content}`).join('\\n\\n').slice(0, 12000);\nconst system = [\n  `You are the WhatsApp sales assistant for ${business}.`,\n  `Language: ${ctx.language || 'reply in the language the customer uses'}. Tone: ${ctx.tone || 'friendly, short, professional'}.`,\n  'Answer ONLY from the business knowledge below. If the answer is not there, say the team will confirm and set needs_human to true.',\n  'Never invent prices, offers, dates, links or policies. Never mention any other business.',\n  `Rules:\\n${ctx.rules || '- Keep replies under 80 words.\\n- Ask at most one question at a time.'}`,\n  `Business knowledge:\\n${brain || '(empty)'}`\n].join('\\n\\n');\nconst history = (ctx.messages || []).slice(-10).map(m => ({ role: m.direction === 'inbound' ? 'user' : 'assistant', content: m.content }));\nconst day = ({ 1: 2, 2: 5, 3: 10 })[item.step] || item.step;\nconst instruction = 'Write ONE short follow-up (max 40 words) for day ' + day + ' after the customer went quiet. Do not repeat earlier messages. No pressure. Return JSON only: {\"reply\": string}';\nreturn [{ json: { llmBody: { model: cfg.model, temperature: 0.5, response_format: { type: 'json_object' },\n  messages: [{ role: 'system', content: system }, ...history, { role: 'user', content: instruction }] } } }];"
+        "jsCode": "const cfg = $('Config').first().json;\nconst item = $('Loop Over Items').first().json;\nconst ctx = $json; // this lead's context (one lead per loop pass)\n\nconst business = ctx.business_name || 'this business';\nconst brain = (ctx.brain || []).map(b => `[${b.doc_type}] ${b.content}`).join('\\n\\n').slice(0, 12000);\nconst system = [\n  `You are the WhatsApp sales assistant for ${business}.`,\n  `Language: ${ctx.language || 'reply in the language the customer uses'}. Tone: ${ctx.tone || 'friendly, short, professional'}.`,\n  'Answer ONLY from the business knowledge below. If the answer is not there, say the team will confirm and set needs_human to true.',\n  'Never invent prices, offers, dates, links or policies. Never mention any other business.',\n  `Rules:\\n${ctx.rules || '- Keep replies under 80 words.\\n- Ask at most one question at a time.'}`,\n  `Business knowledge:\\n${brain || '(empty)'}`\n].join('\\n\\n');\nconst history = (ctx.messages || []).slice(-10).map(m => ({ role: m.direction === 'inbound' ? 'user' : 'assistant', content: m.content }));\nconst day = ({ 1: 2, 2: 5, 3: 10 })[item.step] || item.step;\nconst instruction = 'Write ONE short follow-up (max 40 words) for day ' + day + ' after the customer went quiet. Do not repeat earlier messages. No pressure. Return JSON only: {\"reply\": string}';\nreturn [{ json: { llmBody: { model: cfg.model, temperature: 0.5, response_format: { type: 'json_object' },\n  messages: [{ role: 'system', content: system }, ...history, { role: 'user', content: instruction }] } } }];"
       },
       "id": "8d227f75-bc01-4475-8fd4-9e3ce9ee9136",
       "name": "Build follow-up prompt",
@@ -228,13 +229,13 @@
           "parameters": [
             {
               "name": "x-tenant-id",
-              "value": "={{ $('Split due').item.json.tenant_id }}"
+              "value": "={{ $('Loop Over Items').first().json.tenant_id }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ lead_id: $('Split due').item.json.lead_id, message: $('Parse follow-up').first().json.reply }) }}"
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Loop Over Items').first().json.lead_id, message: $json.reply }) }}"
       },
       "id": "89b9b020-9270-45a7-bd94-7feef98ef22f",
       "name": "Send follow-up",
@@ -252,7 +253,8 @@
       },
       "retryOnFail": true,
       "maxTries": 2,
-      "waitBetweenTries": 2000
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -266,13 +268,13 @@
           "parameters": [
             {
               "name": "x-tenant-id",
-              "value": "={{ $('Split due').item.json.tenant_id }}"
+              "value": "={{ $('Loop Over Items').first().json.tenant_id }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ lead_id: $('Split due').item.json.lead_id, template: $('Split due').item.json.template || $('Config').first().json.followUpTemplate, language: $('Split due').item.json.language || 'en', body_params: [$('Split due').item.json.name || 'there'] }) }}"
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Loop Over Items').first().json.lead_id, template: $('Loop Over Items').first().json.template || $('Config').first().json.followUpTemplate, language: $('Loop Over Items').first().json.language || 'en', body_params: [$('Loop Over Items').first().json.name || 'there'] }) }}"
       },
       "id": "0ec7caf1-fc25-4b2f-8bb1-11598f91cc00",
       "name": "Send follow-up template",
@@ -290,7 +292,8 @@
       },
       "retryOnFail": true,
       "maxTries": 2,
-      "waitBetweenTries": 2000
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -304,13 +307,13 @@
           "parameters": [
             {
               "name": "x-tenant-id",
-              "value": "={{ $('Split due').item.json.tenant_id }}"
+              "value": "={{ $('Loop Over Items').first().json.tenant_id }}"
             }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ lead_id: $('Split due').item.json.lead_id, step: $('Split due').item.json.step }) }}"
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Loop Over Items').first().json.lead_id, step: $('Loop Over Items').first().json.step }) }}"
       },
       "id": "abc45e80-c43f-491e-9561-761c2db0dfd3",
       "name": "Mark step done",
@@ -325,7 +328,57 @@
           "id": "",
           "name": "Nera Internal Key"
         }
-      }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "loop-over-items",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        840,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/handover",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Loop Over Items').first().json.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Loop Over Items').first().json.lead_id, reason: 'Follow-up ' + $('Loop Over Items').first().json.step + ' could not be sent', mode: 'notify' }) }}"
+      },
+      "id": "handover-follow-up-failed",
+      "name": "Handover (follow-up failed)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        560
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      },
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -366,7 +419,7 @@
       "main": [
         [
           {
-            "node": "Inside 24h window?",
+            "node": "Loop Over Items",
             "type": "main",
             "index": 0
           }
@@ -396,6 +449,13 @@
         [
           {
             "node": "Build follow-up prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send follow-up template",
             "type": "main",
             "index": 0
           }
@@ -468,6 +528,13 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Send follow-up template",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
@@ -476,6 +543,47 @@
         [
           {
             "node": "Mark step done",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handover (follow-up failed)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Inside 24h window?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handover (follow-up failed)": {
+      "main": [
+        [
+          {
+            "node": "Mark step done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark step done": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
             "type": "main",
             "index": 0
           }
