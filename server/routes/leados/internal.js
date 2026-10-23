@@ -14,7 +14,10 @@ const {
   io,
   upsertOne,
 } = ctx;
-const { tenantCanSend } = require('../../services/lifecycle');
+const { tenantCanSend, tenantLifecycle } = require('../../services/lifecycle');
+const { internalPlatformAuth } = require('../../middleware/authMiddleware');
+const ai = require('../../services/aiAutomation');
+const { BrainDocs } = ctx;
 // ── INTERNAL (called by n8n) ──────────────────────────────
 
 // POST /api/internal/save-conversation
@@ -135,4 +138,124 @@ app.post('/api/internal/send-template', internalAuth, sendRoute('send-template',
     type: 'template', template: { name: template, language: { code: language }, ...(components ? { components } : {}) },
   }));
 }));
+
+// GET /api/internal/context?lead_id=&before_message_id=&limit=
+// Everything WF1/WF3 need to write one reply: business settings, knowledge,
+// the lead and its recent messages (older than before_message_id, which is
+// the message being answered and is sent separately).
+app.get('/api/internal/context', internalAuth, async (req, res) => {
+  try {
+    const leadId = Number(req.query.lead_id);
+    if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ error: 'lead_id is required' });
+    const lead = await Leads.findOne({ id: leadId }, { _id: 0 }).lean();
+    if (!lead) return res.status(404).json({ error: 'Lead not found' }); // tenant scope: another tenant's lead is 404
+    const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 30);
+    const before = Number(req.query.before_message_id);
+    const conversationIds = await Conversations.distinct('id', { lead_id: lead.id });
+    const filter = { conversation_id: { $in: conversationIds } };
+    if (Number.isInteger(before) && before > 0) filter.id = { $lt: before };
+    const [brain, messages] = await Promise.all([
+      lead.client_id != null ? BrainDocs.find({ client_id: lead.client_id }, { _id: 0, doc_type: 1, content: 1 }).lean() : [],
+      Messages.find(filter, { _id: 0, id: 1, direction: 1, content: 1, is_ai: 1, sent_at: 1 }).sort({ id: -1 }).limit(limit).lean(),
+    ]);
+    const tenant = req.tenant || {};
+    res.json({
+      business_name: tenant.name || null,
+      language: tenant.ai_language || null,
+      tone: tenant.ai_tone || null,
+      rules: tenant.ai_rules || null,
+      scoring_rules: tenant.scoring_rules || null,
+      supervised: Boolean(tenant.ai_supervised),
+      ai_paused: Boolean(lead.ai_paused) || ai.optedOut(lead),
+      brain: brain.filter((b) => b.content).map((b) => ({ doc_type: b.doc_type, content: b.content })),
+      lead: { id: lead.id, name: lead.name || null, status: lead.status || null, score: lead.score ?? null, interest: lead.interest || null },
+      messages: messages.reverse().map((m) => ({ id: m.id, direction: m.direction, content: m.content || '', is_ai: Boolean(m.is_ai), at: m.sent_at })),
+    });
+  } catch (err) {
+    console.error('[internal/context]', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/internal/handover   { lead_id, reason, draft?, mode? }
+// mode: pause (default: AI stops for this chat), notify (a person is told,
+// AI continues), hot (hot-lead alert, once per lead).
+app.post('/api/internal/handover', internalAuth, async (req, res) => {
+  try {
+    const leadId = Number(req.body?.lead_id);
+    const mode = req.body?.mode || 'pause';
+    if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ error: 'lead_id is required' });
+    if (!['pause', 'notify', 'hot'].includes(mode)) return res.status(400).json({ error: 'mode must be pause, notify or hot' });
+    const result = await ai.handover(io, { leadId, reason: req.body?.reason, draft: req.body?.draft, mode });
+    if (!result) return res.status(404).json({ error: 'Lead not found' });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[internal/handover]', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/internal/followups/due   (service key, all tenants)
+// Leads whose AI follow-up is due. Each returned lead is leased for an hour
+// so an overlapping run cannot send it twice; /followups/mark sets the real
+// next date. Paused, opted-out, closed and blocked leads never appear, and
+// nothing is returned outside 9:00-21:00 in the workspace's time zone.
+app.get('/api/internal/followups/due', internalPlatformAuth, async (req, res) => {
+  try {
+    const now = new Date();
+    const leads = await Leads.find({
+      ai_followup_due: { $ne: null, $lte: now },
+      ai_followup_step: { $lt: ai.MAX_FOLLOWUP_STEPS },
+      ai_paused: { $ne: true },
+      needs_human: { $ne: true },
+      opted_out: { $ne: true },
+      whatsapp_opt_out: { $ne: true },
+      status: { $nin: ai.CLOSED_STATUSES },
+      phone: { $nin: [null, ''] },
+    }, { _id: 0, id: 1, tenant_id: 1, name: 1, ai_followup_step: 1, ai_followup_due: 1, last_inbound_at: 1 }).sort({ ai_followup_due: 1 }).limit(100).lean();
+
+    const tenants = new Map();
+    const items = [];
+    for (const lead of leads) {
+      if (!tenants.has(lead.tenant_id)) {
+        const { tenant } = await tenantLifecycle(lead.tenant_id);
+        const usable = tenant && (await tenantCanSend(lead.tenant_id)) && tenant.ai_enabled !== false && tenant.ai_followups_enabled !== false;
+        tenants.set(lead.tenant_id, usable ? tenant : null);
+      }
+      const tenant = tenants.get(lead.tenant_id);
+      if (!tenant || !ai.inSendingHours(tenant, now)) continue;
+      const leased = await Leads.updateOne(
+        { id: lead.id, tenant_id: lead.tenant_id, ai_followup_due: lead.ai_followup_due },
+        { $set: { ai_followup_due: new Date(now.getTime() + ai.HOUR_MS) } },
+      );
+      if (leased.modifiedCount !== 1) continue;
+      const lastInbound = lead.last_inbound_at ? new Date(lead.last_inbound_at).getTime() : 0;
+      items.push({
+        tenant_id: lead.tenant_id,
+        lead_id: lead.id,
+        name: lead.name || null,
+        step: Number(lead.ai_followup_step || 0) + 1,
+        in_window: lastInbound > 0 && now.getTime() - lastInbound < ai.DAY_MS,
+        template: tenant.followup_template || process.env.AI_FOLLOWUP_TEMPLATE || 'follow_up',
+        language: tenant.language || 'en',
+      });
+    }
+    res.json({ items });
+  } catch (err) {
+    console.error('[internal/followups/due]', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/internal/followups/mark   { lead_id, step }
+app.post('/api/internal/followups/mark', internalAuth, async (req, res) => {
+  try {
+    const ok = await ai.markFollowupSent(req.body?.lead_id, req.body?.step);
+    if (!ok) return res.status(400).json({ error: `lead_id and a step from 1 to ${ai.MAX_FOLLOWUP_STEPS} are required` });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[internal/followups/mark]', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 };

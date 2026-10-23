@@ -29,6 +29,8 @@ const SERVER_ROOT = ctx.SERVER_ROOT || path.resolve(__dirname, '../../');
 const { runAsSystem, runAsTenant } = require('../../services/tenantContext');
 const { requireMetaSignature } = require('../../services/metaWebhookSignature');
 const platformInbox = require('../../services/platformInbox');
+const aiAutomation = require('../../services/aiAutomation');
+const { tenantLifecycle } = require('../../services/lifecycle');
  // Store timeouts for delayed AI replies
 
 // GET — Meta webhook verification
@@ -379,8 +381,22 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
               io.emit('incoming_message', { lead_id: String(lead.id), message: savedRows[0] });
               console.log(`[Webhook] ✅ Saved inbound ${msgType} from ${phone} → lead ${lead.id}, msg_id ${savedRows[0].id} (tenant ${client.tenant_id})`);
 
+              // The customer wrote: the AI follow-up schedule starts again from now.
+              await aiAutomation.recordInbound(lead.id);
+
               const shouldTriggerAI = ['text', 'button', 'interactive', 'audio'].includes(msg.type);
-              if (shouldTriggerAI && process.env.N8N_WEBHOOK_URL && process.env.NODE_ENV !== 'test') {
+              const aiWanted = shouldTriggerAI && process.env.N8N_WEBHOOK_URL && process.env.NODE_ENV !== 'test';
+              // Paused chats (handed to a person), opted-out customers, blocked
+              // workspaces and the hourly cap never reach n8n.
+              const aiTenant = aiWanted ? (await tenantLifecycle(client.tenant_id)).tenant : null;
+              const aiBlocked = aiWanted ? await aiAutomation.aiBlockReason(aiTenant, lead) : null;
+              if (aiBlocked) {
+                console.log(`[Webhook] AI reply skipped for lead ${lead.id}: ${aiBlocked}`);
+                if (aiBlocked === 'hourly AI limit reached') {
+                  await aiAutomation.handover(io, { leadId: lead.id, reason: 'AI hourly limit reached: please reply yourself', mode: 'notify' });
+                }
+              }
+              if (aiWanted && !aiBlocked) {
                 if (aiReplyQueue.has(lead.id)) {
                   clearTimeout(aiReplyQueue.get(lead.id));
                 }
@@ -396,11 +412,12 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
                   postToN8n(process.env.N8N_WEBHOOK_URL, {
                     lead_id: lead.id,
                     tenant_id: client.tenant_id,
+                    message_id: inbound.id,
                     phone,
                     message: text,
                     brand: client.name || null,
                   }).catch(e => console.error('[n8n forward error]', e.message));
-                }, 60000);
+                }, aiAutomation.replyDelayMs(aiTenant));
 
                 if (typeof timer.unref === 'function') timer.unref();
                 aiReplyQueue.set(lead.id, timer);

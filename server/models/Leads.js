@@ -61,4 +61,16 @@ module.exports = defineModel('leads', {
   calendar_event_url: { type: String },
   google_meet_link: { type: String },
   booking_status: { type: String },
-}, { autoId: true, unique: [['leadgen_id'], ['phone', 'client_id']], indexes: [['brand_id'], ['client_id']] });
+  // n8n AI automation. A handover pauses AI replies until a person resumes
+  // them; the AI follow-up schedule is separate from SalesOS next_followup_due.
+  ai_paused: { type: Boolean, default: false },
+  ai_paused_at: { type: Date },
+  needs_human: { type: Boolean, default: false },
+  handover_reason: { type: String },
+  handover_at: { type: Date },
+  ai_draft: { type: String },
+  hot_notified_at: { type: Date },
+  last_inbound_at: { type: Date },
+  ai_followup_step: { type: Number, default: 0 },
+  ai_followup_due: { type: Date },
+}, { autoId: true, unique: [['leadgen_id'], ['phone', 'client_id']], indexes: [['brand_id'], ['client_id'], ['ai_followup_due']] });
