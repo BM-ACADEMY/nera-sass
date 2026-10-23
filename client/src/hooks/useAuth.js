@@ -46,8 +46,9 @@ export const useAuth = () => {
     setError(null);
     try {
       const data = await api.login(email, password);
-      if (data.mfa_required) return { ok: false, mfa: 'verify', mfaToken: data.mfa_token };
-      if (data.mfa_setup_required) return { ok: false, mfa: 'setup', mfaToken: data.mfa_token };
+      // methods / email_hint / email tell the second step which codes it can ask for.
+      if (data.mfa_required) return { ok: false, mfa: 'verify', mfaToken: data.mfa_token, mfaInfo: data };
+      if (data.mfa_setup_required) return { ok: false, mfa: 'setup', mfaToken: data.mfa_token, mfaInfo: data };
       return { ok: completeSession(data) };
     } catch (err) {
       setError(err.message);

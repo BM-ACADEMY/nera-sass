@@ -120,11 +120,31 @@ class LeadOSAPI {
     return data;
   }
 
-  // Second login step: a TOTP code or a recovery code.
-  async verifyMfa(mfaToken, { code, recoveryCode } = {}) {
+  // Second login step: an authenticator or email code (method), or a recovery code.
+  async verifyMfa(mfaToken, { code, recoveryCode, method } = {}) {
     const data = await this.request('/api/auth/mfa/verify', {
       method: 'POST',
-      body: JSON.stringify({ mfa_token: mfaToken, code: code || undefined, recovery_code: recoveryCode || undefined }),
+      body: JSON.stringify({ mfa_token: mfaToken, method: method || undefined, code: code || undefined, recovery_code: recoveryCode || undefined }),
+    });
+    if (data.token) this.setToken(data.token);
+    return data;
+  }
+
+  // Emails a sign-in code during the second login step.
+  async sendMfaEmail(mfaToken) {
+    return this.request('/api/auth/mfa/email/send', { method: 'POST', body: JSON.stringify({ mfa_token: mfaToken }) });
+  }
+
+  // Email codes as the two-step method: send a code, then confirm it.
+  async startEmailSetup(mfaToken) {
+    return this.request('/api/auth/mfa/email/setup', { method: 'POST', body: JSON.stringify(mfaToken ? { mfa_token: mfaToken } : {}) });
+  }
+
+  async confirmEmailSetup(code, mfaToken) {
+    const data = await this.request('/api/auth/mfa/email/setup/confirm', {
+      method: 'POST',
+      body: JSON.stringify(mfaToken ? { code, mfa_token: mfaToken } : { code }),
+      allowInvalidMfaCode: true,
     });
     if (data.token) this.setToken(data.token);
     return data;

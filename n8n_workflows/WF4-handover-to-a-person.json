@@ -27,7 +27,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Edit these values once per n8n instance.\nreturn [{ json: {\n  api: 'https://api.getnera.in',\n  llmUrl: 'https://api.openai.com/v1/chat/completions',\n  model: 'gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
+        "jsCode": "// Edit these values once per n8n instance.\nreturn [{ json: {\n  api: 'https://api.getnera.in',\n  llmUrl: 'https://openrouter.ai/api/v1/chat/completions',\n  model: 'openai/gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
       },
       "id": "f20e0224-bb9a-4747-b930-3caa7cb33c62",
       "name": "Config",
