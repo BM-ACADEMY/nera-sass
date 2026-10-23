@@ -260,7 +260,7 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
   );
 
   return (
-    <div className="flex min-h-screen w-full items-center justify-center bg-gradient-to-b from-slate-50 to-blue-50/60 px-4 py-6" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
+    <div className="flex min-h-screen w-full items-center justify-center bg-[#f5f8fc] px-4 py-6" style={{ fontFamily: "'Inter', system-ui, sans-serif", colorScheme: 'light' }}>
       {/* Form */}
       <main className="flex w-full flex-col items-center">
         <div className="mb-5 flex items-center gap-2.5">
@@ -402,7 +402,7 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
           </div>
         </div>
 
-        <p className="mt-5 text-center text-xs text-slate-400">
+        <p className="mt-5 text-center text-xs text-slate-500">
           © {YEAR} Afra Ventures Private Limited · <Link to="/privacy-policy" className="hover:text-slate-600">Privacy</Link> · <Link to="/terms-and-conditions" className="hover:text-slate-600">Terms</Link>
         </p>
       </main>
