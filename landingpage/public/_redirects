@@ -1,0 +1,3 @@
+# Old .html URLs -> clean routes (Netlify / Cloudflare Pages format)
+/privacy-policy.html  /privacy-policy  301
+/terms.html           /terms           301

@@ -122,15 +122,14 @@ async function deleteMetaAccount(req, res) {
   }
 }
 
-const VERIFY_TOKEN = process.env.META_WEBHOOK_VERIFY_TOKEN || 'leados_secret_webhook_token';
-
 async function verifyMetaWebhook(req, res) {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
+  const verifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN;
 
   if (mode && token) {
-    if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    if (mode === 'subscribe' && verifyToken && token === verifyToken) {
       console.log('WEBHOOK_VERIFIED');
       res.status(200).send(challenge);
     } else {

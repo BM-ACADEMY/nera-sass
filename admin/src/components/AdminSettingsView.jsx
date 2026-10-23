@@ -1,15 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Form, Input, Button, message, Descriptions, Badge, Typography, Divider, Tag } from 'antd';
-import { LockOutlined, SettingOutlined, SafetyCertificateOutlined, CloudServerOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { toast } from 'sonner';
+import { FiLock, FiServer } from 'react-icons/fi';
 import axiosClient from '../api/axiosClient';
+import { FormField, IconInput } from './FormField';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Spinner } from '@/components/ui/spinner';
 
-const { Title, Text } = Typography;
+const EMPTY_PASSWORDS = { currentPassword: '', newPassword: '', confirmPassword: '' };
+
+const StatusDot = ({ ok, children }) => (
+  <span className="inline-flex items-center gap-2">
+    <span className={`size-2 rounded-full ${ok ? 'bg-green-500' : 'bg-slate-300'}`} />
+    {children}
+  </span>
+);
 
 const AdminSettingsView = ({ userProfile }) => {
   const [systemInfo, setSystemInfo] = useState(null);
   const [loading, setLoading] = useState(false);
   const [passwordLoading, setPasswordLoading] = useState(false);
-  const [passwordForm] = Form.useForm();
+  const [passwords, setPasswords] = useState(EMPTY_PASSWORDS);
+  const [errors, setErrors] = useState({});
 
   useEffect(() => {
     async function loadSettings() {
@@ -26,109 +39,118 @@ const AdminSettingsView = ({ userProfile }) => {
     loadSettings();
   }, []);
 
-  const handleChangePassword = async (values) => {
-    if (values.newPassword !== values.confirmPassword) {
-      message.error('New password and confirmation do not match');
+  const set = (key) => (e) => {
+    setPasswords((p) => ({ ...p, [key]: e.target.value }));
+    setErrors((er) => ({ ...er, [key]: undefined }));
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    const nextErrors = {};
+    if (!passwords.currentPassword) nextErrors.currentPassword = 'Current password is required';
+    if (!passwords.newPassword) nextErrors.newPassword = 'New password is required';
+    else if (passwords.newPassword.length < 10) nextErrors.newPassword = 'Password must be at least 10 characters';
+    if (!passwords.confirmPassword) nextErrors.confirmPassword = 'Please confirm your new password';
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) return;
+
+    if (passwords.newPassword !== passwords.confirmPassword) {
+      toast.error('New password and confirmation do not match');
       return;
     }
     setPasswordLoading(true);
     try {
       const res = await axiosClient.post('/admin/settings/password', {
-        currentPassword: values.currentPassword,
-        newPassword: values.newPassword,
+        currentPassword: passwords.currentPassword,
+        newPassword: passwords.newPassword,
       });
       // Changing the password signs out every other session; keep this one
       // with the fresh token the server returns.
       if (res.data?.token) localStorage.setItem('adminToken', res.data.token);
-      message.success('Password updated. Other sessions have been signed out.');
-      passwordForm.resetFields();
+      toast.success('Password updated. Other sessions have been signed out.');
+      setPasswords(EMPTY_PASSWORDS);
     } catch (err) {
-      message.error(err.response?.data?.error || 'Failed to update password');
+      toast.error(err.response?.data?.error || 'Failed to update password');
     } finally {
       setPasswordLoading(false);
     }
   };
 
+  const rows = [
+    {
+      label: 'Environment',
+      value: (
+        <StatusDot ok={systemInfo?.environment === 'production'}>
+          {String(systemInfo?.environment || 'development').toUpperCase()}
+        </StatusDot>
+      ),
+    },
+    { label: 'Node Runtime', value: systemInfo?.nodeVersion || 'v22.x' },
+    { label: 'API Port', value: systemInfo?.port || 3601 },
+    { label: 'Email Outbox Mode', value: <Badge variant="info">{systemInfo?.emailDelivery || 'outbox'}</Badge> },
+    {
+      label: 'MFA Enforcement',
+      value: <StatusDot ok={systemInfo?.mfaEnforced}>{systemInfo?.mfaEnforced ? 'Enabled' : 'Disabled (Dev Mode)'}</StatusDot>,
+    },
+    {
+      label: 'Server Uptime',
+      value: systemInfo?.uptimeSeconds ? `${Math.floor(systemInfo.uptimeSeconds / 60)} minutes` : 'Active',
+    },
+  ];
+
   return (
     <div>
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 16, fontWeight: 800, color: '#1e293b' }}>Platform Settings & System Configuration</div>
-        <div style={{ fontSize: 12, color: '#94a3b8' }}>
+      <div className="mb-5">
+        <div className="text-base font-extrabold">Platform Settings & System Configuration</div>
+        <div className="text-xs text-slate-400">
           Platform infrastructure diagnostics, server runtime environment, and administrator account security.
         </div>
       </div>
 
-      <Row gutter={[24, 24]}>
-        <Col xs={24} lg={14}>
-          <Card
-            title={<span style={{ fontWeight: 700, fontSize: 14 }}><CloudServerOutlined style={{ marginRight: 8, color: '#2563eb' }} />Server Runtime Environment</span>}
-            bordered={false}
-            style={{ borderRadius: 12, border: '1px solid #e2e8f0', marginBottom: 24 }}
-          >
-            <Descriptions bordered column={1} size="middle">
-              <Descriptions.Item label="Environment">
-                <Badge status={systemInfo?.environment === 'production' ? 'success' : 'processing'} text={String(systemInfo?.environment || 'development').toUpperCase()} />
-              </Descriptions.Item>
-              <Descriptions.Item label="Node Runtime">
-                {systemInfo?.nodeVersion || 'v22.x'}
-              </Descriptions.Item>
-              <Descriptions.Item label="API Port">
-                {systemInfo?.port || 3600}
-              </Descriptions.Item>
-              <Descriptions.Item label="Email Outbox Mode">
-                <Tag color="cyan" style={{ borderRadius: 10 }}>{systemInfo?.emailDelivery || 'outbox'}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="MFA Enforcement">
-                <Badge status={systemInfo?.mfaEnforced ? 'success' : 'default'} text={systemInfo?.mfaEnforced ? 'Enabled' : 'Disabled (Dev Mode)'} />
-              </Descriptions.Item>
-              <Descriptions.Item label="Server Uptime">
-                {systemInfo?.uptimeSeconds ? `${Math.floor(systemInfo.uptimeSeconds / 60)} minutes` : 'Active'}
-              </Descriptions.Item>
-            </Descriptions>
-          </Card>
-        </Col>
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[7fr_5fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <FiServer className="text-blue-600" /> Server Runtime Environment
+            </CardTitle>
+            {loading && <Spinner className="text-muted-foreground" />}
+          </CardHeader>
+          <CardContent>
+            <dl className="overflow-hidden rounded-lg border border-border">
+              {rows.map((row) => (
+                <div key={row.label} className="grid grid-cols-[180px_1fr] border-b border-border text-sm last:border-b-0">
+                  <dt className="bg-muted/60 px-4 py-3 font-medium text-muted-foreground">{row.label}</dt>
+                  <dd className="px-4 py-3">{row.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </CardContent>
+        </Card>
 
-        <Col xs={24} lg={10}>
-          <Card
-            title={<span style={{ fontWeight: 700, fontSize: 14 }}><LockOutlined style={{ marginRight: 8, color: '#2563eb' }} />Change Administrator Password</span>}
-            bordered={false}
-            style={{ borderRadius: 12, border: '1px solid #e2e8f0' }}
-          >
-            <Form form={passwordForm} layout="vertical" onFinish={handleChangePassword}>
-              <Form.Item
-                name="currentPassword"
-                label={<span style={{ fontSize: 12.5, fontWeight: 600 }}>Current Password</span>}
-                rules={[{ required: true, message: 'Current password is required' }]}
-              >
-                <Input.Password prefix={<LockOutlined style={{ color: '#94a3b8' }} />} size="large" />
-              </Form.Item>
-
-              <Form.Item
-                name="newPassword"
-                label={<span style={{ fontSize: 12.5, fontWeight: 600 }}>New Password</span>}
-                rules={[
-                  { required: true, message: 'New password is required' },
-                  { min: 10, message: 'Password must be at least 10 characters' },
-                ]}
-              >
-                <Input.Password prefix={<LockOutlined style={{ color: '#94a3b8' }} />} size="large" />
-              </Form.Item>
-
-              <Form.Item
-                name="confirmPassword"
-                label={<span style={{ fontSize: 12.5, fontWeight: 600 }}>Confirm New Password</span>}
-                rules={[{ required: true, message: 'Please confirm your new password' }]}
-              >
-                <Input.Password prefix={<LockOutlined style={{ color: '#94a3b8' }} />} size="large" />
-              </Form.Item>
-
-              <Button type="primary" htmlType="submit" size="large" block loading={passwordLoading} style={{ borderRadius: 8, fontWeight: 600, marginTop: 8 }}>
-                Update Admin Password
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <FiLock className="text-blue-600" /> Change Administrator Password
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleChangePassword} noValidate className="flex flex-col gap-4">
+              <FormField label="Current Password" htmlFor="currentPassword" error={errors.currentPassword}>
+                <IconInput id="currentPassword" type="password" autoComplete="current-password" icon={FiLock} value={passwords.currentPassword} onChange={set('currentPassword')} />
+              </FormField>
+              <FormField label="New Password" htmlFor="newPassword" error={errors.newPassword}>
+                <IconInput id="newPassword" type="password" autoComplete="new-password" icon={FiLock} value={passwords.newPassword} onChange={set('newPassword')} />
+              </FormField>
+              <FormField label="Confirm New Password" htmlFor="confirmPassword" error={errors.confirmPassword}>
+                <IconInput id="confirmPassword" type="password" autoComplete="new-password" icon={FiLock} value={passwords.confirmPassword} onChange={set('confirmPassword')} />
+              </FormField>
+              <Button type="submit" size="lg" disabled={passwordLoading} className="mt-2 w-full font-semibold">
+                {passwordLoading && <Spinner />} Update Admin Password
               </Button>
-            </Form>
-          </Card>
-        </Col>
-      </Row>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 };

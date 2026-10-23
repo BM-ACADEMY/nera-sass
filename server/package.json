@@ -51,5 +51,8 @@
     "nodemon": "^3.1.14",
     "pg": "^8.21.0",
     "supertest": "^7.3.1"
+  },
+  "optionalDependencies": {
+    "@napi-rs/canvas-linux-x64-gnu": "^0.1.80"
   }
 }

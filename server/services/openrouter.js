@@ -11,7 +11,7 @@ const client = process.env.OPENROUTER_API_KEY
       baseURL: 'https://openrouter.ai/api/v1',
       apiKey: process.env.OPENROUTER_API_KEY,
       defaultHeaders: {
-        'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'https://leados-app.abmgroups.org',
+        'HTTP-Referer': process.env.OPENROUTER_SITE_URL || process.env.PORTAL_URL,
         'X-OpenRouter-Title': process.env.OPENROUTER_APP_NAME || 'LeadOS',
       },
     })

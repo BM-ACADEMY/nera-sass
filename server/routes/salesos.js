@@ -4,6 +4,7 @@ const express = require('express');
 // service key or founder/ops platform staff only, never a customer token.
 const { internalAuth, internalPlatformAuth, staffAuth, hasInternalKey } = require('../middleware/authMiddleware');
 const audit = require('../services/audit');
+const { recordTenantWorkflowLog, recordPlatformWorkflowLog, WorkflowLogError } = require('../services/workflowLog');
 const fs = require('fs');
 const path = require('path');
 const router = express.Router();
@@ -188,7 +189,7 @@ router.post('/whatsapp/transcribe', internalAuth, async (req, res) => {
     const tokenClient = phoneNumberId
       ? await Clients.findOne({ phone_number_id: phoneNumberId }, { wa_access_token: 1 }).lean()
       : null;
-    const waToken = tokenClient?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
+    const waToken = tokenClient?.wa_access_token;
     if (!waToken) {
       console.error('[WhatsApp Transcription] No WhatsApp access token configured for phone_number_id', phoneNumberId);
       return fallbackToTypedRequest();
@@ -607,8 +608,9 @@ async function sendWhatsAppText(lead_id, content) {
   const lead = await leadWithClient(lead_id, { phone_number_id: 'phone_number_id', client_wa_token: 'wa_access_token' });
   if (!lead) return { delivered: false, reason: 'lead_not_found' };
 
-  const phoneNumberId = lead.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-  const waAccessToken = lead.client_wa_token || process.env.META_PAGE_ACCESS_TOKEN;
+  const phoneNumberId = lead.phone_number_id;
+  const waAccessToken = lead.client_wa_token;
+  if (!phoneNumberId || !waAccessToken) return { delivered: false, reason: 'whatsapp_not_connected' };
   let delivered = false, waMessageId = null;
   if (lead.phone && phoneNumberId && waAccessToken) {
     try {
@@ -1117,7 +1119,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
 
     const asksForContactNumber = /(?:contact|phone|mobile|whatsapp)\s*(?:number|no\.?\b)|how\s+(?:can|do)\s+i\s+(?:contact|reach|call)|(?:can|could)\s+i\s+(?:get|have)\s+(?:your\s+)?(?:contact|phone|mobile|whatsapp)/i.test(effectiveMessage);
     if (asksForContactNumber) {
-      const ai_reply = 'You can contact us at 9944940051. How else can I help you?';
+      const ai_reply = `You can contact us at ${process.env.PUBLIC_CONTACT_NUMBER}. How else can I help you?`;
       return res.json({ ...req.body, brand: persistedBrand, name: leadName, ai_reply });
     }
 
@@ -1145,7 +1147,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
         });
 
         if (replyCount === 1) {
-          const ai_reply = 'For more details, kindly call this number: 9944940051.';
+          const ai_reply = `For more details, kindly call this number: ${process.env.PUBLIC_CONTACT_NUMBER}.`;
           return res.json({ ...req.body, brand: persistedBrand, name: leadName, ai_reply });
         }
       }
@@ -1253,7 +1255,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
       3. Conversation memory: Never ask for something already provided (e.g., don't ask the time slot again after the user gave "4pm", or name if already given).
       4. Fallbacks: If it's a voice note (audio), reply: "Got your voice note 🎧 — could you type it quickly so I can help right away?". If unclear, ask ONE short clarifying question.
       5. Tone: Write a short, friendly WhatsApp reply mimicking a human sales assistant. End with exactly one question to keep the conversation going.
-      6. Contact routing: The only public phone/WhatsApp number the assistant may send is 9944940051. Never disclose the internal WABA identifier, never send 919944509441, and never invent, reformat, or substitute another contact number. If retrieved knowledge conflicts with this rule, ignore that conflicting number. For address/location/Maps or website questions, use the VERIFIED BRAND CONTACT FACTS above exactly as given.
+      6. Contact routing: The only public phone/WhatsApp number the assistant may send is ${process.env.PUBLIC_CONTACT_NUMBER}. Never disclose the internal WABA identifier, never send ${process.env.SHARED_WABA_NUMBER}, and never invent, reformat, or substitute another contact number. If retrieved knowledge conflicts with this rule, ignore that conflicting number. For address/location/Maps or website questions, use the VERIFIED BRAND CONTACT FACTS above exactly as given.
       7. Multi-part messages: A single message can ask several things at once (e.g. price + syllabus + duration, or address + fees). Identify every distinct thing being asked and answer all of them in the one reply — never answer only the first or most obvious part and silently drop the rest.
       ${isBmAcademy ? `8. Course/tier matching: Understand which course(s) the lead means from natural language — loose names, abbreviations, typos, "both"/"all"/"either", or a bare follow-up referring back to chat history. Never require exact wording. If genuinely nothing in the current message or chat history narrows it down, ask ONE short clarifying question instead of guessing.
       9. Syllabus links: Never type, paraphrase, or invent a syllabus URL yourself. If the lead asked for anything else too in the same message (fees, duration, comparison, etc.), answer that normally in "reply" — do not drop it. Wherever the link belongs in your reply, write the exact placeholder {{SYLLABUS_LINKS}} once (e.g. "Here's the syllabus: {{SYLLABUS_LINKS}}"); it is replaced automatically with the real verified link(s) afterward. Also report every course the lead wants a syllabus for as exact IDs from the BM ACADEMY COURSE ID INDEX in "syllabus_course_ids".` : ''}
@@ -1537,8 +1539,11 @@ router.post('/communication/send', internalAuth, async (req, res) => {
 
     // 1. Fetch lead & client details to get phone number, phone_number_id, and access token for Meta Cloud API
     const lead = await leadWithClient(lead_id, { phone_number_id: 'phone_number_id', client_wa_token: 'wa_access_token' });
-    const phoneNumberId = lead?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-    const waAccessToken = lead?.client_wa_token || process.env.META_PAGE_ACCESS_TOKEN;
+    const phoneNumberId = lead?.phone_number_id;
+    const waAccessToken = lead?.client_wa_token;
+    if (channel === 'whatsapp' && lead && (!phoneNumberId || !waAccessToken)) {
+      return res.status(409).json({ error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
+    }
 
     // 2. Send real outbound message via Meta WhatsApp Cloud API (`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`)
     let waMessageId = null;
@@ -1603,7 +1608,7 @@ router.post('/communication/send', internalAuth, async (req, res) => {
 router.post('/communication/send-founder', internalAuth, async (req, res) => {
   const { channel, type, content } = req.body;
   try {
-    const founderPhone = process.env.FOUNDER_WHATSAPP_PHONE || '8807226257';
+    const founderPhone = process.env.FOUNDER_WHATSAPP_PHONE;
     const phoneNumberId = process.env.WA_PHONE_NUMBER_ID;
     const waAccessToken = process.env.META_PAGE_ACCESS_TOKEN;
 
@@ -1631,8 +1636,8 @@ router.post('/communication/send-founder', internalAuth, async (req, res) => {
       }
     }
 
-    // Automatically log this as a Workflow Log so the UI can display it in FounderReportsView
-    await WorkflowLogs.create({ workflow: 'WF06', status: 'success', message: content });
+    // Founder reports are platform-level: logged with no workspace (FounderReportsView).
+    await recordPlatformWorkflowLog({ workflow: 'WF06', status: 'success', message: content });
 
     res.json({ success: true, delivered: true, content, wa_msg_id: waMessageId });
   } catch (err) {
@@ -1642,13 +1647,38 @@ router.post('/communication/send-founder', internalAuth, async (req, res) => {
 });
 
 // 9. Workflow Logger
+// Workspace workflows (WF00–WF05): the n8n engine with the service key and
+// x-tenant-id, stored in that workspace. Customer sessions cannot write engine
+// logs, and platform workflows (WF06/WF07) are refused here.
 router.post('/workflows/log', internalAuth, async (req, res) => {
-  const { workflow, lead_id, status, message } = req.body;
+  if (req.identity?.kind !== 'service') {
+    return res.status(403).json({ error: 'Workflow logs are written by the workflow engine only', code: 'SERVICE_ONLY' });
+  }
   try {
-    await WorkflowLogs.create({ workflow, lead_id: lead_id == null ? lead_id : String(lead_id), status, message: message || null });
-    res.json({ success: true });
+    const log = await recordTenantWorkflowLog(req.body || {});
+    res.json({ success: true, id: log.id, scope: 'tenant' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (err instanceof WorkflowLogError) return res.status(err.status).json({ error: err.message, code: err.code });
+    res.status(500).json({ error: 'Could not record the workflow log' });
+  }
+});
+
+// Platform workflows (WF06/WF07): the n8n engine with the service key and no
+// workspace. Stored with tenant_id = null so they are never shown as, or mixed
+// with, a workspace's events.
+router.post('/platform/workflows/log', (req, res, next) => {
+  if (!hasInternalKey(req)) return res.status(401).json({ error: 'Service key required', code: 'SERVICE_ONLY' });
+  if (req.headers['x-tenant-id']) {
+    return res.status(400).json({ error: 'Platform workflow logs do not belong to a workspace; omit x-tenant-id', code: 'PLATFORM_LOG_NO_TENANT' });
+  }
+  return next();
+}, async (req, res) => {
+  try {
+    const log = await recordPlatformWorkflowLog(req.body || {});
+    res.json({ success: true, id: log.id, scope: 'platform' });
+  } catch (err) {
+    if (err instanceof WorkflowLogError) return res.status(err.status).json({ error: err.message, code: err.code });
+    res.status(500).json({ error: 'Could not record the workflow log' });
   }
 });
 
@@ -1690,19 +1720,22 @@ router.get('/workflows/telemetry', internalPlatformAuth, async (req, res) => {
     // 1. Total executions
     const totalExecutions = await WorkflowLogs.countDocuments();
 
-    // 2. Success Rate
+    // 2. Success Rate (null when nothing has run: no rate to report yet)
     const successCount = await WorkflowLogs.countDocuments({ status: 'success' });
-    const successRate = totalExecutions > 0 ? Math.round((successCount / totalExecutions) * 100) : 100;
+    const successRate = totalExecutions > 0 ? Math.round((successCount / totalExecutions) * 100) : null;
 
     // 3. AI Interventions
     const aiInterventions = await AiDecisions.countDocuments();
+
+    // 4. Workflows that logged at least once in the last 7 days
+    const activeWorkflows = (await WorkflowLogs.distinct('workflow', { created_at: { $gte: new Date(Date.now() - 7 * 86400000) } })).length;
 
     res.json({
       telemetry: {
         totalExecutions,
         successRate,
         aiInterventions,
-        activeWorkflows: 8
+        activeWorkflows
       }
     });
   } catch (err) {
@@ -2044,8 +2077,8 @@ Write one natural follow-up that continues the unfinished topic. Reference the s
     let delivered = false;
     let waMessageId = null;
     let outboundMessageType = 'text';
-    const phoneNumberId = lead?.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-    const waAccessToken = lead?.client_wa_token || process.env.META_PAGE_ACCESS_TOKEN;
+    const phoneNumberId = lead?.phone_number_id;
+    const waAccessToken = lead?.client_wa_token;
     if (lead && lead.phone && phoneNumberId && waAccessToken) {
       try {
         const phoneDigits = lead.phone.replace(/\D/g, '');
@@ -2185,8 +2218,8 @@ Naturally reference relevant details already discussed when useful. Do not inven
     let delivered = false;
     let waMessageId = null;
     let outboundMessageType = 'text';
-    const phoneNumberId = lead.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-    const waAccessToken = lead.client_wa_token || process.env.META_PAGE_ACCESS_TOKEN;
+    const phoneNumberId = lead.phone_number_id;
+    const waAccessToken = lead.client_wa_token;
     if (lead.phone && phoneNumberId && waAccessToken) {
       try {
         let messagePayload;

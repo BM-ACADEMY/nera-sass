@@ -31,8 +31,11 @@ require('dotenv').config({ path: path.join(__dirname, '.env'), override: process
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
+// nginx on the same machine forwards the visitor's IP; trust only that hop so
+// rate limits and audit rows see the real client, not 127.0.0.1.
+app.set('trust proxy', 'loopback');
 const httpServer = http.createServer(app);
-const PORT = process.env.PORT || 3600;
+const PORT = process.env.PORT || 3601;
 
 const {
   auth, internalAuth, internalPlatformAuth, staffAuth, socketAuth, verifyToken, resolveIdentity,
@@ -40,6 +43,9 @@ const {
 const { runAsSystem, runAsTenant, currentTenantId, getContext } = require('./services/tenantContext');
 const { tenantCanSend } = require('./services/lifecycle');
 const { sanitizeClient } = require('./services/clientSecrets');
+const { assertPhoneNumberAvailable } = require('./services/whatsappIdentity');
+const { customerResponseGuard } = require('./services/responseGuard');
+const { inventoryAccessToken, requireInventoryAccessToken } = require('./services/metaInventoryCredentials');
 
 // Background jobs (crons, queue processor). Off in tests: JOBS_ENABLED=false.
 const jobsEnabled = () => process.env.JOBS_ENABLED !== 'false';
@@ -103,6 +109,8 @@ const io = {
 };
 
 app.set('io', io);
+// Admin panel live updates go to the platform staff room only.
+require('./services/realtime').setStaffSender((event, payload) => socketServer.to('platform').emit(event, payload));
 
 socketServer.on('connection', (socket) => {
   console.log(`[Socket.io] Client connected: ${socket.id}`);
@@ -113,6 +121,19 @@ socketServer.on('connection', (socket) => {
 
 // ── DB CONNECTION ─────────────────────────────────────────
 const { connectMongo, mongoose } = require('./db/connection');
+
+// The database may be unreachable at startup (network, or this machine's IP
+// not allowed by the database firewall). Nothing below may crash the process
+// or run against a missing connection while start() keeps retrying.
+const dbConnected = () => mongoose.connection.readyState === 1;
+const whenDbConnected = () => (dbConnected()
+  ? Promise.resolve()
+  : new Promise((resolve) => mongoose.connection.once('connected', resolve)));
+// Scheduled jobs skip their run while the database is not connected.
+const scheduleJob = (expression, task, options) => cron.schedule(expression, (...args) => {
+  if (!dbConnected()) return undefined;
+  return task(...args);
+}, options);
 const {
   NO_ID, ieq, escapeRegex, upsertOne, insertIgnore, withLock, phoneTailRegex, allocIds,
 } = require('./db/mongo');
@@ -266,6 +287,9 @@ async function verifyClientWhatsApp(client) {
   if (!metaConfig.phoneId || !metaConfig.token || !metaConfig.wabaId || !client.whatsapp_number) {
     throw Object.assign(new Error('Real WhatsApp number, Meta Phone Number ID, WABA ID and token are required before verification'), { status: 400 });
   }
+  // A number already connected to another brand (in any workspace) is never
+  // verified or registered for this one.
+  await assertPhoneNumberAvailable(metaConfig.phoneId, { exceptClientId: client.id });
 
   await Clients.updateOne({ id: client.id }, { $set: { whatsapp_status: 'verification_pending', whatsapp_verified_at: null, whatsapp_verification_error: null } });
 
@@ -319,16 +343,17 @@ async function verifyClientWhatsApp(client) {
 // switched off there with META_INVENTORY_SYNC=off.
 const metaInventorySyncEnabled = () => process.env.META_INVENTORY_SYNC !== 'off';
 
+// Uses META_INVENTORY_ACCESS_TOKEN only; with it unset nothing is called or
+// written (see services/metaInventoryCredentials.js).
 async function syncMetaWhatsAppInventory() {
   if (!metaInventorySyncEnabled()) throw new Error('Meta inventory sync is disabled (META_INVENTORY_SYNC=off)');
+  const token = requireInventoryAccessToken();
   await Promise.all([clientsWhatsAppStatusReady, metaInventoryReady]);
   const businessId = process.env.META_BUSINESS_ID || process.env.WA_META_BUSINESS_ID;
   const configuredWabaId = process.env.WA_BUSINESS_ACCOUNT_ID;
-  const token = process.env.META_SYSTEM_USER_ACCESS_TOKEN || process.env.META_PAGE_ACCESS_TOKEN;
   if (!businessId && !configuredWabaId) {
     throw new Error('Configure META_BUSINESS_ID for all WABAs, or WA_BUSINESS_ACCOUNT_ID for single-WABA sync');
   }
-  if (!token) throw new Error('META_SYSTEM_USER_ACCESS_TOKEN or META_PAGE_ACCESS_TOKEN is required');
   const runDoc = await MetaWhatsappSyncRuns.create({ status: 'running' });
   const run = { rows: [{ id: runDoc.id }] };
   try {
@@ -356,6 +381,7 @@ async function syncMetaWhatsAppInventory() {
     client.forEach(item => wabaMap.set(String(item.id), { ...item, ownership_type: 'client' }));
     let phoneCount = 0;
     let templateCount = 0;
+    const seenPhoneIds = [];
     for (const waba of wabaMap.values()) {
       const wabaFields = {
         business_id: businessId || null, name: waba.name ?? null, currency: waba.currency ?? null, timezone_id: waba.timezone_id ?? null,
@@ -390,6 +416,7 @@ async function syncMetaWhatsAppInventory() {
           raw_data: { ...phone, business_profile: profile }, last_synced_at: new Date(),
         };
         await upsertOne(MetaWhatsappPhoneNumbers, { phone_number_id: String(phone.id) }, { $set: phoneFields }, phoneFields);
+        seenPhoneIds.push(String(phone.id));
       }
       for (const template of templates) {
         const templateFields = {
@@ -406,18 +433,28 @@ async function syncMetaWhatsAppInventory() {
       // longer returns (for example, an account removed from the portfolio).
       // Do not do this in single-WABA fallback mode because that response says
       // nothing about the portfolio's other valid WABAs.
+      // Rows left over from a previously configured business are stale too.
+      // A WABA or number still linked to a workspace is kept until unassigned.
       const activeWabaIds = [...wabaMap.keys()];
-      const staleWabaIds = await MetaWhatsappAccounts.distinct('waba_id', { business_id: businessId, waba_id: { $nin: activeWabaIds } });
+      const linkedWabaIds = await MetaWhatsappPhoneNumbers.distinct('waba_id', { client_id: { $ne: null } });
+      const staleFilter = { waba_id: { $nin: [...activeWabaIds, ...linkedWabaIds] } };
+      const staleWabaIds = await MetaWhatsappAccounts.distinct('waba_id', staleFilter);
       await MetaWhatsappTemplates.deleteMany({ waba_id: { $in: staleWabaIds } });
-      await deleteCascade('meta_whatsapp_accounts', { business_id: businessId, waba_id: { $nin: activeWabaIds } });
+      await deleteCascade('meta_whatsapp_accounts', staleFilter);
+      // Numbers Meta no longer lists under a WABA that is still returned.
+      await MetaWhatsappPhoneNumbers.deleteMany({ waba_id: { $in: activeWabaIds }, phone_number_id: { $nin: seenPhoneIds }, client_id: null });
     }
+    // Refresh the verification status of brands linked to an inventory number.
+    // A brand's number, WABA and display number belong to the customer's own
+    // connection and are never written here; the filter matches only while the
+    // brand still uses this exact number.
     for (const phone of await MetaWhatsappPhoneNumbers.find({ client_id: { $ne: null } }).lean()) {
       const verified = String(phone.connection_status ?? '').toUpperCase() === 'CONNECTED'
         || String(phone.verification_status ?? '').toUpperCase() === 'VERIFIED';
-      const linkedClient = await Clients.findOne({ id: phone.client_id }, { whatsapp_verified_at: 1 }).lean();
+      const sameIdentity = { id: phone.client_id, phone_number_id: phone.phone_number_id, wa_business_id: phone.waba_id };
+      const linkedClient = await Clients.findOne(sameIdentity, { whatsapp_verified_at: 1 }).lean();
       if (!linkedClient) continue;
-      await Clients.updateOne({ id: phone.client_id }, { $set: {
-        wa_business_id: phone.waba_id, phone_number_id: phone.phone_number_id, whatsapp_number: phone.display_phone_number,
+      await Clients.updateOne(sameIdentity, { $set: {
         whatsapp_status: verified ? 'verified' : 'verification_pending',
         whatsapp_verified_at: verified ? (linkedClient.whatsapp_verified_at ?? new Date()) : null,
         updated_at: new Date(),
@@ -434,7 +471,18 @@ async function syncMetaWhatsAppInventory() {
   }
 }
 
-if (jobsEnabled() && metaInventorySyncEnabled()) cron.schedule('*/15 * * * *', () => runAsSystem(syncMetaWhatsAppInventory, 'meta-inventory').catch(err =>
+// Scheduled sync: skipped (no call, no write) while META_INVENTORY_ACCESS_TOKEN
+// is unset. Exported for tests.
+let inventoryCredentialWarned = false;
+async function scheduledMetaInventorySync() {
+  if (!inventoryAccessToken()) {
+    if (!inventoryCredentialWarned) console.warn('[Meta Inventory Sync] Skipped: META_INVENTORY_ACCESS_TOKEN is not configured');
+    inventoryCredentialWarned = true;
+    return { skipped: true };
+  }
+  return runAsSystem(syncMetaWhatsAppInventory, 'meta-inventory');
+}
+if (jobsEnabled() && metaInventorySyncEnabled()) scheduleJob('*/15 * * * *', () => scheduledMetaInventorySync().catch(err =>
   console.error('[Meta Inventory Sync]', err.message)));
 const { evaluateLeadBrandAndSchedule, evaluateStuckLeads } = require('./services/aiBrain');
 const { getLeadOSBrand } = require('./services/leadosBrand');
@@ -1009,6 +1057,8 @@ app.use(express.json({
     req.rawBody = buf;
   }
 }));
+// Customer responses never carry a WhatsApp credential (services/responseGuard.js).
+app.use(customerResponseGuard);
 // Media that Meta downloads for outbound messages stays public (unguessable
 // names). Lead exports, archives and logs are never served statically: lead
 // exports are downloaded through the tenant-checked export route.
@@ -1050,7 +1100,10 @@ const adminPanelAuth = staffAuth();
 app.use(
   '/api/admin',
   (req, res, next) => (req.method === 'POST' && SALESOS_MAINTENANCE_PATHS.has(req.path) ? next() : adminPanelAuth(req, res, next)),
-  require('./routes/admin')({ verifyClientWhatsApp: (client) => verifyClientWhatsApp(client) }),
+  require('./routes/admin')({
+    verifyClientWhatsApp: (client) => verifyClientWhatsApp(client),
+    metaInventory: { syncMetaWhatsAppInventory, graphPageData, metaGraphVersion: META_GRAPH_VERSION },
+  }),
 );
 // SalesOS routes are called by the app (user token) and by n8n / cron jobs
 // (x-internal-key + x-tenant-id); the router checks this itself per route.
@@ -1175,7 +1228,9 @@ const mediaUpload = multer({ storage: mediaStorage });
 
 const LEAD_EXPORT_DIR = path.join(__dirname, 'uploads', 'lead-exports');
 const activeLeadExports = new Set();
-const leadExportReady = LeadExportJobs.createIndexes();
+const leadExportReady = whenDbConnected()
+  .then(() => LeadExportJobs.createIndexes())
+  .catch((error) => console.error('[Lead Export] Index setup failed:', error.message));
 
 const FACEBOOK_SOURCE = /(facebook|instagram|meta[_ ]?ads)/i;
 // Mongo filter for a lead export (source / created_at range)
@@ -1298,7 +1353,7 @@ function resumeLeadExports() {
 }
 
 // Export files are temporary. Clean up completed/failed jobs after 48 hours.
-if (jobsEnabled()) cron.schedule('17 */6 * * *', () => runAsSystem(async () => {
+if (jobsEnabled()) scheduleJob('17 */6 * * *', () => runAsSystem(async () => {
   try {
     await leadExportReady;
     const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
@@ -1533,8 +1588,8 @@ async function executeCampaign(campaign_id) {
       return;
     }
 
-    const waToken = campaign.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
-    const phoneId = campaign.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
+    const waToken = campaign.wa_access_token;
+    const phoneId = campaign.phone_number_id;
 
     // Validate credentials
     if (!waToken || !phoneId) {
@@ -1650,7 +1705,7 @@ async function leadFunnel(filter) {
 // ── CRON JOBS ─────────────────────────────────────────────
 // Re-enabled internal campaign execution cron and added logging for WF05 Dashboard
 let scheduledCampaignCronRunning = false;
-if (jobsEnabled()) cron.schedule('* * * * *', async () => {
+if (jobsEnabled()) scheduleJob('* * * * *', async () => {
   if (scheduledCampaignCronRunning) return;
   scheduledCampaignCronRunning = true;
   try {
@@ -1681,7 +1736,7 @@ if (jobsEnabled()) cron.schedule('* * * * *', async () => {
 // n8n is paused or temporarily unavailable. The reminder table's unique claim
 // prevents duplicate sends when both runners execute at the same minute.
 let demoReminderFallbackRunning = false;
-if (jobsEnabled()) cron.schedule('* * * * *', async () => {
+if (jobsEnabled()) scheduleJob('* * * * *', async () => {
   if (process.env.DEMO_REMINDER_FALLBACK_ENABLED === 'false' || demoReminderFallbackRunning) return;
   demoReminderFallbackRunning = true;
   try {
@@ -1716,7 +1771,7 @@ if (jobsEnabled()) cron.schedule('* * * * *', async () => {
 
 // Tenant lifecycle (plan U6): stores each workspace's state daily and archives
 // workspaces that reach day 90. Access rules are also applied live per request.
-if (jobsEnabled()) cron.schedule('30 0 * * *', () => {
+if (jobsEnabled()) scheduleJob('30 0 * * *', () => {
   require('./services/tenantData').runLifecycleSweep()
     .then((changes) => { if (changes.length) console.log('[Lifecycle] State changes:', JSON.stringify(changes)); })
     .catch((error) => console.error('[Lifecycle] Sweep failed:', error.message));
@@ -1725,7 +1780,7 @@ if (jobsEnabled()) cron.schedule('30 0 * * *', () => {
 // Run every 1 minute to poll Google Drive folders for new videos
 let drivePollerRunning = false;
 if (jobsEnabled() && moduleEnabled('contentos') && process.env.DISABLE_DRIVE_POLLER !== 'true') {
-  cron.schedule('* * * * *', async () => {
+  scheduleJob('* * * * *', async () => {
     if (drivePollerRunning) return;
     drivePollerRunning = true;
     try {
@@ -1741,7 +1796,7 @@ if (jobsEnabled() && moduleEnabled('contentos') && process.env.DISABLE_DRIVE_POL
 }
 
 // Run every minute to auto-publish scheduled approved posts (acting as a fallback for n8n)
-if (jobsEnabled() && moduleEnabled('contentos')) cron.schedule('* * * * *', async () => {
+if (jobsEnabled() && moduleEnabled('contentos')) scheduleJob('* * * * *', async () => {
   console.log('Cron: Checking for scheduled approved content due for publishing...');
   try {
     const now = Date.now();
@@ -1757,7 +1812,7 @@ if (jobsEnabled() && moduleEnabled('contentos')) cron.schedule('* * * * *', asyn
         const dummyReq = {
           params: { id: post.id },
           headers: {
-            'host': 'leados-api.abmgroups.org',
+            'host': new URL(process.env.PUBLIC_API_URL).host,
             'x-forwarded-proto': 'https'
           },
           get: (header) => dummyReq.headers[header.toLowerCase()] || null,
@@ -1785,7 +1840,7 @@ if (jobsEnabled() && moduleEnabled('contentos')) cron.schedule('* * * * *', asyn
 });
 
 // Run every Sunday at 2 AM automatically to refresh citations for all GMB clients
-if (jobsEnabled() && moduleEnabled('mafiya')) cron.schedule('0 2 * * 0', async () => {
+if (jobsEnabled() && moduleEnabled('mafiya')) scheduleJob('0 2 * * 0', async () => {
   console.log('Cron: Starting weekly Mafiya citation check for all active clients...');
   try {
     const clients = await models.MafiyaGmbClients.find({ status: 'active' }, { _id: 0, id: 1 }).lean();
@@ -1977,26 +2032,38 @@ function startBackgroundJobs() {
   });
 }
 
+// A promise rejection nobody handled (for example a database call made while
+// the connection is down) is logged; it must not take the whole API down.
+process.on('unhandledRejection', (reason) => {
+  console.error('[Unhandled rejection]', reason?.message || reason);
+});
+
 function start() {
-  for (const name of ['JWT_SECRET', 'INTERNAL_API_KEY', 'TOKEN_ENCRYPTION_KEY']) {
+  for (const name of ['JWT_SECRET', 'INTERNAL_API_KEY', 'TOKEN_ENCRYPTION_KEY', 'PUBLIC_API_URL', 'PORTAL_URL']) {
     if (!process.env[name]) {
       console.error(`[Startup] ${name} is not set; refusing to start.`);
       process.exit(1);
     }
   }
-  return connectMongo().then(() => httpServer.listen(PORT, () => {
+  // The API listens only once MongoDB is connected. If the database cannot be
+  // reached (network down, or this machine's IP not allowed by the database
+  // firewall), keep retrying instead of exiting, so a dev server under nodemon
+  // comes up on its own as soon as the database is reachable again.
+  const RETRY_MS = Number(process.env.MONGO_RETRY_MS || 10000);
+  const attempt = (n = 1) => connectMongo().then(() => httpServer.listen(PORT, () => {
     console.log(`Nera LeadOS API running on port ${PORT} (Socket.io enabled)`);
     if (DISABLED_MODULES.size) console.log(`[Startup] Disabled modules: ${[...DISABLED_MODULES].join(', ')}`);
     startBackgroundJobs();
   })).catch((error) => {
-    console.error('[Startup] MongoDB connection failed:', error.message);
-    process.exit(1);
+    console.error(`[Startup] MongoDB connection failed (attempt ${n}): ${error.message}. The API is not listening yet; retrying in ${RETRY_MS / 1000}s. Check the network and that this machine's IP is allowed by the database firewall.`);
+    setTimeout(() => attempt(n + 1), RETRY_MS);
   });
+  return attempt();
 }
 
 // Tests import the app without starting it (NERA_NO_AUTOSTART=true). A plain
 // require.main check would also stop PM2, which loads this file through a wrapper.
 if (process.env.NERA_NO_AUTOSTART !== 'true') start();
 
-module.exports = { app, httpServer, io, socketServer, start };
+module.exports = { app, httpServer, io, socketServer, start, scheduledMetaInventorySync };
   

@@ -5,11 +5,11 @@
  * runAsTenant(tenantId) for the one tenant being managed.
  */
 const express = require('express');
-const { Tenants, Users, Clients, Invitations, Subscriptions, Plans, AuditEvents, WorkflowLogs, AiDecisions, Leads } = require('../models');
+const { Tenants, Users, Clients, Invitations, AuditEvents, WorkflowLogs, AiDecisions, Leads, Conversations, Messages, Campaigns, MetaWhatsappPhoneNumbers } = require('../models');
 const { runAsSystem, runAsTenant } = require('../services/tenantContext');
 const { can, describeUser } = require('../services/permissions');
-const { computeLifecycle, activeSubscription } = require('../services/lifecycle');
-const { seatUsage, limitValue, LimitError } = require('../services/entitlements');
+const { computeLifecycle } = require('../services/lifecycle');
+const { seatUsage } = require('../services/entitlements');
 const { sanitizeClient } = require('../services/clientSecrets');
 const { escapeRegex } = require('../db/mongo');
 const provisioning = require('../services/provisioning');
@@ -18,9 +18,12 @@ const userAdmin = require('../services/userAdmin');
 const tenantData = require('../services/tenantData');
 const audit = require('../services/audit');
 const authController = require('../controllers/authController');
+const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
+const createMetaInventoryRouter = require('./adminMetaInventory');
+const { logScope } = require('../services/workflowLog');
 
 function fail(res, error) {
-  if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details });
+  if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details, code: error.code });
   // Deliberate "temporarily unavailable" answers from our services (for
   // example the plan catalogue not being loaded) keep their message.
   if (error.status === 503 && error instanceof provisioning.ProvisioningError) {
@@ -46,14 +49,12 @@ async function loadTenant(id) {
 }
 
 async function tenantSummary(tenant) {
-  const [subscription, seats, owner, brand] = await Promise.all([
-    activeSubscription(tenant.id),
+  const [seats, owner, brand] = await Promise.all([
     seatUsage(tenant.id),
     tenant.owner_user_id ? runAsSystem(() => Users.findOne({ id: tenant.owner_user_id }, { _id: 0, id: 1, name: 1, email: 1 }).lean(), 'admin') : null,
     runAsTenant(tenant.id, () => Clients.findOne({}, { _id: 0, id: 1, name: 1, whatsapp_status: 1, whatsapp_number: 1, phone_number_id: 1, wa_token_last4: 1, wa_access_token_enc: 1 }).lean()),
   ]);
-  const lifecycle = computeLifecycle(tenant, subscription);
-  const max = limitValue(subscription?.limits, 'max_users');
+  const lifecycle = computeLifecycle(tenant);
   return {
     id: tenant.id,
     name: tenant.name,
@@ -61,30 +62,27 @@ async function tenantSummary(tenant) {
     lifecycle_state: lifecycle.state,
     access: lifecycle.access,
     owner: owner || null,
-    users: { active: seats.activeUsers, pending_invitations: seats.pendingInvitations, max_users: max === Infinity ? -1 : max },
-    plan: subscription ? { code: subscription.plan_code, name: subscription.plan_name, period_end: subscription.current_period_end, term_months: subscription.term_months } : null,
+    users: { active: seats.activeUsers, pending_invitations: seats.pendingInvitations },
     brand: brand ? sanitizeClient(brand) : null,
-    is_founding_client: Boolean(tenant.is_founding_client),
     created_at: tenant.created_at,
   };
 }
 
-function createAdminRouter({ verifyClientWhatsApp } = {}) {
+function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   const router = express.Router();
 
   router.get('/me', (req, res) => res.json({ user: req.user, permissions: Object.fromEntries(
-    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.billing.grant', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view']
+    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.tenants.create', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view', 'platform.meta', 'platform.meta.admin', 'platform.inbox']
       .map((p) => [p, can(req.identity, p)]),
   ) }));
 
-  router.get('/plans', permit('platform.tenants.view'), async (req, res) => {
-    try {
-      const plans = await Plans.find({ active: true }, { _id: 0 }).sort({ product_line: 1, tier: 1 }).lean();
-      return res.json({ plans });
-    } catch (error) {
-      return fail(res, error);
-    }
-  });
+  // Platform Meta WhatsApp inventory (founder/ops; registration and cache
+  // clearing founder only). Never writes a brand's number or credentials.
+  if (metaInventory) router.use('/meta/whatsapp', createMetaInventoryRouter({ ...metaInventory, permit, fail }));
+  // A workspace's WhatsApp Business profile (synced with Meta).
+  require('./adminWhatsappProfile')(router, { permit, fail, metaGraphVersion: metaInventory?.metaGraphVersion });
+  // The platform's own WhatsApp inbox (admin panel WhatsApp Chat).
+  require('./adminInbox')(router, { permit, fail });
 
   // ── Tenants ───────────────────────────────────────────────
   router.get('/tenants', permit('platform.tenants.view'), async (req, res) => {
@@ -101,26 +99,23 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
     }
   });
 
-  // Creating a workspace is a manual grant: founder only.
-  router.post('/tenants', permit('platform.billing.grant'), async (req, res) => {
+  // Creating a workspace: Admin (Owner) only. There are no plans; the
+  // workspace has full access with no expiry and no limits.
+  router.post('/tenants', permit('platform.tenants.create'), async (req, res) => {
     try {
       const body = req.body || {};
-      if (body.owner_password !== undefined) {
-        return res.status(400).json({ error: 'Owner passwords cannot be set by staff. The owner sets their own password from the invitation email.' });
-      }
-      if (body.payment_method !== undefined && body.payment_method !== 'manual_grant') {
-        return res.status(400).json({ error: 'Staff can only record manual grants; verified payments are recorded by the payment system.' });
+      // Staff set the owner's password here and hand it over themselves; the
+      // admin panel never sends an invitation email.
+      if (typeof body.owner_password !== 'string' || !body.owner_password) {
+        return res.status(400).json({ error: 'Owner password is required' });
       }
       const result = await provisioning.provisionTenant({
         business_name: body.business_name,
         owner_email: body.owner_email,
         owner_name: body.owner_name,
-        plan_code: body.plan_code,
-        term_months: body.term_months,
-        payment: { method: 'manual_grant', reference: body.payment_reference, reason: body.grant_reason },
+        owner_password: body.owner_password,
         settings: body.settings || {},
         brand: body.brand || {},
-        is_founding_client: body.is_founding_client,
       }, { req, actorUserId: req.user.id, actorName: req.user.name });
       return res.status(201).json(result);
     } catch (error) {
@@ -132,36 +127,55 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
     try {
       const tenant = await loadTenant(tenantIdParam(req));
       if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
-      const [summary, users, pending, subscriptions, events] = await Promise.all([
+      const [summary, users, pending, events] = await Promise.all([
         tenantSummary(tenant),
         userAdmin.listTenantUsers(tenant.id),
         runAsTenant(tenant.id, () => Invitations.find({ accepted_at: null, revoked_at: null }, { _id: 0 }).sort({ created_at: -1 }).lean()),
-        runAsTenant(tenant.id, () => Subscriptions.find({}, { _id: 0 }).sort({ created_at: -1 }).limit(20).lean()),
         AuditEvents.find({ tenant_id: tenant.id }, { _id: 0 }).sort({ created_at: -1 }).limit(50).lean(),
       ]);
       const brand = await runAsTenant(tenant.id, () => Clients.findOne({}, { _id: 0 }).lean());
+      const count = (model) => runAsTenant(tenant.id, () => model.countDocuments({})).catch(() => null);
+      const [leads, conversations, messages, campaigns, metaPhone] = await Promise.all([
+        count(Leads), count(Conversations), count(Messages), count(Campaigns),
+        brand?.phone_number_id
+          ? MetaWhatsappPhoneNumbers.findOne({ phone_number_id: brand.phone_number_id }, { _id: 0, raw_data: 0 }).lean()
+          : null,
+      ]);
+      // Names for everyone who appears in this workspace's history.
+      const personIds = [...new Set([
+        ...events.map((e) => e.actor_user_id),
+        tenant.created_by, tenant.suspended_by,
+      ].filter((id) => id != null))];
+      const people = personIds.length
+        ? await Users.find({ id: { $in: personIds } }, { _id: 0, id: 1, name: 1, email: 1, staff_role: 1, is_platform_staff: 1 }).lean()
+        : [];
+      const nameOf = new Map(people.map((u) => [u.id, u.name || u.email]));
       return res.json({
-        tenant: { ...tenant },
+        tenant: { ...tenant, created_by_name: nameOf.get(tenant.created_by) || null, suspended_by_name: nameOf.get(tenant.suspended_by) || null },
         summary,
         brand: brand ? sanitizeClient(brand) : null,
+        whatsapp: metaPhone ? {
+          display_phone_number: metaPhone.display_phone_number, verified_name: metaPhone.verified_name, waba_id: metaPhone.waba_id,
+          connection_status: metaPhone.connection_status, quality_rating: metaPhone.quality_rating, profile_picture_url: metaPhone.profile_picture_url || null,
+        } : null,
+        usage: { leads, conversations, messages, campaigns },
         users,
         invitations: pending.map(invitations.publicInvitation),
-        subscriptions,
-        audit: events,
+        audit: events.map((e) => ({ ...e, actor_name: nameOf.get(e.actor_user_id) || null })),
       });
     } catch (error) {
       return fail(res, error);
     }
   });
 
-  const TENANT_FIELDS = ['name', 'language', 'currency', 'tax_treatment', 'timezone', 'is_founding_client'];
+  const TENANT_FIELDS = ['name', 'language', 'currency', 'tax_treatment', 'timezone'];
   router.patch('/tenants/:id', permit('platform.tenants.manage'), async (req, res) => {
     try {
       const changes = {};
       for (const field of TENANT_FIELDS) {
         if (req.body?.[field] === undefined) continue;
-        changes[field] = field === 'is_founding_client' ? Boolean(req.body[field]) : String(req.body[field]).trim();
-        if (field !== 'is_founding_client' && !changes[field]) return res.status(400).json({ error: `Invalid ${field}` });
+        changes[field] = String(req.body[field]).trim();
+        if (!changes[field]) return res.status(400).json({ error: `Invalid ${field}` });
       }
       if (!Object.keys(changes).length) return res.status(400).json({ error: 'Nothing to update' });
       const tenant = await Tenants.findOneAndUpdate({ id: tenantIdParam(req), status: { $ne: 'deleted' } }, { $set: { ...changes, updated_at: new Date() } }, { new: true, projection: { _id: 0 } }).lean();
@@ -202,8 +216,8 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
       if (!Object.keys(changes).length) return res.status(400).json({ error: 'Nothing to update' });
       const tenantId = tenantIdParam(req);
       if (changes.phone_number_id) {
-        const taken = await runAsSystem(() => Clients.exists({ phone_number_id: changes.phone_number_id, tenant_id: { $ne: tenantId } }), 'admin');
-        if (taken) return res.status(409).json({ error: 'This Meta Phone Number ID is already connected to another workspace' });
+        const current = await runAsTenant(tenantId, () => Clients.findOne({}, { _id: 0, id: 1 }).lean());
+        await assertPhoneNumberAvailable(changes.phone_number_id, { exceptClientId: current?.id ?? null });
       }
       const brand = await runAsTenant(tenantId, () => Clients.findOneAndUpdate(
         {},
@@ -268,26 +282,6 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
     }
   });
 
-  // Renewing or changing a plan is a manual grant: founder only.
-  router.post('/tenants/:id/subscriptions', permit('platform.billing.grant'), async (req, res) => {
-    try {
-      const tenant = await loadTenant(tenantIdParam(req));
-      if (!tenant || tenant.status === 'deleted') return res.status(404).json({ error: 'Tenant not found' });
-      const body = req.body || {};
-      if (body.payment_method !== undefined && body.payment_method !== 'manual_grant') {
-        return res.status(400).json({ error: 'Staff can only record manual grants; verified payments are recorded by the payment system.' });
-      }
-      const subscription = await provisioning.grantSubscription(tenant.id, {
-        plan_code: body.plan_code,
-        term_months: body.term_months,
-        payment: { method: 'manual_grant', reference: body.payment_reference, reason: body.grant_reason },
-      }, { req, actorUserId: req.user.id });
-      return res.status(201).json({ subscription });
-    } catch (error) {
-      return fail(res, error);
-    }
-  });
-
   router.post('/lifecycle/run', permit('platform.tenants.manage'), async (req, res) => {
     try {
       return res.json({ changes: await tenantData.runLifecycleSweep() });
@@ -332,7 +326,6 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
       });
       return res.status(201).json({ invitation: result.invitation, delivery: result.delivery }); // never the raw token
     } catch (error) {
-      if (error instanceof LimitError) return res.status(409).json({ error: error.message, details: error.details, code: 'USER_LIMIT_REACHED' });
       return fail(res, error);
     }
   });
@@ -396,7 +389,6 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
       });
       return res.status(201).json({ invitation: result.invitation, delivery: result.delivery }); // never the raw token
     } catch (error) {
-      if (error instanceof LimitError) return res.status(409).json({ error: error.message, details: error.details, code: 'USER_LIMIT_REACHED' });
       return fail(res, error);
     }
   });
@@ -423,8 +415,7 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
         const tenantId = await tenantOfUser(req.params.userId);
         return res.json({ user: await userAdmin.setActive({ tenantId, userId: req.params.userId, active, actor: staffActor(req), req }) });
       } catch (error) {
-        if (error instanceof LimitError) return res.status(409).json({ error: error.message, details: error.details, code: 'USER_LIMIT_REACHED' });
-        return fail(res, error);
+          return fail(res, error);
       }
     });
   }
@@ -451,9 +442,10 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
     try {
       const staff = await Users.find({ tenant_id: null }, userAdmin.PUBLIC_FIELDS).sort({ created_at: 1 }).lean();
       const pending = await Invitations.find({ tenant_id: null, accepted_at: null, revoked_at: null }, { _id: 0 }).sort({ created_at: -1 }).lean();
+      const inviterNames = new Map(staff.map((u) => [u.id, u.name || u.email]));
       return res.json({
         staff: staff.filter((u) => describeUser(u)?.kind === 'staff').map(userAdmin.presentUser),
-        invitations: pending.map(invitations.publicInvitation),
+        invitations: pending.map((inv) => ({ ...invitations.publicInvitation(inv), invited_by_name: inviterNames.get(inv.invited_by) || null })),
       });
     } catch (error) {
       return fail(res, error);
@@ -463,7 +455,7 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
   router.post('/staff/invitations', permit('platform.staff.manage'), async (req, res) => {
     try {
       const result = await invitations.createInvitation({
-        tenantId: null, email: req.body?.email, name: req.body?.name, staffRole: String(req.body?.staff_role || 'support').toLowerCase(),
+        tenantId: null, email: req.body?.email, name: req.body?.name, staffRole: String(req.body?.staff_role || 'ops').toLowerCase(), password: req.body?.password,
         invitedBy: { id: req.user.id, name: req.user.name }, req,
       });
       return res.status(201).json({ invitation: result.invitation, delivery: result.delivery }); // never the raw token
@@ -475,6 +467,22 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
   router.delete('/staff/invitations/:invitationId', permit('platform.staff.manage'), async (req, res) => {
     try {
       return res.json({ invitation: await invitations.revokeInvitation({ invitationId: req.params.invitationId, tenantId: null, revokedBy: req.user.id, req }) });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  router.post('/staff/invitations/:invitationId/resend', permit('platform.staff.manage'), async (req, res) => {
+    try {
+      return res.json(await invitations.resendInvitation({ invitationId: req.params.invitationId, tenantId: null, invitedBy: { id: req.user.id, name: req.user.name }, req }));
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  router.post('/staff/:userId/revoke-sessions', permit('platform.staff.manage'), async (req, res) => {
+    try {
+      return res.json(await userAdmin.revokeStaffSessions({ userId: req.params.userId, req }));
     } catch (error) {
       return fail(res, error);
     }
@@ -546,6 +554,10 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
       for (const key of allowed) {
         if (req.body[key] !== undefined) update[key] = req.body[key];
       }
+      if (update.phone_number_id != null && String(update.phone_number_id).trim()) {
+        update.phone_number_id = String(update.phone_number_id).trim();
+        await assertPhoneNumberAvailable(update.phone_number_id, { exceptClientId: clientId });
+      }
       update.updated_at = new Date();
       const updated = await Clients.findOneAndUpdate({ id: clientId }, { $set: update }, { new: true, projection: { _id: 0 } }).lean();
       return res.json({ client: sanitizeClient(updated) });
@@ -555,33 +567,51 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
   });
 
   // ── Workflows Management ──────────────────────────────────
+  // Every row is labelled: scope "platform" (WF06/WF07, no workspace) or
+  // "tenant" (WF00–WF05, with the workspace it belongs to).
   router.get('/workflows/logs', permit('platform.tenants.view'), async (req, res) => {
     try {
       const filter = {};
       if (req.query.workflow && req.query.workflow !== 'ALL') filter.workflow = { $regex: escapeRegex(String(req.query.workflow)), $options: 'i' };
       if (req.query.status && req.query.status !== 'ALL') filter.status = String(req.query.status).toLowerCase();
+      if (req.query.scope === 'platform') filter.tenant_id = null;
+      if (req.query.scope === 'tenant') filter.tenant_id = { $ne: null };
+      if (req.query.tenant_id) filter.tenant_id = Number(req.query.tenant_id);
       const logs = await WorkflowLogs.find(filter, { _id: 0 }).sort({ created_at: -1 }).limit(500).lean();
-      return res.json({ logs });
+      const tenantIds = [...new Set(logs.map((l) => l.tenant_id).filter((id) => id != null))];
+      const names = new Map((await Tenants.find({ id: { $in: tenantIds } }, { _id: 0, id: 1, name: 1 }).lean()).map((t) => [t.id, t.name]));
+      return res.json({
+        logs: logs.map((l) => ({ ...l, scope: logScope(l), tenant_name: l.tenant_id == null ? null : (names.get(l.tenant_id) ?? null) })),
+      });
     } catch (error) {
       return fail(res, error);
     }
   });
 
+  // Computed from the stored logs only; nothing is assumed when there are none.
   router.get('/workflows/telemetry', permit('platform.tenants.view'), async (req, res) => {
     try {
-      const totalExecutions = await WorkflowLogs.countDocuments();
-      const successCount = await WorkflowLogs.countDocuments({ status: 'success' });
-      const failedCount = await WorkflowLogs.countDocuments({ status: 'failed' });
-      const successRate = totalExecutions > 0 ? Math.round((successCount / totalExecutions) * 100) : 100;
-      const aiInterventions = await AiDecisions.countDocuments();
+      const weekAgo = new Date(Date.now() - 7 * 86400000);
+      const [totalExecutions, successCount, failedCount, platformExecutions, aiInterventions, recentWorkflows] = await Promise.all([
+        WorkflowLogs.countDocuments(),
+        WorkflowLogs.countDocuments({ status: 'success' }),
+        WorkflowLogs.countDocuments({ status: 'failed' }),
+        WorkflowLogs.countDocuments({ tenant_id: null }),
+        AiDecisions.countDocuments(),
+        WorkflowLogs.distinct('workflow', { created_at: { $gte: weekAgo } }),
+      ]);
       return res.json({
         telemetry: {
           totalExecutions,
           successCount,
           failedCount,
-          successRate,
+          // null when nothing has run: there is no rate to report yet.
+          successRate: totalExecutions > 0 ? Math.round((successCount / totalExecutions) * 100) : null,
           aiInterventions,
-          activeWorkflows: 8,
+          // Workflows that logged at least once in the last 7 days.
+          activeWorkflows: recentWorkflows.length,
+          platformExecutions,
+          tenantExecutions: totalExecutions - platformExecutions,
         },
       });
     } catch (error) {
@@ -601,26 +631,16 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
   // ── Founder Reports ───────────────────────────────────────
   router.get('/reports/founder-dashboard', permit('platform.tenants.view'), async (req, res) => {
     try {
-      const [totalWorkspaces, totalUsers, totalLeads, activeSubs, wf06Logs] = await Promise.all([
+      const [totalWorkspaces, totalUsers, totalLeads, wf06Logs] = await Promise.all([
         Tenants.countDocuments({ status: { $ne: 'deleted' } }),
         Users.countDocuments({ is_active: { $ne: false } }),
         Leads.countDocuments(),
-        Subscriptions.find({ status: 'active' }, { _id: 0, monthly_price: 1, contract_value: 1 }).lean(),
-        WorkflowLogs.find({ workflow: 'WF06' }, { _id: 0 }).sort({ created_at: -1 }).limit(50).lean(),
+        // Platform founder reports only; a workspace cannot appear here.
+        WorkflowLogs.find({ workflow: 'WF06', tenant_id: null }, { _id: 0 }).sort({ created_at: -1 }).limit(50).lean(),
       ]);
 
-      const mrr = activeSubs.reduce((sum, s) => sum + (Number(s.monthly_price) || 0), 0);
-      const totalContractValue = activeSubs.reduce((sum, s) => sum + (Number(s.contract_value) || 0), 0);
-
       return res.json({
-        snapshot: {
-          totalWorkspaces,
-          totalUsers,
-          totalLeads,
-          activeSubscriptions: activeSubs.length,
-          mrr,
-          totalContractValue,
-        },
+        snapshot: { totalWorkspaces, totalUsers, totalLeads },
         reports: wf06Logs,
       });
     } catch (error) {
@@ -637,7 +657,7 @@ function createAdminRouter({ verifyClientWhatsApp } = {}) {
           environment: process.env.NODE_ENV || 'development',
           mfaEnforced: process.env.MFA_ENFORCED === 'true',
           emailDelivery: process.env.EMAIL_DELIVERY || 'outbox',
-          port: process.env.PORT || 3600,
+          port: process.env.PORT || 3601,
           uptimeSeconds: Math.round(process.uptime()),
         },
       });

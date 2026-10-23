@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { startTestDb, stopTestDb, clearCollections, seedTestPlans } = require('./setup');
+const { startTestDb, stopTestDb, clearCollections } = require('./setup');
 
 test.before(async () => {
   await startTestDb();
@@ -12,34 +12,29 @@ test.after(async () => {
 
 test.beforeEach(async () => {
   await clearCollections();
-  await seedTestPlans();
 });
 
 test('Client Management & Tenant Lifecycle Suite', async (t) => {
-  const { Tenants, Clients, Subscriptions, Plans, Users, Invitations } = require('../models');
+  const { Tenants, Clients, Users, Invitations } = require('../models');
   const { runAsTenant, runAsSystem } = require('../services/tenantContext');
   const provisioning = require('../services/provisioning');
   const { sanitizeClient } = require('../services/clientSecrets');
   const { computeLifecycle, tenantLifecycle } = require('../services/lifecycle');
 
-  await t.test('1. Atomic Provisioning: Creates tenant, 1-to-1 brand, subscription, and owner invitation', async () => {
-    // Manual grants must be authorized by an active founder account.
+  await t.test('1. Atomic Provisioning: Creates tenant, 1-to-1 brand and owner invitation; no plan or subscription', async () => {
+    // Only an active founder account may create a workspace.
     const founder = await runAsSystem(() => Users.create({ name: 'Founder', email: 'founder@nera.test', tenant_id: null, is_platform_staff: true, staff_role: 'founder', is_active: true }));
     const result = await provisioning.provisionTenant({
       business_name: 'Apex Global Logistics',
       owner_name: 'Vikram Mehta',
       owner_email: 'vikram@apexlogistics.com',
-      plan_code: 'WA-STARTER',
-      term_months: 12,
-      payment: { method: 'manual_grant', reference: 'PILOT-REF-001', reason: 'Pilot client approved by the founder' },
-      is_founding_client: true,
       settings: { language: 'en', currency: 'INR', timezone: 'Asia/Kolkata', tax_treatment: 'gst' },
       brand: { city: 'Mumbai', phone: '+919876543210' },
-    }, { actorUserId: founder.id }); // manual grants record the authorizing founder
+    }, { actorUserId: founder.id });
 
     assert.ok(result.tenant?.id);
     assert.strictEqual(result.tenant.name, 'Apex Global Logistics');
-    assert.strictEqual(result.tenant.is_founding_client, true);
+    assert.strictEqual(result.tenant.is_founding_client, undefined);
 
     // Verify 1-to-1 Brand (Client)
     assert.ok(result.client?.id);
@@ -50,11 +45,11 @@ test('Client Management & Tenant Lifecycle Suite', async (t) => {
     const savedBrand = await runAsTenant(result.tenant.id, () => Clients.findOne({ id: result.client.id }).lean());
     assert.strictEqual(savedBrand.tenant_id, result.tenant.id);
 
-    // Verify subscription created with correct term and limits
-    assert.ok(result.subscription);
-    assert.strictEqual(result.subscription.plan_code, 'WA-STARTER');
-    assert.strictEqual(result.subscription.limits.max_users, 3);
-    assert.strictEqual(result.subscription.term_months, 12);
+    // No plans: nothing about a subscription is created, and the workspace has full access
+    assert.strictEqual(result.subscription, undefined);
+    const lifecycle = await tenantLifecycle(result.tenant.id);
+    assert.strictEqual(lifecycle.state, 'active');
+    assert.strictEqual(lifecycle.access, 'full');
 
     // Verify owner invitation created
     assert.ok(result.invitation);
@@ -103,37 +98,20 @@ test('Client Management & Tenant Lifecycle Suite', async (t) => {
     assert.strictEqual(sanitized.wa_token_last4, '7890');
   });
 
-  await t.test('4. Tenant Lifecycle States: Grace, Restricted, Suspended enforcement', async () => {
-    const tenant = { id: 77, status: 'active' };
+  await t.test('4. Tenant lifecycle without plans: active with full access; only staff suspension or deletion blocks', async () => {
+    const active = computeLifecycle({ id: 77, status: 'active' });
+    assert.strictEqual(active.state, 'active');
+    assert.strictEqual(active.access, 'full');
 
-    // Case 1: Subscription active (current)
-    const activeSub = { status: 'active', current_period_end: new Date(Date.now() + 10 * 86400 * 1000) };
-    const stateActive = computeLifecycle(tenant, activeSub);
-    assert.strictEqual(stateActive.state, 'active');
-    assert.strictEqual(stateActive.access, 'full');
+    // A long-ago creation date never expires a workspace.
+    const old = computeLifecycle({ id: 79, status: 'active', created_at: new Date(Date.now() - 400 * 86400 * 1000) });
+    assert.strictEqual(old.access, 'full');
 
-    // Case 2: Grace period (Days 1–7 after period end)
-    const graceSub = { status: 'active', current_period_end: new Date(Date.now() - 3 * 86400 * 1000) };
-    const stateGrace = computeLifecycle(tenant, graceSub);
-    assert.strictEqual(stateGrace.state, 'grace');
-    assert.strictEqual(stateGrace.access, 'full');
+    const staffSuspended = computeLifecycle({ id: 78, status: 'suspended', suspended_reason: 'Terms violation' });
+    assert.strictEqual(staffSuspended.state, 'suspended');
+    assert.strictEqual(staffSuspended.access, 'none');
 
-    // Case 3: Restricted period (Days 8–21 after period end: read/export only, no sends)
-    const restrictedSub = { status: 'active', current_period_end: new Date(Date.now() - 14 * 86400 * 1000) };
-    const stateRestricted = computeLifecycle(tenant, restrictedSub);
-    assert.strictEqual(stateRestricted.state, 'restricted');
-    assert.strictEqual(stateRestricted.access, 'read_export');
-
-    // Case 4: Suspended (Day 22+ overdue)
-    const suspendedSub = { status: 'active', current_period_end: new Date(Date.now() - 25 * 86400 * 1000) };
-    const stateSuspended = computeLifecycle(tenant, suspendedSub);
-    assert.strictEqual(stateSuspended.state, 'suspended');
-    assert.strictEqual(stateSuspended.access, 'none');
-
-    // Case 5: Staff manual suspension
-    const staffSuspendedTenant = { id: 78, status: 'suspended', suspended_reason: 'Non-payment' };
-    const stateStaffSuspended = computeLifecycle(staffSuspendedTenant, activeSub);
-    assert.strictEqual(stateStaffSuspended.state, 'suspended');
-    assert.strictEqual(stateStaffSuspended.access, 'none');
+    const deleted = computeLifecycle({ id: 80, status: 'deleted' });
+    assert.strictEqual(deleted.access, 'none');
   });
 });

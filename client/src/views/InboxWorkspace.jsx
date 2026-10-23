@@ -13,7 +13,7 @@ import { toast } from 'react-hot-toast';
 // In local dev (localhost), connect via same origin so Vite's WebSocket proxy works.
 // In production, connect directly to the API server.
 const isLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-const SOCKET_URL = isLocalDev ? window.location.origin : (import.meta.env.VITE_API_URL || 'https://leados-api.abmgroups.org');
+const SOCKET_URL = isLocalDev ? window.location.origin : import.meta.env.VITE_API_URL;
 
 const CircularProgress = ({ progress, size = 30, strokeWidth = 3 }) => {
   const radius = (size - strokeWidth) / 2;

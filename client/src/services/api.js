@@ -3,7 +3,9 @@
  * Base URL from environment: VITE_API_URL
  */
 
-const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3600').replace(/\/+$/, '');
+import { isInvalidMfaCode, NOTICE_KEY, NOTICES, USER_KEY } from './session.js';
+
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3601').replace(/\/+$/, '');
 
 class LeadOSAPI {
   constructor() {
@@ -24,7 +26,10 @@ class LeadOSAPI {
     localStorage.removeItem('leados_token');
   }
 
-  async request(endpoint, options = {}) {
+  // Any 401 ends the session, with a message on the login page. The one
+  // exception is a wrong two-factor code on calls that allow it
+  // (allowInvalidMfaCode): the session itself is still valid.
+  async request(endpoint, { allowInvalidMfaCode = false, ...options } = {}) {
     const dataMode = localStorage.getItem('leados_data_mode') || 'live';
     const headers = {
       'Content-Type': 'application/json',
@@ -41,24 +46,32 @@ class LeadOSAPI {
       headers,
     });
 
-    if (response.status === 401) {
+    const text = await response.text();
+    let data; // null when the body is not JSON
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = null;
+    }
+
+    if (response.status === 401 && !(allowInvalidMfaCode && isInvalidMfaCode(401, data))) {
       this.clearToken();
+      localStorage.removeItem(USER_KEY);
       if (window.location.pathname !== '/login') {
+        sessionStorage.setItem(NOTICE_KEY, NOTICES.sessionEnded);
         window.location.href = '/login';
       }
     }
 
-    const text = await response.text();
-    let data;
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch (e) {
+    if (data === null) {
       console.error('API Error: Non-JSON response:', text);
       throw new Error('Received invalid data from server');
     }
 
     if (!response.ok) {
       const err = new Error(data.error || 'API Error');
+      err.status = response.status;
+      err.code = data.code;
       err.response = { data };
       throw err;
     }
@@ -102,14 +115,69 @@ class LeadOSAPI {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
-    this.setToken(data.token);
+    // With MFA the first step returns an mfa_token and no session yet.
+    if (data.token) this.setToken(data.token);
     return data;
   }
 
+  // Second login step: a TOTP code or a recovery code.
+  async verifyMfa(mfaToken, { code, recoveryCode } = {}) {
+    const data = await this.request('/api/auth/mfa/verify', {
+      method: 'POST',
+      body: JSON.stringify({ mfa_token: mfaToken, code: code || undefined, recovery_code: recoveryCode || undefined }),
+    });
+    if (data.token) this.setToken(data.token);
+    return data;
+  }
+
+  // MFA enrolment, from Settings (signed in) or from login (mfaToken).
+  async startMfaSetup(mfaToken) {
+    return this.request('/api/auth/mfa/setup', {
+      method: 'POST',
+      body: JSON.stringify(mfaToken ? { mfa_token: mfaToken } : {}),
+    });
+  }
+
+  async confirmMfaSetup(code, mfaToken) {
+    const data = await this.request('/api/auth/mfa/setup/confirm', {
+      method: 'POST',
+      body: JSON.stringify(mfaToken ? { code, mfa_token: mfaToken } : { code }),
+      allowInvalidMfaCode: true,
+    });
+    if (data.token) this.setToken(data.token);
+    return data;
+  }
+
+  async getMe() {
+    return this.request('/api/auth/me');
+  }
+
+  // The server revokes every other session and returns a fresh token for this one.
   async changePassword(current, newPassword) {
-    return this.request('/api/auth/change-password', {
+    const data = await this.request('/api/auth/change-password', {
       method: 'POST',
       body: JSON.stringify({ current, newPassword }),
+    });
+    if (data.token) this.setToken(data.token);
+    return data;
+  }
+
+  // Revokes every session, including this one: the caller must sign in again.
+  async logoutAll() {
+    const data = await this.request('/api/auth/logout-all', { method: 'POST' });
+    this.clearToken();
+    return data;
+  }
+
+  // ─── WORKSPACE (tenant from the session, never from the browser) ───
+  async getTenant() {
+    return this.request('/api/tenant');
+  }
+
+  async updateTenantSettings(settings) {
+    return this.request('/api/tenant/settings', {
+      method: 'PATCH',
+      body: JSON.stringify(settings),
     });
   }
 
@@ -490,32 +558,6 @@ class LeadOSAPI {
   async completeMetaEmbeddedSignup(id, data) {
     return this.request(`/api/clients/${id}/meta-embedded-signup/complete`, {
       method: 'POST', body: JSON.stringify(data)
-    });
-  }
-
-  async getMetaWhatsAppInventory() {
-    return this.request('/api/meta/whatsapp/inventory');
-  }
-
-  async syncMetaWhatsApp() {
-    return this.request('/api/meta/whatsapp/sync', { method: 'POST' });
-  }
-
-  async deleteMetaWhatsAppCache(wabaId) {
-    return this.request(`/api/meta/whatsapp/cache/wabas/${encodeURIComponent(wabaId)}`, {
-      method: 'DELETE'
-    });
-  }
-
-  async registerMetaWhatsAppPhone(phoneId, pin) {
-    return this.request(`/api/meta/whatsapp/phone-numbers/${encodeURIComponent(phoneId)}/register`, {
-      method: 'POST', body: JSON.stringify({ pin })
-    });
-  }
-
-  async mapMetaPhoneNumber(phoneId, clientId) {
-    return this.request(`/api/meta/whatsapp/phone-numbers/${phoneId}/map`, {
-      method: 'PATCH', body: JSON.stringify({ client_id: clientId })
     });
   }
 

@@ -67,23 +67,6 @@ async function clearCollections() {
   }
 }
 
-async function seedTestPlans() {
-  const catalogue = require('../config/plan-catalogue.json');
-  const { Plans } = require('../models');
-  const { runAsSystem } = require('../services/tenantContext');
-  return runAsSystem(async () => {
-    for (const plan of catalogue.plans) {
-      await Plans.create({
-        ...plan,
-        version: 1,
-        active: true,
-        pricing_rules: catalogue.pricing_rules,
-        currency: 'INR',
-        created_at: new Date(),
-      });
-    }
-  }, 'seed-test-plans');
-}
 
 function makeToken(user, { mfa = false } = {}) {
   return jwt.sign(
@@ -97,7 +80,6 @@ module.exports = {
   startTestDb,
   stopTestDb,
   clearCollections,
-  seedTestPlans,
   makeToken,
   TEST_JWT_SECRET,
   TEST_TOKEN_KEY,

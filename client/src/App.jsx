@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link } from 'react-router-dom';
 import { ConfigProvider, Card, Form, Input, Button, Typography, Alert, theme, message } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
@@ -9,7 +9,8 @@ import { PrivacyPolicy } from './views/PrivacyPolicy.jsx';
 import { TermsAndConditions } from './views/TermsAndConditions.jsx';
 import { Sidebar } from './components/layout/Sidebar.jsx';
 import { Header } from './components/layout/Header.jsx';
-import { useAuth } from './hooks/useAuth.js';
+import { useAuth, syncCurrentUser } from './hooks/useAuth.js';
+import { mfaErrorKind, NOTICE_KEY, NOTICES } from './services/session.js';
 import { Dashboard } from './views/Dashboard.jsx';
 import { SalesTasksView } from './views/SalesTasksView.jsx';
 import { LeadsView } from './views/LeadsView.jsx';
@@ -21,6 +22,8 @@ import { AIImageGeneratorView } from './views/AIImageGeneratorView.jsx';
 import { ReportsView } from './views/ReportsView.jsx';
 import { ClientsView } from './views/ClientsView.jsx';
 import { SettingsView } from './views/SettingsView.jsx';
+import { MfaEnrollment } from './views/settings/MfaEnrollment.jsx';
+import { api } from './services/api.js';
 import { IntegrationsView } from './views/IntegrationsView.jsx';
 
 
@@ -51,14 +54,77 @@ import MafiyaOrders from './views/mafiya/Orders.jsx';
 import PlanManagementMafiya from './views/mafiya/PlanManagement.jsx';
 import Family from './views/mafiya/Family.jsx';
 
-function LoginPage({ login, authLoading, authError }) {
-  const [loginError, setLoginError] = useState('');
+// Second login step for accounts with two-factor authentication.
+function MfaVerifyStep({ mfaToken, onSession, onBack, onExpired }) {
+  const [code, setCode] = useState('');
+  const [useRecovery, setUseRecovery] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const data = await api.verifyMfa(mfaToken, useRecovery ? { recoveryCode: code.trim() } : { code: code.trim() });
+      onSession(data);
+    } catch (err) {
+      const kind = mfaErrorKind(err);
+      if (kind === 'expired') return onExpired();
+      setError(kind === 'invalid_code' ? 'That code is not valid. Check the time on your phone and try again.' : (err.message || 'Verification failed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Form layout="vertical" onFinish={submit} requiredMark={false}>
+      {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
+      <Form.Item label={useRecovery ? 'Recovery code' : '6-digit code from your authenticator app'}>
+        <Input
+          value={code}
+          onChange={(e) => setCode(useRecovery ? e.target.value : e.target.value.replace(/\D/g, '').slice(0, 6))}
+          inputMode={useRecovery ? 'text' : 'numeric'}
+          autoComplete="one-time-code"
+          size="large"
+          autoFocus
+        />
+      </Form.Item>
+      <Button type="primary" htmlType="submit" size="large" block loading={busy} disabled={!code.trim()}>Verify</Button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16, fontSize: 13 }}>
+        <Button type="link" style={{ padding: 0 }} onClick={() => { setUseRecovery(!useRecovery); setCode(''); setError(''); }}>
+          {useRecovery ? 'Use an authenticator code' : 'Use a recovery code'}
+        </Button>
+        <Button type="link" style={{ padding: 0 }} onClick={onBack}>Back to sign in</Button>
+      </div>
+    </Form>
+  );
+}
+
+function LoginPage({ login, completeSession, authLoading, authError }) {
+  const [mfaStep, setMfaStep] = useState(null); // { mode: 'verify' | 'setup', mfaToken }
+  // A message left by the previous page (session ended, signed out everywhere).
+  const [notice, setNotice] = useState(() => sessionStorage.getItem(NOTICE_KEY));
+  useEffect(() => { sessionStorage.removeItem(NOTICE_KEY); }, []);
+
+  // The two-factor step's own token expired: start again from the password.
+  const signInStepExpired = () => {
+    setMfaStep(null);
+    setNotice(NOTICES.signInStepExpired);
+  };
 
   const onFinish = async (values) => {
-    const success = await login(values.email, values.password);
-    if (!success) {
-      message.error('Invalid email or password');
+    const result = await login(values.email, values.password);
+    if (result.mfa) {
+      setMfaStep({ mode: result.mfa, mfaToken: result.mfaToken });
+      return;
     }
+    if (!result.ok) {
+      message.error(result.error || 'Invalid email or password');
+    }
+  };
+
+  const onSession = (data) => {
+    if (!completeSession(data)) message.error('Sign-in could not be completed. Please try again.');
   };
 
   return (
@@ -101,6 +167,20 @@ function LoginPage({ login, authLoading, authError }) {
 
 
 
+          {notice && <Alert type="info" showIcon message={notice} style={{ marginBottom: 20 }} />}
+
+          {mfaStep?.mode === 'verify' && (
+            <MfaVerifyStep mfaToken={mfaStep.mfaToken} onSession={onSession} onBack={() => setMfaStep(null)} onExpired={signInStepExpired} />
+          )}
+
+          {mfaStep?.mode === 'setup' && (
+            <div>
+              <Alert type="warning" showIcon message="Your account must use two-factor authentication. Set it up to continue." style={{ marginBottom: 16 }} />
+              <MfaEnrollment mfaToken={mfaStep.mfaToken} onDone={onSession} onCancel={() => setMfaStep(null)} onExpired={signInStepExpired} />
+            </div>
+          )}
+
+          {!mfaStep && (
           <Form
             name="login_form"
             layout="vertical"
@@ -144,6 +224,7 @@ function LoginPage({ login, authLoading, authError }) {
               </Button>
             </Form.Item>
           </Form>
+          )}
 
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', marginTop: 32, paddingTop: 20, borderTop: '1px solid #f1f5f9', fontSize: 13 }}>
             <span style={{ color: '#64748b', marginRight: 6 }}>Protected by</span>
@@ -161,6 +242,12 @@ import { Toaster } from 'react-hot-toast';
 function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const navigate = useNavigate();
+
+  // Keep the displayed name and role in step with the server (display only;
+  // the server checks the role on every request).
+  useEffect(() => {
+    api.getMe().then(syncCurrentUser).catch(() => {});
+  }, []);
 
   const handleLeadClick = (lead) => {
     navigate('/inbox', { state: { leadId: lead.id } });
@@ -187,7 +274,7 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
               <Route path="/reports" element={<ReportsView />} />
               <Route path="/founder-reports" element={<Navigate to="/dashboard" replace />} />
               <Route path="/clients" element={<Navigate to="/dashboard" replace />} />
-              <Route path="/settings" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/settings" element={<SettingsView />} />
               <Route path="/workflows" element={<Navigate to="/dashboard" replace />} />
               <Route path="/integrations" element={<IntegrationsView />} />
               
@@ -249,7 +336,7 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
 }
 
 export default function App() {
-  const { user, login, logout, loading: authLoading, error: authError } = useAuth();
+  const { user, login, logout, completeSession, loading: authLoading, error: authError } = useAuth();
   const [selectedLead, setSelectedLead] = useState(null);
   const [leadRefresh, setLeadRefresh] = useState(0);
 
@@ -275,7 +362,7 @@ export default function App() {
               user ? (
                 <Navigate to="/dashboard" replace />
               ) : (
-                <LoginPage login={login} authLoading={authLoading} authError={authError} />
+                <LoginPage login={login} completeSession={completeSession} authLoading={authLoading} authError={authError} />
               )
             }
           />

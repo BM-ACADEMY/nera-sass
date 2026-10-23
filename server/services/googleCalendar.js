@@ -4,7 +4,7 @@ const { GoogleCalendarCredentials } = require('../models');
 const { encrypt, decrypt } = require('../utils/crypto');
 
 const TIME_ZONE = process.env.GOOGLE_CALENDAR_TIME_ZONE || 'Asia/Kolkata';
-const ORGANIZER_EMAIL = process.env.GOOGLE_CALENDAR_ID || 'bmacademypondy@gmail.com';
+const ORGANIZER_EMAIL = process.env.GOOGLE_CALENDAR_ID;
 
 const createOAuthClient = () => new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,

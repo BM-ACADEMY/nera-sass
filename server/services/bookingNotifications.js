@@ -3,8 +3,7 @@ const { BookingNotificationLog } = require('../models');
 
 const supportEmail = () => process.env.SUPPORT_NOTIFICATION_EMAIL ||
   process.env.GOOGLE_CALENDAR_SUPPORT_EMAIL ||
-  process.env.GOOGLE_CALENDAR_ID ||
-  'bmacademypondy@gmail.com';
+  process.env.GOOGLE_CALENDAR_ID;
 
 const escapeHtml = value => String(value || '').replace(/[&<>"']/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',

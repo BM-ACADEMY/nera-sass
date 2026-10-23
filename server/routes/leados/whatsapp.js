@@ -51,11 +51,11 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
       return res.status(403).json({ error: 'WhatsApp is disabled for this brand until verification succeeds' });
     }
 
-    const phoneNumberId = lead.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-    const waAccessToken = lead.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
+    const phoneNumberId = lead.phone_number_id;
+    const waAccessToken = lead.wa_access_token;
 
     if (!phoneNumberId || !waAccessToken) {
-      return res.status(400).json({ error: 'WhatsApp not configured for this brand. Please add phone_number_id and wa_access_token in Clients settings or server .env file.' });
+      return res.status(409).json({ error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
     }
 
     // --- Check 24-hour window ---
@@ -175,7 +175,7 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
       if (waMediaId) {
         payload[type] = { id: waMediaId };
       } else {
-        const fullMediaUrl = media_url && media_url.startsWith('http') ? media_url : `${process.env.API_URL || 'https://leados-api.abmgroups.org'}${media_url}`;
+        const fullMediaUrl = media_url && media_url.startsWith('http') ? media_url : `${process.env.PUBLIC_API_URL}${media_url}`;
         payload[type] = { link: fullMediaUrl };
       }
       if (message && type !== 'audio') payload[type].caption = message; // Audio doesn't support caption

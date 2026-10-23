@@ -2,6 +2,11 @@ import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Search, Bell, X, FileText, Menu } from 'lucide-react';
 import { C } from '../../constants/theme.js';
+import { roleLabel } from '../../views/settings/settingsPolicy.js';
+
+// Optional product label next to the page title (build setting); nothing is
+// shown when it is not set.
+const PRODUCT_LABEL = (import.meta.env.VITE_PRODUCT_LABEL || '').trim();
 
 // Header-scoped palette — matches the sidebar's indigo/purple accent so the
 // two chrome pieces read as one system. Kept local like the sidebar's SB.
@@ -91,9 +96,9 @@ export const Header = ({user, onMenuClick}) => {
     window.location.reload();
   };
 
-  const initial = user?.name ? user.name[0].toUpperCase() : 'K';
-  const roleLabel = 'User';
-  const nameLabel = user?.name || 'Kamar';
+  const initial = user?.name ? user.name[0].toUpperCase() : '';
+  const roleText = roleLabel(user?.role);
+  const nameLabel = user?.name || '';
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -130,7 +135,7 @@ export const Header = ({user, onMenuClick}) => {
           </button>
           <div style={{display:'flex',alignItems:'baseline',gap:8,minWidth:0}}>
             <span style={{fontFamily:"'Syne',sans-serif",fontSize:16,fontWeight:700,color:C.text,whiteSpace:'nowrap'}}>{activeLabel}</span>
-            <span className="hide-mobile" style={{color:C.dim,fontSize:12,whiteSpace:'nowrap'}}>LeadOS by BM TechX</span>
+            {PRODUCT_LABEL && <span className="hide-mobile" style={{color:C.dim,fontSize:12,whiteSpace:'nowrap'}}>{PRODUCT_LABEL}</span>}
           </div>
         </div>
         <div style={{display:'flex',alignItems:'center',gap:20,flexShrink:0}}>
@@ -140,7 +145,7 @@ export const Header = ({user, onMenuClick}) => {
             <div style={{width:28,height:28,borderRadius:'50%',background:HB.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:800,color:'#fff',flexShrink:0}}>{initial}</div>
             <div className="hide-mobile" style={{lineHeight:1.3}}>
               <p style={{fontSize:11.5,fontWeight:600,color:C.text,whiteSpace:'nowrap'}}>{nameLabel}</p>
-              <p style={{fontSize:9.5,color:C.muted,whiteSpace:'nowrap'}}>{roleLabel}</p>
+              <p style={{fontSize:9.5,color:C.muted,whiteSpace:'nowrap'}}>{roleText}</p>
             </div>
           </div>
         </div>

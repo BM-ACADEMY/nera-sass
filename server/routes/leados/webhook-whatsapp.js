@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { postToN8n } = require('../../services/n8n');
 module.exports = function registerWebhookWhatsappRoutes(app, ctx) {
 const {
   CampaignLogs,
@@ -26,6 +27,8 @@ const fs = ctxFs || require('fs');
 const axios = ctxAxios || require('axios');
 const SERVER_ROOT = ctx.SERVER_ROOT || path.resolve(__dirname, '../../');
 const { runAsSystem, runAsTenant } = require('../../services/tenantContext');
+const { requireMetaSignature } = require('../../services/metaWebhookSignature');
+const platformInbox = require('../../services/platformInbox');
  // Store timeouts for delayed AI replies
 
 // GET — Meta webhook verification
@@ -38,10 +41,31 @@ app.get('/webhook/whatsapp', (req, res) => {
   res.sendStatus(403);
 });
 
-// POST — incoming WhatsApp messages + template status updates
-app.post('/webhook/whatsapp', async (req, res) => {
+// POST — incoming WhatsApp messages + template status updates. Only requests
+// signed by Meta (X-Hub-Signature-256 over the raw body) get past this point;
+// anything else is refused before it is logged, stored or acted on.
+app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
   try {
     const body = req.body;
+
+    // The platform's own number goes to the admin inbox only, before anything
+    // is logged to disk or matched to a customer workspace.
+    const platformId = platformInbox.platformPhoneId();
+    if (platformId && body?.object === 'whatsapp_business_account') {
+      const platformValues = [];
+      for (const entry of body.entry || []) {
+        entry.changes = (entry.changes || []).filter((change) => {
+          const mine = change.field === 'messages' && String(change.value?.metadata?.phone_number_id || '') === platformId;
+          if (mine) platformValues.push(change.value);
+          return !mine;
+        });
+      }
+      for (const value of platformValues) {
+        await platformInbox.handleWebhookValue(value).catch((error) => console.error('[Platform inbox] Webhook failed:', error.message));
+      }
+      if (platformValues.length && (body.entry || []).every((entry) => !entry.changes.length)) return res.sendStatus(200);
+    }
+
     try {
       if (fs && fs.appendFileSync) {
         fs.appendFileSync(path.join(SERVER_ROOT, 'uploads', 'incoming_payloads.log'), `[${new Date().toISOString()}] ${JSON.stringify(body, null, 2)}\n\n`);
@@ -62,7 +86,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       )
     );
     if (isAllianceEvent) {
-      const localPort = Number(process.env.PORT) || 3600;
+      const localPort = Number(process.env.PORT) || 3601;
       await axios.post(
         `http://127.0.0.1:${localPort}/api/alliance-inbox/webhook`,
         body,
@@ -105,18 +129,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // FORWARD TO N8N WEBHOOK
-    // This allows the Node server to act as a proxy if needed.
-    // If the request is already coming from n8n (source=n8n), we SKIP forwarding to prevent an infinite loop.
-    if (req.query.source !== 'n8n' && process.env.NODE_ENV !== 'test') {
-      try {
-        const n8nUrl = 'https://leados-n8n.abmgroups.org/webhook/whatsapp-inbound';
-        await axios.post(n8nUrl, body);
-        console.log('✅ Successfully forwarded payload to n8n Lead Integrator (WF00)');
-      } catch (n8nErr) {
-        console.error('⚠️ Failed to forward payload to n8n:', n8nErr.message);
-      }
-    }
+    // Customer WhatsApp payloads are never copied to an external system from
+    // here (the former hard-coded forward to a third-party n8n was removed).
 
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {
@@ -289,7 +303,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
             // Audio transcription
             if (msg.type === 'audio' && msg.audio?.id && openRouter.isConfigured) {
               try {
-                const waToken = lead.client_wa_token || client?.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
+                const waToken = lead.client_wa_token || client?.wa_access_token;
                 if (waToken) {
                   console.log(`[Audio] Fetching media URL for ${msg.audio.id}`);
                   const mediaRes = await axios.get(`https://graph.facebook.com/v18.0/${msg.audio.id}`, {
@@ -366,7 +380,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
               console.log(`[Webhook] ✅ Saved inbound ${msgType} from ${phone} → lead ${lead.id}, msg_id ${savedRows[0].id} (tenant ${client.tenant_id})`);
 
               const shouldTriggerAI = ['text', 'button', 'interactive', 'audio'].includes(msg.type);
-              if (shouldTriggerAI && process.env.N8N_WEBHOOK_URL && req.query.source !== 'n8n' && process.env.NODE_ENV !== 'test') {
+              if (shouldTriggerAI && process.env.N8N_WEBHOOK_URL && process.env.NODE_ENV !== 'test') {
                 if (aiReplyQueue.has(lead.id)) {
                   clearTimeout(aiReplyQueue.get(lead.id));
                 }
@@ -377,12 +391,14 @@ app.post('/webhook/whatsapp', async (req, res) => {
                   aiReplyQueue.delete(lead.id);
                   io.emit('ai_typing', { lead_id: String(lead.id), typing: true, status: 'composing' });
 
-                  axios.post(process.env.N8N_WEBHOOK_URL, {
+                  // No WhatsApp credential leaves the server: n8n returns its
+                  // reply to /api/internal/send-reply, which sends it.
+                  postToN8n(process.env.N8N_WEBHOOK_URL, {
                     lead_id: lead.id,
+                    tenant_id: client.tenant_id,
                     phone,
                     message: text,
-                    phone_number_id: lead.client_phone_number_id || phoneNumberId,
-                    wa_access_token: lead.client_wa_token || process.env.META_PAGE_ACCESS_TOKEN
+                    brand: client.name || null,
                   }).catch(e => console.error('[n8n forward error]', e.message));
                 }, 60000);
 

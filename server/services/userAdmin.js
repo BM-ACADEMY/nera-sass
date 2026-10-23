@@ -13,7 +13,6 @@
 const { Users } = require('../models');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
 const { TENANT_ROLES, STAFF_ROLES, canAssignRole, normalizeTenantRole, describeUser } = require('./permissions');
-const { assertSeatAvailable } = require('./entitlements');
 const audit = require('./audit');
 
 class UserAdminError extends Error {
@@ -99,7 +98,6 @@ async function setActive({ tenantId, userId, active, actor, req }) {
   if (!active && normalizeTenantRole(target.role) === 'owner' && (await activeOwnerCount(tenantId)) <= 1) {
     throw new UserAdminError(409, 'A workspace must keep at least one active Owner');
   }
-  if (active) await assertSeatAvailable(tenantId, 1);
   const update = active
     ? { $set: { is_active: true, active: true, updated_at: new Date() }, $unset: { deactivated_at: '', deactivated_by: '' } }
     : { $set: { is_active: false, active: false, deactivated_at: new Date(), deactivated_by: actor.id ?? null, updated_at: new Date() }, $inc: { token_version: 1 } };
@@ -156,6 +154,14 @@ async function setStaffActive({ userId, active, actor, req }) {
   return presentUser(updated);
 }
 
+async function revokeStaffSessions({ userId, req }) {
+  const target = await runAsSystem(() => Users.findOne({ id: Number(userId) }, { _id: 0 }).lean(), 'user-admin');
+  if (!target || describeUser(target)?.kind !== 'staff') throw new UserAdminError(404, 'Staff member not found');
+  await runAsSystem(() => Users.updateOne({ id: target.id }, { $inc: { token_version: 1 } }), 'user-admin');
+  await audit.record(audit.EVENTS.SESSIONS_REVOKED, { req, targetType: 'staff', targetId: target.id, meta: { email: target.email } });
+  return { success: true };
+}
+
 module.exports = {
   UserAdminError,
   PUBLIC_FIELDS,
@@ -167,4 +173,5 @@ module.exports = {
   resetMfa,
   setStaffRole,
   setStaffActive,
+  revokeStaffSessions,
 };

@@ -144,8 +144,8 @@ app.put('/api/messages/:id/react', auth, async (req, res) => {
 
     // Send the reaction to Meta API if we have a WhatsApp message ID (wa_msg_id)
     if (msgData.wa_msg_id) {
-      const phoneNumberId = msgData.phone_number_id || process.env.WA_PHONE_NUMBER_ID;
-      const waAccessToken = msgData.wa_access_token || process.env.META_PAGE_ACCESS_TOKEN;
+      const phoneNumberId = msgData.phone_number_id;
+      const waAccessToken = msgData.wa_access_token;
 
       if (phoneNumberId && waAccessToken) {
         try {
