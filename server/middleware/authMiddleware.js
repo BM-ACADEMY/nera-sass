@@ -20,6 +20,7 @@
  */
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const { methodsOf } = require('../services/mfa');
 
 // No fallback secret: a missing JWT_SECRET must stop the server, otherwise
 // anyone could sign tokens with a publicly known default.
@@ -126,7 +127,8 @@ function publicUser(user, identity, tenant) {
     tenant_name: tenant?.name || null,
     is_platform_staff: identity.kind === 'staff',
     staff_role: identity.staffRole,
-    mfa_enabled: Boolean(user.mfa_enabled),
+    mfa_enabled: methodsOf(user).length > 0,
+    mfa_methods: methodsOf(user),
   };
 }
 

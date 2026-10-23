@@ -11,6 +11,7 @@ const { describeUser, mfaRequired } = require('../services/permissions');
 const { tenantLifecycle } = require('../services/lifecycle');
 const { encrypt, decrypt } = require('../utils/crypto');
 const mfa = require('../services/mfa');
+const emailOtp = require('../services/emailOtp');
 const notify = require('../services/notify');
 const audit = require('../services/audit');
 const invitations = require('../services/invitations');
@@ -26,7 +27,7 @@ const sha256 = (value) => crypto.createHash('sha256').update(String(value)).dige
 const sys = (fn) => runAsSystem(fn, 'account');
 
 function fail(res, error) {
-  if (error instanceof AuthError || error instanceof invitations.InvitationError) {
+  if (error instanceof AuthError || error instanceof invitations.InvitationError || error instanceof emailOtp.EmailOtpError) {
     return res.status(error.status).json({ error: error.message, code: error.code });
   }
   console.error('[account]', error.message);
@@ -43,12 +44,29 @@ async function sessionPayload(user, { mfaPassed }) {
   };
 }
 
+const mfaEnforcedFor = (user) => process.env.MFA_ENFORCED !== 'false' && mfaRequired(describeUser(user));
+
 // Decides what happens after a correct password: a full session, an MFA
-// challenge, or mandatory MFA enrolment.
+// challenge (with the methods the user may pick from), or mandatory enrolment.
+// With email as the only method the code is mailed straight away.
 async function afterPassword(user) {
-  const identity = describeUser(user);
-  if (user.mfa_enabled) return { mfa_required: true, mfa_token: issueMfaToken(user, 'mfa') };
-  if (process.env.MFA_ENFORCED !== 'false' && mfaRequired(identity)) return { mfa_setup_required: true, mfa_token: issueMfaToken(user, 'mfa_setup') };
+  const methods = mfa.methodsOf(user);
+  if (methods.length) {
+    const out = { mfa_required: true, mfa_token: issueMfaToken(user, 'mfa'), methods };
+    if (methods.includes('email')) out.email_hint = emailOtp.maskEmail(user.email);
+    if (methods.length === 1 && methods[0] === 'email') {
+      try {
+        out.email = await emailOtp.sendCode(user, 'login');
+      } catch (error) {
+        out.email_error = error instanceof emailOtp.EmailOtpError ? error.message : 'The code could not be emailed. Try sending it again.';
+        if (!(error instanceof emailOtp.EmailOtpError)) console.error('[account] Sign-in code not sent:', error.message);
+      }
+    }
+    return out;
+  }
+  if (mfaEnforcedFor(user)) {
+    return { mfa_setup_required: true, mfa_token: issueMfaToken(user, 'mfa_setup'), email_hint: emailOtp.maskEmail(user.email) };
+  }
   return sessionPayload(user, { mfaPassed: false });
 }
 
@@ -96,14 +114,21 @@ exports.login = async (req, res) => {
   }
 };
 
-// Second step of login: TOTP code or a recovery code.
+// Second step of login: an authenticator code, an emailed code, or a
+// recovery code. Without `method`, an authenticator code is assumed when the
+// app is set up (older clients send only `code`).
 exports.verifyMfa = async (req, res) => {
   try {
-    const { mfa_token: mfaToken, code, recovery_code: recoveryCode } = req.body || {};
+    const { mfa_token: mfaToken, method, code, recovery_code: recoveryCode } = req.body || {};
     const { user } = await resolveIdentity(mfaToken, { purpose: 'mfa' });
-    if (!user.mfa_enabled) return res.status(400).json({ error: 'MFA is not enabled for this account' });
+    const methods = mfa.methodsOf(user);
+    if (!methods.length) return res.status(400).json({ error: 'MFA is not enabled for this account' });
     let ok = false;
-    if (code) ok = mfa.verifyTotp(decrypt(user.mfa_secret_enc), code);
+    if (code) {
+      const use = method || (methods.includes('totp') ? 'totp' : 'email');
+      if (!methods.includes(use)) return res.status(400).json({ error: 'This verification method is not turned on for this account' });
+      ok = use === 'totp' ? mfa.verifyTotp(decrypt(user.mfa_secret_enc), code) : await emailOtp.verifyCode(user, code, 'login');
+    }
     if (!ok && recoveryCode) {
       const hash = mfa.hashRecoveryCode(recoveryCode);
       const updated = await sys(() => Users.updateOne({ id: user.id, mfa_recovery_hashes: hash }, { $pull: { mfa_recovery_hashes: hash } }));
@@ -112,6 +137,21 @@ exports.verifyMfa = async (req, res) => {
     if (!ok) return res.status(401).json(INVALID_MFA_CODE);
     return res.json(await sessionPayload(user, { mfaPassed: true }));
   } catch (error) {
+    return fail(res, error);
+  }
+};
+
+// Sends (or resends) the sign-in code by email during the second login step.
+exports.sendMfaEmail = async (req, res) => {
+  try {
+    const { user } = await resolveIdentity(req.body?.mfa_token, { purpose: 'mfa' });
+    if (!mfa.methodsOf(user).includes('email')) return res.status(400).json({ error: 'Email codes are not turned on for this account' });
+    return res.json(await emailOtp.sendCode(user, 'login'));
+  } catch (error) {
+    if (!(error instanceof emailOtp.EmailOtpError) && !(error instanceof AuthError)) {
+      console.error('[account] Sign-in code not sent:', error.message);
+      return res.status(502).json({ error: 'The code could not be emailed. Try again in a minute.' });
+    }
     return fail(res, error);
   }
 };
@@ -127,7 +167,7 @@ async function enrolmentUser(req) {
 exports.startMfaSetup = async (req, res) => {
   try {
     const user = await enrolmentUser(req);
-    if (user.mfa_enabled) return res.status(400).json({ error: 'MFA is already enabled' });
+    if (user.mfa_enabled) return res.status(400).json({ error: 'The authenticator app is already set up' });
     const secret = mfa.generateSecret();
     await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_pending_secret_enc: encrypt(secret) } }));
     return res.json({ secret, otpauth_url: mfa.otpauthUrl(secret, user.email, notify.productName()) });
@@ -142,14 +182,113 @@ exports.confirmMfaSetup = async (req, res) => {
     if (!user.mfa_pending_secret_enc) return res.status(400).json({ error: 'Start MFA setup first' });
     const secret = decrypt(user.mfa_pending_secret_enc);
     if (!mfa.verifyTotp(secret, req.body?.code)) return res.status(401).json(INVALID_MFA_CODE);
-    const { codes, hashes } = mfa.generateRecoveryCodes();
+    const recovery = newRecoveryCodes(user);
     await sys(() => Users.updateOne({ id: user.id }, {
-      $set: { mfa_enabled: true, mfa_secret_enc: encrypt(secret), mfa_recovery_hashes: hashes, mfa_enrolled_at: new Date() },
+      $set: { mfa_enabled: true, mfa_secret_enc: encrypt(secret), mfa_enrolled_at: user.mfa_enrolled_at || new Date(), ...(recovery ? { mfa_recovery_hashes: recovery.hashes } : {}) },
       $unset: { mfa_pending_secret_enc: '' },
     }));
-    await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: { actor_type: user.tenant_id ? 'user' : 'staff', actor_user_id: user.id }, targetType: 'user', targetId: user.id });
+    await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'totp' } });
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
-    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true })), recovery_codes: codes });
+    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
+// Recovery codes are issued with the first method only; adding a second
+// method keeps the codes the user already saved.
+function newRecoveryCodes(user) {
+  if (mfa.hasMfa(user) && user.mfa_recovery_hashes?.length) return null;
+  return mfa.generateRecoveryCodes();
+}
+
+const actorOf = (user) => ({ actor_type: user.tenant_id ? 'user' : 'staff', actor_user_id: user.id });
+
+// Email as a second step: a code is mailed, and entering it turns it on.
+exports.startEmailSetup = async (req, res) => {
+  try {
+    const user = await enrolmentUser(req);
+    if (user.mfa_email_enabled) return res.status(400).json({ error: 'Email codes are already turned on' });
+    return res.json(await emailOtp.sendCode(user, 'setup'));
+  } catch (error) {
+    if (!(error instanceof emailOtp.EmailOtpError) && !(error instanceof AuthError)) {
+      console.error('[account] Setup code not sent:', error.message);
+      return res.status(502).json({ error: 'The code could not be emailed. Check the email settings and try again.' });
+    }
+    return fail(res, error);
+  }
+};
+
+exports.confirmEmailSetup = async (req, res) => {
+  try {
+    const user = await enrolmentUser(req);
+    if (user.mfa_email_enabled) return res.status(400).json({ error: 'Email codes are already turned on' });
+    if (!(await emailOtp.verifyCode(user, req.body?.code, 'setup'))) return res.status(401).json(INVALID_MFA_CODE);
+    const recovery = newRecoveryCodes(user);
+    await sys(() => Users.updateOne({ id: user.id }, {
+      $set: { mfa_email_enabled: true, mfa_enrolled_at: user.mfa_enrolled_at || new Date(), ...(recovery ? { mfa_recovery_hashes: recovery.hashes } : {}) },
+    }));
+    await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'email' } });
+    const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
+    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
+// Turns one method off (password required). Accounts that must use two-step
+// verification keep at least one method.
+exports.disableMfaMethod = async (req, res) => {
+  try {
+    const { method, password } = req.body || {};
+    const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
+    if (!user || typeof password !== 'string' || !(await bcrypt.compare(password, user.password_hash || ''))) {
+      return res.status(400).json({ error: 'Password incorrect' });
+    }
+    const methods = mfa.methodsOf(user);
+    if (!methods.includes(method)) return res.status(400).json({ error: 'This method is not turned on' });
+    const remaining = methods.filter((m) => m !== method);
+    if (!remaining.length && mfaEnforcedFor(user)) {
+      return res.status(400).json({ error: 'Admin accounts must keep one two-step method. Turn on the other method first.', code: 'MFA_LAST_METHOD' });
+    }
+    const update = method === 'totp'
+      ? { $set: { mfa_enabled: false }, $unset: { mfa_secret_enc: '', mfa_pending_secret_enc: '' } }
+      : { $set: { mfa_email_enabled: false }, $unset: { mfa_email_code_hash: '', mfa_email_code_purpose: '', mfa_email_code_expires_at: '' } };
+    if (!remaining.length) update.$unset = { ...update.$unset, mfa_recovery_hashes: '', mfa_enrolled_at: '' };
+    await sys(() => Users.updateOne({ id: user.id }, update));
+    await audit.record(audit.EVENTS.MFA_METHOD_DISABLED, { tenantId: user.tenant_id ?? null, req, targetType: 'user', targetId: user.id, meta: { method } });
+    return res.json({ success: true, mfa_methods: remaining });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
+// Replaces the recovery codes (password required); the old ones stop working.
+exports.regenerateRecoveryCodes = async (req, res) => {
+  try {
+    const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
+    if (!user || typeof req.body?.password !== 'string' || !(await bcrypt.compare(req.body.password, user.password_hash || ''))) {
+      return res.status(400).json({ error: 'Password incorrect' });
+    }
+    if (!mfa.hasMfa(user)) return res.status(400).json({ error: 'Turn on two-step verification first' });
+    const { codes, hashes } = mfa.generateRecoveryCodes();
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_recovery_hashes: hashes } }));
+    return res.json({ recovery_codes: codes });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
+// The signed-in user's own name and phone. Email stays as it is (it is the login).
+exports.updateProfile = async (req, res) => {
+  try {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const phone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+    if (name.length < 2 || name.length > 80) return res.status(400).json({ error: 'Name must be 2 to 80 characters' });
+    if (phone && !/^\+?[0-9 ()-]{7,20}$/.test(phone)) return res.status(400).json({ error: 'Enter a valid phone number' });
+    await sys(() => Users.updateOne({ id: req.user.id }, { $set: { name, phone: phone || null, updated_at: new Date() } }));
+    await audit.record(audit.EVENTS.PROFILE_UPDATED, { tenantId: req.user.tenant_id ?? null, req, targetType: 'user', targetId: req.user.id });
+    return res.json({ success: true, user: { ...req.user, name, phone: phone || null } });
   } catch (error) {
     return fail(res, error);
   }
@@ -161,7 +300,9 @@ exports.me = async (req, res) => {
     const lifecycle = req.lifecycle;
     return res.json({
       ...req.user,
-      mfa_enabled: Boolean(fresh?.mfa_enabled),
+      mfa_enabled: mfa.hasMfa(fresh),
+      mfa_methods: mfa.methodsOf(fresh),
+      recovery_codes_left: fresh?.mfa_recovery_hashes?.length || 0,
       last_login: fresh?.last_login || null,
       workspace: lifecycle ? { id: lifecycle.tenant.id, name: lifecycle.tenant.name, state: lifecycle.state, access: lifecycle.access } : null,
     });
@@ -189,7 +330,7 @@ exports.changePassword = async (req, res) => {
     await audit.record(audit.EVENTS.PASSWORD_CHANGED, { tenantId: user.tenant_id ?? null, req, targetType: 'user', targetId: user.id });
     // Every other session is revoked; this one gets a fresh token. A signed-in
     // user with MFA enabled has already passed it in this session.
-    return res.json({ success: true, token: issueAccessToken(updated, { mfa: Boolean(updated.mfa_enabled) }) });
+    return res.json({ success: true, token: issueAccessToken(updated, { mfa: mfa.hasMfa(updated) }) });
   } catch (error) {
     return fail(res, error);
   }

@@ -1,155 +1,87 @@
-import React, { useState, useEffect } from 'react';
-import { toast } from 'sonner';
-import { FiLock, FiServer } from 'react-icons/fi';
+import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { FiChevronRight } from 'react-icons/fi';
 import axiosClient from '../api/axiosClient';
-import { FormField, IconInput } from './FormField';
+import UserAvatar from './UserAvatar';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Spinner } from '@/components/ui/spinner';
+import { cn } from '@/lib/utils';
+import ProfileSettings from './settings/ProfileSettings';
+import TwoStepSettings from './settings/TwoStepSettings';
+import PasswordSettings from './settings/PasswordSettings';
+import SystemSettings from './settings/SystemSettings';
+import { SETTINGS_SECTIONS } from './settings/SettingsPageHeader';
 
-const EMPTY_PASSWORDS = { currentPassword: '', newPassword: '', confirmPassword: '' };
+const ROLE_NAMES = { founder: 'Admin (Owner)', ops: 'Staff' };
 
-const StatusDot = ({ ok, children }) => (
-  <span className="inline-flex items-center gap-2">
-    <span className={`size-2 rounded-full ${ok ? 'bg-green-500' : 'bg-slate-300'}`} />
-    {children}
-  </span>
-);
+const AdminSettingsView = ({ userProfile, section, permissions = {}, onProfileChanged }) => {
+  const navigate = useNavigate();
+  const [account, setAccount] = useState(null);
+  const canSystem = Boolean(permissions['platform.staff.manage']);
 
-const AdminSettingsView = ({ userProfile }) => {
-  const [systemInfo, setSystemInfo] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [passwordLoading, setPasswordLoading] = useState(false);
-  const [passwords, setPasswords] = useState(EMPTY_PASSWORDS);
-  const [errors, setErrors] = useState({});
-
-  useEffect(() => {
-    async function loadSettings() {
-      setLoading(true);
-      try {
-        const res = await axiosClient.get('/admin/settings');
-        setSystemInfo(res.data?.system || null);
-      } catch (err) {
-        // Fallback gracefully
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadSettings();
-  }, []);
-
-  const set = (key) => (e) => {
-    setPasswords((p) => ({ ...p, [key]: e.target.value }));
-    setErrors((er) => ({ ...er, [key]: undefined }));
-  };
-
-  const handleChangePassword = async (e) => {
-    e.preventDefault();
-    const nextErrors = {};
-    if (!passwords.currentPassword) nextErrors.currentPassword = 'Current password is required';
-    if (!passwords.newPassword) nextErrors.newPassword = 'New password is required';
-    else if (passwords.newPassword.length < 10) nextErrors.newPassword = 'Password must be at least 10 characters';
-    if (!passwords.confirmPassword) nextErrors.confirmPassword = 'Please confirm your new password';
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length) return;
-
-    if (passwords.newPassword !== passwords.confirmPassword) {
-      toast.error('New password and confirmation do not match');
-      return;
-    }
-    setPasswordLoading(true);
+  const loadAccount = async () => {
     try {
-      const res = await axiosClient.post('/admin/settings/password', {
-        currentPassword: passwords.currentPassword,
-        newPassword: passwords.newPassword,
-      });
-      // Changing the password signs out every other session; keep this one
-      // with the fresh token the server returns.
-      if (res.data?.token) localStorage.setItem('adminToken', res.data.token);
-      toast.success('Password updated. Other sessions have been signed out.');
-      setPasswords(EMPTY_PASSWORDS);
-    } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to update password');
-    } finally {
-      setPasswordLoading(false);
+      setAccount((await axiosClient.get('/auth/me')).data);
+    } catch {
+      setAccount(null);
     }
   };
+  useEffect(() => { loadAccount(); }, [section]);
 
-  const rows = [
-    {
-      label: 'Environment',
-      value: (
-        <StatusDot ok={systemInfo?.environment === 'production'}>
-          {String(systemInfo?.environment || 'development').toUpperCase()}
-        </StatusDot>
-      ),
-    },
-    { label: 'Node Runtime', value: systemInfo?.nodeVersion || 'v22.x' },
-    { label: 'API Port', value: systemInfo?.port || 3601 },
-    { label: 'Email Outbox Mode', value: <Badge variant="info">{systemInfo?.emailDelivery || 'outbox'}</Badge> },
-    {
-      label: 'MFA Enforcement',
-      value: <StatusDot ok={systemInfo?.mfaEnforced}>{systemInfo?.mfaEnforced ? 'Enabled' : 'Disabled (Dev Mode)'}</StatusDot>,
-    },
-    {
-      label: 'Server Uptime',
-      value: systemInfo?.uptimeSeconds ? `${Math.floor(systemInfo.uptimeSeconds / 60)} minutes` : 'Active',
-    },
-  ];
+  if (section === 'profile') return <ProfileSettings account={account} userProfile={userProfile} onSaved={() => { loadAccount(); onProfileChanged?.(); }} />;
+  if (section === 'two-step') return <TwoStepSettings account={account} onChanged={loadAccount} />;
+  if (section === 'password') return <PasswordSettings />;
+  if (section === 'system' && canSystem) return <SystemSettings />;
+
+  const methods = account?.mfa_methods || userProfile?.mfa_methods || [];
+  const status = {
+    profile: userProfile?.phone ? userProfile.phone : 'Add a phone number',
+    'two-step': methods.length
+      ? <Badge variant="success">On · {methods.map((m) => (m === 'email' ? 'Email' : 'Authenticator')).join(' + ')}</Badge>
+      : <Badge variant="danger">Off</Badge>,
+    password: null,
+    system: null,
+  };
 
   return (
-    <div>
-      <div className="mb-5">
-        <div className="text-base font-extrabold">Platform Settings & System Configuration</div>
-        <div className="text-xs text-slate-400">
-          Platform infrastructure diagnostics, server runtime environment, and administrator account security.
+    <div className="max-w-6xl">
+      {/* Account summary */}
+      <div className="relative mb-6 overflow-hidden rounded-2xl border border-border bg-gradient-to-r from-blue-600 to-indigo-600 p-5 text-white shadow-sm sm:p-6">
+        <div className="pointer-events-none absolute -top-16 -right-10 size-48 rounded-full bg-white/10" />
+        <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center">
+          <span className="rounded-full bg-white p-1 shadow-md"><UserAvatar name={userProfile?.name} role={userProfile?.staff_role} size={56} /></span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xl font-extrabold">{userProfile?.name || 'Admin'}</div>
+            <div className="truncate text-sm text-blue-100">{userProfile?.email}</div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold ring-1 ring-white/25">{ROLE_NAMES[userProfile?.staff_role] || 'Staff'}</span>
+            <span className={cn('rounded-full px-3 py-1 text-xs font-semibold ring-1', methods.length ? 'bg-emerald-400/20 ring-emerald-200/40' : 'bg-red-400/25 ring-red-200/40')}>
+              {methods.length ? '2-step on' : '2-step off'}
+            </span>
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[7fr_5fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <FiServer className="text-blue-600" /> Server Runtime Environment
-            </CardTitle>
-            {loading && <Spinner className="text-muted-foreground" />}
-          </CardHeader>
-          <CardContent>
-            <dl className="overflow-hidden rounded-lg border border-border">
-              {rows.map((row) => (
-                <div key={row.label} className="grid grid-cols-[180px_1fr] border-b border-border text-sm last:border-b-0">
-                  <dt className="bg-muted/60 px-4 py-3 font-medium text-muted-foreground">{row.label}</dt>
-                  <dd className="px-4 py-3">{row.value}</dd>
-                </div>
-              ))}
-            </dl>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <FiLock className="text-blue-600" /> Change Administrator Password
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleChangePassword} noValidate className="flex flex-col gap-4">
-              <FormField label="Current Password" htmlFor="currentPassword" error={errors.currentPassword}>
-                <IconInput id="currentPassword" type="password" autoComplete="current-password" icon={FiLock} value={passwords.currentPassword} onChange={set('currentPassword')} />
-              </FormField>
-              <FormField label="New Password" htmlFor="newPassword" error={errors.newPassword}>
-                <IconInput id="newPassword" type="password" autoComplete="new-password" icon={FiLock} value={passwords.newPassword} onChange={set('newPassword')} />
-              </FormField>
-              <FormField label="Confirm New Password" htmlFor="confirmPassword" error={errors.confirmPassword}>
-                <IconInput id="confirmPassword" type="password" autoComplete="new-password" icon={FiLock} value={passwords.confirmPassword} onChange={set('confirmPassword')} />
-              </FormField>
-              <Button type="submit" size="lg" disabled={passwordLoading} className="mt-2 w-full font-semibold">
-                {passwordLoading && <Spinner />} Update Admin Password
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {Object.entries(SETTINGS_SECTIONS).filter(([, s]) => !s.founderOnly || canSystem).map(([slug, s]) => {
+          const Icon = s.icon;
+          return (
+            <button
+              key={slug}
+              type="button"
+              onClick={() => navigate(`/dashboard/settings/${slug}`)}
+              className="group flex cursor-pointer items-start gap-4 rounded-2xl border border-border bg-card p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md"
+            >
+              <span className={cn('flex size-12 shrink-0 items-center justify-center rounded-xl ring-4', s.tone)}><Icon size={22} /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-bold text-slate-900">{s.title}</span>
+                <span className="mt-0.5 block text-[13px] text-muted-foreground">{s.text}</span>
+                {status[slug] && <span className="mt-2.5 block text-xs text-slate-500">{status[slug]}</span>}
+              </span>
+              <FiChevronRight className="mt-1 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
+            </button>
+          );
+        })}
       </div>
     </div>
   );

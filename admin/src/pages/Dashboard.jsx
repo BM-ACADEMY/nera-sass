@@ -216,7 +216,7 @@ const Dashboard = () => {
       case 'workflows': return 'Workflow Automation Engines';
       case 'founder-reports': return 'Founder Reports';
       case 'users': return 'Users & Team';
-      case 'settings': return 'Platform Settings & Infrastructure';
+      case 'settings': return ({ profile: 'Profile', 'two-step': 'Two-step verification', password: 'Password & sessions', system: 'System' })[itemId] || 'Settings';
       case 'inbox': return 'WhatsApp Chat';
       default: return 'Platform Administration';
     }
@@ -337,7 +337,7 @@ const Dashboard = () => {
 
           {activeTab === 'founder-reports' && <FounderReportsView />}
 
-          {activeTab === 'settings' && <AdminSettingsView userProfile={userProfile} />}
+          {activeTab === 'settings' && <AdminSettingsView userProfile={userProfile} section={itemId} permissions={permissions} onProfileChanged={fetchProfile} />}
         </div>
       </SidebarInset>
 

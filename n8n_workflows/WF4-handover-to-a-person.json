@@ -1,0 +1,110 @@
+{
+  "name": "Nera WF4 - Handover to a person",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nera-handover",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "d425eae7-3cde-4583-ab1d-5d22d9763604",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Webhook Secret"
+        }
+      },
+      "webhookId": "1c23739a-b4b1-47fe-a3c8-cc59f9729f3e"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Edit these four values once per n8n instance.\nreturn [{ json: {\n  api: 'https://YOUR-API-HOST',\n  llmUrl: 'https://api.openai.com/v1/chat/completions',\n  model: 'gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
+      },
+      "id": "f20e0224-bb9a-4747-b930-3caa7cb33c62",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/handover",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, reason: $('Webhook').first().json.body.reason || 'Customer asked for a person', draft: $('Webhook').first().json.body.draft || '' }) }}"
+      },
+      "id": "8d9292a5-b642-4b24-83b2-37813901b8fd",
+      "name": "Handover",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Handover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}
