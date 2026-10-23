@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { message } from 'antd';
 import { QRCodeSVG } from 'qrcode.react';
-import { Mail, Lock, Eye, EyeOff, ShieldCheck, Smartphone, ChevronRight, ArrowLeft, KeyRound, Copy, Download, CheckCircle2, Info, Loader2 } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, ShieldCheck, Smartphone, ChevronRight, ArrowLeft, KeyRound, Copy, Download, Info, Loader2 } from 'lucide-react';
 import leadosLogo from '../../assets/leadoslogo.png';
 import { api } from '../../services/api.js';
 import { mfaErrorKind, NOTICES } from '../../services/session.js';
@@ -45,12 +45,12 @@ const MethodCard = ({ icon: Icon, tone, title, text, onClick, disabled }) => (
     type="button"
     onClick={onClick}
     disabled={disabled}
-    className="group flex w-full cursor-pointer items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md disabled:pointer-events-none disabled:opacity-60"
+    className="group flex w-full cursor-pointer items-center gap-3.5 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md disabled:pointer-events-none disabled:opacity-60"
   >
     <span className={cn('flex h-12 w-12 shrink-0 items-center justify-center rounded-xl', tone)}><Icon size={22} /></span>
     <span className="min-w-0 flex-1">
-      <span className="block font-semibold text-slate-900">{title}</span>
-      <span className="block text-[13px] text-slate-500">{text}</span>
+      <span className="block font-semibold leading-snug text-slate-900">{title}</span>
+      <span className="mt-0.5 block text-[13px] leading-snug text-slate-500">{text}</span>
     </span>
     <ChevronRight size={18} className="text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-blue-600" />
   </button>
@@ -231,11 +231,11 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
   };
 
   const art = {
-    choose: <ShieldArt />,
-    verify: useRecovery ? <ShieldArt /> : method === 'email' ? <EmailCodeArt /> : <AuthenticatorArt />,
-    'setup-choose': <ShieldArt />,
-    'setup-email': <EmailCodeArt />,
-    codes: <ShieldArt />,
+    choose: <ShieldArt className="h-24 w-auto" />,
+    verify: useRecovery ? <ShieldArt className="h-24 w-auto" /> : method === 'email' ? <EmailCodeArt className="h-24 w-auto" /> : <AuthenticatorArt className="h-24 w-auto" />,
+    'setup-choose': <ShieldArt className="h-24 w-auto" />,
+    'setup-email': <EmailCodeArt className="h-24 w-auto" />,
+    codes: <ShieldArt className="h-24 w-auto" />,
   }[step];
 
   const heading = {
@@ -260,42 +260,16 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
   );
 
   return (
-    <div className="flex min-h-screen w-full bg-slate-50" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
-      {/* Brand panel (large screens) */}
-      <aside className="relative hidden w-[44%] max-w-[620px] flex-col justify-between overflow-hidden bg-gradient-to-br from-[#0b1b4d] via-[#14307a] to-[#1d4ed8] p-10 text-white lg:flex">
-        <div className="pointer-events-none absolute -right-24 -top-24 h-80 w-80 rounded-full bg-white/10 blur-2xl" />
-        <div className="pointer-events-none absolute -bottom-32 -left-20 h-96 w-96 rounded-full bg-sky-400/20 blur-3xl" />
-        <div className="relative flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white p-1.5 shadow-lg"><img src={leadosLogo} alt="" className="h-full w-full object-contain" /></span>
-          <div>
-            <div className="text-lg font-extrabold tracking-tight">Getnera</div>
-            <div className="text-xs text-blue-200">WhatsApp CRM</div>
-          </div>
-        </div>
-        <div className="relative">
-          <div className="mx-auto mb-8 w-fit rounded-3xl bg-white/95 p-6 shadow-2xl shadow-blue-950/40">
-            <ShieldArt className="h-44 w-auto" />
-          </div>
-          <h2 className="m-0 font-sans text-3xl font-extrabold leading-tight tracking-tight text-white">Every lead and WhatsApp chat in one place.</h2>
-          <p className="mt-3 max-w-md text-sm text-blue-100">AI replies, follow-ups, campaigns and your team inbox, protected by two-step verification.</p>
-          <ul className="mt-6 flex flex-col gap-2.5 text-sm text-blue-50">
-            {['Two-step sign-in by email or authenticator app', 'Your WhatsApp tokens never leave our servers', 'Each workspace’s data kept separate'].map((t) => (
-              <li key={t} className="flex items-center gap-2.5"><CheckCircle2 size={16} className="shrink-0 text-emerald-300" /> {t}</li>
-            ))}
-          </ul>
-        </div>
-        <div className="relative text-xs text-blue-200">© {YEAR} Afra Ventures Private Limited</div>
-      </aside>
-
+    <div className="flex min-h-screen w-full items-center justify-center bg-gradient-to-b from-slate-50 to-blue-50/60 px-4 py-6" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
       {/* Form */}
-      <main className="flex flex-1 flex-col items-center justify-center px-4 py-10 sm:px-8">
-        <div className="mb-8 flex items-center gap-2.5 lg:hidden">
+      <main className="flex w-full flex-col items-center">
+        <div className="mb-5 flex items-center gap-2.5">
           <img src={leadosLogo} alt="" className="h-9 w-9 object-contain" />
           <span className="text-lg font-extrabold text-slate-900">Getnera</span>
         </div>
 
-        <div className="w-full max-w-[430px] rounded-3xl border border-slate-200/80 bg-white p-7 shadow-xl shadow-slate-200/60 sm:p-9">
-          {art && <div className="mb-4 flex justify-center">{art}</div>}
+        <div className="w-full max-w-[420px] rounded-3xl border border-slate-200/80 bg-white p-6 shadow-xl shadow-slate-200/60 sm:p-8">
+          {art && <div className="mb-2 flex justify-center">{art}</div>}
           {step === 'password' && (
             <span className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-600"><ShieldCheck size={22} /></span>
           )}
@@ -308,7 +282,7 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
             </div>
           )}
 
-          <div className="mt-7">
+          <div className="mt-6">
             {step === 'password' && (
               <form onSubmit={onSubmit} className="flex flex-col gap-5">
                 <Field label="Email" htmlFor="email">
@@ -397,7 +371,7 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
                   ))}
                 </ol>
                 <div className="flex justify-center">
-                  <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"><QRCodeSVG value={setup.otpauth_url} size={168} /></div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"><QRCodeSVG value={setup.otpauth_url} size={148} /></div>
                 </div>
                 <div className="flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2">
                   <code className="min-w-0 flex-1 truncate text-xs">{setup.secret}</code>
@@ -428,7 +402,7 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
           </div>
         </div>
 
-        <p className="mt-8 text-center text-xs text-slate-400">
+        <p className="mt-5 text-center text-xs text-slate-400">
           © {YEAR} Afra Ventures Private Limited · <Link to="/privacy-policy" className="hover:text-slate-600">Privacy</Link> · <Link to="/terms-and-conditions" className="hover:text-slate-600">Terms</Link>
         </p>
       </main>

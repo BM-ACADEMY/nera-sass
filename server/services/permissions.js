@@ -48,8 +48,12 @@ const STAFF_PERMISSIONS = {
   'platform.modules': ['founder', 'ops'],
 };
 
-// Roles that must use MFA (plan A5; Manager is decision D7).
-const MFA_REQUIRED_TENANT_ROLES = ['owner', 'admin'];
+// Customer roles that must set up two-step verification before their first
+// session. Empty by default: customers turn it on themselves in Settings.
+// Set MFA_REQUIRED_TENANT_ROLES=owner,admin to require it. Platform staff
+// always need it (MFA_ENFORCED).
+const mfaRequiredTenantRoles = () => String(process.env.MFA_REQUIRED_TENANT_ROLES || '')
+  .split(',').map((r) => r.trim()).filter(Boolean);
 
 function normalizeTenantRole(role) {
   const value = String(role || '').toLowerCase();
@@ -87,7 +91,7 @@ function can(identity, permission) {
 function mfaRequired(identity) {
   if (!identity) return false;
   if (identity.kind === 'staff') return true;
-  return identity.kind === 'tenant' && MFA_REQUIRED_TENANT_ROLES.includes(identity.role);
+  return identity.kind === 'tenant' && mfaRequiredTenantRoles().includes(identity.role);
 }
 
 // Express middleware: 403 unless req.identity has the permission.

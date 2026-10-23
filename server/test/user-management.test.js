@@ -194,8 +194,15 @@ test('User Management & Security Lifecycle Suite', async (t) => {
   });
 
   await t.test('6. MFA Requirement: Mandatory for Owner and Admin', async () => {
-    assert.strictEqual(mfaRequired(describeUser({ role: 'owner', tenant_id: 1 })), true);
-    assert.strictEqual(mfaRequired(describeUser({ role: 'admin', tenant_id: 1 })), true);
+    // Customers choose two-step verification themselves unless roles are listed.
+    assert.strictEqual(mfaRequired(describeUser({ role: 'owner', tenant_id: 1 })), false);
+    process.env.MFA_REQUIRED_TENANT_ROLES = 'owner,admin';
+    try {
+      assert.strictEqual(mfaRequired(describeUser({ role: 'owner', tenant_id: 1 })), true);
+      assert.strictEqual(mfaRequired(describeUser({ role: 'admin', tenant_id: 1 })), true);
+    } finally {
+      delete process.env.MFA_REQUIRED_TENANT_ROLES;
+    }
     assert.strictEqual(mfaRequired(describeUser({ role: 'manager', tenant_id: 1 })), false);
     assert.strictEqual(mfaRequired(describeUser({ role: 'agent', tenant_id: 1 })), false);
     assert.strictEqual(mfaRequired(describeUser({ is_platform_staff: true, staff_role: 'superadmin' })), true);
