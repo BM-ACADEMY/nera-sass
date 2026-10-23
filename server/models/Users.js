@@ -31,6 +31,13 @@ module.exports = defineModel('users', {
   mfa_pending_secret_enc: { type: String },
   mfa_recovery_hashes: { type: [String], default: undefined },
   mfa_enrolled_at: { type: Date },
+  // Email one-time codes as a second method (mfa_enabled = authenticator app).
+  mfa_email_enabled: { type: Boolean, default: false },
+  mfa_email_code_hash: { type: String },
+  mfa_email_code_purpose: { type: String },
+  mfa_email_code_expires_at: { type: Date },
+  mfa_email_code_sent_at: { type: Date },
+  mfa_email_code_attempts: { type: Number, default: 0 },
   invited_by: { type: Number },
   last_login: { type: Date },
   created_at: { type: Date, default: Date.now },

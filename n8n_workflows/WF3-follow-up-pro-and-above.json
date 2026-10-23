@@ -1,0 +1,492 @@
+{
+  "name": "Nera WF3 - Follow-up (Pro and above)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "287d2495-1803-4fff-bf7b-b710da42f641",
+      "name": "Every 15 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Edit these four values once per n8n instance.\nreturn [{ json: {\n  api: 'https://YOUR-API-HOST',\n  llmUrl: 'https://api.openai.com/v1/chat/completions',\n  model: 'gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
+      },
+      "id": "35a6649f-b93b-4ada-a5a4-a7e239f0869a",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.api }}/api/internal/followups/due",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "4229c3ef-5125-4237-bc75-3f1473a4c82d",
+      "name": "Get due follow-ups",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// The server returns { items: [{ tenant_id, lead_id, step, in_window, name, template, language }] }\nreturn ($json.items || []).map(x => ({ json: x }));"
+      },
+      "id": "0008276f-ffa8-4d1b-9e1e-19e8835e0da7",
+      "name": "Split due",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.in_window }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "00138ecb-9002-4e73-9ca9-90eda9f6bd93",
+      "name": "Inside 24h window?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.api }}/api/internal/context",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Split due').item.json.tenant_id }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "lead_id",
+              "value": "={{ $('Split due').item.json.lead_id }}"
+            },
+            {
+              "name": "limit",
+              "value": "={{ 10 }}"
+            }
+          ]
+        }
+      },
+      "id": "03f74fe6-1e8c-47eb-aae6-23e5a9a94447",
+      "name": "Get context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        420
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Config').first().json;\nconst item = $('Split due').item.json;\nconst ctx = $('Get context').first().json;\n\nconst business = ctx.business_name || 'this business';\nconst brain = (ctx.brain || []).map(b => `[${b.doc_type}] ${b.content}`).join('\\n\\n').slice(0, 12000);\nconst system = [\n  `You are the WhatsApp sales assistant for ${business}.`,\n  `Language: ${ctx.language || 'reply in the language the customer uses'}. Tone: ${ctx.tone || 'friendly, short, professional'}.`,\n  'Answer ONLY from the business knowledge below. If the answer is not there, say the team will confirm and set needs_human to true.',\n  'Never invent prices, offers, dates, links or policies. Never mention any other business.',\n  `Rules:\\n${ctx.rules || '- Keep replies under 80 words.\\n- Ask at most one question at a time.'}`,\n  `Business knowledge:\\n${brain || '(empty)'}`\n].join('\\n\\n');\nconst history = (ctx.messages || []).slice(-10).map(m => ({ role: m.direction === 'inbound' ? 'user' : 'assistant', content: m.content }));\nconst day = ({ 1: 2, 2: 5, 3: 10 })[item.step] || item.step;\nconst instruction = 'Write ONE short follow-up (max 40 words) for day ' + day + ' after the customer went quiet. Do not repeat earlier messages. No pressure. Return JSON only: {\"reply\": string}';\nreturn [{ json: { llmBody: { model: cfg.model, temperature: 0.5, response_format: { type: 'json_object' },\n  messages: [{ role: 'system', content: system }, ...history, { role: 'user', content: instruction }] } } }];"
+      },
+      "id": "8d227f75-bc01-4475-8fd4-9e3ce9ee9136",
+      "name": "Build follow-up prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.llmUrl }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.llmBody) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "a6a66e66-d735-4c54-880f-4d0b821b060f",
+      "name": "LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        420
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "LLM API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "let reply = '';\ntry { reply = String(JSON.parse($json.choices[0].message.content).reply || '').trim(); } catch (e) {}\nif (!reply || reply.length > 600) return [{ json: { ok: false } }];\nreturn [{ json: { ok: true, reply } }];"
+      },
+      "id": "a2e16514-6647-40fe-9f35-4c897eae56aa",
+      "name": "Parse follow-up",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "ff2216ba-2bdb-468f-8e10-4734911da918",
+      "name": "Draft ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/send-reply",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Split due').item.json.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Split due').item.json.lead_id, message: $('Parse follow-up').first().json.reply }) }}"
+      },
+      "id": "89b9b020-9270-45a7-bd94-7feef98ef22f",
+      "name": "Send follow-up",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/send-template",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Split due').item.json.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Split due').item.json.lead_id, template: $('Split due').item.json.template || $('Config').first().json.followUpTemplate, language: $('Split due').item.json.language || 'en', body_params: [$('Split due').item.json.name || 'there'] }) }}"
+      },
+      "id": "0ec7caf1-fc25-4b2f-8bb1-11598f91cc00",
+      "name": "Send follow-up template",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        420
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/followups/mark",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Split due').item.json.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Split due').item.json.lead_id, step: $('Split due').item.json.step }) }}"
+      },
+      "id": "abc45e80-c43f-491e-9561-761c2db0dfd3",
+      "name": "Mark step done",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2880,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 minutes": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Get due follow-ups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get due follow-ups": {
+      "main": [
+        [
+          {
+            "node": "Split due",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split due": {
+      "main": [
+        [
+          {
+            "node": "Inside 24h window?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inside 24h window?": {
+      "main": [
+        [
+          {
+            "node": "Get context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send follow-up template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get context": {
+      "main": [
+        [
+          {
+            "node": "Build follow-up prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build follow-up prompt": {
+      "main": [
+        [
+          {
+            "node": "LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send follow-up template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse follow-up": {
+      "main": [
+        [
+          {
+            "node": "Draft ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft ok?": {
+      "main": [
+        [
+          {
+            "node": "Send follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send follow-up template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send follow-up": {
+      "main": [
+        [
+          {
+            "node": "Mark step done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send follow-up template": {
+      "main": [
+        [
+          {
+            "node": "Mark step done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

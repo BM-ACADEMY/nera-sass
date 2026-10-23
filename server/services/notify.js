@@ -142,8 +142,39 @@ function passwordResetEmail({ to, name, url, expiresMinutes }) {
   return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: 'Choose a new password' }) });
 }
 
+// Six-digit sign-in / setup code. The code is the whole message, so it is
+// shown large; nothing else in the mail is actionable.
+function signInCodeEmail({ to, name, code, minutes, purpose }) {
+  const product = productName();
+  const title = purpose === 'setup' ? `Confirm email verification for ${product}` : `Your ${product} sign-in code`;
+  const intro = purpose === 'setup'
+    ? 'Use this code to turn on two-step verification by email.'
+    : 'Use this code to finish signing in.';
+  const lines = [
+    `Hi ${name || 'there'},`,
+    intro,
+    `Code: ${code}`,
+    `It expires in ${minutes} minutes and works once.`,
+    'If you did not try to sign in, change your password now: someone may know it.',
+  ];
+  const html = `<div style="font-family:Arial,sans-serif;font-size:15px;color:#1e293b;max-width:520px;margin:0 auto;padding:8px">
+<div style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:18px">${escapeHtml(product)}</div>
+<h2 style="font-size:19px;margin:0 0 12px">${escapeHtml(title)}</h2>
+<p style="margin:0 0 14px">Hi ${escapeHtml(name || 'there')},</p>
+<p style="margin:0 0 18px">${escapeHtml(intro)}</p>
+<div style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:12px;padding:18px;text-align:center;margin:0 0 18px">
+<div style="font-size:34px;font-weight:700;letter-spacing:10px;color:#0f172a;font-family:'Courier New',monospace">${escapeHtml(code)}</div>
+<div style="font-size:13px;color:#64748b;margin-top:6px">Expires in ${escapeHtml(minutes)} minutes</div>
+</div>
+<p style="color:#64748b;font-size:13px;margin:0">If you did not try to sign in, change your password now: someone may know it. Never share this code with anyone, including ${escapeHtml(product)} staff.</p>
+</div>`;
+  // The subject is logged by send(), so it never carries the code.
+  return send({ to, subject: title, text: `${lines.join('\n\n')}\n`, html });
+}
+
 module.exports = {
   send,
+  signInCodeEmail,
   deliveryMode,
   invitationEmail,
   staffWelcomeEmail,

@@ -79,4 +79,15 @@ function generateRecoveryCodes(count = 10) {
   return { codes, hashes: codes.map(hashRecoveryCode) };
 }
 
-module.exports = { generateSecret, totp, verifyTotp, otpauthUrl, generateRecoveryCodes, hashRecoveryCode, base32Encode, base32Decode };
+// Second-step methods a user has turned on: 'email' (one-time code by mail)
+// and 'totp' (authenticator app; stored as mfa_enabled for older accounts).
+function methodsOf(user) {
+  const methods = [];
+  if (user?.mfa_email_enabled) methods.push('email');
+  if (user?.mfa_enabled) methods.push('totp');
+  return methods;
+}
+
+const hasMfa = (user) => methodsOf(user).length > 0;
+
+module.exports = { generateSecret, totp, verifyTotp, otpauthUrl, generateRecoveryCodes, hashRecoveryCode, base32Encode, base32Decode, methodsOf, hasMfa };

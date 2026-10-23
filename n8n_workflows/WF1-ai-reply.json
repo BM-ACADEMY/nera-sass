@@ -1,0 +1,434 @@
+{
+  "name": "Nera WF1 - AI reply",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nera-ai-reply",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "dc15a4ba-6e3a-4895-94b7-5f3f0f14cfde",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Webhook Secret"
+        }
+      },
+      "webhookId": "7116ecd2-dfb4-4508-b8bd-95b947885c65"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Edit these four values once per n8n instance.\nreturn [{ json: {\n  api: 'https://YOUR-API-HOST',\n  llmUrl: 'https://api.openai.com/v1/chat/completions',\n  model: 'gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
+      },
+      "id": "d198163f-342b-4f40-8a01-3f5f08db8855",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.api }}/api/internal/context",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "lead_id",
+              "value": "={{ $('Webhook').first().json.body.lead_id }}"
+            },
+            {
+              "name": "before_message_id",
+              "value": "={{ $('Webhook').first().json.body.message_id }}"
+            },
+            {
+              "name": "limit",
+              "value": "={{ 10 }}"
+            }
+          ]
+        }
+      },
+      "id": "12f530b3-438f-46a0-9746-e23260ccaf2e",
+      "name": "Get context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $('Webhook').first().json.body;\nconst cfg = $('Config').first().json;\nconst ctx = $('Get context').first().json;\n\nconst business = ctx.business_name || 'this business';\nconst brain = (ctx.brain || []).map(b => `[${b.doc_type}] ${b.content}`).join('\\n\\n').slice(0, 12000);\nconst system = [\n  `You are the WhatsApp sales assistant for ${business}.`,\n  `Language: ${ctx.language || 'reply in the language the customer uses'}. Tone: ${ctx.tone || 'friendly, short, professional'}.`,\n  'Answer ONLY from the business knowledge below. If the answer is not there, say the team will confirm and set needs_human to true.',\n  'Never invent prices, offers, dates, links or policies. Never mention any other business.',\n  `Rules:\\n${ctx.rules || '- Keep replies under 80 words.\\n- Ask at most one question at a time.'}`,\n  `Business knowledge:\\n${brain || '(empty)'}`\n].join('\\n\\n');\nconst history = (ctx.messages || []).slice(-10).map(m => ({ role: m.direction === 'inbound' ? 'user' : 'assistant', content: m.content }));\nconst instruction = 'Return JSON only: {\"reply\": string, \"confidence\": number 0 to 1, \"needs_human\": boolean, \"reason\": string, \"lead\": {\"name\": string|null, \"need\": string|null, \"budget\": string|null, \"timeline\": string|null}, \"score\": number 0 to 100}';\nreturn [{ json: { llmBody: { model: cfg.model, temperature: 0.3, response_format: { type: 'json_object' },\n  messages: [{ role: 'system', content: system + '\\n\\n' + instruction }, ...history, { role: 'user', content: body.message }] } } }];"
+      },
+      "id": "10d7bedb-2cc6-4d9a-a0a2-8aa37fa5aadd",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.llmUrl }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.llmBody) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "788900a7-f14b-456b-94fe-cee1c4a69eb6",
+      "name": "LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "LLM API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst cfg = $('Config').first().json;\nconst ctx = $('Get context').first().json;\nlet out;\ntry { out = JSON.parse($json.choices[0].message.content); }\ncatch (e) { return [{ json: { route: 'handover', reason: 'AI returned invalid output', draft: '' } }]; }\nconst reply = String(out.reply || '').trim();\nconst problems = [];\nif (!reply) problems.push('empty reply');\nif (reply.length > 1000) problems.push('reply too long');\nif (out.needs_human) problems.push(out.reason || 'AI asked for a person');\nif (!(Number(out.confidence) >= cfg.minConfidence)) problems.push('low confidence');\nconst known = JSON.stringify(ctx).toLowerCase();\nconst badLinks = (reply.match(/https?:\\/\\/\\S+/g) || []).filter(u => !known.includes(u.toLowerCase()));\nif (badLinks.length) problems.push('link not in knowledge');\nconst badNums = (reply.match(/\\+?\\d[\\d\\s-]{8,}\\d/g) || []).filter(n => !known.includes(n.replace(/[\\s-]/g, '')) && !known.includes(n));\nif (badNums.length) problems.push('phone number not in knowledge');\nconst lead = out.lead || {};\nconst score = Math.max(0, Math.min(100, Math.round(Number(out.score) || 0)));\nconst interest = [lead.need, lead.budget && ('budget ' + lead.budget), lead.timeline].filter(Boolean).join(' | ') || null;\nlet route = problems.length ? 'handover' : 'send';\nif (!problems.length && ctx.supervised) { route = 'handover'; problems.push('Supervised mode: approve this draft'); }\nreturn [{ json: { route, reason: problems.join('; '), reply, draft: reply, score, interest } }];\n"
+      },
+      "id": "f59b6f93-313f-40b1-bc38-bbfd275a8912",
+      "name": "Parse and guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.route }}",
+              "operation": "equal",
+              "value2": "send"
+            }
+          ]
+        }
+      },
+      "id": "9e304f64-ed60-4bf7-86d3-88526d1277d9",
+      "name": "Can send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/send-reply",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, message: $('Parse and guard').first().json.reply }) }}"
+      },
+      "id": "1a572fd3-33d5-48a9-92c9-5223e48227c8",
+      "name": "Send reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        420
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/update-lead",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, score: $('Parse and guard').first().json.score, interest: $('Parse and guard').first().json.interest, status: $('Parse and guard').first().json.score >= 70 ? 'hot' : null }) }}"
+      },
+      "id": "5e3a313f-2b64-4796-8db2-7edc7e05ab0f",
+      "name": "Update lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1920,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/handover",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, reason: $json.reason, draft: $json.draft }) }}"
+      },
+      "id": "47fe7a85-33c7-4cca-9cc6-f1b21930cc65",
+      "name": "Handover",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        420
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/handover",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, reason: 'AI failed', draft: '' }) }}"
+      },
+      "id": "5a99e277-ac9b-439e-a4cd-d66aba792506",
+      "name": "Handover (AI failed)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Get context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get context": {
+      "main": [
+        [
+          {
+            "node": "Build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handover (AI failed)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build prompt": {
+      "main": [
+        [
+          {
+            "node": "LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM": {
+      "main": [
+        [
+          {
+            "node": "Parse and guard",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handover (AI failed)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse and guard": {
+      "main": [
+        [
+          {
+            "node": "Can send?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Can send?": {
+      "main": [
+        [
+          {
+            "node": "Send reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send reply": {
+      "main": [
+        [
+          {
+            "node": "Update lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

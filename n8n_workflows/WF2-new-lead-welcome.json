@@ -1,0 +1,185 @@
+{
+  "name": "Nera WF2 - New lead welcome",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nera-new-lead",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a9af98dd-841e-480d-be0c-5df12d7daac9",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Webhook Secret"
+        }
+      },
+      "webhookId": "4488b1fb-767c-4b7b-bfea-3242e1e87894"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Edit these four values once per n8n instance.\nreturn [{ json: {\n  api: 'https://YOUR-API-HOST',\n  llmUrl: 'https://api.openai.com/v1/chat/completions',\n  model: 'gpt-4o-mini',\n  minConfidence: 0.6,\n  welcomeTemplate: 'welcome_message',\n  followUpTemplate: 'follow_up'\n} }];"
+      },
+      "id": "e9372407-6573-4e5c-9e1d-435e560aa7e4",
+      "name": "Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": "={{ Number($('Webhook').first().json.body.delay_seconds || 0) }}",
+        "unit": "seconds"
+      },
+      "id": "df795288-67f8-4204-b235-892eff3b6152",
+      "name": "Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        300
+      ],
+      "webhookId": "bef5033d-91f5-4fb2-b1d4-919a8f153f8d"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/send-template",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, template: $('Webhook').first().json.body.template || $('Config').first().json.welcomeTemplate, language: $('Webhook').first().json.body.language || 'en', body_params: $('Webhook').first().json.body.body_params || [$('Webhook').first().json.body.name || 'there'] }) }}"
+      },
+      "id": "6acf7613-ec6e-4ea2-b046-a2b75a0fe330",
+      "name": "Send welcome template",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        420
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.api }}/api/internal/handover",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-tenant-id",
+              "value": "={{ $('Webhook').first().json.body.tenant_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ lead_id: $('Webhook').first().json.body.lead_id, reason: 'Welcome template could not be sent', draft: '' }) }}"
+      },
+      "id": "8a17c0de-8beb-4183-9d02-08e435302168",
+      "name": "Handover (welcome failed)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Nera Internal Key"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Send welcome template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send welcome template": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Handover (welcome failed)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}
