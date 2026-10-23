@@ -31,6 +31,7 @@ const audit = require('../services/audit');
 const { inventoryAccessToken, phoneRegistrationEnabled, requireInventoryAccessToken } = require('../services/metaInventoryCredentials');
 const { runAsTenant } = require('../services/tenantContext');
 const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
+const { encryptToken } = require('../services/clientSecrets');
 const { platformPhoneId } = require('../services/platformInbox');
 
 const NO_ID = { _id: 0 };
@@ -193,7 +194,22 @@ function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, gr
 
       const verified = String(phone.connection_status || '').toUpperCase() === 'CONNECTED'
         || String(phone.verification_status || '').toUpperCase() === 'VERIFIED';
+      // A platform inventory number sends with the platform's system-user
+      // token (kept encrypted on the brand, never returned by any API), and
+      // its WABA must be subscribed to the app or Meta never delivers the
+      // customers' messages to our webhook.
+      const token = inventoryAccessToken();
+      let webhookSubscribed = false;
+      if (token) {
+        try {
+          await axios.post(`https://graph.facebook.com/${metaGraphVersion}/${phone.waba_id}/subscribed_apps`, null, { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 });
+          webhookSubscribed = true;
+        } catch (error) {
+          console.error('[Meta assign] WABA webhook subscription failed:', error.response?.data?.error?.message || error.message);
+        }
+      }
       await runAsTenant(brand.tenant_id, () => Clients.updateOne({ id: brand.id }, { $set: {
+        ...(token ? encryptToken(token) : {}),
         phone_number_id: phone.phone_number_id,
         wa_business_id: phone.waba_id,
         whatsapp_number: String(phone.display_phone_number || '').replace(/\D/g, '') || null,
@@ -205,9 +221,9 @@ function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, gr
       await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: phone.phone_number_id }, { $set: { client_id: brand.id } });
       await audit.record(audit.EVENTS.META_PHONE_LINKED, {
         tenantId: brand.tenant_id, req, targetType: 'meta_phone_number', targetId: phone.phone_number_id,
-        meta: { client_id: brand.id, waba_id: phone.waba_id, assigned: true, previous_client_id: phone.client_id ?? null },
+        meta: { client_id: brand.id, waba_id: phone.waba_id, assigned: true, previous_client_id: phone.client_id ?? null, webhook_subscribed: webhookSubscribed },
       });
-      return res.json({ success: true });
+      return res.json({ success: true, webhook_subscribed: webhookSubscribed, can_send: Boolean(token) });
     } catch (error) {
       return fail(res, error);
     }
@@ -224,7 +240,7 @@ function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, gr
         : null;
       if (brand && brand.phone_number_id === phone.phone_number_id) {
         await runAsTenant(brand.tenant_id, () => Clients.updateOne({ id: brand.id }, { $set: {
-          phone_number_id: null, wa_business_id: null, whatsapp_number: null,
+          phone_number_id: null, wa_business_id: null, whatsapp_number: null, wa_access_token_enc: null, wa_token_last4: null,
           whatsapp_status: 'not_configured', whatsapp_verified_at: null, whatsapp_verification_error: null, updated_at: new Date(),
         } }));
       }

@@ -56,7 +56,7 @@ test('Meta number assignment', async (t) => {
   }
   const brand = (id, tenantId) => runAsTenant(tenantId, () => Clients.findOne({ id }).lean());
 
-  await t.test('A1. Ops assigns a number: brand gets number and WABA (no token), inventory linked, audited', async () => {
+  await t.test('A1. Ops assigns a number: brand gets number, WABA and the encrypted inventory token, inventory linked, audited', async () => {
     const { ops, acme } = await seed();
     const inv = await request(app).get('/api/admin/meta/whatsapp/inventory').set(bearer(ops));
     assert.strictEqual(inv.status, 200);
@@ -69,7 +69,17 @@ test('Meta number assignment', async (t) => {
     assert.strictEqual(b.wa_business_id, 'W1');
     assert.strictEqual(b.whatsapp_number, '919876543210');
     assert.strictEqual(b.whatsapp_status, 'verified');
-    assert.ok(!b.wa_access_token && !b.wa_access_token_enc, 'no token written');
+    // The brand sends with the platform inventory token, stored encrypted only
+    // and never returned to the caller.
+    const inventoryToken = process.env.META_INVENTORY_ACCESS_TOKEN;
+    if (inventoryToken) {
+      assert.strictEqual(b.wa_access_token, inventoryToken, 'model decrypts the stored token in memory');
+      const raw = await Clients.collection.findOne({ id: acme.id });
+      assert.ok(raw.wa_access_token_enc && !raw.wa_access_token && !String(raw.wa_access_token_enc).includes(inventoryToken), 'stored encrypted only');
+      assert.ok(!JSON.stringify(res.body).includes(inventoryToken), 'token never returned');
+    } else {
+      assert.ok(!b.wa_access_token_enc, 'no token without an inventory credential');
+    }
     assert.strictEqual((await sys(() => MetaWhatsappPhoneNumbers.findOne({ phone_number_id: 'P1' }).lean())).client_id, acme.id);
     assert.ok(await sys(() => AuditEvents.exists({ event: 'META_PHONE_LINKED', tenant_id: 1 })));
 
