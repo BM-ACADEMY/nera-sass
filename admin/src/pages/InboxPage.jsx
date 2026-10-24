@@ -247,7 +247,9 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
         <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
           <FiAlertTriangle className="mt-0.5 shrink-0" />
           <span>
-            The platform WhatsApp number is not set up. Add {status?.missing?.join(' and ')} to server/.env and restart the server.
+            {status?.missing?.includes('PLATFORM_WA_PHONE_NUMBER_ID')
+              ? <>The admin WhatsApp number is not set up. In <a href="/dashboard/whatsapp-numbers" className="font-semibold underline">WhatsApp Numbers</a>, choose a number and click "Use for admin WhatsApp".</>
+              : <>The admin WhatsApp number cannot send yet: {status?.missing?.join(' and ')} is missing on the server.</>}
             Existing chats are shown, but nothing can be sent.
           </span>
         </div>

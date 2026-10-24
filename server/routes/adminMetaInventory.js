@@ -22,8 +22,9 @@
  */
 const express = require('express');
 const axios = require('axios');
+const bcrypt = require('bcryptjs');
 const {
-  Clients, Tenants, MetaWhatsappAccounts, MetaWhatsappPhoneNumbers, MetaWhatsappTemplates, MetaWhatsappSyncRuns,
+  Users, Clients, Tenants, MetaWhatsappAccounts, MetaWhatsappPhoneNumbers, MetaWhatsappTemplates, MetaWhatsappSyncRuns,
 } = require('../models');
 const { deleteCascade } = require('../db/cascade');
 const { can } = require('../services/permissions');
@@ -32,7 +33,7 @@ const { inventoryAccessToken, phoneRegistrationEnabled, requireInventoryAccessTo
 const { runAsTenant } = require('../services/tenantContext');
 const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
 const { encryptToken } = require('../services/clientSecrets');
-const { platformPhoneId } = require('../services/platformInbox');
+const { platformPhoneId, refreshPlatformNumber } = require('../services/platformInbox');
 
 const NO_ID = { _id: 0 };
 
@@ -96,6 +97,7 @@ function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, gr
         credential_configured: Boolean(inventoryAccessToken()),
         registration_enabled: phoneRegistrationEnabled(),
         can_administer: can(req.identity, 'platform.meta.admin'),
+        platform_phone_number_id: platformPhoneId(),
       });
     } catch (error) {
       return fail(res, error);
@@ -229,10 +231,63 @@ function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, gr
     }
   });
 
+  // Uses an inventory number as the platform's own WhatsApp (admin panel
+  // WhatsApp Chat). It must not belong to a workspace; at most one number is
+  // the admin number, and its WABA is subscribed so customer messages arrive.
+  router.post('/phone-numbers/:phoneId/platform', permit('platform.meta.admin'), async (req, res) => {
+    try {
+      const phone = await MetaWhatsappPhoneNumbers.findOne({ phone_number_id: String(req.params.phoneId) }, NO_ID).lean();
+      if (!phone) return res.status(404).json({ error: 'Meta phone number not found in inventory' });
+      if (phone.client_id != null) {
+        return res.status(409).json({ error: 'This number is assigned to a workspace. Unassign it first.', code: 'PHONE_ASSIGNED' });
+      }
+      const token = inventoryAccessToken();
+      if (!token) return res.status(503).json({ error: 'The Meta inventory credential (META_INVENTORY_ACCESS_TOKEN) is not configured', code: 'META_CREDENTIAL_NOT_CONFIGURED' });
+      let webhookSubscribed = false;
+      try {
+        await axios.post(`https://graph.facebook.com/${metaGraphVersion}/${phone.waba_id}/subscribed_apps`, null, { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 });
+        webhookSubscribed = true;
+      } catch (error) {
+        console.error('[Meta platform number] WABA webhook subscription failed:', error.response?.data?.error?.message || error.message);
+      }
+      await MetaWhatsappPhoneNumbers.updateMany({ platform_inbox: true, phone_number_id: { $ne: phone.phone_number_id } }, { $set: { platform_inbox: false } });
+      await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: phone.phone_number_id }, { $set: { platform_inbox: true } });
+      await refreshPlatformNumber();
+      await audit.record(audit.EVENTS.META_PHONE_LINKED, {
+        req, targetType: 'meta_phone_number', targetId: phone.phone_number_id,
+        meta: { platform_inbox: true, waba_id: phone.waba_id, webhook_subscribed: webhookSubscribed },
+      });
+      return res.json({ success: true, platform_phone_number_id: phone.phone_number_id, webhook_subscribed: webhookSubscribed });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  router.delete('/phone-numbers/:phoneId/platform', permit('platform.meta.admin'), async (req, res) => {
+    try {
+      const result = await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: String(req.params.phoneId), platform_inbox: true }, { $set: { platform_inbox: false } });
+      if (result.matchedCount !== 1) return res.status(404).json({ error: 'This number is not the admin WhatsApp number' });
+      await refreshPlatformNumber();
+      await audit.record(audit.EVENTS.META_PHONE_UNLINKED, {
+        req, targetType: 'meta_phone_number', targetId: String(req.params.phoneId), meta: { platform_inbox: false },
+      });
+      return res.json({ success: true, platform_phone_number_id: platformPhoneId() });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
   // Unassigns a number: the brand stops using it (its number and WABA are
   // cleared when they point at this number) and the inventory link is removed.
   router.post('/phone-numbers/:phoneId/unassign', permit('platform.meta'), async (req, res) => {
     try {
+      // Unassigning stops a workspace's WhatsApp, so the staff member confirms
+      // with their own password.
+      const password = req.body?.password;
+      const staff = req.user?.id ? await Users.findOne({ id: req.user.id }, { _id: 0, password_hash: 1 }).lean() : null;
+      if (typeof password !== 'string' || !password || !staff?.password_hash || !(await bcrypt.compare(password, staff.password_hash))) {
+        return res.status(403).json({ error: 'Password incorrect', code: 'PASSWORD_REQUIRED' });
+      }
       const phone = await MetaWhatsappPhoneNumbers.findOne({ phone_number_id: String(req.params.phoneId) }, NO_ID).lean();
       if (!phone) return res.status(404).json({ error: 'Meta phone number not found in inventory' });
       const brand = phone.client_id != null

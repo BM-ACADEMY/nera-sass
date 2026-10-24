@@ -110,7 +110,12 @@ test('Meta number assignment', async (t) => {
   await t.test('A3. Unassign releases the brand and the inventory row; the number can then go to another workspace', async () => {
     const { ops, acme, beta } = await seed();
     await request(app).post('/api/admin/meta/whatsapp/phone-numbers/P1/assign').set(bearer(ops)).send({ client_id: acme.id });
-    const un = await request(app).post('/api/admin/meta/whatsapp/phone-numbers/P1/unassign').set(bearer(ops));
+    const noPassword = await request(app).post('/api/admin/meta/whatsapp/phone-numbers/P1/unassign').set(bearer(ops));
+    assert.strictEqual(noPassword.status, 403, 'unassign needs the password');
+    const wrong = await request(app).post('/api/admin/meta/whatsapp/phone-numbers/P1/unassign').set(bearer(ops)).send({ password: 'wrong-pass' });
+    assert.strictEqual(wrong.status, 403);
+    assert.strictEqual((await brand(acme.id, 1)).phone_number_id, 'P1', 'nothing changed without the right password');
+    const un = await request(app).post('/api/admin/meta/whatsapp/phone-numbers/P1/unassign').set(bearer(ops)).send({ password: 'Original-Pass-1' });
     assert.strictEqual(un.status, 200);
     const b = await brand(acme.id, 1);
     assert.strictEqual(b.phone_number_id, null);

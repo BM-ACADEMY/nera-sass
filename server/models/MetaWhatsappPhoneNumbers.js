@@ -19,4 +19,6 @@ module.exports = defineModel('meta_whatsapp_phone_numbers', {
   profile_email: { type: String },
   profile_websites: { type: Mixed, default: () => [] },
   profile_vertical: { type: String },
-}, { unique: [['phone_number_id']], indexes: [['client_id']] });
+  // The platform's own number (admin panel WhatsApp Chat); at most one row.
+  platform_inbox: { type: Boolean, default: false },
+}, { unique: [['phone_number_id']], indexes: [['client_id'], ['platform_inbox']] });

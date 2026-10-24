@@ -81,7 +81,11 @@ module.exports = function registerAdminInboxRoutes(router, { permit, fail }) {
       ]);
       return res.json({
         configured: Boolean(phoneId && inbox.platformToken()),
-        missing: [!phoneId && 'PLATFORM_WA_PHONE_NUMBER_ID', !inbox.platformToken() && 'PLATFORM_WA_ACCESS_TOKEN'].filter(Boolean),
+        source: inbox.platformSource(),
+        missing: [
+          !phoneId && 'PLATFORM_WA_PHONE_NUMBER_ID',
+          phoneId && !inbox.platformToken() && (inbox.platformSource() === 'inventory' ? 'META_INVENTORY_ACCESS_TOKEN' : 'PLATFORM_WA_ACCESS_TOKEN'),
+        ].filter(Boolean),
         number: phone ? { ...phone } : (phoneId ? { display_phone_number: null } : null),
         unread_conversations: unread[0]?.conversations || 0,
         unread_messages: unread[0]?.messages || 0,

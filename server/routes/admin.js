@@ -21,6 +21,7 @@ const authController = require('../controllers/authController');
 const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
 const createMetaInventoryRouter = require('./adminMetaInventory');
 const { logScope } = require('../services/workflowLog');
+const n8nApi = require('../services/n8nApi');
 
 function fail(res, error) {
   if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details, code: error.code });
@@ -83,6 +84,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   require('./adminWhatsappProfile')(router, { permit, fail, metaGraphVersion: metaInventory?.metaGraphVersion });
   // The platform's own WhatsApp inbox (admin panel WhatsApp Chat).
   require('./adminInbox')(router, { permit, fail });
+  require('./adminTemplates')(router, { permit, fail, metaGraphVersion: metaInventory?.metaGraphVersion });
 
   // ── Tenants ───────────────────────────────────────────────
   router.get('/tenants', permit('platform.tenants.view'), async (req, res) => {
@@ -623,6 +625,41 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
     try {
       const result = await WorkflowLogs.deleteOne({ id: Number(req.params.id) });
       return res.json({ success: true, deleted: result.deletedCount });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // ── n8n (live, read-only) ─────────────────────────────────
+  // Published state and run history straight from n8n, next to workflow_logs.
+  router.get('/n8n/workflows', permit('platform.tenants.view'), async (req, res) => {
+    try {
+      return res.json({ workflows: await n8nApi.listWorkflows() });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  router.get('/n8n/executions', permit('platform.tenants.view'), async (req, res) => {
+    try {
+      const executions = await n8nApi.listExecutions({
+        workflowId: req.query.workflow_id ? String(req.query.workflow_id) : undefined,
+        status: ['success', 'error', 'running', 'waiting', 'canceled'].includes(req.query.status) ? req.query.status : undefined,
+        limit: req.query.limit,
+      });
+      const tenantIds = [...new Set(executions.map((e) => e.tenant_id).filter(Number.isFinite))];
+      const names = new Map((await Tenants.find({ id: { $in: tenantIds } }, { _id: 0, id: 1, name: 1 }).lean()).map((t) => [t.id, t.name]));
+      return res.json({ executions: executions.map((e) => ({ ...e, tenant_name: names.get(e.tenant_id) ?? null })) });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  router.get('/n8n/executions/:id', permit('platform.tenants.view'), async (req, res) => {
+    try {
+      const execution = await n8nApi.getExecution(req.params.id);
+      const tenant = Number.isFinite(execution.tenant_id) ? await Tenants.findOne({ id: execution.tenant_id }, { _id: 0, name: 1 }).lean() : null;
+      return res.json({ execution: { ...execution, tenant_name: tenant?.name ?? null } });
     } catch (error) {
       return fail(res, error);
     }

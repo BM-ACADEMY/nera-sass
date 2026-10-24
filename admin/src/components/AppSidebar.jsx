@@ -1,5 +1,5 @@
 import React from 'react';
-import { FiLogOut, FiMoreVertical } from 'react-icons/fi';
+import { FiLogOut, FiMoreVertical, FiSettings, FiUser, FiShield } from 'react-icons/fi';
 import { MdOutlineSpaceDashboard } from 'react-icons/md';
 import { FaWhatsapp } from 'react-icons/fa';
 import UserAvatar from './UserAvatar';
@@ -20,22 +20,27 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 
-// Platform navigation: brand, the section menu and the signed-in admin.
+// Platform navigation: brand, the menu in labelled sections, and the signed-in
+// admin (account settings and sign-out live in that profile menu).
+// `sections`: [{ label, items: [{ key, icon, label, badge?, whatsapp? }] }]
 const AppSidebar = ({
-  items,
+  sections,
   activeTab,
   onSelect,
+  onOpenSettings,
   workspaceCount,
   userCount,
   userProfile,
   onLogout,
-  showInbox = false,
-  inboxUnread = 0,
 }) => {
   const { isMobile, setOpenMobile } = useSidebar();
 
   const select = (key) => {
     onSelect(key);
+    if (isMobile) setOpenMobile(false);
+  };
+  const openSettings = (section) => {
+    onOpenSettings(section);
     if (isMobile) setOpenMobile(false);
   };
 
@@ -49,7 +54,7 @@ const AppSidebar = ({
                 <MdOutlineSpaceDashboard className="size-5" />
               </div>
               <div className="grid flex-1 text-left leading-tight">
-                <span className="truncate text-[15px] font-extrabold">Nera Platform</span>
+                <span className="truncate text-[15px] font-extrabold">Getnera Admin</span>
                 <span className="truncate text-[11px] text-slate-400">
                   {workspaceCount} workspace{workspaceCount === 1 ? '' : 's'} · {userCount} users
                 </span>
@@ -60,51 +65,33 @@ const AppSidebar = ({
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Platform</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {items.map(({ key, icon: Icon, label, badge }) => (
-                <SidebarMenuItem key={key}>
-                  <SidebarMenuButton isActive={activeTab === key} tooltip={badge ? `${label} (${badge} unread)` : label} onClick={() => select(key)}>
-                    <Icon />
-                    <span>{label}</span>
-                  </SidebarMenuButton>
-                  {badge > 0 && (
-                    <SidebarMenuBadge className="rounded-full bg-[#25D366] text-white peer-data-[active=true]/menu-button:text-white">{badge > 99 ? '99+' : badge}</SidebarMenuBadge>
-                  )}
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {/* The platform's own WhatsApp number: chats open inside the panel. */}
-        {showInbox && (
-          <SidebarGroup>
-            <SidebarGroupLabel>Getnera WhatsApp</SidebarGroupLabel>
+        {sections.filter((section) => section.items.length).map((section) => (
+          <SidebarGroup key={section.label}>
+            <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={activeTab === 'inbox'}
-                    tooltip={inboxUnread ? `WhatsApp Chat (${inboxUnread} unread)` : 'WhatsApp Chat'}
-                    onClick={() => select('inbox')}
-                    className="data-[active=true]:bg-[#25D366]/12 data-[active=true]:font-semibold data-[active=true]:text-[#128C7E]"
-                  >
-                    <FaWhatsapp className="text-[#25D366]" />
-                    <span>WhatsApp Chat</span>
-                  </SidebarMenuButton>
-                  {inboxUnread > 0 && (
-                    <SidebarMenuBadge className="rounded-full bg-[#25D366] text-white peer-data-[active=true]/menu-button:text-white">
-                      {inboxUnread > 99 ? '99+' : inboxUnread}
-                    </SidebarMenuBadge>
-                  )}
-                </SidebarMenuItem>
+                {section.items.map(({ key, icon: Icon, label, badge, whatsapp }) => (
+                  <SidebarMenuItem key={key}>
+                    <SidebarMenuButton
+                      isActive={activeTab === key}
+                      tooltip={badge ? `${label} (${badge} unread)` : label}
+                      onClick={() => select(key)}
+                      className={whatsapp ? 'data-[active=true]:bg-green-50 data-[active=true]:text-green-800' : undefined}
+                    >
+                      {whatsapp ? <FaWhatsapp className="text-[#25D366]" /> : <Icon />}
+                      <span>{label}</span>
+                    </SidebarMenuButton>
+                    {badge > 0 && (
+                      <SidebarMenuBadge className={`rounded-full ${whatsapp ? 'bg-[#25D366]' : 'bg-blue-600'} text-white peer-data-[active=true]/menu-button:text-white`}>
+                        {badge > 99 ? '99+' : badge}
+                      </SidebarMenuBadge>
+                    )}
+                  </SidebarMenuItem>
+                ))}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-        )}
+        ))}
       </SidebarContent>
 
       <SidebarFooter>
@@ -112,7 +99,7 @@ const AppSidebar = ({
           <SidebarMenuItem>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
+                <SidebarMenuButton size="lg" isActive={activeTab === 'settings'} className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
                   <UserAvatar name={userProfile?.name} role={userProfile?.staff_role || 'superadmin'} size={32} />
                   <div className="grid flex-1 text-left leading-tight">
                     <span className="truncate text-[13px] font-semibold">{userProfile?.name || 'Platform Admin'}</span>
@@ -131,6 +118,10 @@ const AppSidebar = ({
                   <div className="truncate font-semibold">{userProfile?.name || 'Platform Admin'}</div>
                   <div className="truncate text-xs text-muted-foreground">{userProfile?.email || ''}</div>
                 </div>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => openSettings('profile')}><FiUser /> Profile</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openSettings('two-step')}><FiShield /> Two-step verification</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openSettings(null)}><FiSettings /> Settings</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onSelect={onLogout}>
                   <FiLogOut /> Log out

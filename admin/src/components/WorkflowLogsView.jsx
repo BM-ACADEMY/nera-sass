@@ -1,66 +1,62 @@
 import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { FiRefreshCw, FiCheckCircle, FiXCircle, FiLoader, FiZap, FiCpu, FiCheck } from 'react-icons/fi';
+import { FiRefreshCw, FiCheckCircle, FiXCircle, FiLoader, FiZap, FiCheck } from 'react-icons/fi';
 import axiosClient from '../api/axiosClient';
 import DataTable from './DataTable';
 import StatTile from './StatTile';
-import ConfirmDeleteButton from './ConfirmDeleteButton';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 
-const ENGINES = [
-  { id: 'ALL', name: 'All Engines' },
-  { id: 'WF00', name: 'WF00: Lead Integrator' },
-  { id: 'WF01', name: 'WF01: Conversational Sales' },
-  { id: 'WF02', name: 'WF02: Automated Follow-ups' },
-  { id: 'WF03', name: 'WF03: SLA & Reminders' },
-  { id: 'WF04', name: 'WF04: Customer Journey' },
-  { id: 'WF05', name: 'WF05: Marketing Broadcasts' },
-  { id: 'WF06', name: 'WF06: Founder Dashboard' },
-  { id: 'WF07', name: 'WF07: Maintenance & Memory' },
-];
+// Everything on this page is read live from n8n: only the workflows connected
+// there (named "Nera WF…") and their real runs. A run whose error branch
+// caught a failure (for example the LLM call) is shown as failed, not success.
 
 const STATUSES = [
   { value: 'ALL', label: 'All Statuses' },
   { value: 'success', label: 'Success Only' },
-  { value: 'failed', label: 'Failed Only' },
+  { value: 'error', label: 'Failed Only' },
 ];
 
-const SCOPES = [
-  { value: 'ALL', label: 'All Scopes' },
-  { value: 'tenant', label: 'Workspace (WF00–WF05)' },
-  { value: 'platform', label: 'Platform (WF06–WF07)' },
-];
+const fmt = (d) => (d ? new Date(d).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'medium' }) : '—');
+const shortName = (name) => String(name || '').replace(/^Nera\s+/i, '');
+
+const RunStatus = ({ status }) => {
+  if (status === 'success') return <Badge variant="success"><FiCheckCircle />SUCCESS</Badge>;
+  if (status === 'error' || status === 'crashed') return <Badge variant="danger"><FiXCircle />FAILED</Badge>;
+  return <Badge variant="warning"><FiLoader />{String(status || 'unknown').toUpperCase()}</Badge>;
+};
 
 const WorkflowLogsView = () => {
-  const [logs, setLogs] = useState([]);
-  // Real values only: no success rate until something has run, no assumed engine count.
-  const [telemetry, setTelemetry] = useState({ totalExecutions: 0, successRate: null, aiInterventions: 0, activeWorkflows: 0 });
-  const [loading, setLoading] = useState(false);
-  const [selectedEngine, setSelectedEngine] = useState('ALL');
+  const [workflows, setWorkflows] = useState([]);
+  const [runs, setRuns] = useState([]);
+  const [selectedWorkflow, setSelectedWorkflow] = useState('ALL');
   const [selectedStatus, setSelectedStatus] = useState('ALL');
-  const [selectedScope, setSelectedScope] = useState('ALL');
+  const [detail, setDetail] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   const fetchWorkflowData = async () => {
     setLoading(true);
     try {
-      const [logsRes, teleRes] = await Promise.all([
-        axiosClient.get('/admin/workflows/logs', {
+      const [wf, ex] = await Promise.all([
+        axiosClient.get('/admin/n8n/workflows'),
+        axiosClient.get('/admin/n8n/executions', {
           params: {
-            workflow: selectedEngine !== 'ALL' ? selectedEngine : undefined,
-            status: selectedStatus !== 'ALL' ? selectedStatus : undefined,
-            scope: selectedScope !== 'ALL' ? selectedScope : undefined,
+            workflow_id: selectedWorkflow !== 'ALL' ? selectedWorkflow : undefined,
+            limit: 100,
           },
         }),
-        axiosClient.get('/admin/workflows/telemetry'),
       ]);
-      setLogs(logsRes.data?.logs || []);
-      if (teleRes.data?.telemetry) setTelemetry(teleRes.data.telemetry);
+      setWorkflows(wf.data?.workflows || []);
+      // n8n filters by its own status; a caught error is still "success" there.
+      const rows = ex.data?.executions || [];
+      setRuns(selectedStatus === 'ALL' ? rows : rows.filter((r) => r.status === selectedStatus));
+      setError(null);
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to load workflow data');
+      setError(err.response?.data?.error || 'Could not reach n8n');
     } finally {
       setLoading(false);
     }
@@ -68,105 +64,93 @@ const WorkflowLogsView = () => {
 
   useEffect(() => {
     fetchWorkflowData();
-  }, [selectedEngine, selectedStatus, selectedScope]);
+    const timer = setInterval(fetchWorkflowData, 30000);
+    return () => clearInterval(timer);
+  }, [selectedWorkflow, selectedStatus]);
 
-  const handleDeleteLog = async (id) => {
+  const openRun = async (run) => {
+    setDetail({ ...run, loading: true });
     try {
-      await axiosClient.delete(`/admin/workflows/logs/${id}`);
-      toast.success('Log deleted');
-      fetchWorkflowData();
+      const { data } = await axiosClient.get(`/admin/n8n/executions/${run.id}`);
+      setDetail({ ...run, ...data.execution });
     } catch (err) {
-      toast.error('Failed to delete log');
+      toast.error(err.response?.data?.error || 'Could not load the run');
+      setDetail(null);
     }
   };
 
+  const published = workflows.filter((w) => w.active).length;
+  const succeeded = runs.filter((r) => r.status === 'success').length;
+  const failed = runs.filter((r) => r.status === 'error' || r.status === 'crashed').length;
+
   const columns = [
+    { key: 'workflow_name', title: 'Workflow', width: 200, render: (r) => <Badge variant="info" className="font-bold"><FiZap />{shortName(r.workflow_name)}</Badge> },
+    { key: 'status', title: 'Status', width: 110, render: (r) => <RunStatus status={r.status} /> },
     {
-      key: 'workflow',
-      title: 'Engine / Workflow',
-      width: 180,
-      render: (r) => <Badge variant="info" className="font-bold"><FiZap />{r.workflow || 'Unknown'}</Badge>,
-    },
-    {
-      // WF06/WF07 are platform events (no workspace); WF00–WF05 belong to one workspace.
-      key: 'scope',
-      title: 'Scope',
+      key: 'tenant_name',
+      title: 'Workspace / Lead',
       width: 190,
-      render: (r) => (r.scope === 'platform'
-        ? <Badge variant="purple">Platform</Badge>
-        : (
-          <span className="flex flex-wrap items-center gap-1.5">
-            <Badge variant="info">Workspace</Badge>
-            <span className="text-xs text-slate-600">{r.tenant_name || `#${r.tenant_id}`}</span>
-          </span>
-        )),
+      render: (r) => (r.tenant_id == null
+        ? <span className="text-xs text-slate-400">—</span>
+        : <span className="text-xs text-slate-700">{r.tenant_name || `#${r.tenant_id}`}{r.lead_id ? ` · lead #${r.lead_id}` : ''}</span>),
     },
     {
-      key: 'status',
-      title: 'Status',
-      width: 120,
-      render: (r) => {
-        const isSuccess = r.status === 'success';
-        const isFailed = r.status === 'failed';
-        return (
-          <Badge variant={isSuccess ? 'success' : isFailed ? 'danger' : 'warning'}>
-            {isSuccess ? <FiCheckCircle /> : isFailed ? <FiXCircle /> : <FiLoader className="animate-spin" />}
-            {String(r.status || 'unknown').toUpperCase()}
-          </Badge>
-        );
-      },
+      key: 'last_node',
+      title: 'Result',
+      render: (r) => (r.error
+        ? <span className="font-mono text-[13px] text-red-700">{r.error.node}: {r.error.message}</span>
+        : <span className="font-mono text-[13px] text-slate-700">Ended at {r.last_node || '—'}</span>),
     },
-    {
-      key: 'message',
-      title: 'Execution Log / Event Message',
-      render: (r) => <span className="font-mono text-[13px] text-slate-700">{r.message || 'No details provided'}</span>,
-    },
-    {
-      key: 'created_at',
-      title: 'Timestamp',
-      width: 170,
-      render: (r) => (
-        <span className="text-xs text-muted-foreground">
-          {r.created_at ? new Date(r.created_at).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'medium' }) : '—'}
-        </span>
-      ),
-    },
-    {
-      key: 'action',
-      title: 'Action',
-      width: 80,
-      render: (r) => <ConfirmDeleteButton title="Delete this log?" onConfirm={() => handleDeleteLog(r.id)} />,
-    },
+    { key: 'started_at', title: 'Started', width: 160, render: (r) => <span className="text-xs text-muted-foreground">{fmt(r.started_at)}</span> },
+    { key: 'duration_ms', title: 'Took', width: 70, render: (r) => <span className="text-xs tabular-nums">{r.duration_ms == null ? '—' : `${(r.duration_ms / 1000).toFixed(1)}s`}</span> },
+    { key: 'id', title: 'Run', width: 100, render: (r) => <Button variant="outline" size="sm" onClick={() => openRun(r)}>#{r.id}</Button> },
   ];
 
   return (
     <div>
+      {error && <Card className="mb-4 border-red-200 bg-red-50 px-5 py-3 text-sm text-red-700">{error}</Card>}
+
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatTile label="Total Executions" value={telemetry.totalExecutions || 0} icon={<FiZap className="text-blue-600" />} />
-        <StatTile label="Success Rate" value={telemetry.successRate == null ? '—' : `${telemetry.successRate}%`} icon={<FiCheck />} valueClassName="text-green-600" />
-        <StatTile label="AI Interventions" value={telemetry.aiInterventions || 0} icon={<FiCpu />} valueClassName="text-violet-600" />
-        <StatTile label="Active Engines (7 days)" value={telemetry.activeWorkflows ?? 0} />
+        <StatTile label="Published" value={`${published} / ${workflows.length}`} icon={<FiZap className="text-blue-600" />} />
+        <StatTile label="Runs shown" value={runs.length} />
+        <StatTile label="Success Rate" value={runs.length ? `${Math.round((succeeded / runs.length) * 100)}%` : '—'} icon={<FiCheck />} valueClassName="text-green-600" />
+        <StatTile label="Failed" value={failed} icon={<FiXCircle />} valueClassName={failed ? 'text-red-600' : undefined} />
+      </div>
+
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {workflows.map((w) => (
+          <Card
+            key={w.id}
+            role="button"
+            tabIndex={0}
+            onClick={() => setSelectedWorkflow(selectedWorkflow === w.id ? 'ALL' : w.id)}
+            onKeyDown={(e) => e.key === 'Enter' && setSelectedWorkflow(selectedWorkflow === w.id ? 'ALL' : w.id)}
+            className={cn('cursor-pointer gap-2 px-5 py-4', selectedWorkflow === w.id && 'ring-2 ring-blue-500')}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-bold">{shortName(w.name)}</span>
+              <Badge variant={w.active ? 'success' : 'muted'}>{w.active ? 'Published' : 'Not published'}</Badge>
+            </div>
+            <div className="text-xs text-slate-500">Trigger: {w.trigger || '—'}</div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              Last run: {w.last_execution ? <>{fmt(w.last_execution.started_at)}</> : 'never'}
+            </div>
+          </Card>
+        ))}
       </div>
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="text-base font-extrabold">Workflow Execution Logs</div>
-          <div className="text-xs text-slate-400">
-            Real-time logs for all automated AI sales, reminders, and journey workflows across the platform.
-          </div>
+          <div className="text-base font-extrabold">Workflow Runs</div>
+          <div className="text-xs text-slate-400">Live from n8n: every run of the connected workflows, newest first.</div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={selectedEngine} onValueChange={setSelectedEngine}>
-            <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
+          <Select value={selectedWorkflow} onValueChange={setSelectedWorkflow}>
+            <SelectTrigger className="w-60"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {ENGINES.map((e) => <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={selectedScope} onValueChange={setSelectedScope}>
-            <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {SCOPES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
+              <SelectItem value="ALL">All Workflows</SelectItem>
+              {workflows.map((w) => <SelectItem key={w.id} value={w.id}>{shortName(w.name)}</SelectItem>)}
             </SelectContent>
           </Select>
           <Select value={selectedStatus} onValueChange={setSelectedStatus}>
@@ -181,8 +165,32 @@ const WorkflowLogsView = () => {
         </div>
       </div>
 
+      {detail && (
+        <Card className="mb-4 gap-2 px-5 py-4 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="font-bold">{shortName(detail.workflow_name)} · run #{detail.id}</span>
+            <Button variant="ghost" size="sm" onClick={() => setDetail(null)}>Close</Button>
+          </div>
+          {detail.loading ? <span className="text-slate-500">Loading…</span> : (
+            <>
+              {detail.error && (
+                <div className="text-red-700">
+                  {detail.error.handled ? 'Run finished, but ' : 'Failed at '}<b>{detail.error.node || 'unknown node'}</b>
+                  {detail.error.handled ? ' failed' : ''}: {detail.error.message}
+                </div>
+              )}
+              <div className="flex flex-wrap gap-1.5">
+                {(detail.nodes || []).map((n) => (
+                  <Badge key={n.name} variant={n.status === 'error' ? 'danger' : 'success'} title={n.error || ''}>{n.name}</Badge>
+                ))}
+              </div>
+            </>
+          )}
+        </Card>
+      )}
+
       <Card className="py-2">
-        <DataTable columns={columns} data={logs} loading={loading} pageSize={12} emptyText="No workflow executions have been recorded yet." />
+        <DataTable columns={columns} data={runs} loading={loading} pageSize={12} emptyText="No runs yet for the connected workflows." />
       </Card>
     </div>
   );

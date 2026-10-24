@@ -1,11 +1,13 @@
 /**
  * The platform's own WhatsApp inbox (admin panel "WhatsApp Chat").
  *
- * One number belongs to the platform itself (PLATFORM_WA_PHONE_NUMBER_ID),
- * used for Getnera's own support and sales chats. Its messages are stored in
- * platform_wa_* collections, never in a customer workspace, and are sent with
- * PLATFORM_WA_ACCESS_TOKEN, which stays on the server. There is deliberately
- * no fallback to any other token.
+ * One number belongs to the platform itself, used for Getnera's own support
+ * and sales chats. Staff pick it in WhatsApp Numbers ("Use for admin
+ * WhatsApp"), which marks the inventory row platform_inbox; it then sends with
+ * the inventory credential (META_INVENTORY_ACCESS_TOKEN). The older
+ * PLATFORM_WA_PHONE_NUMBER_ID / PLATFORM_WA_ACCESS_TOKEN settings still work
+ * when no number is picked. Its messages are stored in platform_wa_*
+ * collections, never in a customer workspace, and the token stays on the server.
  *
  * Meta's rules apply: free-form messages only inside the 24-hour customer
  * service window (24 h after the customer's last message); outside it only
@@ -17,8 +19,24 @@ const { notifyStaff } = require('./realtime');
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 const graphBase = () => `https://graph.facebook.com/${process.env.META_GRAPH_VERSION || 'v19.0'}`;
-const platformPhoneId = () => String(process.env.PLATFORM_WA_PHONE_NUMBER_ID || '').trim() || null;
-const platformToken = () => String(process.env.PLATFORM_WA_ACCESS_TOKEN || '').trim() || null;
+const envPhoneId = () => String(process.env.PLATFORM_WA_PHONE_NUMBER_ID || '').trim() || null;
+const envToken = () => String(process.env.PLATFORM_WA_ACCESS_TOKEN || '').trim() || null;
+const inventoryToken = () => String(process.env.META_INVENTORY_ACCESS_TOKEN || '').trim() || null;
+
+// The number picked in WhatsApp Numbers, kept in memory so the webhook can
+// route without a database read. refreshPlatformNumber() reloads it at start
+// and whenever staff change the pick.
+let linkedNumber = null;
+async function refreshPlatformNumber() {
+  linkedNumber = await MetaWhatsappPhoneNumbers.findOne(
+    { platform_inbox: true },
+    { _id: 0, phone_number_id: 1, waba_id: 1, display_phone_number: 1, verified_name: 1 },
+  ).lean() || null;
+  return linkedNumber;
+}
+const platformPhoneId = () => linkedNumber?.phone_number_id || envPhoneId();
+const platformToken = () => (linkedNumber ? inventoryToken() || envToken() : envToken());
+const platformSource = () => (linkedNumber ? 'inventory' : envPhoneId() ? 'env' : null);
 
 class InboxError extends Error {
   constructor(status, message, code) {
@@ -179,6 +197,7 @@ async function sendText({ contactId, text, staff }) {
 
 // The WABA of the platform number, from the inventory (or the env override).
 async function platformWabaId() {
+  if (linkedNumber?.waba_id) return linkedNumber.waba_id;
   if (process.env.PLATFORM_WA_BUSINESS_ACCOUNT_ID) return String(process.env.PLATFORM_WA_BUSINESS_ACCOUNT_ID).trim();
   const id = platformPhoneId();
   if (!id) return null;
@@ -233,6 +252,8 @@ module.exports = {
   WINDOW_MS,
   platformPhoneId,
   platformToken,
+  platformSource,
+  refreshPlatformNumber,
   windowOpen,
   handleWebhookValue,
   sendText,

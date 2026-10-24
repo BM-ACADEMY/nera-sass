@@ -22,6 +22,8 @@ Server .env:
   N8N_WEBHOOK_URL=https://<n8n>/webhook/nera-ai-reply
   N8N_NEW_LEAD_WEBHOOK_URL=https://<n8n>/webhook/nera-new-lead
   N8N_WEBHOOK_SECRET=<same value as the credential>
+  N8N_API_URL=https://<n8n>          (admin panel > Workflows: live status/runs)
+  N8N_API_KEY=<n8n > Settings > n8n API>
   Optional: AI_REPLY_DELAY_SECONDS=60, AI_REPLIES_PER_TENANT_HOUR=200,
             AI_SENDING_HOURS=9-21, AI_FOLLOWUP_TEMPLATE=follow_up
 

@@ -1232,6 +1232,11 @@ const leadExportReady = whenDbConnected()
   .then(() => LeadExportJobs.createIndexes())
   .catch((error) => console.error('[Lead Export] Index setup failed:', error.message));
 
+// The admin WhatsApp number picked in WhatsApp Numbers (cached for webhook routing).
+whenDbConnected()
+  .then(() => runAsSystem(() => require('./services/platformInbox').refreshPlatformNumber(), 'platform-number'))
+  .catch((error) => console.error('[Platform WhatsApp] Could not load the admin number:', error.message));
+
 const FACEBOOK_SOURCE = /(facebook|instagram|meta[_ ]?ads)/i;
 // Mongo filter for a lead export (source / created_at range)
 function leadExportFilter(filter) {

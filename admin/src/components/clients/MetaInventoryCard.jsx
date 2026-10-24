@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { FiSmartphone, FiPlus, FiTrash2, FiRefreshCw, FiLink, FiCheckCircle, FiSearch, FiChevronDown, FiChevronLeft, FiChevronRight, FiTarget, FiX } from 'react-icons/fi';
+import { FaWhatsapp } from 'react-icons/fa';
 import axiosClient from '../../api/axiosClient';
+import PasswordInput from '../security/PasswordInput';
 import StatTile from '../StatTile';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -164,6 +166,7 @@ const MetaInventoryCard = ({ inventory, onRefresh, focusTenantId = null, onClear
   const [pin, setPin] = useState('');
   const [registering, setRegistering] = useState(false);
   const [unassignPhone, setUnassignPhone] = useState(null);
+  const [unassignPassword, setUnassignPassword] = useState('');
   const [unassigning, setUnassigning] = useState(false);
   const workspaces = inventory.workspaces || [];
   // A workspace uses one number: workspaces that already have one are not offered.
@@ -316,12 +319,32 @@ const MetaInventoryCard = ({ inventory, onRefresh, focusTenantId = null, onClear
     }
   };
 
+  // The platform's own number (admin panel WhatsApp Chat and Templates).
+  const [platformBusy, setPlatformBusy] = useState(null);
+  const isPlatformPhone = (phone) => phone.phone_number_id === inventory.platform_phone_number_id;
+  const setPlatformPhone = async (phone, use) => {
+    setPlatformBusy(phone.phone_number_id);
+    try {
+      const url = `/admin/meta/whatsapp/phone-numbers/${encodeURIComponent(phone.phone_number_id)}/platform`;
+      const res = use ? await axiosClient.post(url) : await axiosClient.delete(url);
+      toast.success(use
+        ? `${phone.display_phone_number} is now the admin WhatsApp number${res.data.webhook_subscribed === false ? ' (webhook subscription failed: check the Meta app)' : ''}`
+        : `${phone.display_phone_number} is no longer the admin WhatsApp number`);
+      await onRefresh();
+    } catch (err) {
+      toast.error(apiError(err, 'Could not change the admin WhatsApp number'));
+    } finally {
+      setPlatformBusy(null);
+    }
+  };
+
   const unassign = async () => {
     setUnassigning(true);
     try {
-      await axiosClient.post(`/admin/meta/whatsapp/phone-numbers/${encodeURIComponent(unassignPhone.phone_number_id)}/unassign`);
+      await axiosClient.post(`/admin/meta/whatsapp/phone-numbers/${encodeURIComponent(unassignPhone.phone_number_id)}/unassign`, { password: unassignPassword });
       toast.success(`${unassignPhone.display_phone_number} unassigned from ${unassignPhone.linked_brand?.tenant_name || 'its workspace'}`);
       setUnassignPhone(null);
+      setUnassignPassword('');
       await onRefresh();
     } catch (err) {
       toast.error(apiError(err, 'Failed to unassign number'));
@@ -381,10 +404,26 @@ const MetaInventoryCard = ({ inventory, onRefresh, focusTenantId = null, onClear
     );
   };
 
-  // Workspace picker + Assign. Workspaces that already use a number are not offered.
+  // Workspace picker + Assign. Workspaces that already use a number are not
+  // offered. The admin number is shown as such instead of the picker.
   const assignControl = (phone) => {
     const value = selectedWorkspaceFor(phone.phone_number_id);
+    if (isPlatformPhone(phone)) {
+      return (
+        <div className="flex w-full flex-wrap items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-800">
+            <FaWhatsapp className="text-[#25D366]" /> Admin WhatsApp
+          </span>
+          {inventory.can_administer && (
+            <Button size="sm" variant="outline" className="h-7 text-xs" disabled={platformBusy === phone.phone_number_id} onClick={() => setPlatformPhone(phone, false)}>
+              {platformBusy === phone.phone_number_id && <Spinner />} Stop using
+            </Button>
+          )}
+        </div>
+      );
+    }
     return (
+      <div className="flex w-full flex-col gap-1.5">
       <div className="flex w-full items-center gap-2">
         <Select value={value} onValueChange={(v) => setMapping((m) => ({ ...m, [phone.phone_number_id]: v }))}>
           <SelectTrigger size="sm" className="min-w-0 flex-1"><SelectValue placeholder="Select workspace" /></SelectTrigger>
@@ -402,6 +441,18 @@ const MetaInventoryCard = ({ inventory, onRefresh, focusTenantId = null, onClear
         <Button size="sm" className="shrink-0" disabled={!value} onClick={() => assignPhone(phone.phone_number_id)}>
           <FiLink /> Assign
         </Button>
+      </div>
+      {inventory.can_administer && (
+        <button
+          type="button"
+          disabled={platformBusy === phone.phone_number_id}
+          onClick={() => setPlatformPhone(phone, true)}
+          className="inline-flex w-fit cursor-pointer items-center gap-1 text-[12px] font-medium text-green-700 hover:underline disabled:opacity-60"
+          title="Use this number for the admin panel's WhatsApp Chat and Templates"
+        >
+          {platformBusy === phone.phone_number_id ? <Spinner className="size-3" /> : <FaWhatsapp />} Use for admin WhatsApp
+        </button>
+      )}
       </div>
     );
   };
@@ -863,7 +914,7 @@ const MetaInventoryCard = ({ inventory, onRefresh, focusTenantId = null, onClear
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={Boolean(unassignPhone)} onOpenChange={(open) => !open && !unassigning && setUnassignPhone(null)}>
+      <AlertDialog open={Boolean(unassignPhone)} onOpenChange={(open) => { if (!open && !unassigning) { setUnassignPhone(null); setUnassignPassword(''); } }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Unassign {unassignPhone?.display_phone_number}?</AlertDialogTitle>
@@ -871,9 +922,13 @@ const MetaInventoryCard = ({ inventory, onRefresh, focusTenantId = null, onClear
               {unassignPhone?.linked_brand?.tenant_name || 'This workspace'} will stop sending and receiving WhatsApp messages through this number until another number is assigned. The number stays in Meta.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <form id="unassign-form" onSubmit={(e) => { e.preventDefault(); if (unassignPassword) unassign(); }} className="flex flex-col gap-1.5">
+            <label htmlFor="unassign-password" className="text-[12.5px] font-semibold">Enter your password to confirm</label>
+            <PasswordInput id="unassign-password" autoFocus autoComplete="current-password" placeholder="Your password" value={unassignPassword} onChange={(e) => setUnassignPassword(e.target.value)} />
+          </form>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={unassigning}>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" disabled={unassigning} onClick={(e) => { e.preventDefault(); unassign(); }}>
+            <AlertDialogAction variant="destructive" disabled={unassigning || !unassignPassword} onClick={(e) => { e.preventDefault(); unassign(); }}>
               {unassigning && <Spinner />} Unassign
             </AlertDialogAction>
           </AlertDialogFooter>

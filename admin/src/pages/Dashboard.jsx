@@ -8,7 +8,7 @@ import {
   FiSmartphone,
   FiActivity,
   FiBarChart2,
-  FiSettings
+  FiFileText
 } from 'react-icons/fi';
 import { MdOutlineSpaceDashboard } from 'react-icons/md';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
@@ -23,6 +23,7 @@ import ClientsManagement from '../components/ClientsManagement';
 import WorkflowLogsView from '../components/WorkflowLogsView';
 import FounderReportsView from '../components/FounderReportsView';
 import AdminSettingsView from '../components/AdminSettingsView';
+import TemplatesPage from '../components/templates/TemplatesPage';
 import axiosClient from '../api/axiosClient';
 import { disconnectRealtime, useLiveEvent, useLiveRefresh, useLiveStatus } from '../api/realtime';
 import { Button } from '@/components/ui/button';
@@ -42,6 +43,7 @@ const TAB_SLUGS = {
   inbox: 'whatsapp-inbox',
   tenants: 'workspaces',
   clients: 'whatsapp-numbers',
+  templates: 'templates',
   workflows: 'workflow-logs',
   'founder-reports': 'founder-reports',
   users: 'users',
@@ -200,19 +202,32 @@ const Dashboard = () => {
       .some(field => String(field || '').toLowerCase().includes(q));
   });
 
-  const menuItems = [
-    { key: 'tenants', icon: MdOutlineSpaceDashboard, label: 'Workspaces' },
-    { key: 'clients', icon: FiSmartphone, label: 'WhatsApp Numbers' },
-    { key: 'workflows', icon: FiActivity, label: 'Workflow Logs' },
-    { key: 'founder-reports', icon: FiBarChart2, label: 'Founder Reports' },
-    { key: 'users', icon: FiUsers, label: 'Users & Team' },
-    { key: 'settings', icon: FiSettings, label: 'Settings' },
+  // Sidebar sections; account settings open from the profile menu.
+  const menuSections = [
+    { label: 'Customers', items: [{ key: 'tenants', icon: MdOutlineSpaceDashboard, label: 'Workspaces' }] },
+    {
+      label: 'WhatsApp',
+      items: [
+        { key: 'clients', icon: FiSmartphone, label: 'WhatsApp Numbers' },
+        { key: 'templates', icon: FiFileText, label: 'Templates' },
+        ...(canInbox ? [{ key: 'inbox', label: 'WhatsApp Chat', whatsapp: true, badge: inboxUnread }] : []),
+      ],
+    },
+    {
+      label: 'Insights',
+      items: [
+        { key: 'founder-reports', icon: FiBarChart2, label: 'Founder Reports' },
+        { key: 'workflows', icon: FiActivity, label: 'Workflow Logs' },
+      ],
+    },
+    { label: 'Team', items: [{ key: 'users', icon: FiUsers, label: 'Users & Team' }] },
   ];
 
   const getTabTitle = () => {
     switch (activeTab) {
       case 'tenants': return detailTenantId ? 'Workspace Details' : 'Workspaces & Tenants';
       case 'clients': return 'WhatsApp Numbers & Meta Inventory';
+      case 'templates': return itemId === 'new' ? 'New template' : itemId ? 'Edit template' : 'Template Management';
       case 'workflows': return 'Workflow Automation Engines';
       case 'founder-reports': return 'Founder Reports';
       case 'users': return 'Users & Team';
@@ -229,15 +244,14 @@ const Dashboard = () => {
     <SidebarProvider>
       <FoldSidebarWhile active={activeTab === 'inbox'} />
       <AppSidebar
-        items={menuItems}
+        sections={menuSections}
         activeTab={activeTab}
         onSelect={(key) => { setActiveTab(key); setSearchQuery(''); }}
+        onOpenSettings={(section) => navigate(`/dashboard/${TAB_SLUGS.settings}${section ? `/${section}` : ''}`)}
         workspaceCount={tenants.length}
         userCount={users.length}
         userProfile={userProfile}
         onLogout={handleLogout}
-        showInbox={canInbox}
-        inboxUnread={inboxUnread}
       />
 
       <SidebarInset>
@@ -337,6 +351,7 @@ const Dashboard = () => {
 
           {activeTab === 'founder-reports' && <FounderReportsView />}
 
+          {activeTab === 'templates' && <TemplatesPage itemId={itemId} basePath={`/dashboard/${TAB_SLUGS.templates}`} canManage={Boolean(permissions['platform.meta'])} />}
           {activeTab === 'settings' && <AdminSettingsView userProfile={userProfile} section={itemId} permissions={permissions} onProfileChanged={fetchProfile} />}
         </div>
       </SidebarInset>
