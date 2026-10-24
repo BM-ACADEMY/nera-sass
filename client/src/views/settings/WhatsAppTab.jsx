@@ -1,4 +1,5 @@
 import { connectWhatsApp, whatsappSummary } from './settingsPolicy.js';
+import { useNavigate } from 'react-router-dom';
 import { SectionTitle, ReadOnly, Button, Notice } from './ui.jsx';
 
 // WhatsApp: connection status only. No credential is shown or entered here.
@@ -7,10 +8,15 @@ import { SectionTitle, ReadOnly, Button, Notice } from './ui.jsx';
 export const WhatsAppTab = ({ brand, tenantInfo, signupConfig }) => {
   const summary = whatsappSummary(brand);
   const connect = connectWhatsApp({ permissions: tenantInfo?.permissions, signupConfig });
+  const navigate = useNavigate();
 
   return (
     <div>
       <SectionTitle>WhatsApp</SectionTitle>
+      <Notice tone="muted">Status, quality and your WhatsApp business profile are on the WhatsApp Number page.</Notice>
+      <div style={{ margin: '10px 0 18px' }}>
+        <Button type="button" onClick={() => navigate('/whatsapp')}>Open WhatsApp Number</Button>
+      </div>
       <ReadOnly label="Connection" value={summary.status} />
       <ReadOnly label="WhatsApp number" value={summary.number} />
       <ReadOnly label="Phone Number ID" value={summary.phoneId} />

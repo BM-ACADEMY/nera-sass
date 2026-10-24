@@ -184,7 +184,7 @@ export default function PlanManagement() {
               <Layers size={20} color="#fff" />
             </div>
             <div>
-              <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+              <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
                 Mafiya GBP OS Plans
               </h1>
               <p style={{ margin: 0, color: C.muted, fontSize: 12, marginTop: 2 }}>

@@ -66,7 +66,7 @@ export const LeadModal = ({lead, onClose, onUpdate}) => {
           <div style={{display:'flex',alignItems:'center',gap:13}}>
             <div style={{width:42,height:42,borderRadius:'50%',background:C.accent+'22',display:'flex',alignItems:'center',justifyContent:'center',fontSize:17,fontWeight:700,color:C.accent}}>{displayLead.name?.[0]}</div>
             <div>
-              <h3 style={{fontFamily:"'Syne',sans-serif",fontSize:15,fontWeight:700,color:C.text}}>{displayLead.name}</h3>
+              <h3 style={{fontFamily:"'Inter',sans-serif",fontSize:15,fontWeight:700,color:C.text}}>{displayLead.name}</h3>
               <p style={{color:C.muted,fontSize:11}}>{displayLead.phone} - {displayLead.brand_name || displayLead.brand} - {displayLead.source}</p>
             </div>
           </div>

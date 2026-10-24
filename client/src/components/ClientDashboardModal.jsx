@@ -36,7 +36,7 @@ export const ClientDashboardModal = ({ client, onClose }) => {
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: 20, fontWeight: 800, color: C.text }}>{client.name}</h2>
+                <h2 style={{ fontFamily: "'Inter', sans-serif", fontSize: 20, fontWeight: 800, color: C.text }}>{client.name}</h2>
                 <span style={{ background: client.status === 'active' ? '#0a2018' : '#221414', color: client.status === 'active' ? C.green : C.red, padding: '3px 10px', borderRadius: 12, fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                   {client.status === 'active' ? 'Active' : 'Inactive'}
                 </span>
@@ -75,7 +75,7 @@ export const ClientDashboardModal = ({ client, onClose }) => {
               ].map(stat => (
                 <div key={stat.label} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: '16px 18px', textAlign: 'center', position: 'relative' }}>
                   <div style={{ position: 'absolute', top: 12, right: 12 }}>{stat.icon}</div>
-                  <h4 style={{ fontSize: 24, fontWeight: 800, color: stat.color, fontFamily: "'Syne', sans-serif" }}>{stat.val}</h4>
+                  <h4 style={{ fontSize: 24, fontWeight: 800, color: stat.color, fontFamily: "'Inter', sans-serif" }}>{stat.val}</h4>
                   <p style={{ fontSize: 10, color: C.muted, marginTop: 4, fontWeight: 500 }}>{stat.label}</p>
                 </div>
               ))}

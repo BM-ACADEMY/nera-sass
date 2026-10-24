@@ -44,7 +44,7 @@ export const ClientsView = () => {
     <div className="p-mobile" style={{ padding: 26, overflowY: 'auto', height: '100%' }}>
       <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 22 }}>
         <div>
-          <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>Client Management</h1>
+          <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>Client Management</h1>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>External businesses using LeadOS via BM TechX {loading && '(loading...)'}</p>
         </div>
         <button onClick={() => { setSelectedClient(null); setIsModalOpen(true); }} style={{ background: C.accent, border: 'none', color: '#fff', padding: '8px 16px', borderRadius: 7, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}><Plus size={12} />Onboard Client</button>
@@ -57,7 +57,7 @@ export const ClientsView = () => {
         ].map(([l, v, col]) => (
           <div key={l} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 11, padding: '14px 18px', flex: 1 }}>
             <p style={{ fontSize: 9, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 5 }}>{l}</p>
-            <p style={{ fontSize: 20, fontWeight: 700, color: col, fontFamily: "'Syne',sans-serif" }}>{v}</p>
+            <p style={{ fontSize: 20, fontWeight: 700, color: col, fontFamily: "'Inter',sans-serif" }}>{v}</p>
           </div>
         ))}
       </div>
@@ -81,7 +81,7 @@ export const ClientsView = () => {
               <div style={{ display: 'flex', gap: 11, marginBottom: 14 }}>
                 {[['Leads', leads, C.blue], ['Converted', converted, C.green], ['Conversion', leads > 0 ? Math.round((converted / leads) * 100) + '%' : '0%', C.purple]].map(([l, v, col]) => (
                   <div key={l} style={{ flex: 1, background: C.surface, borderRadius: 7, padding: '9px 11px', textAlign: 'center' }}>
-                    <p style={{ fontSize: 16, fontWeight: 700, color: col, fontFamily: "'Syne',sans-serif" }}>{v}</p>
+                    <p style={{ fontSize: 16, fontWeight: 700, color: col, fontFamily: "'Inter',sans-serif" }}>{v}</p>
                     <p style={{ fontSize: 9, color: C.muted, marginTop: 2 }}>{l}</p>
                   </div>
                 ))}

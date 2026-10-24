@@ -640,7 +640,7 @@ export const TemplatesView = () => {
       {/* Header */}
       <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 22 }}>
         <div>
-          <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>Template Management</h1>
+          <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>Template Management</h1>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>Create, submit and track Meta WhatsApp template approvals</p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
@@ -677,7 +677,7 @@ export const TemplatesView = () => {
         ].map(([l, v, col]) => (
           <div key={l} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 11, padding: '13px 18px', flex: 1 }}>
             <p style={{ fontSize: 10, color: C.muted, marginBottom: 5 }}>{l}</p>
-            <p style={{ fontSize: 22, fontWeight: 700, color: col, fontFamily: "'Syne',sans-serif" }}>{v}</p>
+            <p style={{ fontSize: 22, fontWeight: 700, color: col, fontFamily: "'Inter',sans-serif" }}>{v}</p>
           </div>
         ))}
       </div>
@@ -1047,7 +1047,7 @@ export const TemplatesView = () => {
             }}
           >
             <div style={{ padding: '24px 24px 16px' }}>
-              <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 8 }}>Delete Template?</h3>
+              <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 8 }}>Delete Template?</h3>
               <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.5, marginBottom: 16 }}>
                 Are you sure you want to delete <strong style={{ color: C.accent }}>{templateToDelete.name}</strong>? This action cannot be undone.
               </p>
@@ -1109,7 +1109,7 @@ export const TemplatesView = () => {
             {/* Modal header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: `1px solid ${C.border}` }}>
               <div>
-                <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 14, fontWeight: 700, color: C.text }}>
+                <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 14, fontWeight: 700, color: C.text }}>
                   <span style={{ fontFamily: 'monospace', color: C.accent }}>{previewTemplate.name}</span>
                 </h3>
                 <div style={{ display: 'flex', gap: 8, marginTop: 5 }}>
@@ -1200,7 +1200,7 @@ export const TemplatesView = () => {
             {/* Modal header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 24px', borderBottom: `1px solid ${C.border}` }}>
               <div>
-                <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: 16, fontWeight: 800, color: C.text }}>Create WhatsApp Template</h2>
+                <h2 style={{ fontFamily: "'Inter',sans-serif", fontSize: 16, fontWeight: 800, color: C.text }}>Create WhatsApp Template</h2>
                 <p style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>Build your template with live preview</p>
               </div>
               <button onClick={() => { setShowBuilder(false); setForm(defaultForm); setEditingId(null); }} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, padding: '6px 10px' }}>

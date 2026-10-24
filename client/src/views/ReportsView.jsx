@@ -164,7 +164,7 @@ export const ReportsView = () => {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <BarChart3 size={20} color={C.accent} />
-            <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 24, fontWeight: 800, color: C.text, letterSpacing: '-0.5px' }}>Reports & Analytics</h1>
+            <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 24, fontWeight: 800, color: C.text, letterSpacing: '-0.5px' }}>Reports & Analytics</h1>
           </div>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>
             Advanced analytical dashboard for brand conversion, scoring & revenue mapping.
@@ -228,7 +228,7 @@ export const ReportsView = () => {
             <Users size={16} color={C.blue} />
           </div>
           <p style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{appliedRange ? 'Leads in Range' : 'Leads Today'}</p>
-          <h2 style={{ fontSize: 26, fontWeight: 800, color: C.text, margin: '8px 0 4px 0', fontFamily: "'Syne',sans-serif" }}>
+          <h2 style={{ fontSize: 26, fontWeight: 800, color: C.text, margin: '8px 0 4px 0', fontFamily: "'Inter',sans-serif" }}>
             {loading ? '-' : stats?.leads_today}
           </h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
@@ -247,7 +247,7 @@ export const ReportsView = () => {
             <DollarSign size={16} color={C.green} />
           </div>
           <p style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{appliedRange ? 'Revenue in Range' : 'Monthly Revenue'}</p>
-          <h2 style={{ fontSize: 26, fontWeight: 800, color: C.text, margin: '8px 0 4px 0', fontFamily: "'Syne',sans-serif" }}>
+          <h2 style={{ fontSize: 26, fontWeight: 800, color: C.text, margin: '8px 0 4px 0', fontFamily: "'Inter',sans-serif" }}>
             {loading ? '-' : `₹${Math.round(stats?.revenue_month || 0).toLocaleString()}`}
           </h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
@@ -266,7 +266,7 @@ export const ReportsView = () => {
             <Flame size={16} color={C.accent} />
           </div>
           <p style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Hot Pipelines</p>
-          <h2 style={{ fontSize: 26, fontWeight: 800, color: C.text, margin: '8px 0 4px 0', fontFamily: "'Syne',sans-serif" }}>
+          <h2 style={{ fontSize: 26, fontWeight: 800, color: C.text, margin: '8px 0 4px 0', fontFamily: "'Inter',sans-serif" }}>
             {loading ? '-' : stats?.hot_leads}
           </h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
@@ -281,7 +281,7 @@ export const ReportsView = () => {
             <Award size={16} color={C.purple} />
           </div>
           <p style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{appliedRange ? 'Conversions in Range' : 'Conversions Today'}</p>
-          <h2 style={{ fontSize: 26, fontWeight: 800, color: C.text, margin: '8px 0 4px 0', fontFamily: "'Syne',sans-serif" }}>
+          <h2 style={{ fontSize: 26, fontWeight: 800, color: C.text, margin: '8px 0 4px 0', fontFamily: "'Inter',sans-serif" }}>
             {loading ? '-' : stats?.converted_today}
           </h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>

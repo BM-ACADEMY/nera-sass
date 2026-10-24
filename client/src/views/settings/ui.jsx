@@ -3,11 +3,11 @@ import { inputStyle } from './styles.js';
 
 // Small building blocks shared by the Settings tabs (same look as before).
 export const SectionTitle = ({ children }) => (
-  <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 16 }}>{children}</h3>
+  <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 16 }}>{children}</h3>
 );
 
 export const SubTitle = ({ children }) => (
-  <h4 style={{ fontFamily: "'Syne',sans-serif", fontSize: 12, fontWeight: 700, color: C.text, margin: '4px 0 12px' }}>{children}</h4>
+  <h4 style={{ fontFamily: "'Inter',sans-serif", fontSize: 12, fontWeight: 700, color: C.text, margin: '4px 0 12px' }}>{children}</h4>
 );
 
 export const Divider = () => <div style={{ height: 1, background: C.border, margin: '20px 0' }} />;

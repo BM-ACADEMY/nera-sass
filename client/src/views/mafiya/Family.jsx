@@ -182,7 +182,7 @@ export default function Family() {
         {/* ═══ Header Section ═══ */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 26, flexWrap: 'wrap', gap: 16 }}>
           <div>
-            <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 24, fontWeight: 800, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h1 style={{ fontFamily: "'Inter', sans-serif", fontSize: 24, fontWeight: 800, color: '#fff', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
               The Family <span style={{ fontSize: 10, fontWeight: 700, background: 'rgba(249,115,22,0.12)', color: C.accent, padding: '3px 8px', borderRadius: 20 }}>GMB Mafia</span>
             </h1>
             <p style={{ color: C.muted, fontSize: 12.5, marginTop: 5, margin: 0 }}>
@@ -210,7 +210,7 @@ export default function Family() {
               <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Territory Captured</span>
               <Target size={16} color={C.accent} />
             </div>
-            <div style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>{metrics.territoryCaptured || 0}</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>{metrics.territoryCaptured || 0}</div>
             <div style={{ fontSize: 11.5, color: '#10b981', marginTop: 4 }}>↑ {metrics.territoryCapturedChange || 0} keywords at #1</div>
           </div>
 
@@ -220,7 +220,7 @@ export default function Family() {
               <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>New Reviews (7D)</span>
               <Star size={16} color="#f59e0b" />
             </div>
-            <div style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>{metrics.newReviews || 0}</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>{metrics.newReviews || 0}</div>
             <div style={{ fontSize: 11.5, color: '#10b981', marginTop: 4 }}>↑ {metrics.newReviewsChange || 0} vs last week</div>
           </div>
 
@@ -230,7 +230,7 @@ export default function Family() {
               <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Code Red Alerts</span>
               <AlertTriangle size={16} color="#ef4444" />
             </div>
-            <div style={{ fontSize: 26, fontWeight: 800, color: '#ef4444', fontFamily: "'Syne', sans-serif" }}>{metrics.codeRedAlerts || 0}</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: '#ef4444', fontFamily: "'Inter', sans-serif" }}>{metrics.codeRedAlerts || 0}</div>
             <div style={{ fontSize: 11.5, color: '#fca5a5', marginTop: 4 }}>Action needed today</div>
           </div>
 
@@ -240,7 +240,7 @@ export default function Family() {
               <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Direction Requests</span>
               <TrendingUp size={16} color="#3b82f6" />
             </div>
-            <div style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>{metrics.directionRequests || 0}</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>{metrics.directionRequests || 0}</div>
             <div style={{ fontSize: 11.5, color: '#3b82f6', marginTop: 4 }}>↑ {metrics.directionRequestsChange || 0}% walk-in signals</div>
           </div>
 
@@ -252,7 +252,7 @@ export default function Family() {
           {/* Left Column: Family Health - All Brands */}
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 16, padding: 24 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <h2 style={{ fontSize: 16, fontWeight: 800, color: '#fff', margin: 0, fontFamily: "'Syne', sans-serif" }}>
+              <h2 style={{ fontSize: 16, fontWeight: 800, color: '#fff', margin: 0, fontFamily: "'Inter', sans-serif" }}>
                 Family Health — All Brands
               </h2>
               <span style={{ fontSize: 12, color: C.muted }}>Live status</span>
@@ -381,7 +381,7 @@ export default function Family() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <AlertTriangle size={16} color="#ef4444" />
-                  <h2 style={{ fontSize: 15, fontWeight: 800, color: '#fff', margin: 0, fontFamily: "'Syne', sans-serif" }}>
+                  <h2 style={{ fontSize: 15, fontWeight: 800, color: '#fff', margin: 0, fontFamily: "'Inter', sans-serif" }}>
                     Active Alerts
                   </h2>
                 </div>
@@ -467,7 +467,7 @@ export default function Family() {
                   <AlertTriangle size={18} color={selectedAlert.urgency === 'urgent' ? '#ef4444' : C.accent} />
                 </div>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
                     {selectedAlert.title}
                   </h3>
                   <span style={{ fontSize: 11, color: C.muted }}>{selectedAlert.brand}</span>
@@ -700,7 +700,7 @@ export default function Family() {
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
               <div>
-                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
                   {selectedClientForModal.display_name || selectedClientForModal.business_name}
                 </h3>
                 <span style={{ fontSize: 11.5, color: C.muted }}>

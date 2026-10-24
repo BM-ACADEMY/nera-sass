@@ -984,7 +984,7 @@ return (
       >
         <div style={{ padding: '18px 14px', borderBottom: '1px solid ' + C.border }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 11 }}>
-            <h2 style={{ fontFamily: "'Syne',sans-serif", fontSize: 14, fontWeight: 700, color: C.text }}>WhatsApp Inbox</h2>
+            <h2 style={{ fontFamily: "'Inter',sans-serif", fontSize: 14, fontWeight: 700, color: C.text }}>WhatsApp Chat</h2>
             <div title={connected ? 'Live – Socket.io connected' : 'Polling mode'} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9, color: connected ? C.green : C.muted }}>
               {connected ? <Wifi size={11} /> : <WifiOff size={11} />}
               <span>{connected ? 'Live' : 'Offline'}</span>

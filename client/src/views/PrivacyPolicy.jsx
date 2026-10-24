@@ -48,7 +48,7 @@ export function PrivacyPolicy() {
             }}
           />
           <div>
-            <div style={{ fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 22, color: '#f8fafc', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
+            <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 800, fontSize: 22, color: '#f8fafc', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
               Lead OS
             </div>
           </div>
@@ -109,7 +109,7 @@ export function PrivacyPolicy() {
             }}>
               Legal Document
             </span>
-            <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 32, fontWeight: 800, color: '#f8fafc', margin: '0 0 8px 0' }}>
+            <h1 style={{ fontFamily: "'Inter', sans-serif", fontSize: 32, fontWeight: 800, color: '#f8fafc', margin: '0 0 8px 0' }}>
               Lead OS Privacy Policy
             </h1>
           </div>
@@ -361,7 +361,7 @@ export function PrivacyPolicy() {
                     filter: 'drop-shadow(0 2px 8px rgba(249, 115, 22, 0.3))'
                   }}
                 />
-                <span style={{ fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 20, color: '#f8fafc' }}>Lead OS</span>
+                <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 800, fontSize: 20, color: '#f8fafc' }}>Lead OS</span>
               </div>
               <p style={{ fontSize: 12, color: '#64748b', maxWidth: 300, lineHeight: 1.5 }}>
                 Lead OS is an AI-powered Google Business Profile management platform.

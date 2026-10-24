@@ -62,7 +62,7 @@ export const SettingsView = () => {
 
   return (
     <div className="p-mobile" style={{ padding: 26, overflowY: 'auto', height: '100%' }}>
-      <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 21, fontWeight: 800, color: C.text, marginBottom: 22 }}>Settings</h1>
+      <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 21, fontWeight: 800, color: C.text, marginBottom: 22 }}>Settings</h1>
       {view === 'loading' && <p style={{ fontSize: 12, color: C.muted }}>Loading…</p>}
       {view === 'error' && (
         // Nothing loaded: show the problem and a retry, never empty tabs.

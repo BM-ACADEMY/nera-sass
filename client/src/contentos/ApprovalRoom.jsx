@@ -982,7 +982,7 @@ export function ApprovalRoom({
       {confirmAction && confirmAction.type === 'reject' && (
         <div className="content-os-dashboard-dialog-overlay">
           <div className="content-os-dashboard-dialog">
-            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, fontFamily: "'Syne', sans-serif" }}>Reject this content?</div>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, fontFamily: "'Inter', sans-serif" }}>Reject this content?</div>
             <div style={{ fontSize: 13, color: 'var(--t2)', marginBottom: 16 }}>Please provide a reason for the content team.</div>
 
             <textarea

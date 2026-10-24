@@ -271,7 +271,7 @@ export const CampaignsView = () => {
     <div className="p-mobile" style={{ padding: 26, overflowY: 'auto', height: '100%' }}>
       <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 22 }}>
         <div>
-          <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>Bulk Campaigns</h1>
+          <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>Bulk Campaigns</h1>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>Send bulk WhatsApp messages using approved templates {loading && '(loading...)'}</p>
         </div>
         <div style={{ display: 'flex', gap: 12 }}>
@@ -289,7 +289,7 @@ export const CampaignsView = () => {
             {[['Total', displayCampaigns.length.toString(), C.accent], ['Running', displayCampaigns.filter(c => c.status === 'running').length.toString(), C.green], ['Total Sent', displayCampaigns.reduce((a, b) => a + parseInt(b.sent_count || b.sent || 0), 0).toString(), C.blue], ['Avg Read', avgRead, C.purple]].map(([l, v, col]) => (
               <div key={l} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 11, padding: '14px 18px', flex: 1 }}>
                 <p style={{ fontSize: 9, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 5 }}>{l}</p>
-                <p style={{ fontSize: 20, fontWeight: 700, color: col, fontFamily: "'Syne',sans-serif" }}>{v}</p>
+                <p style={{ fontSize: 20, fontWeight: 700, color: col, fontFamily: "'Inter',sans-serif" }}>{v}</p>
               </div>
             ))}
           </div>
@@ -340,7 +340,7 @@ export const CampaignsView = () => {
       ) : (
         <form onSubmit={handleCreateCampaign} className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
           <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 14, padding: 22 }}>
-            <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 18 }}>Campaign Setup</h3>
+            <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 18 }}>Campaign Setup</h3>
             <div style={{ marginBottom: 14 }}>
               <label style={{ display: 'block', fontSize: 10, color: C.muted, marginBottom: 5, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Campaign Name</label>
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Academy June Batch" style={{ width: '100%', background: C.surface, border: '1px solid ' + C.border, borderRadius: 7, color: C.text, padding: '9px 11px', fontSize: 12, outline: 'none' }} />
@@ -385,7 +385,7 @@ export const CampaignsView = () => {
             )}
           </div>
           <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 14, padding: 22 }}>
-            <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 18 }}>Message & Schedule</h3>
+            <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 18 }}>Message & Schedule</h3>
             <div style={{ marginBottom: 14 }}>
               <label style={{ display: 'block', fontSize: 10, color: C.muted, marginBottom: 5, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Select Approved Template</label>
               <select value={templateId} onChange={(e) => {
@@ -491,7 +491,7 @@ export const CampaignsView = () => {
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, width: '100%', maxWidth: 680, maxHeight: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <div style={{ padding: '16px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 16, fontWeight: 700, color: C.text }}>Campaign Live Status</h3>
+                <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 16, fontWeight: 700, color: C.text }}>Campaign Live Status</h3>
                 {isLiveTracking && (reportModal.status === 'running' || reportModal.status === 'scheduled') && (
                   <span style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.green + '20', color: C.green, padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600 }}>
                     <span style={{ width: 6, height: 6, background: C.green, borderRadius: '50%', animation: 'pulse 1.5s infinite' }}></span>
@@ -621,7 +621,7 @@ export const CampaignsView = () => {
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div style={{ background: C.card, border: `1px solid ${C.red}`, borderRadius: 14, width: '100%', maxWidth: 400, overflow: 'hidden', animation: 'fadeIn 0.2s ease-out' }}>
             <div style={{ padding: '16px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#331111' }}>
-              <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 16, fontWeight: 700, color: C.red }}>Delete Campaign</h3>
+              <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 16, fontWeight: 700, color: C.red }}>Delete Campaign</h3>
               <button onClick={() => { setDeleteModal(null); setDeleteConfirmText(''); }} style={{ background: 'transparent', border: 'none', color: C.muted, fontSize: 18, cursor: 'pointer' }}>×</button>
             </div>
             <div style={{ padding: 24 }}>

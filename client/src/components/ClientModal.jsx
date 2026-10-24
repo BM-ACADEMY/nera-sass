@@ -191,7 +191,7 @@ export const ClientModal = ({ client, onClose, onUpdate }) => {
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 24px', borderBottom: '1px solid ' + C.border, background: C.surface, borderRadius: '16px 16px 0 0', flexShrink: 0 }}>
           <div>
-            <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: 18, fontWeight: 800, color: C.text }}>
+            <h2 style={{ fontFamily: "'Inter', sans-serif", fontSize: 18, fontWeight: 800, color: C.text }}>
               {isEditing ? 'Manage Client' : 'Onboard New Client'}
             </h2>
             <p style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{isEditing ? client.name : 'Create the brand now; WhatsApp can be configured later'}</p>
@@ -417,7 +417,7 @@ export const ClientModal = ({ client, onClose, onUpdate }) => {
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 16 }}>
             <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 24, width: '100%', maxWidth: 400, textAlign: 'center' }}>
               <AlertCircle size={48} color={C.red} style={{ margin: '0 auto 16px' }} />
-              <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 8 }}>Delete Client?</h3>
+              <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 8 }}>Delete Client?</h3>
               <p style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>
                 This action cannot be undone. Please type <strong style={{ color: C.text }}>delete-account</strong> to confirm.
               </p>

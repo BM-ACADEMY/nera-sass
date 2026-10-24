@@ -101,7 +101,7 @@ export const AIImageGeneratorView = () => {
             <Wand2 size={20} color="#fff" />
           </div>
           <div>
-            <h1 style={{ fontSize: 22, fontWeight: 700, color: C.text, fontFamily: "'Syne', sans-serif" }}>AI Image Generator</h1>
+            <h1 style={{ fontSize: 22, fontWeight: 700, color: C.text, fontFamily: "'Inter', sans-serif" }}>AI Image Generator</h1>
             <p style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Generate stunning images from any text description · Powered by Gemini</p>
           </div>
         </div>

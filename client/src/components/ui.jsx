@@ -50,7 +50,7 @@ export const Stat = ({label,value,change,Icon,color}) => (
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
       <div>
         <p style={{fontSize:10,color:C.muted,letterSpacing:0.8,textTransform:'uppercase',fontWeight:600,marginBottom:8}}>{label}</p>
-        <p style={{fontSize:24,fontWeight:700,color:C.text,fontFamily:"'Syne',sans-serif"}}>{value}</p>
+        <p style={{fontSize:24,fontWeight:700,color:C.text,fontFamily:"'Inter',sans-serif"}}>{value}</p>
         {change != null && <p style={{fontSize:11,color:change>0 ? '#34d399' : '#ef4444',marginTop:4,fontWeight:500}}>{change>0 ? '↑' : '↓'} {Math.abs(change)}% vs last week</p>}
       </div>
       <div style={{width:38,height:38,borderRadius:10,background:color+'20',display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -62,7 +62,7 @@ export const Stat = ({label,value,change,Icon,color}) => (
 
 export const SectionHeader = ({title, action, label}) => (
   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18}}>
-    <h2 style={{fontFamily:"'Syne',sans-serif",fontSize:15,fontWeight:700,color:C.text}}>{title}</h2>
+    <h2 style={{fontFamily:"'Inter',sans-serif",fontSize:15,fontWeight:700,color:C.text}}>{title}</h2>
     {label && (
       <button onClick={action} style={{background:C.accent,border:'none',color:'#fff',padding:'6px 14px',borderRadius:7,fontSize:12,fontWeight:600,display:'flex',alignItems:'center',gap:5}}>
         <Plus size={12} />

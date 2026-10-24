@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { FiSmartphone, FiPlus, FiTrash2, FiRefreshCw, FiLink, FiCheckCircle, FiSearch, FiChevronDown, FiChevronLeft, FiChevronRight, FiTarget, FiX } from 'react-icons/fi';
+import { FiSmartphone, FiPlus, FiTrash2, FiRefreshCw, FiLink, FiCheckCircle, FiSettings, FiMessageSquare, FiFileText, FiSearch, FiChevronDown, FiChevronLeft, FiChevronRight, FiTarget, FiX } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import axiosClient from '../../api/axiosClient';
 import PasswordInput from '../security/PasswordInput';
@@ -165,6 +166,7 @@ const MetaInventoryCard = ({ inventory, onRefresh, focusTenantId = null, onClear
   const [registrationPhone, setRegistrationPhone] = useState(null);
   const [pin, setPin] = useState('');
   const [registering, setRegistering] = useState(false);
+  const navigate = useNavigate();
   const [unassignPhone, setUnassignPhone] = useState(null);
   const [unassignPassword, setUnassignPassword] = useState('');
   const [unassigning, setUnassigning] = useState(false);
@@ -414,11 +416,15 @@ const MetaInventoryCard = ({ inventory, onRefresh, focusTenantId = null, onClear
           <span className="inline-flex items-center gap-1.5 rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-800">
             <FaWhatsapp className="text-[#25D366]" /> Admin WhatsApp
           </span>
+          <div className="flex gap-1.5">
+          <Button size="sm" className="h-7 text-xs" onClick={() => navigate('/dashboard/whatsapp-inbox')}><FiMessageSquare /> Chat</Button>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate('/dashboard/templates')}><FiFileText /> Templates</Button>
           {inventory.can_administer && (
             <Button size="sm" variant="outline" className="h-7 text-xs" disabled={platformBusy === phone.phone_number_id} onClick={() => setPlatformPhone(phone, false)}>
               {platformBusy === phone.phone_number_id && <Spinner />} Stop using
             </Button>
           )}
+          </div>
         </div>
       );
     }
@@ -464,6 +470,13 @@ const MetaInventoryCard = ({ inventory, onRefresh, focusTenantId = null, onClear
       {phone.linked_brand && !phone.linked_brand.identity_matches && <div className="text-[11px] font-semibold text-amber-600">Workspace now uses a different number</div>}
     </div>
   );
+
+  // Manage: the workspace page (WhatsApp profile, re-verify, change number).
+  const manageButton = (phone, className) => (phone.linked_brand?.tenant_id != null ? (
+    <Button size="sm" className={className} onClick={() => navigate(`/dashboard/workspaces/${phone.linked_brand.tenant_id}`)}>
+      <FiSettings /> Manage
+    </Button>
+  ) : null);
 
   const isFocusedPhone = (phone) => focusedPhone && phone.phone_number_id === focusedPhone.phone_number_id;
 
@@ -817,7 +830,10 @@ const MetaInventoryCard = ({ inventory, onRefresh, focusTenantId = null, onClear
                       <StatusCell phone={phone} onEditName={openDisplayNameEditor} />
                       <TableCell>{workspaceOf(phone)}</TableCell>
                       <TableCell className="text-right">
-                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setUnassignPhone(phone)}>Unassign</Button>
+                        <div className="flex justify-end gap-1.5">
+                          {manageButton(phone, 'h-7 text-xs')}
+                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setUnassignPhone(phone)}>Unassign</Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -825,7 +841,10 @@ const MetaInventoryCard = ({ inventory, onRefresh, focusTenantId = null, onClear
                     <PhoneCard key={phone.phone_number_id} phone={phone} onEditName={openDisplayNameEditor} highlighted={isFocusedPhone(phone)}>
                       <div className="flex items-center justify-between gap-3">
                         {workspaceOf(phone)}
-                        <Button size="sm" variant="outline" className="h-8 shrink-0 text-xs" onClick={() => setUnassignPhone(phone)}>Unassign</Button>
+                        <div className="flex shrink-0 gap-1.5">
+                          {manageButton(phone, 'h-8 text-xs')}
+                          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setUnassignPhone(phone)}>Unassign</Button>
+                        </div>
                       </div>
                     </PhoneCard>
                   ))}

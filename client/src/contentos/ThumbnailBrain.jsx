@@ -109,7 +109,7 @@ export function ThumbnailBrain() {
                 display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20
               }}>🧠</div>
               <div>
-                <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: 'var(--t1)', fontFamily: "'Syne', sans-serif", letterSpacing: '-0.3px' }}>
+                <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: 'var(--t1)', fontFamily: "'Inter', sans-serif", letterSpacing: '-0.3px' }}>
                   🧠 Thumbnail Brain Configuration
                 </h1>
                 <div style={{ fontSize: 12, color: 'var(--t3)', marginTop: 3 }}>
@@ -293,7 +293,7 @@ export function ThumbnailBrain() {
             <div className="panel-b">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <span style={{ fontSize: 12, color: 'var(--t2)' }}>Empty space reserved for title overlay</span>
-                <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--gold)', fontFamily: "'Syne', sans-serif", lineHeight: 1 }}>
+                <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--gold)', fontFamily: "'Inter', sans-serif", lineHeight: 1 }}>
                   {config.titleSafeArea}%
                 </span>
               </div>

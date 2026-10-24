@@ -134,7 +134,7 @@ export default function Usage() {
               <Activity size={20} color="#fff" />
             </div>
             <div>
-              <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+              <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
                 ValueSERP API Usage & Credits
               </h1>
               <p style={{ margin: 0, color: C.muted, fontSize: 12, marginTop: 2 }}>
@@ -181,7 +181,7 @@ export default function Usage() {
             <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Available Credits</span>
             <Database size={16} color="#94a3b8" />
           </div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
             {loadingSummary ? '...' : (summary?.totalCreditsAvailable?.toLocaleString('en-IN') || 0)}
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Allocated API Quota</div>
@@ -193,7 +193,7 @@ export default function Usage() {
             <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Credits Used</span>
             <Zap size={16} color="#f97316" />
           </div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#f97316', fontFamily: "'Syne', sans-serif" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#f97316', fontFamily: "'Inter', sans-serif" }}>
             {loadingSummary ? '...' : (summary?.totalCreditsUsed?.toLocaleString('en-IN') || 0)}
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Consumed across scans</div>
@@ -205,7 +205,7 @@ export default function Usage() {
             <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Remaining Credits</span>
             <Cpu size={16} color={summary?.isWarning ? '#ef4444' : '#10b981'} />
           </div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: summary?.isWarning ? '#ef4444' : '#10b981', fontFamily: "'Syne', sans-serif" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: summary?.isWarning ? '#ef4444' : '#10b981', fontFamily: "'Inter', sans-serif" }}>
             {loadingSummary ? '...' : (summary?.remainingCredits?.toLocaleString('en-IN') || 0)}
           </div>
           {/* Progress Bar */}
@@ -220,7 +220,7 @@ export default function Usage() {
             <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Total API Requests</span>
             <Server size={16} color="#3b82f6" />
           </div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
             {loadingSummary ? '...' : (summary?.totalApiRequests?.toLocaleString('en-IN') || 0)}
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Lifetime SERP Queries</div>
@@ -232,7 +232,7 @@ export default function Usage() {
             <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Today's Requests</span>
             <TrendingUp size={16} color="#8b5cf6" />
           </div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#c084fc', fontFamily: "'Syne', sans-serif" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#c084fc', fontFamily: "'Inter', sans-serif" }}>
             {loadingSummary ? '...' : (summary?.todayApiRequests?.toLocaleString('en-IN') || 0)}
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Requested today</div>
@@ -244,7 +244,7 @@ export default function Usage() {
             <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>This Month</span>
             <Calendar size={16} color="#06b6d4" />
           </div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#38bdf8', fontFamily: "'Syne', sans-serif" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#38bdf8', fontFamily: "'Inter', sans-serif" }}>
             {loadingSummary ? '...' : (summary?.monthApiRequests?.toLocaleString('en-IN') || 0)}
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Current calendar month</div>
@@ -256,7 +256,7 @@ export default function Usage() {
             <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Last API Call</span>
             <Clock size={16} color="#eab308" />
           </div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#fef08a', fontFamily: "'Syne', sans-serif", marginTop: 4 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#fef08a', fontFamily: "'Inter', sans-serif", marginTop: 4 }}>
             {loadingSummary ? '...' : (summary?.lastApiCallTime ? new Date(summary.lastApiCallTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Never')}
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
@@ -272,7 +272,7 @@ export default function Usage() {
         {/* Table Controls (Search, Filter, Sort) */}
         <div style={{ padding: '18px 22px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 14, background: 'rgba(255,255,255,0.01)' }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#fff', fontFamily: "'Syne', sans-serif" }}>Client API Usage Breakdown</h2>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#fff', fontFamily: "'Inter', sans-serif" }}>Client API Usage Breakdown</h2>
             <p style={{ margin: 0, color: C.muted, fontSize: 11, marginTop: 2 }}>Click on any client row to view detailed scan logs and directory metrics</p>
           </div>
 
@@ -441,7 +441,7 @@ export default function Usage() {
             {/* Modal Header */}
             <div style={{ padding: '20px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'linear-gradient(135deg, rgba(249,115,22,0.08) 0%, transparent 100%)' }}>
               <div>
-                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
                   {selectedClient.businessName}
                 </h2>
                 <p style={{ margin: 0, color: C.muted, fontSize: 12, marginTop: 2 }}>

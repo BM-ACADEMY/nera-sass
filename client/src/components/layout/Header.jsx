@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Search, X, FileText, PanelLeft } from 'lucide-react';
+import { Search, X, FileText } from 'lucide-react';
+import { SidebarTrigger } from '@/components/ui/sidebar';
+import { Separator } from '@/components/ui/separator';
 import { C } from '../../constants/theme.js';
 
 // Optional product label next to the page title (build setting); nothing is
@@ -10,8 +12,9 @@ const PRODUCT_LABEL = (import.meta.env.VITE_PRODUCT_LABEL || '').trim();
 const LABELS = {
   dashboard: 'Dashboard',
   leads: 'Lead Management',
-  inbox: 'WhatsApp Inbox',
-  campaigns: 'Bulk Campaigns',
+  inbox: 'WhatsApp Chat',
+  whatsapp: 'WhatsApp Number',
+  campaigns: 'Campaigns',
   templates: 'Templates',
   brain: 'AI Brain',
   reports: 'Reports',
@@ -25,13 +28,13 @@ const SEARCH_PAGES = [
   { path: '/dashboard', label: 'Dashboard', desc: 'Overview and quick stats' },
   { path: '/leads', label: 'Leads', desc: 'View, filter, and manage all leads' },
   { path: '/sales-tasks', label: 'Sales Task', desc: 'Manage your daily sales activities' },
-  { path: '/inbox', label: 'WhatsApp Inbox', desc: 'Chat directly with your leads' },
+  { path: '/inbox', label: 'WhatsApp Chat', desc: 'Chat directly with your leads' },
+  { path: '/whatsapp', label: 'WhatsApp Number', desc: 'Your connected number, status and profile' },
   { path: '/campaigns', label: 'Bulk Campaigns', desc: 'Send mass WhatsApp messages' },
   { path: '/templates', label: 'Templates', desc: 'Manage WhatsApp message templates' },
   { path: '/brain', label: 'AI Brain', desc: 'Configure AI assistant behavior' },
   { path: '/ai-image', label: 'AI Image', desc: 'Generate AI images' },
   { path: '/reports', label: 'Reports', desc: 'Detailed analytics and performance' },
-  { path: '/integrations', label: 'Integrations', desc: 'Connect third-party tools' },
 
   // AllianceOS
   { path: '/alliance-dashboard', label: 'AllianceOS Dashboard', desc: 'Alliance overview' },
@@ -70,7 +73,7 @@ const SEARCH_PAGES = [
   { path: '/mafiya/usage', label: 'Usage', desc: 'Mafiya OS - Platform usage' },
 ];
 
-export const Header = ({ onMenuClick }) => {
+export const Header = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const activePath = location.pathname.substring(1) || 'dashboard';
@@ -116,17 +119,15 @@ export const Header = ({ onMenuClick }) => {
 
   return (
     <>
-      <div style={{height:64,background:C.surface,borderBottom:'1px solid #e2e8f0',display:'flex',alignItems:'center',padding:'0 20px',flexShrink:0,gap:12}}>
-        <button type="button" onClick={onMenuClick} title="Toggle sidebar" aria-label="Toggle sidebar" className="ghd-toggle">
-          <PanelLeft size={18} />
+      <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center gap-2 border-b border-border bg-card px-4 md:px-6">
+        <SidebarTrigger className="-ml-1" />
+        <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
+        <h1 className="m-0 truncate text-lg font-semibold tracking-normal text-foreground">{activeLabel}</h1>
+        {PRODUCT_LABEL && <span className="hidden text-xs text-muted-foreground sm:inline">{PRODUCT_LABEL}</span>}
+        <button type="button" onClick={() => setSearchOpen(true)} className="ml-auto hidden h-9 w-56 cursor-pointer items-center gap-2 rounded-md border border-input bg-background px-3 text-sm text-muted-foreground hover:bg-muted md:flex">
+          <Search size={15} /> Search pages <kbd className="ml-auto rounded border border-border bg-muted px-1.5 text-[10px]">Ctrl K</kbd>
         </button>
-        <span style={{width:1,height:18,background:'#e2e8f0'}} />
-        <div style={{display:'flex',alignItems:'baseline',gap:8,minWidth:0}}>
-          <span style={{fontSize:20,fontWeight:600,color:'#0f172a',whiteSpace:'nowrap',letterSpacing:'-0.01em'}}>{activeLabel}</span>
-          {PRODUCT_LABEL && <span className="hide-mobile" style={{color:C.dim,fontSize:12,whiteSpace:'nowrap'}}>{PRODUCT_LABEL}</span>}
-        </div>
-      </div>
-      <style>{`.ghd-toggle{width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;background:transparent;color:#334155;cursor:pointer}.ghd-toggle:hover{background:#f1f5f9}`}</style>
+      </header>
 
       {searchOpen && (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(4px)',zIndex:1000,display:'flex',alignItems:'flex-start',justifyContent:'center',paddingTop:'12vh'}} onClick={() => setSearchOpen(false)}>

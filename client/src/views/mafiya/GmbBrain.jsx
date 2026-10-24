@@ -573,7 +573,7 @@ export default function GmbBrain() {
         <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 28 }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 25, fontWeight: 800, color: '#fff', margin: 0, letterSpacing: '-0.5px' }}>
+              <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 25, fontWeight: 800, color: '#fff', margin: 0, letterSpacing: '-0.5px' }}>
                 {displayTitle}'s Brain
               </h1>
               <span style={{ fontSize: 10, fontWeight: 800, background: 'linear-gradient(135deg,#f97316,#ea580c)', color: '#fff', padding: '4px 10px', borderRadius: 20, textTransform: 'uppercase', letterSpacing: 0.8, boxShadow: '0 2px 8px rgba(249,115,22,0.2)' }}>AI Training</span>

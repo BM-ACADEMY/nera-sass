@@ -247,7 +247,7 @@ export const SalesTasksView = () => {
       {/* --- HEADER CONTROLS --- */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, marginBottom: 26 }}>
         <div>
-          <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 22, fontWeight: 800, color: C.text, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <h1 style={{ fontFamily: "'Inter', sans-serif", fontSize: 22, fontWeight: 800, color: C.text, display: 'flex', alignItems: 'center', gap: 8 }}>
             Sales Tasks
             <User size={18} color={C.accent} />
           </h1>

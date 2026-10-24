@@ -342,7 +342,7 @@ export default function RivalFamilies() {
             <Target size={22} color="#fff" />
           </div>
           <div>
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>Rival Families</h1>
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>Rival Families</h1>
             <p style={{ margin: 0, color: C.muted, fontSize: 12, marginTop: 2 }}>Track & compare your local SEO performance</p>
           </div>
         </div>

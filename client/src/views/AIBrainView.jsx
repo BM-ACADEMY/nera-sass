@@ -501,7 +501,7 @@ Use only the current BM TechX product/pricing memory. No service facts are store
     <div className="p-mobile" style={{ padding: 26, overflowY: 'auto', height: '100%' }}>
       <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 22 }}>
         <div>
-          <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>AI Brain Configuration</h1>
+          <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>AI Brain Configuration</h1>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>Configure what each brand AI agent knows and how it closes</p>
         </div>
         <select 
@@ -543,7 +543,7 @@ Use only the current BM TechX product/pricing memory. No service facts are store
 
             {tab === 'prompt' && (
               <div>
-                <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 14 }}>Agent Behaviour — <span style={{ color: C.accent }}>ABM Groups Shared WhatsApp</span></h3>
+                <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 14 }}>Agent Behaviour — <span style={{ color: C.accent }}>ABM Groups Shared WhatsApp</span></h3>
                 <div style={{ background: C.accent + '08', border: '1px solid ' + C.accentDim, borderRadius: 7, padding: 11, marginBottom: 13 }}>
                   <p style={{ fontSize: 11, color: C.accent }}>This text is sent as the bot’s behaviour/system layer. Put greeting, routing, memory, booking and fallback rules here—not course prices or property inventory.</p>
                 </div>
@@ -553,7 +553,7 @@ Use only the current BM TechX product/pricing memory. No service facts are store
                   style={{ width: '100%', height: 320, background: C.surface, border: '1px solid ' + C.border, borderRadius: 7, color: '#60a5fa', padding: 16, fontSize: 13, outline: 'none', fontFamily: 'monospace', lineHeight: 1.7, resize: 'vertical', marginBottom: 22 }}
                 />
 
-                <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Shared AI Routing Rules</h3>
+                <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Shared AI Routing Rules</h3>
                 <p style={{ fontSize: 11, color: C.muted, marginBottom: 10 }}>BM Academy and BM TechX facts are read only from documentation/updated-brain-data.md. This editor contains shared routing rules, not duplicated product or pricing details.</p>
                 <textarea
                   value={promptText}
@@ -566,7 +566,7 @@ Use only the current BM TechX product/pricing memory. No service facts are store
 
             {tab === 'settings' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
-                <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>Brand Automation Settings</h3>
+                <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>Brand Automation Settings</h3>
 
                 {/* Welcome Template */}
                 <div style={{ background: C.surface, border: '1px solid ' + C.border, borderRadius: 9, padding: 18 }}>
@@ -612,7 +612,7 @@ Use only the current BM TechX product/pricing memory. No service facts are store
 
             {tab === 'guide' && (
               <div style={{ lineHeight: 1.7, padding: '0 10px' }}>
-                <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 18 }}>📖 AI Brain Configuration Guide</h3>
+                <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 18 }}>📖 AI Brain Configuration Guide</h3>
 
                 <div style={{ marginBottom: 20 }}>
                   <h4 style={{ fontSize: 13, color: C.accent, marginBottom: 6 }}>1. Select Your Brand</h4>

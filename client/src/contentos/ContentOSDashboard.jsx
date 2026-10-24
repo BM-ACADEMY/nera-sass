@@ -763,7 +763,7 @@ export default function ContentOSDashboard({ defaultPage = "approval" }) {
       {isSuggestModalOpen && selectedItem && (
         <div className="content-os-dashboard-dialog-overlay">
           <div className="content-os-dashboard-dialog" style={{ maxWidth: 500 }}>
-            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, fontFamily: "'Syne', sans-serif" }}>
+            <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8, fontFamily: "'Inter', sans-serif" }}>
               AI Caption Generator
             </div>
             

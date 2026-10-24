@@ -405,7 +405,7 @@ export default function GbpInsights() {
       element.innerHTML = `
         <div style="border-bottom: 2px solid #2d3748; padding-bottom: 20px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: flex-end;">
           <div>
-            <h1 style="font-family: 'Syne', sans-serif; font-size: 24px; color: #fff; margin: 0 0 5px 0;">Google Business Profile Report</h1>
+            <h1 style="font-family: 'Inter', sans-serif; font-size: 24px; color: #fff; margin: 0 0 5px 0;">Google Business Profile Report</h1>
             <div style="font-size: 13px; color: #94a3b8;">Client: <strong>${data.client?.name}</strong></div>
             <div style="font-size: 13px; color: #94a3b8;">Location: ${data.client?.locationTitle || 'Verified profile'}</div>
           </div>
@@ -516,7 +516,7 @@ export default function GbpInsights() {
             <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg,#f97316,#ea580c)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <BarChart2 size={18} color="#fff" />
             </div>
-            <h1 style={{ fontSize: 20, fontWeight: 800, color: '#e2e8f0', fontFamily: "'Syne',sans-serif", margin: 0 }}>
+            <h1 style={{ fontSize: 20, fontWeight: 800, color: '#e2e8f0', fontFamily: "'Inter',sans-serif", margin: 0 }}>
               GBP Insights
             </h1>
             <span style={{ background: '#f9731622', color: '#f97316', fontSize: 10, fontWeight: 700, padding: '3px 8px', borderRadius: 5, letterSpacing: 0.5 }}>
@@ -1122,7 +1122,7 @@ export default function GbpInsights() {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
                   <div>
-                    <h3 style={{ fontSize: 18, fontWeight: 800, color: '#fff', margin: 0, fontFamily: "'Syne', sans-serif" }}>
+                    <h3 style={{ fontSize: 18, fontWeight: 800, color: '#fff', margin: 0, fontFamily: "'Inter', sans-serif" }}>
                       All Search Keywords
                     </h3>
                     <p style={{ fontSize: 11, color: C.muted, margin: '2px 0 0 0' }}>

@@ -57,6 +57,21 @@ export const EMPTY_FORM = {
   add_security_recommendation: true, code_expiration_minutes: 10, copy_code_text: 'Copy code',
 };
 
+// Guesses the category Meta will likely give the message, from its words and
+// buttons. Meta decides in the end (it can re-categorise on review); this only
+// warns before submitting.
+const MARKETING_WORDS = /(offer|offers|discount|sale|deal|deals|coupon|promo|promotion|% ?off|off on|free trial|buy|shop now|limited time|exclusive|new arrivals?|launch|subscribe|upgrade|special price|save|cashback|hurry|don'?t miss|best price|try (it|now)|check out|interested in|learn more about our)/i;
+const UTILITY_WORDS = /(order|booking|booked|appointment|reservation|confirmed|confirmation|payment|paid|receipt|invoice|bill|due|delivery|delivered|shipped|dispatch|tracking|account|password|reminder|scheduled|reschedul\w*|status|ticket|refund|renewal|expires?|verification|registered)/i;
+export function detectCategory(form) {
+  const text = [form.header_format === 'TEXT' ? form.header_text : '', form.body, form.footer, ...(form.buttons || []).map((b) => b.text)].join(' ');
+  if (!text.trim()) return null;
+  const promo = MARKETING_WORDS.test(text) || (form.buttons || []).some((b) => b.type === 'COPY_CODE');
+  const transactional = UTILITY_WORDS.test(text);
+  if (promo) return { category: 'MARKETING', reason: 'It has promotional words or an offer code.' };
+  if (transactional) return { category: 'UTILITY', reason: 'It is about a specific booking, order, payment or account update.' };
+  return { category: 'MARKETING', reason: 'It is not tied to an order, booking or account update, so Meta treats it as marketing.' };
+}
+
 const varsIn = (text) => [...new Set([...String(text || '').matchAll(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi)].map((m) => m[1]))];
 const Counter = ({ value, max }) => <span className={cn('text-[11px] tabular-nums', String(value || '').length > max ? 'text-red-600' : 'text-muted-foreground')}>{String(value || '').length}/{max}</span>;
 
@@ -109,6 +124,9 @@ const TemplateEditor = ({ initial, templateId, onCancel, onSaved }) => {
 
   const set = (patch) => { setForm((f) => ({ ...f, ...patch })); setError(null); };
   const setSample = (name, value) => setForm((f) => ({ ...f, samples: { ...f.samples, [name]: value } }));
+
+  const detected = isAuth ? null : detectCategory(form);
+  const mismatch = detected && detected.category !== form.category;
 
   const variables = useMemo(() => [...new Set([...(form.header_format === 'TEXT' ? varsIn(form.header_text) : []), ...varsIn(form.body)])], [form.header_format, form.header_text, form.body]);
 
@@ -249,8 +267,15 @@ const TemplateEditor = ({ initial, templateId, onCancel, onSaved }) => {
 
           {step === 2 && (
             <>
+              {mismatch && (
+                <div className="flex flex-col gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-[13px] text-blue-900 sm:flex-row sm:items-center">
+                  <FiInfo className="hidden shrink-0 sm:block" />
+                  <span className="flex-1">This message looks like <b>{CATEGORIES.find((c) => c.key === detected.category)?.label}</b>. {detected.reason}</span>
+                  <Button size="sm" className="w-fit shrink-0" onClick={() => set({ category: detected.category })}>Use {CATEGORIES.find((c) => c.key === detected.category)?.label}</Button>
+                </div>
+              )}
               <Section title="Template name and language">
-                <div className="grid gap-3 sm:grid-cols-[1fr_200px]">
+                <div className="grid gap-3 sm:grid-cols-[1fr_180px_180px]">
                   <div className="flex flex-col gap-1.5">
                     <Label htmlFor="tpl-name">Name your template</Label>
                     <div className="relative">
@@ -271,6 +296,13 @@ const TemplateEditor = ({ initial, templateId, onCancel, onSaved }) => {
                     <Select value={form.language} onValueChange={(v) => set({ language: v })} disabled={nameLocked}>
                       <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                       <SelectContent>{LANGUAGES.map(([code, label]) => <SelectItem key={code} value={code}>{label}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label>Category</Label>
+                    <Select value={form.category} onValueChange={(v) => set({ category: v })}>
+                      <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                      <SelectContent>{CATEGORIES.map((c) => <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
                 </div>
@@ -442,7 +474,7 @@ const TemplateEditor = ({ initial, templateId, onCancel, onSaved }) => {
                 {[
                   ['Name', <code key="n" className="text-[13px]">{form.name}</code>],
                   ['Language', LANGUAGES.find(([c]) => c === form.language)?.[1] || form.language],
-                  ['Category', <Badge key="c" variant="info">{category.label}</Badge>],
+                  ['Category', <span key="c" className="inline-flex items-center gap-2"><Badge variant="info">{category.label}</Badge><button type="button" onClick={() => setStep(isAuth ? 1 : 2)} className="cursor-pointer text-[12px] text-blue-700 hover:underline">Change</button></span>],
                   ['Header', isAuth ? 'None' : form.header_format === 'NONE' ? 'None' : form.header_format === 'TEXT' ? 'Text' : `${form.header_format.toLowerCase()} (${form.media_name || 'uploaded'})`],
                   ['Variables', isAuth ? 'Verification code' : variables.length ? variables.map((v) => `{{${v}}}`).join(', ') : 'None'],
                   ['Buttons', isAuth ? 'Copy code' : form.buttons.length ? form.buttons.map((b) => b.text || b.example || b.type).join(', ') : 'None'],
@@ -450,6 +482,12 @@ const TemplateEditor = ({ initial, templateId, onCancel, onSaved }) => {
                   <div key={k}><dt className="text-[12px] font-medium text-muted-foreground">{k}</dt><dd className="mt-0.5">{v}</dd></div>
                 ))}
               </dl>
+              {mismatch && (
+                <div className="flex flex-col gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 sm:flex-row sm:items-center">
+                  <span className="flex-1">You chose {category.label}, but the message reads like <b>{CATEGORIES.find((c) => c.key === detected.category)?.label}</b>. {detected.reason} Meta may change the category on review.</span>
+                  <Button size="sm" variant="outline" className="w-fit shrink-0 bg-white" onClick={() => set({ category: detected.category })}>Use {CATEGORIES.find((c) => c.key === detected.category)?.label}</Button>
+                </div>
+              )}
               {form.category === 'MARKETING' && (
                 <p className="flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800"><FiInfo className="mt-0.5 shrink-0" /> Marketing templates can only be sent to customers who agreed to receive them.</p>
               )}

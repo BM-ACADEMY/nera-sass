@@ -204,14 +204,14 @@ export const IntegrationsView = () => {
           <Share2 size={20} color={C.accent} />
         </div>
         <div>
-          <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 21, fontWeight: 800, color: C.text, margin: 0 }}>Meta Integrations</h1>
+          <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 21, fontWeight: 800, color: C.text, margin: 0 }}>Meta Integrations</h1>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Manage Meta Leads Webhooks and Page connections</p>
         </div>
       </div>
 
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 13, padding: 22, width: '100%' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <h3 style={{ fontFamily: "'Syne',sans-serif", fontSize: 16, fontWeight: 700, color: C.text }}>Connected Meta Pages</h3>
+          <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 16, fontWeight: 700, color: C.text }}>Connected Meta Pages</h3>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <select 
               value={selectedBrandName} 
@@ -241,7 +241,7 @@ export const IntegrationsView = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
             {Object.entries(groupedAccounts).map(([brand, platforms]) => (
               <div key={brand}>
-                <h4 style={{ fontFamily: "'Syne',sans-serif", color: C.text, fontSize: 18, marginBottom: 16, borderBottom: '1px solid ' + C.border, paddingBottom: 8 }}>{brand}</h4>
+                <h4 style={{ fontFamily: "'Inter',sans-serif", color: C.text, fontSize: 18, marginBottom: 16, borderBottom: '1px solid ' + C.border, paddingBottom: 8 }}>{brand}</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                     <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>Facebook Pages</div>
@@ -262,7 +262,7 @@ export const IntegrationsView = () => {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
           <div style={{ background: C.surface, border: '1px solid ' + C.border, borderRadius: 16, width: 400, padding: 24 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <h3 style={{ margin: 0, fontSize: 18, color: C.text, fontFamily: "'Syne', sans-serif", fontWeight: 700 }}>
+              <h3 style={{ margin: 0, fontSize: 18, color: C.text, fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
                 {formData.id ? 'Edit Meta Account' : 'Add Meta Account'}
               </h3>
               <button onClick={() => setShowModal(false)} style={{ background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer' }}><X size={20} /></button>

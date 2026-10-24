@@ -73,7 +73,7 @@ export function LandingPage() {
             }}
           />
           <div>
-            <div style={{ fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 22, color: '#f8fafc', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
+            <div style={{ fontFamily: "'Inter', sans-serif", fontWeight: 800, fontSize: 22, color: '#f8fafc', letterSpacing: '-0.02em', lineHeight: 1.1 }}>
               Lead OS
             </div>
           </div>
@@ -171,7 +171,7 @@ export function LandingPage() {
 
           {/* H1 - App Name */}
           <h1 style={{
-            fontFamily: "'Syne', sans-serif",
+            fontFamily: "'Inter', sans-serif",
             fontSize: 'calc(2.2rem + 1.2vw)',
             fontWeight: 800,
             lineHeight: 1.1,
@@ -184,7 +184,7 @@ export function LandingPage() {
 
           {/* H2 - Platform Focus */}
           <h2 style={{
-            fontFamily: "'Syne', sans-serif",
+            fontFamily: "'Inter', sans-serif",
             fontSize: 'calc(1.2rem + 0.8vw)',
             fontWeight: 700,
             lineHeight: 1.25,
@@ -275,7 +275,7 @@ export function LandingPage() {
         borderTop: '1px solid #1a2e4a'
       }}>
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: 28, fontWeight: 800, color: '#f8fafc' }}>
+          <h2 style={{ fontFamily: "'Inter', sans-serif", fontSize: 28, fontWeight: 800, color: '#f8fafc' }}>
             About Lead OS
           </h2>
           <p style={{ color: '#94a3b8', fontSize: 15, marginTop: 8, maxWidth: 720, margin: '8px auto 0 auto', lineHeight: 1.6 }}>
@@ -332,7 +332,7 @@ export function LandingPage() {
         borderTop: '1px solid #1a2e4a'
       }}>
         <div style={{ textAlign: 'center', marginBottom: 36 }}>
-          <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: 28, fontWeight: 800, color: '#f8fafc' }}>
+          <h2 style={{ fontFamily: "'Inter', sans-serif", fontSize: 28, fontWeight: 800, color: '#f8fafc' }}>
             How It Works
           </h2>
           <p style={{ color: '#94a3b8', fontSize: 14, marginTop: 6 }}>
@@ -390,7 +390,7 @@ export function LandingPage() {
             <ShieldCheck size={15} />
             <span>ENTERPRISE COMPLIANCE & PRIVACY</span>
           </div>
-          <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: 28, fontWeight: 800, color: '#f8fafc' }}>
+          <h2 style={{ fontFamily: "'Inter', sans-serif", fontSize: 28, fontWeight: 800, color: '#f8fafc' }}>
             Secure Google Authentication
           </h2>
           <p style={{ color: '#94a3b8', fontSize: 14, marginTop: 6 }}>
@@ -459,7 +459,7 @@ export function LandingPage() {
         borderTop: '1px solid #1a2e4a'
       }}>
         <div style={{ textAlign: 'center', marginBottom: 30 }}>
-          <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: 26, fontWeight: 800, color: '#f8fafc' }}>
+          <h2 style={{ fontFamily: "'Inter', sans-serif", fontSize: 26, fontWeight: 800, color: '#f8fafc' }}>
             Lead OS Dashboard Preview
           </h2>
           <p style={{ color: '#94a3b8', fontSize: 14, marginTop: 6 }}>
@@ -543,7 +543,7 @@ export function LandingPage() {
               <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 12, padding: 16 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#38bdf8', marginBottom: 12 }}>REVIEW SENTIMENT & OVERVIEW</div>
                 <div style={{ background: '#060c17', padding: 16, borderRadius: 8, textAlign: 'center' }}>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#f8fafc', fontFamily: "'Syne', sans-serif" }}>4.9 ★</div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: '#f8fafc', fontFamily: "'Inter', sans-serif" }}>4.9 ★</div>
                   <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>Based on 248 verified Google Reviews</div>
                   <div style={{ fontSize: 11, color: '#10b981', marginTop: 8, fontWeight: 600 }}>100% Google Business Profile API Compliant</div>
                 </div>
@@ -653,7 +653,7 @@ export function LandingPage() {
         borderTop: '1px solid #1a2e4a'
       }}>
         <div style={{ textAlign: 'center', marginBottom: 30 }}>
-          <h2 style={{ fontFamily: "'Syne', sans-serif", fontSize: 24, fontWeight: 800, color: '#f8fafc' }}>
+          <h2 style={{ fontFamily: "'Inter', sans-serif", fontSize: 24, fontWeight: 800, color: '#f8fafc' }}>
             Frequently Asked Questions
           </h2>
           <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 4 }}>
@@ -765,7 +765,7 @@ export function LandingPage() {
                     filter: 'drop-shadow(0 2px 8px rgba(249, 115, 22, 0.3))'
                   }}
                 />
-                <span style={{ fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 20, color: '#f8fafc' }}>Lead OS</span>
+                <span style={{ fontFamily: "'Inter', sans-serif", fontWeight: 800, fontSize: 20, color: '#f8fafc' }}>Lead OS</span>
               </div>
               <p style={{ fontSize: 12, color: '#64748b', maxWidth: 300, lineHeight: 1.5 }}>
                 Lead OS is an AI-powered Google Business Profile management platform.

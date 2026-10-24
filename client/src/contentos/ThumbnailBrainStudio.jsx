@@ -1519,7 +1519,7 @@ const AnalyticsTab = ({ analytics }) => {
   const StatCard = ({ label, value, sub, color = C.accent }) => (
     <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: '18px 20px' }}>
       <p style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</p>
-      <p style={{ fontSize: 28, fontWeight: 800, color, fontFamily: 'Syne, sans-serif' }}>{value ?? '—'}</p>
+      <p style={{ fontSize: 28, fontWeight: 800, color, fontFamily: 'Inter, sans-serif' }}>{value ?? '—'}</p>
       {sub && <p style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{sub}</p>}
     </div>
   );

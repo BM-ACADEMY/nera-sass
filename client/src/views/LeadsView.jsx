@@ -673,7 +673,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
 
       <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 22 }}>
         <div>
-          <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>Lead Management</h1>
+          <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>Lead Management</h1>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>{total || 0} total leads {loading && '(loading...)'}</p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

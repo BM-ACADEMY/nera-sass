@@ -430,7 +430,7 @@ export const Dashboard = () => {
         {/* Leads & Conversions AreaChart */}
         <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column', minHeight: 280 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-            <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Lead Acquisition & Conversions</h3>
+            <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Lead Acquisition & Conversions</h3>
             <span style={{ fontSize: 10, color: C.accent, fontWeight: 700, background: `${C.accent}15`, padding: '3px 8px', borderRadius: 4 }}>
               Active Timeline: {timeRange.toUpperCase()}
             </span>
@@ -474,7 +474,7 @@ export const Dashboard = () => {
 
         {/* Ingestion Sources PieChart */}
         <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column', minHeight: 280 }}>
-          <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 14 }}>Traffic Channels</h3>
+          <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 14 }}>Traffic Channels</h3>
           
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 140 }}>
             {loading ? (
@@ -520,7 +520,7 @@ export const Dashboard = () => {
         
         {/* Revenue trend line/bar */}
         <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column', minHeight: 250 }}>
-          <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 16 }}>Revenue Performance</h3>
+          <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 16 }}>Revenue Performance</h3>
           
           <div style={{ flex: 1, minHeight: 160 }}>
             {loading ? (
@@ -549,7 +549,7 @@ export const Dashboard = () => {
 
         {/* Funnel Dropoff Breakdown */}
         <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column', minHeight: 250 }}>
-          <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 12 }}>Pipeline Drop-off Funnel</h3>
+          <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 12 }}>Pipeline Drop-off Funnel</h3>
           
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, justifyContent: 'center' }}>
             {loading ? (
@@ -579,7 +579,7 @@ export const Dashboard = () => {
         {/* Recent Transactions List */}
         <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-            <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Recent Captured Payments</h3>
+            <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Recent Captured Payments</h3>
             <CreditCard size={15} color={C.muted} />
           </div>
 
@@ -632,7 +632,7 @@ export const Dashboard = () => {
         <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
             <AlertCircle size={15} color={C.red} />
-            <h3 style={{ fontFamily: "'Syne', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Hot Pipelines</h3>
+            <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Hot Pipelines</h3>
             <span style={{ marginLeft: 'auto', background: `${C.red}15`, color: C.red, padding: '2px 8px', borderRadius: 12, fontSize: 9, fontWeight: 700 }}>
               {hotLeads.length} Urgent
             </span>
@@ -835,7 +835,7 @@ const LeadActionsDrawer = ({ leadId, onClose, onUpdate, navigate }) => {
             {/* Drawer Header */}
             <div style={{ padding: '20px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: C.card }}>
               <div>
-                <h3 style={{ fontSize: 16, fontWeight: 800, color: C.text, fontFamily: "'Syne', sans-serif" }}>{lead.name}</h3>
+                <h3 style={{ fontSize: 16, fontWeight: 800, color: C.text, fontFamily: "'Inter', sans-serif" }}>{lead.name}</h3>
                 <span style={{ fontSize: 10, color: C.muted }}>Brand: {lead.brand_name || 'Individual'}</span>
               </div>
               <button

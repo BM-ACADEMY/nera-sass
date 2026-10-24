@@ -560,7 +560,7 @@ export default function AddClient() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 16 }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 24, fontWeight: 800, color: '#fff', margin: 0 }}>
+            <h1 style={{ fontFamily: "'Inter', sans-serif", fontSize: 24, fontWeight: 800, color: '#fff', margin: 0 }}>
               Clients
             </h1>
             <span style={{ fontSize: 11, fontWeight: 700, background: 'rgba(249,115,22,0.12)', color: C.accent, padding: '3px 8px', borderRadius: 20 }}>
@@ -614,19 +614,19 @@ export default function AddClient() {
         {/* Card 1: Total Clients */}
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Total Clients</div>
-          <div style={{ fontSize: 28, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>{totalClientsCount}</div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>{totalClientsCount}</div>
           <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{totalInternalCount} internal • {totalPaidCount} paying</div>
         </div>
         {/* Card 2: Monthly Recurring */}
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Monthly Recurring</div>
-          <div style={{ fontSize: 28, fontWeight: 800, color: '#10b981', fontFamily: "'Syne', sans-serif" }}>₹{totalMonthlyRecurring.toLocaleString('en-IN')}</div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: '#10b981', fontFamily: "'Inter', sans-serif" }}>₹{totalMonthlyRecurring.toLocaleString('en-IN')}</div>
           <div style={{ fontSize: 12, color: '#10b981', marginTop: 4 }}>↑ ₹9,999 this month</div>
         </div>
         {/* Card 3: Average Health Score */}
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Avg Health Score</div>
-          <div style={{ fontSize: 28, fontWeight: 800, color: '#f59e0b', fontFamily: "'Syne', sans-serif" }}>{avgHealthScore}</div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: '#f59e0b', fontFamily: "'Inter', sans-serif" }}>{avgHealthScore}</div>
           <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{attentionNeededCount} brand{attentionNeededCount !== 1 ? 's' : ''} need attention</div>
         </div>
       </div>
@@ -710,7 +710,7 @@ export default function AddClient() {
                   <Shield size={18} color="#fff" />
                 </div>
                 <div>
-                  <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+                  <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
                     {editingClient ? 'Edit GMB Client' : 'Add GMB Client'}
                   </h2>
                   <p style={{ margin: 0, color: C.muted, fontSize: 11, marginTop: 2 }}>

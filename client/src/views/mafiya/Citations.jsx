@@ -386,7 +386,7 @@ export default function Citations() {
         {/* Header Section */}
         <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 26 }}>
           <div>
-            <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 24, fontWeight: 800, color: '#fff', margin: 0 }}>
+            <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 24, fontWeight: 800, color: '#fff', margin: 0 }}>
               Citation <span style={{ fontSize: 10, fontWeight: 700, background: 'rgba(249,115,22,0.12)', color: C.accent, padding: '3px 8px', borderRadius: 20, marginLeft: 8 }}>Single-Search Scanner</span>
             </h1>
             <p style={{ color: C.muted, fontSize: 12.5, marginTop: 5 }}>
@@ -480,7 +480,7 @@ export default function Citations() {
                   <Bug size={18} color="#ef4444" />
                 </div>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
                     Citation Scanner Debug Mode Panel
                   </h3>
                   <span style={{ fontSize: 11, color: '#fca5a5' }}>Inspecting query, raw ValueSERP organic results, and parser detection failures</span>
@@ -615,7 +615,7 @@ export default function Citations() {
                 <Loader2 size={20} className="animate-spin" style={{ color: C.accent }} />
                 <h3 style={{ color: '#fff', fontSize: 16, fontWeight: 700, margin: 0 }}>Citation Audit in Progress</h3>
               </div>
-              <span style={{ fontSize: 18, fontWeight: 800, color: C.accent, fontFamily: "'Syne', sans-serif" }}>
+              <span style={{ fontSize: 18, fontWeight: 800, color: C.accent, fontFamily: "'Inter', sans-serif" }}>
                 {scanProgress}%
               </span>
             </div>
@@ -674,7 +674,7 @@ export default function Citations() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <CheckCircle2 size={22} color="#10b981" />
-                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
                   Citation Audit Completed
                 </h3>
               </div>
@@ -763,7 +763,7 @@ export default function Citations() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                  <span style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+                  <span style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
                     {scanData.scan.score}%
                   </span>
                 </div>
@@ -779,7 +779,7 @@ export default function Citations() {
                     <AlertTriangle size={15} color={C.red} />
                   </div>
                 </div>
-                <span style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+                <span style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
                   {scanData.scan.mismatched}
                 </span>
                 <p style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>Directories with incorrect NAP</p>
@@ -790,7 +790,7 @@ export default function Citations() {
                   <span style={{ color: C.muted, fontSize: 12.5, fontWeight: 600 }}>Missing Listings</span>
                   <span style={{ fontSize: 10, fontWeight: 700, color: C.accent, background: 'rgba(249,115,22,0.1)', padding: '2px 6px', borderRadius: 4 }}>Alert</span>
                 </div>
-                <span style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Syne', sans-serif" }}>
+                <span style={{ fontSize: 26, fontWeight: 800, color: '#fff', fontFamily: "'Inter', sans-serif" }}>
                   {scanData.scan.missing}
                 </span>
                 <p style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>Directories without listings</p>
@@ -960,7 +960,7 @@ export default function Citations() {
                         <Wrench size={20} color={C.accent} />
                       </div>
                       <div>
-                        <h3 style={{ color: '#fff', fontSize: 16, fontWeight: 800, margin: 0, fontFamily: "'Syne', sans-serif" }}>
+                        <h3 style={{ color: '#fff', fontSize: 16, fontWeight: 800, margin: 0, fontFamily: "'Inter', sans-serif" }}>
                           Citation Correction Assistant
                         </h3>
                         <span style={{ fontSize: 11, color: C.muted }}>
@@ -1363,7 +1363,7 @@ export default function Citations() {
 
             {/* Content */}
             <h2 style={{
-              fontFamily: "'Syne', sans-serif",
+              fontFamily: "'Inter', sans-serif",
               fontSize: 22,
               fontWeight: 800,
               color: '#fff',

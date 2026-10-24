@@ -471,7 +471,7 @@ const GmbPostModal = ({ activeClient, fetchGmbPosts, showModal, setShowModal, ed
                 <div style={{ background: 'rgba(249,115,22,0.1)', padding: 8, borderRadius: 8 }}>
                   <Megaphone size={20} color="#f97316" />
                 </div>
-                <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: '#f4f4f5', fontFamily: "'Syne', sans-serif" }}>Create GMB Post</h2>
+                <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: '#f4f4f5', fontFamily: "'Inter', sans-serif" }}>Create GMB Post</h2>
               </div>
               <button
                 onClick={() => setShowModal(false)}
@@ -1263,7 +1263,7 @@ const PostAnalyticsView = ({ post, onBack, activeClient }) => {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: 18, marginBottom: 26 }}>
         <div>
-          <h1 style={{ fontFamily: "'Syne', sans-serif", fontSize: 24, fontWeight: 800, margin: 0 }}>GMB Post Analytics</h1>
+          <h1 style={{ fontFamily: "'Inter', sans-serif", fontSize: 24, fontWeight: 800, margin: 0 }}>GMB Post Analytics</h1>
           <p style={{ color: '#71717a', fontSize: 12.5, marginTop: 4 }}>Detailed spline chart & segment performance insights</p>
         </div>
       </div>
@@ -1877,7 +1877,7 @@ export default function StreetPosts() {
         <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 26 }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <h1 style={{ fontFamily: "'Syne',sans-serif", fontSize: 24, fontWeight: 800, color: '#fff', margin: 0 }}>
+              <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 24, fontWeight: 800, color: '#fff', margin: 0 }}>
                 Street Posts <span style={{ fontSize: 10, fontWeight: 700, background: 'rgba(249,115,22,0.12)', color: C.accent, padding: '3px 8px', borderRadius: 20, marginLeft: 8 }}>GMB Posts</span>
               </h1>
             </div>
@@ -2057,7 +2057,7 @@ export default function StreetPosts() {
               </div>
             ) : (
               <div style={{ marginTop: 30 }}>
-                <h2 style={{ fontSize: 18, fontWeight: 800, color: '#fff', margin: '0 0 4px 0', fontFamily: "'Syne', sans-serif" }}>All posts</h2>
+                <h2 style={{ fontSize: 18, fontWeight: 800, color: '#fff', margin: '0 0 4px 0', fontFamily: "'Inter', sans-serif" }}>All posts</h2>
                 <p style={{ color: C.muted, fontSize: 12.5, margin: '0 0 20px 0' }}>View or make changes</p>
 
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
