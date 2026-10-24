@@ -5,7 +5,7 @@
 
 import { isInvalidMfaCode, NOTICE_KEY, NOTICES, USER_KEY } from './session.js';
 
-const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3601').replace(/\/+$/, '');
+export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3601').replace(/\/+$/, '');
 
 class LeadOSAPI {
   constructor() {

@@ -19,7 +19,7 @@ export const C = {
 
 export const STYLE = [
   "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');",
-  "*, *::before, *::after { box-sizing: border-box; margin:0; padding:0; }",
+  "*, *::before, *::after { box-sizing: border-box; }",
   "body { font-family:'Inter',sans-serif; background:#f8fafc; color:#1e293b; }",
   "::-webkit-scrollbar{width:6px;height:6px}",
   "::-webkit-scrollbar-track{background:transparent}",

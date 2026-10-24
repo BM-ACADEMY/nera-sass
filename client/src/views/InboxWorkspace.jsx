@@ -51,7 +51,7 @@ const MessageActionsMenu = ({ isOpen, onToggle, onClose, align = 'end', children
         {...getReferenceProps({ onClick: (e) => { e.stopPropagation(); onToggle(); } })}
         style={{ background: 'rgba(11, 20, 26, 0.7)', border: 'none', cursor: 'pointer', padding: 2, borderRadius: 4, display: 'flex' }}
       >
-        <ChevronDown size={14} color="#e9edef" />
+        <ChevronDown size={14} color="#54656f" />
       </button>
       {isOpen && (
         <FloatingPortal>
@@ -1170,7 +1170,7 @@ return (
         })()}
 
         {/* Messages area */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#0b2123', position: 'relative' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#efeae2', position: 'relative' }}>
           {/* WhatsApp wallpaper overlay */}
           <div style={{
             position: 'absolute',
@@ -1178,7 +1178,7 @@ return (
             backgroundImage: 'url("/chat-bg.png")',
             backgroundRepeat: 'repeat',
             backgroundSize: '450px',
-            opacity: 0.5,
+            opacity: 0.06,
             pointerEvents: 'none',
             zIndex: 0
           }} />
@@ -1287,9 +1287,9 @@ return (
                     {showDateHeader && (
                       <div style={{ display: 'flex', justifyContent: 'center', margin: '20px 0 14px 0' }}>
                         <span style={{
-                          background: '#182229',
+                          background: 'rgba(255,255,255,0.92)',
                           border: 'none',
-                          color: '#aebac1',
+                          color: '#54656f',
                           fontSize: '12px',
                           padding: '6px 12px',
                           borderRadius: '8px',
@@ -1325,8 +1325,8 @@ return (
                     style={{
                       position: 'relative',
                       background: highlightedMessageKey === getMessageIdentity(m)
-                        ? (isLead ? '#2a3942' : '#00755f')
-                        : (selectedMessageIds.includes(m.id) ? (isLead ? '#2a3942' : '#00755f') : (isLead ? '#202c33' : '#005c4b')),
+                        ? (isLead ? '#f0f2f5' : '#c6f1bd')
+                        : (selectedMessageIds.includes(m.id) ? (isLead ? '#f0f2f5' : '#c6f1bd') : (isLead ? '#ffffff' : '#d9fdd3')),
                       border: 'none',
                       borderRadius: isLead ? '0px 8px 8px 8px' : '8px 0px 8px 8px',
                       padding: '8px 12px 8px 12px',
@@ -1482,7 +1482,7 @@ return (
                                     <div
                                       onClick={() => window.open(fullMediaUrl, '_blank')}
                                       style={{
-                                        background: 'rgba(255, 255, 255, 0.05)',
+                                        background: 'rgba(11, 20, 26, 0.04)',
                                         borderRadius: 8,
                                         padding: 12,
                                         display: 'flex',
@@ -1491,19 +1491,19 @@ return (
                                         cursor: 'pointer',
                                         textDecoration: 'none',
                                         transition: 'background 0.2s',
-                                        border: '1px solid rgba(255, 255, 255, 0.08)'
+                                        border: '1px solid rgba(11, 20, 26, 0.08)'
                                       }}
-                                      onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
-                                      onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
+                                      onMouseOver={(e) => e.currentTarget.style.background = 'rgba(11, 20, 26, 0.08)'}
+                                      onMouseOut={(e) => e.currentTarget.style.background = 'rgba(11, 20, 26, 0.04)'}
                                     >
                                       <div style={{ background: '#027eb5', borderRadius: 6, width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', flexShrink: 0 }}>
                                         <FileText size={20} />
                                       </div>
                                       <div style={{ flex: 1, overflow: 'hidden' }}>
-                                        <div style={{ fontWeight: 600, fontSize: 14, color: '#e9edef', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                                        <div style={{ fontWeight: 600, fontSize: 14, color: '#111b21', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
                                           {fullMediaUrl.split('/').pop() || 'Document'}
                                         </div>
-                                        <div style={{ fontSize: 11, color: '#8696a0', marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
+                                        <div style={{ fontSize: 11, color: '#667781', marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
                                           <span>{fullMediaUrl.split('.').pop().toUpperCase().substring(0,4)}</span>
                                           <span>•</span>
                                           <span>Open file</span>
@@ -1516,7 +1516,7 @@ return (
                       })()}
 
                       <div style={{ display: 'block', minWidth: '70px', position: 'relative' }}>
-                        <span style={{ fontSize: '14.2px', color: '#e9edef', whiteSpace: 'pre-wrap', lineHeight: '19px', wordBreak: 'break-word' }}>
+                        <span style={{ fontSize: '14.2px', color: '#111b21', whiteSpace: 'pre-wrap', lineHeight: '19px', wordBreak: 'break-word' }}>
                           {renderMessageWithLinks(getMessageText(m))}
                         </span>
                         <span style={{
@@ -1529,7 +1529,7 @@ return (
                           top: 2,
                           userSelect: 'none'
                         }}>
-                          <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)' }}>
+                          <span style={{ fontSize: 10, color: '#667781' }}>
                             {isSending ? 'sending…' : new Date(m.timestamp || m.sent_at || m.time || new Date())
                               .toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })
                               .toLowerCase()}
@@ -1539,9 +1539,9 @@ return (
                               {m.status === 'failed' ? (
                                 <span style={{ color: '#ef4444', fontSize: 11, fontWeight: 'bold' }}>✕</span>
                               ) : m.status === 'sent' ? (
-                                <Check size={13} style={{ color: 'rgba(255,255,255,0.5)' }} />
+                                <Check size={13} style={{ color: '#8696a0' }} />
                               ) : (
-                                <span style={{ color: (m.status === 'read' || m.status === 'seen') ? '#53bdeb' : 'rgba(255,255,255,0.5)', display: 'inline-flex' }}>
+                                <span style={{ color: (m.status === 'read' || m.status === 'seen') ? '#53bdeb' : '#8696a0', display: 'inline-flex' }}>
                                   <Check size={13} style={{ marginRight: -6 }} />
                                   <Check size={13} />
                                 </span>
@@ -1553,7 +1553,7 @@ return (
                         <div style={{ clear: 'both' }} />
                       </div>
                       {alliance && Array.isArray(m.template_buttons) && m.template_buttons.length > 0 && (
-                        <div style={{ margin: '9px -12px -8px -12px', borderTop: '1px solid rgba(255, 255, 255, 0.1)' }}>
+                        <div style={{ margin: '9px -12px -8px -12px', borderTop: '1px solid #e9edef' }}>
                           {m.template_buttons.map((button, buttonIndex) => {
                             const type = String(button.type || '').toUpperCase();
                             const label = button.text || (type === 'URL' ? 'Open link' : type === 'PHONE_NUMBER' ? 'Call' : 'Reply');
@@ -1569,7 +1569,7 @@ return (
                                 href={href || undefined}
                                 target={type === 'URL' ? '_blank' : undefined}
                                 rel={type === 'URL' ? 'noopener noreferrer' : undefined}
-                                style={{ minHeight: 40, padding: '10px 12px', borderTop: buttonIndex ? '1px solid rgba(255, 255, 255, 0.1)' : 'none', color: '#00a884', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, fontSize: 14, fontWeight: 500, textDecoration: 'none', cursor: href ? 'pointer' : 'default', background: 'transparent' }}
+                                style={{ minHeight: 40, padding: '10px 12px', borderTop: buttonIndex ? '1px solid #e9edef' : 'none', color: '#0a8576', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, fontSize: 14, fontWeight: 500, textDecoration: 'none', cursor: href ? 'pointer' : 'default', background: 'transparent' }}
                               >
                                 {type === 'URL' ? <ExternalLink size={14} /> : type === 'PHONE_NUMBER' ? <Phone size={14} /> : <CornerUpLeft size={14} />}
                                 {label}
@@ -1880,10 +1880,10 @@ return (
               )}
 
               {isRecording ? (
-                <div style={{ flex: 1, background: '#2a3942', border: 'none', borderRadius: 24, padding: '9px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ flex: 1, background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 24, padding: '9px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'red', animation: 'pulse 1s infinite' }} />
-                    <span style={{ color: '#d1d7db', fontSize: 14 }}>Recording... {formatDuration(recordingDuration)}</span>
+                    <span style={{ color: '#3b4a54', fontSize: 14 }}>Recording... {formatDuration(recordingDuration)}</span>
                   </div>
                   <button type="button" onClick={stopRecording} style={{ background: 'transparent', border: 'none', color: '#f15c6d', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>STOP</button>
                 </div>
@@ -1913,11 +1913,11 @@ return (
                   placeholder="Type a message"
                   style={{ 
                     flex: 1, 
-                    background: '#2a3942', 
-                    border: 'none', 
+                    background: '#ffffff', 
+                    border: '1px solid #e2e8f0', 
                     borderRadius: 20, 
                     padding: '10px 16px', 
-                    color: '#d1d7db', 
+                    color: '#111b21', 
                     fontSize: 14, 
                     outline: 'none',
                     resize: 'none',

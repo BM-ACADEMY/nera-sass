@@ -23,60 +23,24 @@ const LABELS = {
   'sales-tasks': 'Sales Tasks',
 };
 
+// Only the pages in the sidebar; other addresses are not routed.
 const SEARCH_PAGES = [
-  // Primary
   { path: '/dashboard', label: 'Dashboard', desc: 'Overview and quick stats' },
   { path: '/leads', label: 'Leads', desc: 'View, filter, and manage all leads' },
   { path: '/sales-tasks', label: 'Sales Task', desc: 'Manage your daily sales activities' },
   { path: '/inbox', label: 'WhatsApp Chat', desc: 'Chat directly with your leads' },
   { path: '/whatsapp', label: 'WhatsApp Number', desc: 'Your connected number, status and profile' },
-  { path: '/campaigns', label: 'Bulk Campaigns', desc: 'Send mass WhatsApp messages' },
-  { path: '/templates', label: 'Templates', desc: 'Manage WhatsApp message templates' },
+  { path: '/templates', label: 'Templates', desc: 'Your WhatsApp message templates' },
+  { path: '/campaigns', label: 'Campaigns', desc: 'Send bulk WhatsApp messages' },
   { path: '/brain', label: 'AI Brain', desc: 'Configure AI assistant behavior' },
-  { path: '/ai-image', label: 'AI Image', desc: 'Generate AI images' },
   { path: '/reports', label: 'Reports', desc: 'Detailed analytics and performance' },
-
-  // AllianceOS
-  { path: '/alliance-dashboard', label: 'AllianceOS Dashboard', desc: 'Alliance overview' },
-  { path: '/upload-leads', label: 'Upload Leads', desc: 'AllianceOS - Import new leads' },
-  { path: '/lead-list', label: 'Lead List', desc: 'AllianceOS - View leads' },
-  { path: '/pipeline', label: 'Pipeline', desc: 'AllianceOS - Sales pipeline' },
-  { path: '/lead-profile', label: 'Lead Profile', desc: 'AllianceOS - Lead details' },
-  { path: '/knowledge-base', label: 'Knowledge Base', desc: 'AllianceOS - Documentation' },
-  { path: '/prompt-manager', label: 'Prompt Manager', desc: 'AllianceOS - Manage prompts' },
-  { path: '/alliance-inbox', label: 'Alliance Inbox', desc: 'AllianceOS - Messages' },
-
-  // Content OS
-  { path: '/admin/content-os/approval', label: 'Approval Room', desc: 'Content OS - Review content' },
-  { path: '/admin/content-os/monitors', label: 'Folder Monitors', desc: 'Content OS - Track folders' },
-  { path: '/admin/content-os/scheduler', label: 'Scheduler', desc: 'Content OS - Schedule posts' },
-  { path: '/admin/content-os/captions', label: 'Caption Studio', desc: 'Content OS - Manage captions' },
-  { path: '/admin/content-os/thumbnail-brain', label: 'Thumbnail Brain', desc: 'Content OS - AI thumbnails' },
-  { path: '/admin/content-os/social-connection', label: 'Social Accounts', desc: 'Content OS - Social links' },
-  { path: '/admin/content-os/tokens', label: 'Token Health', desc: 'Content OS - API token status' },
-  { path: '/admin/content-os/logs', label: 'Publish Logs', desc: 'Content OS - Publishing history' },
-  { path: '/admin/content-os/reach', label: 'Reach Report', desc: 'Content OS - Analytics' },
-  { path: '/admin/content-os/failed', label: 'Failed Jobs', desc: 'Content OS - Error logs' },
-
-
-  // Mafiya OS
-  { path: '/mafiya/family', label: 'The Family', desc: 'Mafiya OS - Users' },
-  { path: '/mafiya/add-client', label: 'GMB Clients', desc: 'Mafiya OS - Client management' },
-  { path: '/mafiya/plans', label: 'Mafiya Plans', desc: 'Mafiya OS - Plans' },
-  { path: '/mafiya/loyalty', label: 'Loyalty (Review)', desc: 'Mafiya OS - Reviews' },
-  { path: '/mafiya/street-posts', label: 'Street Posts', desc: 'Mafiya OS - Social posting' },
-  { path: '/mafiya/rivals', label: 'Rival Families', desc: 'Mafiya OS - Competitors' },
-  { path: '/mafiya/gbp-insights', label: 'GBP Insights', desc: 'Mafiya OS - Business Profile' },
-  { path: '/mafiya/citations', label: 'Citation', desc: 'Mafiya OS - Citations' },
-  { path: '/mafiya/orders', label: 'Mafia Orders', desc: 'Mafiya OS - Orders' },
-  { path: '/mafiya/brain', label: "Don's Brain", desc: 'Mafiya OS - AI Assistant' },
-  { path: '/mafiya/usage', label: 'Usage', desc: 'Mafiya OS - Platform usage' },
+  { path: '/settings', label: 'Settings', desc: 'Workspace, brand profile and account' },
 ];
 
 export const Header = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const activePath = location.pathname.substring(1) || 'dashboard';
+  const activePath = location.pathname.split('/')[1] || 'dashboard';
   const activeLabel = LABELS[activePath] || 'Dashboard';
 
   const [searchOpen, setSearchOpen] = useState(false);
