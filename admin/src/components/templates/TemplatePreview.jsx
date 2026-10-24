@@ -59,7 +59,11 @@ const TemplatePreview = ({ template, title = 'Template preview', className, comp
       )}
       <div className="bg-[#e9e2d7] bg-[radial-gradient(rgba(120,100,70,0.10)_1px,transparent_1px),radial-gradient(rgba(120,100,70,0.06)_1px,transparent_1px)] bg-size-[18px_18px,18px_18px] bg-position-[0_0,9px_9px] px-3 py-4">
         <div className="relative w-[92%] max-w-[320px] rounded-lg rounded-tl-none bg-white shadow-[0_1px_0.5px_rgba(11,20,26,0.13)]">
-          <span className="absolute top-0 -left-2 size-0 border-t-[8px] border-r-[8px] border-t-white border-r-transparent" aria-hidden />
+          {/* WhatsApp's incoming-message tail, joined to the bubble's square top-left corner */}
+          <svg viewBox="0 0 8 13" width="8" height="13" className="absolute top-0 -left-[7.5px] block text-white" aria-hidden>
+            <path fill="rgba(11,20,26,0.06)" d="M1.533 3.568 8 12.193V1H2.812C1.042 1 .474 2.156 1.533 3.568z" transform="translate(0 0.6)" />
+            <path fill="currentColor" d="M1.533 2.568 8 11.193V0H2.812C1.042 0 .474 1.156 1.533 2.568z" />
+          </svg>
           <div className="px-2.5 pt-2.5 pb-1.5">
             {MediaIcon && (
               template.media_url && template.header_format === 'IMAGE'

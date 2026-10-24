@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { FiPlus, FiRefreshCw, FiSearch, FiEye, FiEdit2, FiTrash2, FiFileText, FiAlertTriangle, FiSmartphone } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import axiosClient from '../../api/axiosClient';
+import { useLiveEvent } from '../../api/realtime';
 import ConfirmDialog from '../ConfirmDialog';
 import TemplateEditor, { EMPTY_FORM, LANGUAGES } from './TemplateEditor';
 import TemplatePreview, { toEditorShape } from './TemplatePreview';
@@ -108,6 +109,27 @@ const TemplatesPage = ({ itemId, basePath, canManage }) => {
   };
 
   useEffect(() => { loadPlatform(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Meta's status webhook updates the list at once; while a template is still
+  // in review the page also asks Meta every 15 seconds.
+  useLiveEvent('templates:changed', () => { loadPlatform(); if (cache.clients) loadClients(); });
+  const pendingCount = (platform?.templates || []).filter((t) => ['PENDING', 'IN_APPEAL'].includes(t.status)).length;
+  useEffect(() => {
+    if (!pendingCount || !platform?.can_manage) return undefined;
+    let stopped = false;
+    const check = async () => {
+      if (document.hidden) return;
+      try {
+        const res = await axiosClient.post('/admin/templates/platform/check-pending');
+        if (stopped) return;
+        setPlatform({ ...cache.platform, templates: res.data.templates });
+        if (res.data.changed) toast.success(`${res.data.changed} template${res.data.changed > 1 ? 's' : ''} reviewed by Meta`);
+      } catch { /* keep the last list; the next check retries */ }
+    };
+    check();
+    const timer = setInterval(check, 15000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [pendingCount, platform?.can_manage]); // eslint-disable-line react-hooks/exhaustive-deps
   // Client templates load only when that tab is opened.
   useEffect(() => {
     if (tab !== 'clients') return;

@@ -4,6 +4,8 @@
  * arrive through `ctx`.
  */
 const { postToN8n } = require('../../services/n8n');
+const { MetaWhatsappTemplates } = require('../../models');
+const { notifyStaff } = require('../../services/realtime');
 module.exports = function registerWebhookWhatsappRoutes(app, ctx) {
 const {
   CampaignLogs,
@@ -139,8 +141,18 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
 
         // ── TEMPLATE STATUS UPDATES ──────────────────────────
         if (change.field === 'message_template_status_update') {
-          const { event, message_template_id, message_template_name } = change.value || {};
+          const { event, message_template_id, message_template_name, reason } = change.value || {};
           console.log(`📋 Template status update: ${message_template_name} → ${event}`);
+
+          // The Meta inventory cache (admin Template Management) follows every
+          // status change at once, whichever WABA the template belongs to.
+          if (message_template_id && event) {
+            const cacheUpdate = await runAsSystem(() => MetaWhatsappTemplates.updateOne(
+              { template_id: String(message_template_id) },
+              { $set: { status: String(event).toUpperCase(), 'raw_data.status': String(event).toUpperCase(), 'raw_data.rejected_reason': reason || null, last_synced_at: new Date() } },
+            ), 'webhook-wa-template-cache');
+            if (cacheUpdate.matchedCount) notifyStaff('templates:changed', { template_id: String(message_template_id), status: event });
+          }
 
           const template = await runAsSystem(() => Templates.findOne(
             { $or: [{ meta_template_id: String(message_template_id) }, { name: message_template_name }] },

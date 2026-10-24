@@ -130,6 +130,34 @@ module.exports = function registerAdminTemplateRoutes(router, { permit, fail, me
     }
   });
 
+  // Asks Meta for the current status of the admin WABA's templates still in
+  // review. The status webhook normally does this at once; the page calls
+  // this while something is pending, in case the webhook is not subscribed.
+  router.post('/templates/platform/check-pending', view, async (req, res) => {
+    try {
+      const { token, wabaId } = await platformContext();
+      const pending = await MetaWhatsappTemplates.find({ waba_id: wabaId, status: { $in: ['PENDING', 'IN_APPEAL'] } }, { _id: 0, template_id: 1, raw_data: 1 }).limit(20).lean();
+      let changed = 0;
+      for (const t of pending) {
+        let data;
+        try {
+          ({ data } = await axios.get(graph(String(t.template_id)), {
+            params: { fields: 'id,name,language,status,category,components,rejected_reason,quality_score,parameter_format' },
+            headers: { Authorization: `Bearer ${token}` }, timeout: 15000,
+          }));
+        } catch (error) {
+          throw new MetaCallError(error);
+        }
+        if (data?.status && data.status !== 'PENDING') changed += 1;
+        await cacheTemplate(wabaId, { ...t.raw_data, ...data, id: t.template_id });
+      }
+      const templates = await MetaWhatsappTemplates.find({ waba_id: wabaId }, PUBLIC_FIELDS).sort({ name: 1, language: 1 }).lean();
+      return res.json({ checked: pending.length, changed, templates: templates.map(present) });
+    } catch (error) {
+      return replyError(res, error);
+    }
+  });
+
   router.post('/templates/platform', manage, async (req, res) => {
     try {
       const payload = buildTemplate(req.body);

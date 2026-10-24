@@ -190,6 +190,12 @@ test('Admin WhatsApp and templates', async (t) => {
     const list = await request(app).get('/api/admin/templates/platform?refresh=1').set(bearer(ops));
     assert.strictEqual(list.status, 200, JSON.stringify(list.body));
     assert.deepStrictEqual(list.body.templates.map((x) => x.name), ['welcome'], 'stale row removed, new row added');
+    await sys(() => MetaWhatsappTemplates.updateOne({ template_id: 'N1' }, { $set: { status: 'PENDING' } }));
+    routes['GET N1'] = { id: 'N1', name: 'welcome', language: 'en', status: 'APPROVED', category: 'MARKETING', components: [{ type: 'BODY', text: 'Hi' }] };
+    const checked = await request(app).post('/api/admin/templates/platform/check-pending').set(bearer(ops));
+    assert.strictEqual(checked.status, 200, JSON.stringify(checked.body));
+    assert.strictEqual(checked.body.changed, 1);
+    assert.strictEqual(checked.body.templates[0].status, 'APPROVED', 'pending template picked up its new status from Meta');
     const clients = await request(app).get('/api/admin/templates/clients').set(bearer(ops));
     assert.strictEqual(clients.status, 200);
     assert.deepStrictEqual(clients.body.templates.map((x) => x.name), ['order_update'], 'admin WABA not mixed in');
