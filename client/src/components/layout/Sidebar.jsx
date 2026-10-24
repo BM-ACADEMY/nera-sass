@@ -1,39 +1,56 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { io as socketIO } from 'socket.io-client';
-import { Layout, Menu, Badge } from 'antd';
-import { 
-  Home, Users, Inbox, Zap, FileText, Brain, BarChart2, Building2, 
-  Settings, LogOut, Activity, Share2, User, Layers, MonitorPlay, Shield,
-  UploadCloud, List, Globe, Megaphone, MessageCircle, BookOpen, Sparkles, Columns,
-  CheckSquare, FileSearch, Target, FileOutput, ShieldAlert, Heart, ClipboardList, UserPlus
+import {
+  LayoutDashboard, Users, ClipboardCheck, Inbox, Megaphone, FileText, Brain, BarChart2,
+  Share2, Settings, LogOut, MoreVertical, MessageCircle,
 } from 'lucide-react';
-import { C } from '../../constants/theme.js';
 import { api } from '../../services/api.js';
 import { roleLabel } from '../../views/settings/settingsPolicy.js';
 import { useAuth } from '../../hooks/useAuth.js';
 
-const { Sider } = Layout;
-
-const NAV = [
-  { path: '/dashboard', Icon: Home, label: 'Dashboard' },
-  { path: '/leads', Icon: Users, label: 'Leads' },
-  { path: '/sales-tasks', Icon: User, label: 'Sales Task', taskBadge: true },
-  { path: '/inbox', Icon: Inbox, label: 'Inbox', showBadge: true },
-  { path: '/campaigns', Icon: Zap, label: 'Campaigns' },
-  { path: '/templates', Icon: FileText, label: 'Templates' },
-  { path: '/brain', Icon: Brain, label: 'AI Brain' },
-  { path: '/reports', Icon: BarChart2, label: 'Reports' },
-  { path: '/integrations', Icon: Share2, label: 'Integrations' },
-  { path: '/settings', Icon: Settings, label: 'Settings' },
+// Same structure and look as the admin panel sidebar: brand header, labelled
+// sections, a solid blue active item, icon-only collapsed mode and the
+// signed-in user with a sign-out menu at the bottom.
+const SECTIONS = [
+  {
+    label: 'Workspace',
+    items: [
+      { path: '/dashboard', Icon: LayoutDashboard, label: 'Dashboard' },
+      { path: '/leads', Icon: Users, label: 'Leads' },
+      { path: '/sales-tasks', Icon: ClipboardCheck, label: 'Sales Task', badge: 'tasks' },
+      { path: '/inbox', Icon: Inbox, label: 'Inbox', badge: 'inbox' },
+    ],
+  },
+  {
+    label: 'Grow',
+    items: [
+      { path: '/campaigns', Icon: Megaphone, label: 'Campaigns' },
+      { path: '/templates', Icon: FileText, label: 'Templates' },
+      { path: '/brain', Icon: Brain, label: 'AI Brain' },
+      { path: '/reports', Icon: BarChart2, label: 'Reports' },
+    ],
+  },
+  {
+    label: 'Setup',
+    items: [
+      { path: '/integrations', Icon: Share2, label: 'Integrations' },
+      { path: '/settings', Icon: Settings, label: 'Settings' },
+    ],
+  },
 ];
 
-export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }) => {
+const isMobile = () => window.innerWidth <= 768;
+
+export const Sidebar = ({ onLogout, unreadCount = 0, collapsed = false, mobileOpen, setMobileOpen }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
-  const [collapsed, setCollapsed] = useState(window.innerWidth <= 768);
   const [taskUnreadCount, setTaskUnreadCount] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const footerRef = useRef(null);
+  // On a phone the sidebar is a full-width drawer, never icon-only.
+  const iconOnly = collapsed && !isMobile();
 
   useEffect(() => {
     const loadUnread = () => api.get('/sales-tasks/unread-count')
@@ -58,203 +75,145 @@ export const Sidebar = ({ onLogout, unreadCount = 0, mobileOpen, setMobileOpen }
     return () => socket.disconnect();
   }, [navigate]);
 
+  // Close the user menu on an outside click.
   useEffect(() => {
-    const handleResize = () => {
-      if (window.innerWidth <= 768) {
-        setCollapsed(true);
-      }
-    };
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+    if (!menuOpen) return undefined;
+    const close = (e) => { if (footerRef.current && !footerRef.current.contains(e.target)) setMenuOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [menuOpen]);
 
-  const handleMenuClick = ({ key }) => {
-    if (key === 'logout') {
-      onLogout();
-      return;
-    }
-    if (key === '/sales-tasks' && 'Notification' in window && Notification.permission === 'default') {
+  const go = (path) => {
+    if (path === '/sales-tasks' && 'Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
     }
-    navigate(key);
-    if (window.innerWidth <= 768) {
-      setMobileOpen(false);
-    }
+    navigate(path);
+    if (isMobile()) setMobileOpen(false);
   };
 
-  const menuItems = [
-    ...NAV.map(item => {
-      const badgeCount = item.taskBadge ? taskUnreadCount : (item.showBadge ? unreadCount : 0);
-      return {
-        key: item.path,
-        icon: <item.Icon size={16} />,
-        label: badgeCount > 0 ? (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>{item.label}</span>
-            <Badge count={badgeCount} style={{ backgroundColor: '#1677ff' }} />
-          </div>
-        ) : item.label,
-      };
-    }),
-    { type: 'divider' },
-    
-    // AllianceOS (Commented out per request, using false && to hide)
-    ...(false ? [{
-      key: 'alliance',
-      icon: <Layers size={16} />,
-      label: 'AllianceOS',
-      children: [
-        { key: '/alliance/analytics', icon: <BarChart2 size={14} />, label: 'Analytics' },
-        { key: '/alliance/upload', icon: <UploadCloud size={14} />, label: 'Upload Leads' },
-        { key: '/alliance/prospects', icon: <List size={14} />, label: 'Prospects' },
-        { key: '/alliance/number-health', icon: <Activity size={14} />, label: 'Number Health' },
-        { key: '/alliance/email-setup', icon: <Globe size={14} />, label: 'Email Senders' },
-        { key: '/alliance/email-campaigns/new', icon: <Megaphone size={14} />, label: 'Email Campaigns' },
-        { key: '/alliance/whatsapp-campaigns/new', icon: <MessageCircle size={14} />, label: 'WhatsApp Campaigns' },
-        { key: '/alliance/replies', icon: <Inbox size={14} />, label: 'Replies' },
-        { key: '/alliance/ai-brain', icon: <BookOpen size={14} />, label: 'AI Brain' },
-        { key: '/alliance/prompts', icon: <Sparkles size={14} />, label: 'Prompts' },
-        { key: '/alliance/planner', icon: <Columns size={14} />, label: 'Campaign Planner' },
-        { key: '/alliance-inbox', icon: <Inbox size={14} />, label: 'WhatsApp Inbox' },
-      ]
-    }] : []),
-
-    // Content OS (Commented out)
-    ...(false ? [{
-      key: 'content-os',
-      icon: <MonitorPlay size={16} />,
-      label: 'Content OS',
-      children: [
-        { key: '/admin/content-os/approval', icon: <CheckSquare size={14} />, label: 'Approval Room' },
-        { key: '/admin/content-os/monitors', icon: <FileSearch size={14} />, label: 'Folder Monitors' },
-        { key: '/admin/content-os/scheduler', icon: <Target size={14} />, label: 'Scheduler' },
-        { key: '/admin/content-os/captions', icon: <Sparkles size={14} />, label: 'Caption Studio' },
-        { key: '/admin/content-os/thumbnail-brain', icon: <Brain size={14} />, label: 'Thumbnail Brain' },
-        { key: '/admin/content-os/social-connection', icon: <Share2 size={14} />, label: 'Social Accounts' },
-        { key: '/admin/content-os/tokens', icon: <Shield size={14} />, label: 'Token Health' },
-        { key: '/admin/content-os/logs', icon: <FileText size={14} />, label: 'Publish Logs' },
-        { key: '/admin/content-os/reach', icon: <BarChart2 size={14} />, label: 'Reach Report' },
-        { key: '/admin/content-os/failed', icon: <ShieldAlert size={14} />, label: 'Failed Jobs' },
-      ]
-    }] : []),
-
-    // Mafiya OS (Commented out)
-    ...(false ? [{
-      key: 'mafiya-os',
-      icon: <Shield size={16} />,
-      label: 'Mafiya OS',
-      children: [
-        { key: '/mafiya/family', icon: <Users size={14} />, label: 'The Family' },
-        { key: '/mafiya/add-client', icon: <UserPlus size={14} />, label: 'GMB Clients' },
-        { key: '/mafiya/plans', icon: <Layers size={14} />, label: 'Mafiya Plans' },
-        { key: '/mafiya/loyalty', icon: <Heart size={14} />, label: 'Loyalty (Review)' },
-        { key: '/mafiya/street-posts', icon: <Megaphone size={14} />, label: 'Street Posts' },
-        { key: '/mafiya/rivals', icon: <Target size={14} />, label: 'Rival Families' },
-        { key: '/mafiya/gbp-insights', icon: <BarChart2 size={14} />, label: 'GBP Insights' },
-        { key: '/mafiya/citations', icon: <Globe size={14} />, label: 'Citation' },
-        { key: '/mafiya/orders', icon: <ClipboardList size={14} />, label: 'Mafia Orders' },
-        { key: '/mafiya/brain', icon: <Brain size={14} />, label: "Don's Brain" },
-        { key: '/mafiya/usage', icon: <Activity size={14} />, label: 'Usage' },
-      ]
-    }] : [])
-  ];
+  const badgeFor = (item) => (item.badge === 'tasks' ? taskUnreadCount : item.badge === 'inbox' ? unreadCount : 0);
+  const isActive = (path) => location.pathname === path || location.pathname.startsWith(`${path}/`);
+  const initial = user?.name ? user.name.trim()[0].toUpperCase() : 'U';
+  const workspaceName = user?.tenant_name || 'Your workspace';
 
   return (
     <>
       {mobileOpen && (
-        <div
-          className="mobile-overlay show-mobile"
-          onClick={() => setMobileOpen(false)}
-          style={{ display: 'none' }} // Ensure overlay handles correctly with app CSS
-        />
+        <div className="mobile-overlay show-mobile" onClick={() => setMobileOpen(false)} style={{ display: 'none' }} />
       )}
-      <Sider
-        collapsible
-        collapsed={collapsed}
-        onCollapse={(value) => setCollapsed(value)}
-        width={250}
-        theme="light"
-        trigger={null}
-        className={`mobile-sidebar ${!mobileOpen ? 'closed' : ''}`}
-        style={{
-          height: '100vh',
-          position: 'relative',
-          left: 0,
-          top: 0,
-          bottom: 0,
-          borderRight: `1px solid ${C.border}`,
-          zIndex: 10
-        }}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-          {/* Custom Header with Logo and Toggle */}
-          <div style={{ height: 72, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', padding: collapsed ? '0' : '0 20px', transition: 'all 0.2s' }}>
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              <div style={{ width: 36, height: 36, flexShrink: 0, background: '#4299e1', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <BarChart2 size={20} color="#fff" />
-              </div>
+      <aside className={`gsb mobile-sidebar ${!mobileOpen ? 'closed' : ''} ${iconOnly ? 'gsb--icons' : ''}`}>
+        {/* Brand */}
+        <div className="gsb-brand" title={iconOnly ? `Getnera · ${workspaceName}` : undefined}>
+          <span className="gsb-logo"><MessageCircle size={18} strokeWidth={2.4} /></span>
+          {!iconOnly && (
+            <span className="gsb-brand-text">
+              <span className="gsb-brand-name">Getnera</span>
+              <span className="gsb-brand-sub">{workspaceName}</span>
+            </span>
+          )}
+        </div>
+
+        {/* Sections */}
+        <nav className="gsb-nav">
+          {SECTIONS.map(section => (
+            <div key={section.label} className="gsb-group">
+              {!iconOnly && <div className="gsb-group-label">{section.label}</div>}
+              {section.items.map(item => {
+                const count = badgeFor(item);
+                const active = isActive(item.path);
+                return (
+                  <button
+                    key={item.path}
+                    type="button"
+                    className={`gsb-item ${active ? 'is-active' : ''}`}
+                    onClick={() => go(item.path)}
+                    title={iconOnly ? (count ? `${item.label} (${count})` : item.label) : undefined}
+                    aria-current={active ? 'page' : undefined}
+                  >
+                    <item.Icon size={17} className="gsb-icon" />
+                    {!iconOnly && <span className="gsb-label">{item.label}</span>}
+                    {count > 0 && (iconOnly
+                      ? <span className="gsb-dot" />
+                      : <span className="gsb-badge">{count > 99 ? '99+' : count}</span>)}
+                  </button>
+                );
+              })}
             </div>
-            {!collapsed && (
-              <div onClick={() => setCollapsed(true)} style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 4, opacity: 0.5 }}>
-                <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
-                <div style={{ width: 12, height: 2, background: C.text, borderRadius: 2, alignSelf: 'flex-end' }} />
+          ))}
+        </nav>
+
+        {/* Signed-in user */}
+        <div className="gsb-footer" ref={footerRef}>
+          {menuOpen && (
+            <div className={`gsb-menu ${iconOnly ? 'gsb-menu--side' : ''}`} role="menu">
+              <div className="gsb-menu-head">
+                <div className="gsb-menu-name">{user?.name || 'User'}</div>
+                <div className="gsb-menu-email">{user?.email || ''}</div>
               </div>
-            )}
-          </div>
-          {collapsed && (
-            <div onClick={() => setCollapsed(false)} style={{ height: 20, cursor: 'pointer', display: 'flex', justifyContent: 'center', opacity: 0.5, marginBottom: 10 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
-                <div style={{ width: 16, height: 2, background: C.text, borderRadius: 2 }} />
-              </div>
+              <button type="button" className="gsb-menu-item danger" onClick={() => { setMenuOpen(false); onLogout(); }} role="menuitem">
+                <LogOut size={15} /> Log out
+              </button>
             </div>
           )}
-
-          {/* Menu Area */}
-          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
-            <Menu
-              theme="light"
-              mode="inline"
-              selectedKeys={[location.pathname]}
-              onClick={handleMenuClick}
-              items={menuItems}
-              style={{ borderRight: 0, padding: '0 12px' }}
-            />
-          </div>
-
-          {/* Custom Footer (User Profile) */}
-          <div style={{ padding: collapsed ? '20px 0' : '20px', borderTop: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between', background: '#f8fafc', margin: collapsed ? '0' : '0 12px 12px 12px', borderRadius: collapsed ? 0 : 12, cursor: 'pointer' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ position: 'relative' }}>
-                <div style={{ width: 36, height: 36, borderRadius: '50%', background: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 600, fontSize: 14 }}>
-                  {user?.name ? user.name[0].toUpperCase() : 'U'}
-                </div>
-                <div style={{ position: 'absolute', bottom: 0, right: -2, width: 10, height: 10, borderRadius: '50%', background: '#48bb78', border: '2px solid #fff' }} />
-              </div>
-              {!collapsed && (
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{user?.name || 'User'}</span>
-                  <span style={{ fontSize: 11, color: C.muted }}>{roleLabel(user?.role)}</span>
-                </div>
-              )}
-            </div>
-            {!collapsed && (
-              <div onClick={(e) => { e.stopPropagation(); onLogout(); }} title="Sign Out" style={{ padding: 4, opacity: 0.5 }}>
-                <LogOut size={16} />
-              </div>
+          <button type="button" className="gsb-user" onClick={() => setMenuOpen(v => !v)} title={iconOnly ? (user?.name || 'Account') : undefined} aria-haspopup="menu" aria-expanded={menuOpen}>
+            <span className="gsb-avatar">{initial}<span className="gsb-online" /></span>
+            {!iconOnly && (
+              <>
+                <span className="gsb-user-text">
+                  <span className="gsb-user-name">{user?.name || 'User'}</span>
+                  <span className="gsb-user-sub">{user?.email || roleLabel(user?.role)}</span>
+                </span>
+                <MoreVertical size={16} className="gsb-more" />
+              </>
             )}
-          </div>
+          </button>
         </div>
-      </Sider>
+      </aside>
+
       <style>{`
-        .ant-menu-light .ant-menu-item-selected {
-          background-color: #ebf4ff !important;
-          color: #3182ce !important;
-          font-weight: 600;
-        }
-        .ant-menu-light .ant-menu-item-selected .lucide {
-          color: #3182ce !important;
-        }
+        .gsb { width: 256px; height: 100vh; flex-shrink: 0; display: flex; flex-direction: column; background: #fff; border-right: 1px solid #e2e8f0; font-family: 'Inter', sans-serif; transition: width .2s ease; position: relative; z-index: 10; }
+        .gsb--icons { width: 60px; }
+        .gsb-brand { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 14px; flex-shrink: 0; }
+        .gsb--icons .gsb-brand { justify-content: center; padding: 0; }
+        .gsb-logo { width: 34px; height: 34px; border-radius: 9px; background: #2563eb; color: #fff; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 2px 6px rgba(37,99,235,.25); }
+        .gsb-brand-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+        .gsb-brand-name { font-size: 15px; font-weight: 800; color: #0f172a; }
+        .gsb-brand-sub { font-size: 11.5px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gsb-nav { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 4px 8px 8px; }
+        .gsb-group { padding: 6px 0; }
+        .gsb--icons .gsb-group + .gsb-group { border-top: 1px solid #f1f5f9; }
+        .gsb-group-label { font-size: 12px; font-weight: 500; color: #64748b; padding: 8px 10px 6px; }
+        .gsb-item { position: relative; width: 100%; display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 10px; margin: 1px 0; border: 0; border-radius: 8px; background: transparent; color: #1e293b; font-size: 14px; text-align: left; cursor: pointer; transition: background .15s, color .15s; }
+        .gsb--icons .gsb-item { justify-content: center; padding: 0; }
+        .gsb-item:hover { background: #f1f5f9; }
+        .gsb-item:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+        .gsb-item.is-active { background: #2563eb; color: #fff; font-weight: 600; }
+        .gsb-item.is-active:hover { background: #1d4ed8; }
+        .gsb-icon { flex-shrink: 0; }
+        .gsb-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gsb-badge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: #2563eb; color: #fff; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+        .gsb-item.is-active .gsb-badge { background: #fff; color: #2563eb; }
+        .gsb-dot { position: absolute; top: 7px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: #ef4444; border: 2px solid #fff; }
+        .gsb-footer { position: relative; padding: 8px; border-top: 1px solid #f1f5f9; flex-shrink: 0; }
+        .gsb-user { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px; border: 0; border-radius: 10px; background: transparent; cursor: pointer; text-align: left; }
+        .gsb-user:hover, .gsb-user[aria-expanded="true"] { background: #f1f5f9; }
+        .gsb--icons .gsb-user { justify-content: center; padding: 8px 0; }
+        .gsb-avatar { position: relative; width: 34px; height: 34px; border-radius: 50%; background: #dbeafe; color: #1d4ed8; font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .gsb-online { position: absolute; bottom: 0; right: -1px; width: 10px; height: 10px; border-radius: 50%; background: #22c55e; border: 2px solid #fff; }
+        .gsb-user-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+        .gsb-user-name { font-size: 13px; font-weight: 600; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gsb-user-sub { font-size: 11.5px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gsb-more { color: #64748b; flex-shrink: 0; }
+        .gsb-menu { position: absolute; left: 8px; right: 8px; bottom: calc(100% - 2px); background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 10px 30px rgba(15,23,42,.12); padding: 4px; z-index: 30; }
+        .gsb-menu--side { left: calc(100% + 6px); right: auto; bottom: 8px; width: 220px; }
+        .gsb-menu-head { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; margin-bottom: 4px; }
+        .gsb-menu-name { font-size: 13px; font-weight: 600; color: #0f172a; }
+        .gsb-menu-email { font-size: 12px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .gsb-menu-item { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; font-size: 13px; cursor: pointer; color: #1e293b; }
+        .gsb-menu-item:hover { background: #f1f5f9; }
+        .gsb-menu-item.danger { color: #dc2626; }
+        .gsb-menu-item.danger:hover { background: #fef2f2; }
+        @media (max-width: 768px) { .gsb { width: 272px; } }
       `}</style>
     </>
   );

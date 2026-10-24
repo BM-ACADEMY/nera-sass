@@ -1,20 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Search, Bell, X, FileText, Menu } from 'lucide-react';
+import { Search, X, FileText, PanelLeft } from 'lucide-react';
 import { C } from '../../constants/theme.js';
-import { roleLabel } from '../../views/settings/settingsPolicy.js';
 
 // Optional product label next to the page title (build setting); nothing is
 // shown when it is not set.
 const PRODUCT_LABEL = (import.meta.env.VITE_PRODUCT_LABEL || '').trim();
-
-// Header-scoped palette — matches the sidebar's indigo/purple accent so the
-// two chrome pieces read as one system. Kept local like the sidebar's SB.
-const HB = {
-  accent: '#1677ff',
-  card: '#ffffff',
-  border: '#e2e8f0',
-};
 
 const LABELS = {
   dashboard: 'Dashboard',
@@ -79,7 +70,7 @@ const SEARCH_PAGES = [
   { path: '/mafiya/usage', label: 'Usage', desc: 'Mafiya OS - Platform usage' },
 ];
 
-export const Header = ({user, onMenuClick}) => {
+export const Header = ({ onMenuClick }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const activePath = location.pathname.substring(1) || 'dashboard';
@@ -96,9 +87,6 @@ export const Header = ({user, onMenuClick}) => {
     window.location.reload();
   };
 
-  const initial = user?.name ? user.name[0].toUpperCase() : '';
-  const roleText = roleLabel(user?.role);
-  const nameLabel = user?.name || '';
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -128,28 +116,17 @@ export const Header = ({user, onMenuClick}) => {
 
   return (
     <>
-      <div style={{height:60,background:C.surface,borderBottom:'1px solid '+C.border,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 24px',flexShrink:0,gap:16}}>
-        <div style={{display: 'flex', alignItems: 'center', gap: 12, minWidth:0}}>
-          <button className="show-mobile" onClick={onMenuClick} style={{background:'transparent',border:'none',color:C.muted, display: 'none'}}>
-            <Menu size={20} />
-          </button>
-          <div style={{display:'flex',alignItems:'baseline',gap:8,minWidth:0}}>
-            <span style={{fontFamily:"'Syne',sans-serif",fontSize:16,fontWeight:700,color:C.text,whiteSpace:'nowrap'}}>{activeLabel}</span>
-            {PRODUCT_LABEL && <span className="hide-mobile" style={{color:C.dim,fontSize:12,whiteSpace:'nowrap'}}>{PRODUCT_LABEL}</span>}
-          </div>
-        </div>
-        <div style={{display:'flex',alignItems:'center',gap:20,flexShrink:0}}>
-
-
-          <div style={{display:'flex',alignItems:'center',gap:9,background:HB.card,border:'1px solid '+HB.border,borderRadius:8,padding:'6px 12px 6px 6px'}}>
-            <div style={{width:28,height:28,borderRadius:'50%',background:HB.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:800,color:'#fff',flexShrink:0}}>{initial}</div>
-            <div className="hide-mobile" style={{lineHeight:1.3}}>
-              <p style={{fontSize:11.5,fontWeight:600,color:C.text,whiteSpace:'nowrap'}}>{nameLabel}</p>
-              <p style={{fontSize:9.5,color:C.muted,whiteSpace:'nowrap'}}>{roleText}</p>
-            </div>
-          </div>
+      <div style={{height:64,background:C.surface,borderBottom:'1px solid #e2e8f0',display:'flex',alignItems:'center',padding:'0 20px',flexShrink:0,gap:12}}>
+        <button type="button" onClick={onMenuClick} title="Toggle sidebar" aria-label="Toggle sidebar" className="ghd-toggle">
+          <PanelLeft size={18} />
+        </button>
+        <span style={{width:1,height:18,background:'#e2e8f0'}} />
+        <div style={{display:'flex',alignItems:'baseline',gap:8,minWidth:0}}>
+          <span style={{fontSize:20,fontWeight:600,color:'#0f172a',whiteSpace:'nowrap',letterSpacing:'-0.01em'}}>{activeLabel}</span>
+          {PRODUCT_LABEL && <span className="hide-mobile" style={{color:C.dim,fontSize:12,whiteSpace:'nowrap'}}>{PRODUCT_LABEL}</span>}
         </div>
       </div>
+      <style>{`.ghd-toggle{width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:0;border-radius:8px;background:transparent;color:#334155;cursor:pointer}.ghd-toggle:hover{background:#f1f5f9}`}</style>
 
       {searchOpen && (
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(4px)',zIndex:1000,display:'flex',alignItems:'flex-start',justifyContent:'center',paddingTop:'12vh'}} onClick={() => setSearchOpen(false)}>

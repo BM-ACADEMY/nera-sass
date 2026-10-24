@@ -64,6 +64,17 @@ import { Toaster } from 'react-hot-toast';
 
 function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // Desktop: the sidebar folds to icons (remembered). Phone: it is a drawer.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('getnera_sidebar_collapsed') === '1'; } catch { return false; }
+  });
+  const toggleSidebar = () => {
+    if (window.innerWidth <= 768) { setMobileMenuOpen(open => !open); return; }
+    setSidebarCollapsed(prev => {
+      try { localStorage.setItem('getnera_sidebar_collapsed', prev ? '0' : '1'); } catch { /* storage unavailable */ }
+      return !prev;
+    });
+  };
   const navigate = useNavigate();
 
   // Keep the displayed name and role in step with the server (display only;
@@ -80,9 +91,9 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
       <style>{STYLE}</style>
       <Toaster position="top-right" containerStyle={{ zIndex: 999999 }} toastOptions={{ style: { background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155' } }} />
       <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-        <Sidebar onLogout={logout} mobileOpen={mobileMenuOpen} setMobileOpen={setMobileMenuOpen} />
+        <Sidebar onLogout={logout} collapsed={sidebarCollapsed} mobileOpen={mobileMenuOpen} setMobileOpen={setMobileMenuOpen} />
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', width: '100%' }}>
-          <Header user={user} onMenuClick={() => setMobileMenuOpen(true)} />
+          <Header onMenuClick={toggleSidebar} />
           <div style={{ flex: 1, overflowY: 'auto' }}>
             <Routes>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
