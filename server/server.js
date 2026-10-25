@@ -1969,6 +1969,7 @@ const leadosRouteContext = {
   'whatsapp',
   'whatsapp-overview',
   'wa-templates',
+  'calendar',
   'webhook-whatsapp',
   'webhook-meta-leads',
   'webhook-razorpay',

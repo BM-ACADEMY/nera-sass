@@ -27,8 +27,11 @@ const getTransport = () => {
   };
 };
 
-const sendBookingNotification = async ({ eventId, brand, name, email, phone, start, eventUrl, meetLink, rescheduled = false }) => {
-  const recipient = supportEmail();
+// recipient: the workspace's connected Google account; the platform support
+// address is only the fallback.
+const sendBookingNotification = async ({ eventId, brand, name, email, phone, start, eventUrl, meetLink, rescheduled = false, recipient: to, timeZone = 'Asia/Kolkata' }) => {
+  const recipient = to || supportEmail();
+  if (!recipient) return { sent: false, reason: 'no_recipient' };
   const existing = await BookingNotificationLog.findOne(
     { calendar_event_id: eventId, meeting_start: new Date(start), recipient },
     { id: 1, message_id: 1 }
@@ -37,7 +40,7 @@ const sendBookingNotification = async ({ eventId, brand, name, email, phone, sta
 
   const { transporter, from } = getTransport();
   const meetingTime = new Date(start).toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata', dateStyle: 'full', timeStyle: 'short',
+    timeZone, dateStyle: 'full', timeStyle: 'short',
   });
   const action = rescheduled ? 'rescheduled' : 'booked';
   const subject = `[LeadOS] Meeting ${action}: ${name || phone || 'New lead'} — ${meetingTime}`;
@@ -45,11 +48,11 @@ const sendBookingNotification = async ({ eventId, brand, name, email, phone, sta
     <h2>Meeting ${escapeHtml(action)}</h2>
     <p>A customer meeting has been ${escapeHtml(action)} through LeadOS.</p>
     <table cellpadding="6" cellspacing="0" border="0">
-      <tr><td><strong>Brand</strong></td><td>${escapeHtml(brand || 'ABM Groups')}</td></tr>
+      <tr><td><strong>Brand</strong></td><td>${escapeHtml(brand || 'Your business')}</td></tr>
       <tr><td><strong>Customer</strong></td><td>${escapeHtml(name || 'Not provided')}</td></tr>
       <tr><td><strong>Mobile</strong></td><td>${escapeHtml(phone || 'Not provided')}</td></tr>
       <tr><td><strong>Email</strong></td><td>${escapeHtml(email || 'Not provided')}</td></tr>
-      <tr><td><strong>Date & time</strong></td><td>${escapeHtml(meetingTime)} (Asia/Kolkata)</td></tr>
+      <tr><td><strong>Date & time</strong></td><td>${escapeHtml(meetingTime)} (${escapeHtml(timeZone)})</td></tr>
     </table>
     ${meetLink ? `<p><a href="${escapeHtml(meetLink)}">Join Google Meet</a></p>` : ''}
     ${eventUrl ? `<p><a href="${escapeHtml(eventUrl)}">Open Google Calendar event</a></p>` : ''}

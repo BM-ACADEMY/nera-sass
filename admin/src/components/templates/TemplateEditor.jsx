@@ -75,20 +75,22 @@ export function detectCategory(form) {
 const varsIn = (text) => [...new Set([...String(text || '').matchAll(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi)].map((m) => m[1]))];
 const Counter = ({ value, max }) => <span className={cn('text-[11px] tabular-nums', String(value || '').length > max ? 'text-red-600' : 'text-muted-foreground')}>{String(value || '').length}/{max}</span>;
 
+// Three steps on one line: connectors stretch between them; on small screens
+// only the current step shows its label.
 const Steps = ({ step }) => (
-  <ol className="flex flex-wrap items-center gap-2 text-[13px]">
+  <ol className="flex w-full items-center gap-2 text-[13px]" aria-label="Progress">
     {['Set up template', 'Edit template', 'Submit for review'].map((label, i) => {
       const n = i + 1;
       const done = n < step;
       const current = n === step;
       return (
-        <li key={label} className="flex items-center gap-2">
-          {i > 0 && <span className="h-px w-5 bg-slate-300" />}
-          <span className={cn('flex items-center gap-1.5 rounded-full px-2.5 py-1 font-semibold', current ? 'bg-blue-50 text-blue-700' : done ? 'text-slate-700' : 'text-slate-400')}>
-            <span className={cn('flex size-4.5 items-center justify-center rounded-full border text-[10px]', done ? 'border-green-600 bg-green-600 text-white' : current ? 'border-blue-600 text-blue-700' : 'border-slate-300')}>
-              {done ? <FiCheck className="size-3" /> : n}
+        <li key={label} className={cn('flex items-center gap-2', i > 0 && 'flex-1')} aria-current={current ? 'step' : undefined}>
+          {i > 0 && <span className={cn('h-px min-w-4 flex-1', done || current ? 'bg-blue-300' : 'bg-slate-200')} />}
+          <span className={cn('flex shrink-0 items-center gap-2 rounded-full py-1 pr-3 pl-1 font-semibold whitespace-nowrap', current ? 'bg-blue-50 text-blue-700' : done ? 'text-slate-700' : 'text-slate-400')}>
+            <span className={cn('flex size-6 items-center justify-center rounded-full border text-[11px]', done ? 'border-green-600 bg-green-600 text-white' : current ? 'border-blue-600 bg-white text-blue-700' : 'border-slate-300 bg-white')}>
+              {done ? <FiCheck className="size-3.5" /> : n}
             </span>
-            {label}
+            <span className={cn(!current && 'hidden sm:inline')}>{label}</span>
           </span>
         </li>
       );
@@ -220,9 +222,9 @@ const TemplateEditor = ({ initial, templateId, onCancel, onSaved }) => {
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground" onClick={onCancel}><FiArrowLeft /> Templates</Button>
-        <Steps step={step} />
+      <div className="flex flex-col gap-3">
+        <Button variant="ghost" size="sm" className="-ml-2 w-fit text-muted-foreground" onClick={onCancel}><FiArrowLeft /> Templates</Button>
+        <Card className="px-4 py-3"><Steps step={step} /></Card>
       </div>
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">

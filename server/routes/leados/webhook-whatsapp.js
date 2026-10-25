@@ -4,6 +4,7 @@
  * arrive through `ctx`.
  */
 const { postToN8n } = require('../../services/n8n');
+const aiLatency = require('../../services/aiLatency');
 const { MetaWhatsappTemplates } = require('../../models');
 const { notifyStaff } = require('../../services/realtime');
 module.exports = function registerWebhookWhatsappRoutes(app, ctx) {
@@ -414,10 +415,12 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
                 }
 
                 io.emit('ai_typing', { lead_id: String(lead.id), typing: true, status: 'waiting' });
+                aiLatency.received(lead.id);
 
                 const timer = setTimeout(() => {
                   aiReplyQueue.delete(lead.id);
                   io.emit('ai_typing', { lead_id: String(lead.id), typing: true, status: 'composing' });
+                  aiLatency.triggered(lead.id);
 
                   // No WhatsApp credential leaves the server: n8n returns its
                   // reply to /api/internal/send-reply, which sends it.

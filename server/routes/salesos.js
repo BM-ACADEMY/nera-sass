@@ -1212,10 +1212,16 @@ router.post('/ai/response', internalAuth, async (req, res) => {
     }
 
     const responseLanguageTarget = getResponseLanguageTarget(effectiveMessage);
+    // This workspace's own Google Calendar and booking rules (Calendar page).
+    const booking = await googleCalendar.getBookingContext();
+    const bookingTimeZone = booking.settings.time_zone;
     const prompt = `AI BRAIN SYSTEM INSTRUCTIONS (editable in LeadOS):\n${system_instructions || DEFAULT_BOT_BEHAVIOR}\n\n
       NON-NEGOTIABLE ORCHESTRATION RULES:
       - REQUIRED RESPONSE LANGUAGE FOR THIS TURN: ${responseLanguageTarget}
-      - Current date/time: ${new Date().toLocaleString('en-US', { timeZone: googleCalendar.TIME_ZONE })} (Local time in ${googleCalendar.TIME_ZONE}). Scheduling timezone: ${googleCalendar.TIME_ZONE}.
+      - Current date/time: ${new Date().toLocaleString('en-US', { timeZone: bookingTimeZone })} (Local time in ${bookingTimeZone}). Scheduling timezone: ${bookingTimeZone}.
+      - ${booking.enabled
+        ? `Google Meet bookings are available ${booking.working_hours}, ${booking.settings.meeting_minutes} minutes each. Only suggest or accept times inside these hours.`
+        : 'Online meeting booking is not available right now. If the lead wants a meeting, take their preferred date and time and say the team will confirm it; never say a meeting is booked.'}
       - Reply in the same language the lead's current message is written in, regardless of what language earlier turns used. Judge this by the actual words used, not the script: Tamil/Hindi words typed in English letters (Tanglish/Hinglish, e.g. "eppo course start pannuvinga", "kitna fees hai") are that language, not English — reply in that same romanized Tanglish/Hinglish, not in English and not by switching to Tamil/Devanagari script. If the message is written in native Tamil/Hindi script, reply in that same native script. If the message mixes languages, mirror that mix rather than picking one.
       - Current contact name: "${leadName || 'unknown'}". Current locked brand: "${effectiveBrand}".
       - Address the contact naturally by first name ("${firstName || 'there'}") when useful, but do not repeat their name in every sentence.
@@ -1266,7 +1272,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
         "reply": "your generated reply message following the behavior specs",
         "extracted_name": "John Doe", (or null if the user has not provided their name)
         "extracted_email": "john@example.com", (or null if unavailable)
-        "extracted_booking_time": "YYYY-MM-DDTHH:mm:ss±HH:MM" (ISO format with correct timezone offset for scheduling timezone ${googleCalendar.TIME_ZONE}, e.g. 2026-07-25T16:00:00+05:30, or null if the user has not provided a preferred date/time for a call),
+        "extracted_booking_time": "YYYY-MM-DDTHH:mm:ss±HH:MM" (ISO format with correct timezone offset for scheduling timezone ${bookingTimeZone}, e.g. 2026-07-25T16:00:00+05:30, or null if the user has not provided a preferred date/time for a call),
         "cancel_meeting": false (true ONLY if the lead is clearly asking to cancel/call off their already-booked meeting)${isBmAcademy ? `,
         "syllabus_course_ids": ["BMA-CFSD-010"] (array of Course IDs from the BM ACADEMY COURSE ID INDEX the lead wants a syllabus for; empty array [] if this message isn't a syllabus request or no course is identified yet)` : ''}
       }
@@ -1360,6 +1366,22 @@ router.post('/ai/response', internalAuth, async (req, res) => {
            }
          }
 
+         if (extractedData.extracted_booking_time && !booking.enabled) {
+           // No calendar connected (or AI booking switched off): record the
+           // requested time and hand it to the team instead of booking.
+           const requested = new Date(extractedData.extracted_booking_time);
+           await Leads.updateOne({ id: lead_id }, { $set: {
+             booking_status: 'requested',
+             meeting_requested_for: Number.isNaN(requested.getTime()) ? null : requested,
+             updated_at: new Date(),
+           } });
+           await ensureSalesTask(req, lead_id, 'hot_lead');
+           ai_reply = Number.isNaN(requested.getTime())
+             ? 'Thanks! Our team will contact you shortly to confirm the meeting time.'
+             : `Thanks! I've noted ${requested.toLocaleString('en-IN', { timeZone: bookingTimeZone, dateStyle: 'medium', timeStyle: 'short' })}. Our team will confirm your meeting shortly.`;
+           return res.json({ ...req.body, brand: persistedBrand, name: leadName, ai_reply, booking_status: 'requested' });
+         }
+
          if (extractedData.extracted_booking_time) {
            if (!leadEmail) {
              ai_reply = 'Please share your email address so I can check the slot and send the Calendar and Google Meet invitation.';
@@ -1394,18 +1416,23 @@ router.post('/ai/response', internalAuth, async (req, res) => {
                    eventUrl: calendarBooking.event_url,
                    meetLink: calendarBooking.meet_link,
                    rescheduled: calendarBooking.rescheduled,
+                   recipient: booking.notify_email,
+                   timeZone: bookingTimeZone,
                  });
                } catch (notificationError) {
                  console.error('[AI Booking] Support email notification failed:', notificationError.message);
                }
-               ai_reply = `Your meeting is confirmed for ${new Date(calendarBooking.start).toLocaleString('en-IN', { timeZone: googleCalendar.TIME_ZONE, dateStyle: 'medium', timeStyle: 'short' })}.${calendarBooking.meet_link ? ` Google Meet: ${calendarBooking.meet_link}` : ''}`;
+               ai_reply = `Your meeting is confirmed for ${new Date(calendarBooking.start).toLocaleString('en-IN', { timeZone: bookingTimeZone, dateStyle: 'medium', timeStyle: 'short' })}.${calendarBooking.meet_link ? ` Google Meet: ${calendarBooking.meet_link}` : ''}`;
                console.log(`[AI Booking] Lead ${lead_id} booked in Google Calendar for ${calendarBooking.start}`);
+             } else if (calendarBooking.reason === 'outside_working_hours') {
+               await Leads.updateOne({ id: lead_id }, { $set: { booking_status: 'outside_working_hours', updated_at: new Date() } });
+               ai_reply = `Meetings can be booked ${calendarBooking.working_hours}. Please share a date and time within these hours.`;
              } else {
                await Leads.updateOne({ id: lead_id }, { $set: { booking_status: 'slot_unavailable', updated_at: new Date() } });
                ai_reply = 'That time is already occupied. Please share another preferred date and time, and I’ll check availability.';
              }
            } catch (calendarError) {
-             const calendarDisconnected = /not connected|oauth is not configured|refresh token/i.test(calendarError.message);
+             const calendarDisconnected = googleCalendar.isDisconnectedError(calendarError);
              const failedStatus = calendarDisconnected ? 'calendar_not_connected' : 'calendar_error';
              await Leads.updateOne({ id: lead_id }, { $set: { booking_status: failedStatus, updated_at: new Date() } });
              await ensureSalesTask(req, lead_id, 'hot_lead');
@@ -3063,28 +3090,8 @@ router.delete('/sales-tasks/:id', internalAuth, async (req, res) => {
 // ==========================================
 // Bot Integration: Book a Call - STOPS FOLLOW-UPS
 // ==========================================
-router.get('/auth/google', (req, res) => {
-  try {
-    res.redirect(googleCalendar.getAuthorizationUrl());
-  } catch (error) {
-    res.status(503).json({ success: false, error: error.message });
-  }
-});
-
-router.get('/auth/google/callback-calender', async (req, res) => {
-  try {
-    if (!req.query.code) return res.status(400).send('Google authorization code is missing.');
-    const email = await googleCalendar.exchangeAndStoreCode(String(req.query.code));
-    res.send(`Google Calendar connected successfully for ${email}. You may close this window.`);
-  } catch (error) {
-    res.status(500).send(`Google Calendar connection failed: ${error.message}`);
-  }
-});
-
-router.get('/calendar/status', internalAuth, async (req, res) => {
-  res.json(await googleCalendar.getConnectionStatus());
-});
-
+// Connecting a workspace's Google Calendar, its booking settings and the
+// meetings list live in routes/leados/calendar.js.
 router.post('/calendar/availability', internalAuth, async (req, res) => {
   try {
     const start = new Date(req.body.start);
@@ -3092,7 +3099,8 @@ router.post('/calendar/availability', internalAuth, async (req, res) => {
     if (Number.isNaN(start.getTime())) return res.status(400).json({ success: false, error: 'A valid start time is required' });
     const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
     const available = await googleCalendar.isSlotAvailable(start, end);
-    res.json({ success: true, available, start: start.toISOString(), end: end.toISOString(), time_zone: googleCalendar.TIME_ZONE });
+    const { settings } = await googleCalendar.getBookingContext();
+    res.json({ success: true, available, start: start.toISOString(), end: end.toISOString(), time_zone: settings.time_zone });
   } catch (error) {
     res.status(503).json({ success: false, error: error.message });
   }
@@ -3119,7 +3127,13 @@ router.post('/leads/book-call', internalAuth, async (req, res) => {
       start: booking_time,
       durationMinutes: duration_minutes,
       notes,
+      // A person booking from the panel may pick any time; automations keep
+      // to the workspace's working hours.
+      enforceWorkingHours: req.identity?.kind === 'service',
     });
+    if (calendarBooking.reason === 'outside_working_hours') {
+      return res.status(409).json({ success: false, reason: calendarBooking.reason, error: `Meetings can be booked ${calendarBooking.working_hours}` });
+    }
     if (!calendarBooking.booked) {
       return res.status(409).json({ success: false, reason: calendarBooking.reason, error: 'The selected Google Calendar slot is unavailable' });
     }
@@ -3149,6 +3163,7 @@ router.post('/leads/book-call', internalAuth, async (req, res) => {
     }
 
     let support_notification = { sent: false };
+    const bookingContext = await googleCalendar.getBookingContext();
     try {
       support_notification = await sendBookingNotification({
         eventId: calendarBooking.event_id,
@@ -3160,6 +3175,8 @@ router.post('/leads/book-call', internalAuth, async (req, res) => {
         eventUrl: calendarBooking.event_url,
         meetLink: calendarBooking.meet_link,
         rescheduled: calendarBooking.rescheduled,
+        recipient: bookingContext.notify_email,
+        timeZone: bookingContext.settings.time_zone,
       });
     } catch (notificationError) {
       console.error('[Book Call] Support email notification failed:', notificationError.message);
@@ -3169,6 +3186,10 @@ router.post('/leads/book-call', internalAuth, async (req, res) => {
     console.log(`[Book Call] Lead ${lead_id} booked for ${booking_time} - follow-ups will STOP`);
     res.json({ success: true, lead: result.rows[0], calendar: calendarBooking, support_notification, message: "Meeting booked in Google Calendar and follow-ups stopped." });
   } catch (err) {
+    if (googleCalendar.isDisconnectedError(err)) {
+      return res.status(409).json({ success: false, code: 'CALENDAR_NOT_CONNECTED', error: 'Connect your Google Calendar on the Calendar page first.' });
+    }
+    if (err instanceof googleCalendar.CalendarError) return res.status(400).json({ success: false, code: err.code, error: err.message });
     res.status(500).json({ success: false, error: err.message });
   }
 });

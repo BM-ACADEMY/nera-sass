@@ -17,6 +17,7 @@ const {
 const { tenantCanSend, tenantLifecycle } = require('../../services/lifecycle');
 const { internalPlatformAuth } = require('../../middleware/authMiddleware');
 const ai = require('../../services/aiAutomation');
+const aiLatency = require('../../services/aiLatency');
 const { BrainDocs } = ctx;
 // ── INTERNAL (called by n8n) ──────────────────────────────
 
@@ -121,7 +122,8 @@ const sendRoute = (name, handler) => async (req, res) => {
 app.post('/api/internal/send-reply', internalAuth, sendRoute('send-reply', (req) => {
   const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
   if (!message || message.length > 4096) throw new SendError(400, 'message must be 1 to 4096 characters');
-  return sendToLead(req, req.body?.lead_id, message, () => ({ type: 'text', text: { body: message } }));
+  return sendToLead(req, req.body?.lead_id, message, () => ({ type: 'text', text: { body: message } }))
+    .then((result) => { aiLatency.replied(req.body?.lead_id); return result; });
 }));
 
 // POST /api/internal/send-template   { lead_id, template, language?, body_params? }
@@ -149,6 +151,7 @@ app.get('/api/internal/context', internalAuth, async (req, res) => {
     if (!Number.isInteger(leadId) || leadId <= 0) return res.status(400).json({ error: 'lead_id is required' });
     const lead = await Leads.findOne({ id: leadId }, { _id: 0 }).lean();
     if (!lead) return res.status(404).json({ error: 'Lead not found' }); // tenant scope: another tenant's lead is 404
+    aiLatency.contextFetched(lead.id);
     const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 30);
     const before = Number(req.query.before_message_id);
     const conversationIds = await Conversations.distinct('id', { lead_id: lead.id });

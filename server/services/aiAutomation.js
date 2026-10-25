@@ -18,9 +18,11 @@ const CLOSED_STATUSES = ['converted', 'lost', 'closed', 'opt-out', 'opted_out'];
 const hourlyCap = () => Number(process.env.AI_REPLIES_PER_TENANT_HOUR || 200);
 
 // Seconds the server waits for more customer messages before asking n8n.
+// How long to wait after a customer message before asking the AI, so a burst
+// of quick messages gets one reply. Short by default: replies should feel live.
 function replyDelayMs(tenant) {
-  const seconds = Number(tenant?.ai_reply_delay_seconds ?? process.env.AI_REPLY_DELAY_SECONDS ?? 60);
-  return Math.min(Math.max(Number.isFinite(seconds) ? seconds : 60, 0), 600) * 1000;
+  const seconds = Number(tenant?.ai_reply_delay_seconds ?? process.env.AI_REPLY_DELAY_SECONDS ?? 3);
+  return Math.min(Math.max(Number.isFinite(seconds) ? seconds : 3, 0), 600) * 1000;
 }
 
 // Hour of day (0-23) in the workspace's time zone.

@@ -27,7 +27,7 @@ function fail(res, error) {
   if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details, code: error.code });
   // Deliberate "temporarily unavailable" answers from our services (for
   // example the plan catalogue not being loaded) keep their message.
-  if (error.status === 503 && error instanceof provisioning.ProvisioningError) {
+  if ((error.status === 503 && error instanceof provisioning.ProvisioningError) || error instanceof n8nApi.N8nApiError) {
     return res.status(503).json({ error: error.message });
   }
   if (error.code === 11000) {

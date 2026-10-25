@@ -21,6 +21,7 @@ const TENANT_PERMISSIONS = {
   'team.manage': ['owner', 'admin'],
   'tenant.settings': ['owner', 'admin'],
   'whatsapp.manage': ['owner', 'admin'],
+  'calendar.manage': ['owner', 'admin'],
   'templates.manage': ['owner', 'admin', 'manager'],
   'campaigns.manage': ['owner', 'admin', 'manager'],
   'ai_brain.manage': ['owner', 'admin', 'manager'],
