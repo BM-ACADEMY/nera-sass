@@ -19,8 +19,9 @@ const MEDIA_TYPES = {
   DOCUMENT: { mime: ['application/pdf'], max: 100 * 1024 * 1024 },
 };
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } });
-const LIST_FIELDS = { _id: 0, template_id: 1, waba_id: 1, name: 1, language: 1, category: 1, status: 1, last_synced_at: 1 };
-const PUBLIC_FIELDS = { _id: 0, template_id: 1, waba_id: 1, name: 1, language: 1, category: 1, status: 1, components: 1, last_synced_at: 1, 'raw_data.rejected_reason': 1, 'raw_data.quality_score': 1, 'raw_data.parameter_format': 1 };
+const REVIEW_FIELDS = { submitted_at: 1, submitted_at_estimated: 1, reviewed_at: 1 };
+const LIST_FIELDS = { _id: 0, template_id: 1, waba_id: 1, name: 1, language: 1, category: 1, status: 1, last_synced_at: 1, ...REVIEW_FIELDS };
+const PUBLIC_FIELDS = { _id: 0, template_id: 1, waba_id: 1, name: 1, language: 1, category: 1, status: 1, components: 1, last_synced_at: 1, ...REVIEW_FIELDS, 'raw_data.rejected_reason': 1, 'raw_data.quality_score': 1, 'raw_data.parameter_format': 1 };
 const TEMPLATE_FIELDS = 'id,name,language,status,category,components,rejected_reason,quality_score,parameter_format';
 
 class MetaCallError extends Error {
@@ -45,6 +46,9 @@ class TemplateApiError extends Error {
 const present = (t) => ({
   template_id: t.template_id, waba_id: t.waba_id, name: t.name, language: t.language, category: t.category, status: t.status,
   components: t.components || [], last_synced_at: t.last_synced_at,
+  submitted_at: t.submitted_at || null,
+  submitted_at_estimated: Boolean(t.submitted_at_estimated),
+  reviewed_at: t.reviewed_at || null,
   rejected_reason: t.raw_data?.rejected_reason && t.raw_data.rejected_reason !== 'NONE' ? t.raw_data.rejected_reason : null,
   quality: t.raw_data?.quality_score?.score || null,
   parameter_format: t.raw_data?.parameter_format || null,
@@ -60,6 +64,22 @@ function replyError(res, error, fail) {
   return fail(res, error);
 }
 
+const IN_REVIEW = ['PENDING', 'IN_APPEAL'];
+const inReview = (status) => IN_REVIEW.includes(String(status || '').toUpperCase());
+
+// Review timing for a status change. `submitted`: we just sent it to Meta
+// (create or edit). A template first seen already decided has no timing.
+function reviewTiming(previous, nextStatus, { submitted = false } = {}) {
+  const now = new Date();
+  if (submitted) return { $set: { submitted_at: now, submitted_at_estimated: false }, $unset: { reviewed_at: '' } };
+  if (inReview(nextStatus)) {
+    if (previous && inReview(previous.status) && previous.submitted_at) return null;
+    return { $set: { submitted_at: now, submitted_at_estimated: true }, $unset: { reviewed_at: '' } };
+  }
+  if (previous && inReview(previous.status) && previous.submitted_at && !previous.reviewed_at) return { $set: { reviewed_at: now } };
+  return null;
+}
+
 function createTemplateApi({ metaGraphVersion = 'v21.0' } = {}) {
   const graph = (path) => `https://graph.facebook.com/${metaGraphVersion}/${path}`;
   const call = async (fn) => {
@@ -70,12 +90,15 @@ function createTemplateApi({ metaGraphVersion = 'v21.0' } = {}) {
     }
   };
 
-  const cacheTemplate = (wabaId, t) => {
+  const cacheTemplate = async (wabaId, t, { submitted = false } = {}) => {
     const fields = {
       waba_id: wabaId, name: t.name ?? null, language: t.language ?? null, status: t.status ?? null,
       category: t.category ?? null, components: t.components || [], raw_data: t, last_synced_at: new Date(),
     };
-    return MetaWhatsappTemplates.updateOne({ template_id: String(t.id) }, { $set: fields }, { upsert: true });
+    const previous = await MetaWhatsappTemplates.findOne({ template_id: String(t.id) }, { _id: 0, status: 1, ...REVIEW_FIELDS }).lean();
+    const timing = reviewTiming(previous, t.status, { submitted });
+    const update = { $set: { ...fields, ...(timing?.$set || {}) }, ...(timing?.$unset ? { $unset: timing.$unset } : {}) };
+    return MetaWhatsappTemplates.updateOne({ template_id: String(t.id) }, update, { upsert: true });
   };
 
   const list = async (wabaId) => (await MetaWhatsappTemplates.find({ waba_id: wabaId }, PUBLIC_FIELDS).sort({ name: 1, language: 1 }).lean()).map(present);
@@ -108,7 +131,7 @@ function createTemplateApi({ metaGraphVersion = 'v21.0' } = {}) {
     await cacheTemplate(wabaId, {
       id: created.id, name: payload.name, language: payload.language, category: created.category || payload.category,
       status: created.status || 'PENDING', components: payload.components, parameter_format: payload.parameter_format,
-    });
+    }, { submitted: true });
     return present(await findOwn(wabaId, created.id, PUBLIC_FIELDS));
   }
 
@@ -120,7 +143,7 @@ function createTemplateApi({ metaGraphVersion = 'v21.0' } = {}) {
     const body = { components: payload.components };
     if (payload.category !== current.category) body.category = payload.category;
     await call(() => axios.post(graph(String(current.template_id)), body, { headers: { Authorization: `Bearer ${token}` }, timeout: 30000 }));
-    await cacheTemplate(wabaId, { ...current.raw_data, id: current.template_id, name: current.name, language: current.language, category: payload.category, status: 'PENDING', components: payload.components });
+    await cacheTemplate(wabaId, { ...current.raw_data, id: current.template_id, name: current.name, language: current.language, category: payload.category, status: 'PENDING', components: payload.components }, { submitted: true });
     return { template: present(await findOwn(wabaId, current.template_id, PUBLIC_FIELDS)), name: current.name };
   }
 
@@ -170,4 +193,4 @@ function createTemplateApi({ metaGraphVersion = 'v21.0' } = {}) {
   return { list, refresh, create, update, remove, checkPending, uploadMedia, findOwn, cacheTemplate };
 }
 
-module.exports = { createTemplateApi, replyError, present, upload, LIST_FIELDS, PUBLIC_FIELDS, MetaCallError, TemplateApiError };
+module.exports = { createTemplateApi, replyError, present, upload, reviewTiming, LIST_FIELDS, PUBLIC_FIELDS, MetaCallError, TemplateApiError };

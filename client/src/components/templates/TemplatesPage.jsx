@@ -7,6 +7,7 @@ import axiosClient from './templatesClient';
 import ConfirmDialog from './ConfirmDialog';
 import TemplateEditor, { EMPTY_FORM, LANGUAGES } from './TemplateEditor';
 import TemplatePreview, { toEditorShape } from './TemplatePreview';
+import ReviewTime from './ReviewTime';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -165,7 +166,7 @@ const TemplatesPage = ({ itemId, basePath = '/templates' }) => {
                 <div className="flex flex-col gap-2 md:hidden">
                   {rows.map((t) => (
                     <button key={t.template_id} type="button" onClick={() => setPreview(t)} className="flex cursor-pointer flex-col gap-1.5 rounded-lg border border-border px-3 py-3 text-left hover:bg-muted/50">
-                      <div className="flex items-center justify-between gap-2"><span className="truncate font-semibold">{t.name}</span><StatusBadge status={t.status} /></div>
+                      <div className="flex items-center justify-between gap-2"><span className="truncate font-semibold">{t.name}</span><span className="flex flex-col items-end gap-0.5"><StatusBadge status={t.status} /><ReviewTime template={t} /></span></div>
                       <div className="text-[12px] text-muted-foreground">{title(t.category)} · {langName(t.language)}</div>
                     </button>
                   ))}
@@ -186,7 +187,7 @@ const TemplatesPage = ({ itemId, basePath = '/templates' }) => {
                             <div className="text-[12px] text-muted-foreground">{langName(t.language)}</div>
                           </TableCell>
                           <TableCell><Badge variant="outline">{title(t.category)}</Badge></TableCell>
-                          <TableCell><StatusBadge status={t.status} /></TableCell>
+                          <TableCell><div className="flex flex-col items-start gap-1"><StatusBadge status={t.status} /><ReviewTime template={t} /></div></TableCell>
                           <TableCell className="text-[13px] text-muted-foreground">{t.quality ? title(t.quality) : '—'}</TableCell>
                           <TableCell className="text-[13px] text-muted-foreground">{when(t.last_synced_at)}</TableCell>
                           <TableCell>
@@ -210,7 +211,7 @@ const TemplatesPage = ({ itemId, basePath = '/templates' }) => {
       <Dialog open={Boolean(preview)} onOpenChange={(open) => !open && setPreview(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex flex-wrap items-center gap-2"><span className="truncate">{preview?.name}</span> {preview && <StatusBadge status={preview.status} />}</DialogTitle>
+            <DialogTitle className="flex flex-wrap items-center gap-2"><span className="truncate">{preview?.name}</span> {preview && <StatusBadge status={preview.status} />} {preview && <ReviewTime template={preview} />}</DialogTitle>
             <DialogDescription>{preview && `${title(preview.category)} · ${langName(preview.language)}`}</DialogDescription>
           </DialogHeader>
           {preview?.rejected_reason && (
