@@ -104,11 +104,11 @@ In the Meta app dashboard, set the WhatsApp webhook callback URL to
 
 Chat files (images, voice notes, videos, documents, sent and received) are stored
 encrypted (AES-256-GCM, one key per workspace) in one folder per workspace:
-`/var/lib/getnera-media/t_<tenant id>/<yyyy>/<mm>/<random>.nmf`, admin inbox files in
+`/opt/getnera/mediaserver/storage/t_<tenant id>/<yyyy>/<mm>/<random>.nmf`, admin inbox files in
 `platform/`. The browser only gets signed links that expire after 15 minutes.
 
 ```bash
-sudo mkdir -p /var/lib/getnera-media && sudo chown $USER /var/lib/getnera-media && chmod 700 /var/lib/getnera-media
+mkdir -p /opt/getnera/mediaserver/storage && chmod 700 /opt/getnera/mediaserver/storage
 cd /opt/getnera/mediaserver && cp .env.example .env && node scripts/keygen.js
 ```
 Put the three printed values into `mediaserver/.env`, then `chmod 600 mediaserver/.env`.
@@ -132,7 +132,7 @@ node scripts/migrate-media-to-mediaserver.js --apply
 ```
 Add `--delete-local` once you have checked old chats still show their files.
 
-Backups: back up `/var/lib/getnera-media` like the database. The files are useless
+Backups: back up `/opt/getnera/mediaserver/storage` like the database. It is gitignored, so `git pull` and deploys leave it alone, but never run `git clean -x` in /opt/getnera. The files are useless
 without `MEDIA_MASTER_KEY`, so keep that key out of the same backup.
 
 ## Updating later
