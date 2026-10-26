@@ -9,7 +9,10 @@ const inbox = require('../services/platformInbox');
 const mediaStore = require('../services/mediaStore');
 const multer = require('multer');
 
-const headerUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 1 } });
+const fileUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 1 } });
+const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
+// Labels stored for incoming files without a caption; the file itself is shown instead.
+const MEDIA_PLACEHOLDER = /^\[(Photo|Video|Voice message|Sticker|Document)\]( .*)?$/;
 
 const SEND_LIMIT = 30; // messages per staff member per minute
 const sendLog = new Map();
@@ -42,9 +45,16 @@ const presentMessage = (m) => ({
   id: m.id,
   direction: m.direction,
   type: m.type,
-  text: m.text || '',
+  text: MEDIA_TYPES.has(m.type) && MEDIA_PLACEHOLDER.test(m.text || '') ? '' : m.text || '',
   template_name: m.template_name || null,
-  media_url: m.media_ref ? mediaStore.presentUrl(m.media_ref) : null,
+  // Signed media-server link when a copy exists; otherwise the panel loads
+  // the file through /inbox/messages/:id/media.
+  media_url: m.media_ref && mediaStore.enabled() ? mediaStore.signedUrl(m.media_ref) : null,
+  has_media: Boolean(m.media_ref || m.media_id),
+  filename: m.filename || null,
+  mime_type: m.mime_type || null,
+  file_size: m.file_size || null,
+  voice: Boolean(m.voice),
   status: m.status,
   error: m.error || null,
   sent_by_name: m.sent_by_name || null,
@@ -176,7 +186,7 @@ module.exports = function registerAdminInboxRoutes(router, { permit, fail }) {
   });
 
   // Header image / video / document for a template, uploaded to Meta first.
-  router.post('/inbox/template-media', can, headerUpload.single('file'), async (req, res) => {
+  router.post('/inbox/template-media', can, fileUpload.single('file'), async (req, res) => {
     try {
       return res.status(201).json(await inbox.uploadHeaderMedia({
         buffer: req.file?.buffer, mimeType: req.file?.mimetype, filename: req.file?.originalname, format: req.body?.format,
@@ -187,7 +197,20 @@ module.exports = function registerAdminInboxRoutes(router, { permit, fail }) {
     }
   });
 
-  const sendRoute = (path, handler) => router.post(path, can, async (req, res) => {
+  router.get('/inbox/messages/:id/media', can, async (req, res) => {
+    try {
+      const file = await inbox.messageMedia(req.params.id);
+      res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      return res.send(file.buffer);
+    } catch (error) {
+      if (error instanceof inbox.InboxError) return res.status(error.status).json({ error: error.message, code: error.code });
+      return fail(res, error);
+    }
+  });
+
+  const sendRoute = (path, handler, ...middleware) => router.post(path, can, ...middleware, async (req, res) => {
     try {
       if (rateLimited(req.user.id)) return res.status(429).json({ error: 'Too many messages in a minute. Wait a moment.', code: 'RATE_LIMITED' });
       return res.status(201).json(await handler(req));
@@ -202,6 +225,14 @@ module.exports = function registerAdminInboxRoutes(router, { permit, fail }) {
   sendRoute('/inbox/conversations/:id/messages', async (req) => ({
     message: presentMessage(await inbox.sendText({ contactId: req.params.id, text: req.body?.text, staff: staffOf(req) })),
   }));
+
+  // Photos, videos, documents, any file and recorded voice notes.
+  sendRoute('/inbox/conversations/:id/media', async (req) => ({
+    message: presentMessage(await inbox.sendMedia({
+      contactId: req.params.id, buffer: req.file?.buffer, mimeType: req.file?.mimetype, filename: req.file?.originalname,
+      caption: req.body?.caption, voice: req.body?.voice === '1', staff: staffOf(req),
+    })),
+  }), fileUpload.single('file'));
 
   sendRoute('/inbox/conversations/:id/template', async (req) => ({
     message: presentMessage(await inbox.sendTemplate({ contactId: req.params.id, name: req.body?.name, language: req.body?.language, values: req.body?.values, staff: staffOf(req) })),

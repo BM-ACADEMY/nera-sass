@@ -211,4 +211,88 @@ test('Platform WhatsApp inbox', async (t) => {
       process.env.PLATFORM_WA_ACCESS_TOKEN = saved;
     }
   });
+
+  await t.test('I7. Files: photos go as image, anything else as a document, only inside the window', async () => {
+    const { ops } = await seed();
+    const uploads = [];
+    const realFetch = global.fetch;
+    global.fetch = async (url, options = {}) => {
+      const target = String(url);
+      if (target.endsWith(`/${PLATFORM_PHONE}/media`)) {
+        const file = options.body.get('file');
+        uploads.push({ name: file.name, type: file.type, size: file.size });
+        return new Response(JSON.stringify({ id: `MEDIA_${uploads.length}` }), { status: 200 });
+      }
+      if (target.endsWith('/MEDIA_IN_1')) return new Response(JSON.stringify({ url: 'https://lookaside.test/file', mime_type: 'application/pdf' }), { status: 200 });
+      if (target === 'https://lookaside.test/file') return new Response(Buffer.from('%PDF-inbound'), { status: 200 });
+      throw new Error(`blocked outbound fetch ${target}`);
+    };
+    try {
+      await postWebhook(inbound('send me the brochure'));
+      const contact = await PlatformWaContacts.findOne({}).lean();
+      const sendFile = (buffer, name, type, fields = {}) => {
+        const req = request(app).post(`/api/admin/inbox/conversations/${contact.id}/media`).set(bearer(ops));
+        for (const [k, v] of Object.entries(fields)) req.field(k, v);
+        return req.attach('file', buffer, { filename: name, contentType: type });
+      };
+
+      const photo = await sendFile(Buffer.from('png-bytes'), 'shop.png', 'image/png', { caption: 'Our shop' });
+      assert.strictEqual(photo.status, 201, JSON.stringify(photo.body));
+      assert.strictEqual(photo.body.message.type, 'image');
+      assert.strictEqual(photo.body.message.text, 'Our shop');
+      assert.deepStrictEqual(metaCalls.at(-1).data.image, { id: 'MEDIA_1', caption: 'Our shop' });
+
+      const sheet = await sendFile(Buffer.from('xlsx-bytes'), 'Launch_Plan.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      assert.strictEqual(sheet.status, 201, JSON.stringify(sheet.body));
+      assert.strictEqual(sheet.body.message.type, 'document');
+      assert.strictEqual(sheet.body.message.filename, 'Launch_Plan.xlsx');
+      assert.strictEqual(sheet.body.message.file_size, 10);
+      assert.deepStrictEqual(metaCalls.at(-1).data.document, { id: 'MEDIA_2', filename: 'Launch_Plan.xlsx' });
+
+      const gif = await sendFile(Buffer.from('gif'), 'fun.gif', 'image/gif');
+      assert.strictEqual(gif.body.message.type, 'document', 'Meta takes only jpeg/png as image');
+      const preview = await PlatformWaContacts.findOne({ id: contact.id }).lean();
+      assert.strictEqual(preview.last_message_preview, '📄 fun.gif');
+
+      // An incoming file is fetched from Meta for the panel.
+      const raw = JSON.stringify({ object: 'whatsapp_business_account', entry: [{ changes: [{ field: 'messages', value: {
+        metadata: { phone_number_id: PLATFORM_PHONE }, contacts: [{ wa_id: '919876543210' }],
+        messages: [{ from: '919876543210', id: 'wamid.in.doc', timestamp: String(Math.floor(Date.now() / 1000)), type: 'document', document: { id: 'MEDIA_IN_1', filename: 'quote.pdf', mime_type: 'application/pdf' } }],
+      } }] }] });
+      await postWebhook(raw);
+      const list = await request(app).get(`/api/admin/inbox/conversations/${contact.id}/messages`).set(bearer(ops));
+      const doc = list.body.messages.find((m) => m.type === 'document' && m.direction === 'inbound');
+      assert.strictEqual(doc.filename, 'quote.pdf');
+      assert.strictEqual(doc.text, '', 'the [Document] label is not shown as text');
+      assert.strictEqual(doc.has_media, true);
+      const file = await request(app).get(`/api/admin/inbox/messages/${doc.id}/media`).set(bearer(ops)).buffer(true).parse((res, cb) => {
+        const parts = [];
+        res.on('data', (c) => parts.push(c));
+        res.on('end', () => cb(null, Buffer.concat(parts)));
+      });
+      assert.strictEqual(file.status, 200);
+      assert.strictEqual(file.headers['content-type'], 'application/pdf');
+      assert.strictEqual(file.body.toString(), '%PDF-inbound');
+
+      // Outside the window nothing is uploaded.
+      await PlatformWaContacts.updateOne({ id: contact.id }, { $set: { last_inbound_at: new Date(Date.now() - 25 * 3600000) } });
+      const before = uploads.length;
+      const closed = await sendFile(Buffer.from('png'), 'late.png', 'image/png');
+      assert.strictEqual(closed.status, 409);
+      assert.strictEqual(uploads.length, before);
+    } finally {
+      global.fetch = realFetch;
+    }
+  });
+
+  await t.test('I8. Media kinds follow Meta limits', () => {
+    const { mediaKind } = require('../services/platformInbox');
+    assert.strictEqual(mediaKind('image/jpeg', 1000), 'image');
+    assert.strictEqual(mediaKind('image/jpeg', 6 * 1024 * 1024), 'document', 'over 5 MB');
+    assert.strictEqual(mediaKind('video/mp4', 10 * 1024 * 1024), 'video');
+    assert.strictEqual(mediaKind('video/quicktime', 1000), 'document');
+    assert.strictEqual(mediaKind('audio/mpeg', 1000), 'audio');
+    assert.strictEqual(mediaKind('audio/ogg; codecs=opus', 1000), 'audio');
+    assert.strictEqual(mediaKind('application/zip', 1000), 'document');
+  });
 });

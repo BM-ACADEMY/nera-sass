@@ -74,6 +74,12 @@ function messageText(msg) {
 }
 
 const mediaIdOf = (msg) => msg[msg.type]?.id || null;
+// Name, type and size of an incoming file, kept so the chat can show a file card.
+const mediaInfoOf = (msg) => {
+  const media = ['image', 'video', 'audio', 'document', 'sticker'].includes(msg.type) ? msg[msg.type] : null;
+  if (!media) return {};
+  return { filename: media.filename || null, mime_type: media.mime_type || null, voice: Boolean(media.voice) };
+};
 
 // Status only moves forward; a failure is always recorded.
 const STATUS_RANK = { sending: 0, sent: 1, delivered: 2, read: 3 };
@@ -121,7 +127,7 @@ async function handleWebhookValue(value = {}) {
     try {
       saved = await PlatformWaMessages.create({
         contact_id: contact.id, direction: 'inbound', type: msg.type || 'text', text,
-        media_id: mediaIdOf(msg), wa_message_id: msg.id, status: 'received', created_at: at,
+        media_id: mediaIdOf(msg), ...mediaInfoOf(msg), wa_message_id: msg.id, status: 'received', created_at: at,
       });
     } catch (error) {
       if (error.code === 11000) continue; // Meta retried a message we already have
@@ -164,10 +170,10 @@ function requireConfigured() {
 }
 
 // Sends one payload to Meta and records the outbound message either way.
-async function deliver(contact, { type, text, templateName }, payload, staff) {
+async function deliver(contact, { type, text, templateName, preview, extra }, payload, staff) {
   const record = (await PlatformWaMessages.create({
     contact_id: contact.id, direction: 'outbound', type, text, template_name: templateName || null,
-    status: 'sending', sent_by: staff?.id ?? null, sent_by_name: staff?.name || null,
+    status: 'sending', sent_by: staff?.id ?? null, sent_by_name: staff?.name || null, ...(extra || {}),
   })).toObject();
   let result;
   try {
@@ -183,7 +189,7 @@ async function deliver(contact, { type, text, templateName }, payload, staff) {
     result = { ...record, status: 'failed', error: reason };
   }
   await PlatformWaContacts.updateOne({ id: contact.id }, { $set: {
-    last_message_at: new Date(), last_message_preview: String(text || '').slice(0, 160), last_message_direction: 'outbound', updated_at: new Date(),
+    last_message_at: new Date(), last_message_preview: String(preview || text || '').slice(0, 160), last_message_direction: 'outbound', updated_at: new Date(),
   } });
   changed(contact.id);
   if (result.status === 'failed') throw Object.assign(new InboxError(400, `Not sent: ${result.error}`, 'SEND_FAILED'), { message_record: result });
@@ -207,6 +213,127 @@ async function sendText({ contactId, text, staff }) {
     throw new InboxError(409, 'The 24-hour window is closed. Send an approved template to restart the conversation.', 'WINDOW_CLOSED');
   }
   return deliver(contact, { type: 'text', text: body }, { type: 'text', text: { body, preview_url: false } }, staff);
+}
+
+// Meta Cloud API media rules: which files go as image / video / audio and the
+// size limit of each. Anything else (gif, webp, heic, zip, xlsx, ...) is sent
+// as a document, which keeps its name and accepts up to 100 MB.
+const MB = 1024 * 1024;
+const MEDIA_KINDS = [
+  { kind: 'image', types: ['image/jpeg', 'image/png'], max: 5 * MB },
+  { kind: 'video', types: ['video/mp4', 'video/3gpp'], max: 16 * MB },
+  { kind: 'audio', types: ['audio/aac', 'audio/amr', 'audio/mpeg', 'audio/mp4', 'audio/ogg'], max: 16 * MB },
+];
+const DOCUMENT_MAX = 100 * MB;
+
+function mediaKind(mimeType, size) {
+  const base = String(mimeType || '').split(';')[0].trim().toLowerCase();
+  const match = MEDIA_KINDS.find((k) => k.types.includes(base) && size <= k.max);
+  return match ? match.kind : 'document';
+}
+
+const MEDIA_PREVIEW = { image: '📷 Photo', video: '🎥 Video', audio: '🎤 Voice message', document: '📄 Document' };
+
+// Browsers record voice notes as webm; WhatsApp plays only ogg/opus as a voice note.
+async function toVoiceNote(buffer) {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const { convertToWhatsAppVoiceNote } = require('./voice-note-encoder');
+  const base = path.join(os.tmpdir(), `nera-voice-${Date.now()}-${Math.round(Math.random() * 1e9)}`);
+  await fs.promises.writeFile(`${base}.webm`, buffer);
+  try {
+    await convertToWhatsAppVoiceNote(`${base}.webm`, `${base}.ogg`);
+    return await fs.promises.readFile(`${base}.ogg`);
+  } finally {
+    await Promise.all([`${base}.webm`, `${base}.ogg`].map((p) => fs.promises.unlink(p).catch(() => {})));
+  }
+}
+
+async function uploadToMeta(buffer, mimeType, filename) {
+  const fd = new FormData();
+  fd.append('messaging_product', 'whatsapp');
+  fd.append('file', new Blob([buffer], { type: mimeType || 'application/octet-stream' }), filename || 'file');
+  const res = await fetch(`${graphBase()}/${platformPhoneId()}/media`, {
+    method: 'POST', headers: { Authorization: `Bearer ${platformToken()}` }, body: fd, signal: AbortSignal.timeout(120000),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.id) throw new InboxError(400, `Meta did not accept the file: ${data.error?.error_user_msg || data.error?.message || res.status}`, 'MEDIA_REJECTED');
+  return data.id;
+}
+
+// Keeps an encrypted copy on the media server; Meta's copy expires after ~30 days.
+function copyOutboundMedia(messageId, { buffer, mimeType, filename, waMediaId }) {
+  if (!mediaStore.enabled()) return;
+  runAsSystem(() => mediaStore.save({ data: buffer, mime: mimeType, name: filename, source: 'upload', scope: mediaStore.PLATFORM_SCOPE, waMediaId }), 'platform-inbox-media')
+    .then((file) => PlatformWaMessages.updateOne({ id: messageId }, { $set: { media_ref: file.ref } }))
+    .catch((error) => console.error('[Platform inbox] Media copy failed:', error.message));
+}
+
+/**
+ * Any file, photo, video or recorded voice note, inside the 24-hour window.
+ * `voice`: a browser recording, converted to an ogg/opus voice note.
+ */
+async function sendMedia({ contactId, buffer, mimeType, filename, caption, voice, staff }) {
+  requireConfigured();
+  if (!buffer?.length) throw new InboxError(400, 'Choose a file');
+  if (buffer.length > DOCUMENT_MAX) throw new InboxError(400, 'A file can be at most 100 MB');
+  const contact = await loadContact(contactId);
+  if (!windowOpen(contact)) {
+    throw new InboxError(409, 'The 24-hour window is closed. Send an approved template to restart the conversation.', 'WINDOW_CLOSED');
+  }
+
+  let data = buffer;
+  let mime = String(mimeType || 'application/octet-stream');
+  let name = String(filename || 'file').slice(0, 200);
+  if (voice) {
+    if (!/^audio\/ogg/i.test(mime)) {
+      try {
+        data = await toVoiceNote(buffer);
+      } catch (error) {
+        console.error('[Platform inbox] Voice note conversion failed:', error.message);
+        throw new InboxError(400, 'Could not prepare the voice note. Please record it again.', 'VOICE_FAILED');
+      }
+    }
+    mime = 'audio/ogg; codecs=opus';
+    name = `voice-${Date.now()}.ogg`;
+  }
+
+  const kind = voice ? 'audio' : mediaKind(mime, data.length);
+  const text = String(caption || '').trim().slice(0, 1024);
+  const waMediaId = await uploadToMeta(data, mime, name);
+  const media = { id: waMediaId };
+  if (text && kind !== 'audio') media.caption = text;
+  if (kind === 'document') media.filename = name;
+
+  const label = voice ? '🎤 Voice message' : kind === 'document' ? `📄 ${name}` : MEDIA_PREVIEW[kind];
+  const message = await deliver(contact, {
+    type: kind,
+    text,
+    preview: text || label,
+    extra: { media_id: waMediaId, filename: voice ? null : name, mime_type: mime, file_size: data.length, voice: Boolean(voice) },
+  }, { type: kind, [kind]: media }, staff);
+  copyOutboundMedia(message.id, { buffer: data, mimeType: mime, filename: name, waMediaId });
+  return message;
+}
+
+/**
+ * The bytes of one chat file, for the admin panel: from the media server when
+ * a copy exists, otherwise from Meta (which keeps files for about 30 days).
+ */
+async function messageMedia(messageId) {
+  const message = await PlatformWaMessages.findOne({ id: Number(messageId) }, { _id: 0, media_ref: 1, media_id: 1, mime_type: 1, filename: 1 }).lean();
+  if (!message || (!message.media_ref && !message.media_id)) throw new InboxError(404, 'This message has no file');
+  if (message.media_ref && mediaStore.enabled()) {
+    return { buffer: await mediaStore.read(message.media_ref), mimeType: message.mime_type, filename: message.filename };
+  }
+  const auth = { Authorization: `Bearer ${platformToken()}` };
+  const info = await fetch(`${graphBase()}/${encodeURIComponent(message.media_id)}`, { headers: auth, signal: AbortSignal.timeout(20000) });
+  const meta = await info.json().catch(() => ({}));
+  if (!info.ok || !meta.url) throw new InboxError(410, 'WhatsApp no longer has this file', 'MEDIA_EXPIRED');
+  const file = await fetch(meta.url, { headers: auth, signal: AbortSignal.timeout(120000) });
+  if (!file.ok) throw new InboxError(502, 'Could not download the file from WhatsApp');
+  return { buffer: Buffer.from(await file.arrayBuffer()), mimeType: meta.mime_type || message.mime_type, filename: message.filename };
 }
 
 // The WABA of the platform number, from the inventory (or the env override).
@@ -370,7 +497,7 @@ const HEADER_MEDIA_LIMITS = { IMAGE: 5, VIDEO: 16, DOCUMENT: 100 }; // MB, Meta'
 
 /**
  * Uploads a template header file to Meta for the platform number and returns
- * its media id. A copy is also kept on the media server (scope "platform").
+ * its media id.
  */
 async function uploadHeaderMedia({ buffer, mimeType, filename, format }) {
   requireConfigured();
@@ -378,19 +505,7 @@ async function uploadHeaderMedia({ buffer, mimeType, filename, format }) {
   if (!MEDIA_HEADERS.includes(kind)) throw new InboxError(400, 'Unknown header type');
   if (!buffer?.length) throw new InboxError(400, 'Choose a file');
   if (buffer.length > HEADER_MEDIA_LIMITS[kind] * 1024 * 1024) throw new InboxError(400, `A header ${kind.toLowerCase()} can be at most ${HEADER_MEDIA_LIMITS[kind]} MB`);
-  const fd = new FormData();
-  fd.append('messaging_product', 'whatsapp');
-  fd.append('file', new Blob([buffer], { type: mimeType || 'application/octet-stream' }), filename || 'file');
-  const res = await fetch(`${graphBase()}/${platformPhoneId()}/media`, {
-    method: 'POST', headers: { Authorization: `Bearer ${platformToken()}` }, body: fd, signal: AbortSignal.timeout(60000),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.id) throw new InboxError(400, `Meta did not accept the file: ${data.error?.error_user_msg || data.error?.message || res.status}`);
-  if (mediaStore.enabled()) {
-    runAsSystem(() => mediaStore.save({ data: buffer, mime: mimeType, name: filename, source: 'upload', scope: mediaStore.PLATFORM_SCOPE, waMediaId: data.id }), 'platform-inbox-media')
-      .catch((error) => console.error('[Platform inbox] Header copy failed:', error.message));
-  }
-  return { media_id: data.id };
+  return { media_id: await uploadToMeta(buffer, mimeType, filename) };
 }
 
 module.exports = {
@@ -409,5 +524,8 @@ module.exports = {
   templateFields,
   buildTemplateMessage,
   uploadHeaderMedia,
+  sendMedia,
+  messageMedia,
+  mediaKind,
   platformWabaId,
 };

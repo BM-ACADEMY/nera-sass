@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  FiSearch, FiSend, FiPlus, FiArrowLeft, FiCheck, FiClock, FiAlertTriangle, FiInfo, FiX,
-  FiLock, FiUnlock, FiExternalLink, FiFileText, FiInbox,
+  FiSearch, FiPlus, FiArrowLeft, FiCheck, FiClock, FiAlertTriangle, FiInfo, FiX,
+  FiLock, FiUnlock, FiExternalLink, FiFileText, FiInbox, FiPaperclip,
 } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import axiosClient from '../api/axiosClient';
@@ -19,6 +19,8 @@ import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { relativeTime, fullDateTime } from '../utils/time';
+import { Composer } from '../components/inbox/Composer';
+import { MessageMedia } from '../components/inbox/ChatMedia';
 
 const apiError = (err, fallback) => err.response?.data?.error || fallback;
 const FILTERS = [['all', 'All'], ['unread', 'Unread'], ['open', 'Open'], ['closed', 'Closed']];
@@ -79,8 +81,8 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
   const [messages, setMessages] = useState([]);
   const [hasMore, setHasMore] = useState(false);
   const [threadLoading, setThreadLoading] = useState(false);
-  const [text, setText] = useState('');
-  const [sending, setSending] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const composerRef = useRef(null);
   const [templates, setTemplates] = useState([]);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [newChatOpen, setNewChatOpen] = useState(false);
@@ -140,7 +142,6 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
   useEffect(() => {
     setDetail(null);
     setMessages([]);
-    setText('');
     loadThread(activeId);
   }, [activeId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -168,21 +169,52 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
   const windowOpen = Boolean(conversation?.window_open);
   const configured = status?.configured !== false;
 
-  const send = async () => {
-    const body = text.trim();
-    if (!body || sending) return;
-    setSending(true);
+  // Shows the failed message (if the server recorded one) and the reason; rethrows
+  // so the composer keeps what was not sent.
+  const sendFailed = (err, fallback) => {
+    if (err.response?.data?.message) setMessages((m) => [...m, err.response.data.message]);
+    toast.error(apiError(err, fallback));
+    if (err.response?.data?.code === 'WINDOW_CLOSED') loadThread(activeId, { quiet: true });
+    throw err;
+  };
+
+  const sendText = async (body) => {
     try {
       const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/messages`, { text: body });
       setMessages((m) => [...m, res.data.message]);
-      setText('');
     } catch (err) {
-      if (err.response?.data?.message) setMessages((m) => [...m, err.response.data.message]);
-      toast.error(apiError(err, 'Message not sent'));
-      if (err.response?.data?.code === 'WINDOW_CLOSED') loadThread(activeId, { quiet: true });
-    } finally {
-      setSending(false);
+      sendFailed(err, 'Message not sent');
     }
+  };
+
+  const sendFile = async (file, { caption = '', voice = false, onProgress } = {}) => {
+    const form = new FormData();
+    form.append('file', file);
+    if (caption) form.append('caption', caption);
+    if (voice) form.append('voice', '1');
+    try {
+      const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/media`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 0,
+        onUploadProgress: (e) => e.total && onProgress?.(Math.round((e.loaded / e.total) * 100)),
+      });
+      setMessages((m) => [...m, res.data.message]);
+    } catch (err) {
+      sendFailed(err, voice ? 'Voice message not sent' : `${file.name} not sent`);
+    }
+  };
+
+  const canAttach = configured && windowOpen;
+  const dragProps = {
+    onDragEnter: (e) => { if (canAttach && e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); setDragging(true); } },
+    onDragOver: (e) => { if (canAttach && e.dataTransfer?.types?.includes('Files')) e.preventDefault(); },
+    onDragLeave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false); },
+    onDrop: (e) => {
+      if (!canAttach) return;
+      e.preventDefault();
+      setDragging(false);
+      composerRef.current?.addFiles(e.dataTransfer.files);
+    },
   };
 
   const updateConversation = async (changes, success) => {
@@ -315,7 +347,14 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
         </aside>
 
         {/* Thread */}
-        <section className={cn('flex min-w-0 flex-1 flex-col', !activeId && 'hidden md:flex')}>
+        <section className={cn('relative flex min-w-0 flex-1 flex-col', !activeId && 'hidden md:flex')} {...dragProps}>
+          {dragging && (
+            <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#25D366] bg-white/90 text-center">
+              <FiPaperclip className="size-8 text-[#25D366]" />
+              <div className="font-semibold">Drop files to send</div>
+              <div className="text-xs text-muted-foreground">Photos, videos, documents and any other file up to 100 MB</div>
+            </div>
+          )}
           {!activeId ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-[#f0f2f5] p-6 text-center">
               <span className="flex size-16 items-center justify-center rounded-full bg-white text-[#25D366] shadow-sm"><FaWhatsapp size={30} /></span>
@@ -367,7 +406,8 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
                         {item.template_name && (
                           <div className="mb-0.5 inline-flex items-center gap-1 text-[10.5px] font-semibold text-green-800"><FiFileText /> Template · {item.template_name}</div>
                         )}
-                        <div className="break-words whitespace-pre-wrap">{item.text || ' '}</div>
+                        <MessageMedia message={item} />
+                        {(item.text || !(item.has_media || item.media_url)) && <div className="break-words whitespace-pre-wrap">{item.text || ' '}</div>}
                         <div className="mt-0.5 flex items-center justify-end gap-1.5 text-[10.5px] text-slate-500">
                           {item.direction === 'outbound' && item.sent_by_name && <span>{item.sent_by_name} ·</span>}
                           <span title={fullDateTime(item.created_at)}>{timeOf(item.created_at)}</span>
@@ -386,21 +426,7 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
                 {!configured ? (
                   <div className="text-center text-xs text-muted-foreground">Sending is off until the platform number is set up.</div>
                 ) : windowOpen ? (
-                  <div className="flex items-end gap-2">
-                    <Button variant="ghost" size="icon" className="shrink-0" onClick={() => setTemplateOpen(true)} title="Send a template" aria-label="Send a template"><FiFileText /></Button>
-                    <Textarea
-                      value={text}
-                      onChange={(e) => setText(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-                      placeholder="Type a message. Enter to send, Shift+Enter for a new line"
-                      rows={1}
-                      maxLength={4096}
-                      className="max-h-36 min-h-10 resize-none"
-                    />
-                    <Button size="icon" className="shrink-0 bg-[#25D366] hover:bg-[#1fb857]" onClick={send} disabled={sending || !text.trim()} aria-label="Send">
-                      {sending ? <Spinner /> : <FiSend />}
-                    </Button>
-                  </div>
+                  <Composer key={activeId} ref={composerRef} onSendText={sendText} onSendFile={sendFile} onTemplate={() => setTemplateOpen(true)} />
                 ) : (
                   <div className="flex flex-col items-center gap-2 text-center sm:flex-row sm:justify-between sm:text-left">
                     <span className="text-xs text-muted-foreground">
