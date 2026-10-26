@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { FiDownload, FiExternalLink, FiFile, FiFileText, FiFilm, FiImage, FiMusic, FiArchive } from 'react-icons/fi';
+import React, { useEffect, useRef, useState } from 'react';
+import { FiDownload, FiExternalLink, FiFile, FiFileText, FiFilm, FiImage, FiMic, FiMusic, FiArchive, FiPause, FiPlay } from 'react-icons/fi';
 import axiosClient from '../../api/axiosClient';
 import { cn } from '@/lib/utils';
 
@@ -96,9 +96,97 @@ const DocumentCard = ({ message, src }) => {
   );
 };
 
+const PEAKS = 40;
+
+// Loudness of the recording in PEAKS bars (0..1), for the waveform.
+async function peaksOf(src) {
+  const data = await (await fetch(src)).arrayBuffer();
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new Ctx();
+  try {
+    const audio = await ctx.decodeAudioData(data);
+    const samples = audio.getChannelData(0);
+    const size = Math.floor(samples.length / PEAKS) || 1;
+    const peaks = Array.from({ length: PEAKS }, (_, i) => {
+      let sum = 0;
+      for (let j = i * size; j < Math.min(samples.length, (i + 1) * size); j++) sum += samples[j] * samples[j];
+      return Math.sqrt(sum / size);
+    });
+    const max = Math.max(...peaks) || 1;
+    return peaks.map((p) => Math.max(0.12, p / max));
+  } finally {
+    ctx.close().catch(() => {});
+  }
+}
+
+const mmss = (s) => (Number.isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00');
+
+/** WhatsApp-style voice note: avatar with mic, play / pause, waveform you can tap to seek. */
+export const VoicePlayer = ({ src, name, outbound }) => {
+  const audioRef = useRef(null);
+  const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [peaks, setPeaks] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    peaksOf(src).then((p) => !cancelled && setPeaks(p)).catch(() => !cancelled && setPeaks(Array(PEAKS).fill(0.3)));
+    return () => { cancelled = true; };
+  }, [src]);
+
+  const toggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (a.paused) a.play().catch(() => {}); else a.pause();
+  };
+  const seek = (e) => {
+    const a = audioRef.current;
+    if (!a || !duration) return;
+    const box = e.currentTarget.getBoundingClientRect();
+    a.currentTime = Math.min(duration, Math.max(0, ((e.clientX - box.left) / box.width) * duration));
+  };
+  const progress = duration ? time / duration : 0;
+
+  return (
+    <div className="mb-1 flex w-72 max-w-full items-center gap-2.5 py-1">
+      <span className="relative shrink-0">
+        <span className={cn('flex size-11 items-center justify-center rounded-full text-base font-bold', outbound ? 'bg-green-600 text-white' : 'bg-violet-100 text-violet-700')}>
+          {String(name || '?').trim().charAt(0).toUpperCase()}
+        </span>
+        <FiMic className={cn('absolute -right-0.5 -bottom-0.5 size-4 rounded-full bg-white p-0.5', playing || time ? 'text-sky-500' : 'text-green-600')} />
+      </span>
+      <button type="button" onClick={toggle} className="shrink-0 cursor-pointer text-slate-600 hover:text-slate-800" aria-label={playing ? 'Pause' : 'Play'}>
+        {playing ? <FiPause className="size-6 fill-current" /> : <FiPlay className="size-6 fill-current" />}
+      </button>
+      <div className="min-w-0 flex-1">
+        <div className="relative flex h-7 cursor-pointer items-center gap-[2px]" onClick={seek} role="slider" aria-label="Seek" aria-valuenow={Math.round(time)} aria-valuemax={Math.round(duration)}>
+          {(peaks || Array(PEAKS).fill(0.2)).map((p, i) => (
+            <span key={i} className={cn('flex-1 rounded-full', i / PEAKS < progress ? 'bg-sky-500' : 'bg-slate-400/70')} style={{ height: `${Math.round(p * 100)}%` }} />
+          ))}
+          <span className="pointer-events-none absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-sky-500 shadow" style={{ left: `${progress * 100}%` }} />
+        </div>
+        <div className="text-[11px] text-slate-500">{mmss(playing || time ? time : duration)}</div>
+      </div>
+      <audio
+        ref={audioRef}
+        src={src}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => { setPlaying(false); setTime(0); }}
+        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onDurationChange={(e) => Number.isFinite(e.currentTarget.duration) && setDuration(e.currentTarget.duration)}
+        className="hidden"
+      />
+    </div>
+  );
+};
+
 /** The file part of a chat message: photo, video, voice note, sticker or document card. */
 // `onOpenImage(message)`: show a photo in the full-screen viewer.
-export const MessageMedia = ({ message, onOpenImage }) => {
+export const MessageMedia = ({ message, onOpenImage, senderName }) => {
   const { src, failed } = useMediaSrc(message);
   if (!message.has_media && !message.media_url) return null;
   if (failed) return <div className="mb-1 rounded-md bg-black/5 px-3 py-2 text-xs text-slate-500">This file is no longer available on WhatsApp.</div>;
@@ -113,6 +201,6 @@ export const MessageMedia = ({ message, onOpenImage }) => {
     );
   }
   if (message.type === 'video') return <video src={src} controls preload="metadata" className="mb-1 max-h-80 max-w-full rounded-md bg-black sm:max-w-72" />;
-  if (message.type === 'audio') return <audio src={src} controls preload="metadata" className="mb-1 h-10 w-64 max-w-full" />;
+  if (message.type === 'audio') return <VoicePlayer src={src} name={senderName} outbound={message.direction === 'outbound'} />;
   return null;
 };

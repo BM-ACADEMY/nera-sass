@@ -285,7 +285,7 @@ test('Platform WhatsApp inbox', async (t) => {
     }
   });
 
-  await t.test('I9. Replies, reactions, location, contact cards, buttons, lists and typing', async () => {
+  await t.test('I9. Replies, reactions and typing', async () => {
     const { ops } = await seed();
     await postWebhook(inbound('Do you have a demo video? https://getnera.in/demo'));
     const contact = await PlatformWaContacts.findOne({}).lean();
@@ -313,25 +313,6 @@ test('Platform WhatsApp inbox', async (t) => {
     assert.deepStrictEqual(list.body.messages.find((m) => m.id === ours.id).reactions, { customer: '❤️' });
     assert.deepStrictEqual(list.body.messages.find((m) => m.id === first.id).reactions, { staff: '👍' });
 
-    const loc = await post(`/conversations/${contact.id}/location`, { latitude: '11.9416', longitude: '79.8083', name: 'Getnera office', address: 'Puducherry' });
-    assert.strictEqual(loc.status, 201, JSON.stringify(loc.body));
-    assert.deepStrictEqual(metaCalls.at(-1).data.location, { latitude: 11.9416, longitude: 79.8083, name: 'Getnera office', address: 'Puducherry' });
-    assert.strictEqual(loc.body.message.location.name, 'Getnera office');
-    assert.strictEqual((await post(`/conversations/${contact.id}/location`, { latitude: 200, longitude: 0 })).status, 400);
-
-    const card = await post(`/conversations/${contact.id}/contact`, { name: 'Priya Sales', phone: '+91 98765 00000' });
-    assert.strictEqual(card.status, 201, JSON.stringify(card.body));
-    assert.strictEqual(metaCalls.at(-1).data.contacts[0].phones[0].phone, '+919876500000');
-    assert.deepStrictEqual(card.body.message.contacts, [{ name: 'Priya Sales', phones: ['+919876500000'], emails: [] }]);
-
-    const buttons = await post(`/conversations/${contact.id}/interactive`, { kind: 'buttons', body: 'Book a demo?', buttons: ['Yes', 'Later', 'Call me'] });
-    assert.strictEqual(buttons.status, 201, JSON.stringify(buttons.body));
-    assert.deepStrictEqual(metaCalls.at(-1).data.interactive.action.buttons.map((b) => b.reply.title), ['Yes', 'Later', 'Call me']);
-    assert.strictEqual((await post(`/conversations/${contact.id}/interactive`, { kind: 'buttons', body: 'x', buttons: ['a', 'b', 'c', 'd'] })).status, 400);
-    const listMsg = await post(`/conversations/${contact.id}/interactive`, { kind: 'list', body: 'Pick a plan', button_text: 'Plans', rows: [{ title: 'Starter', description: '₹999' }, { title: 'Pro' }] });
-    assert.strictEqual(listMsg.status, 201, JSON.stringify(listMsg.body));
-    assert.strictEqual(metaCalls.at(-1).data.interactive.action.sections[0].rows[1].title, 'Pro');
-
     const typing = await post(`/conversations/${contact.id}/typing`, {});
     assert.strictEqual(typing.body.sent, true);
     assert.deepStrictEqual(metaCalls.at(-1).data.typing_indicator, { type: 'text' });
@@ -341,22 +322,11 @@ test('Platform WhatsApp inbox', async (t) => {
     assert.deepStrictEqual(shared.body.links.map((l) => l.url), ['https://getnera.in/demo']);
   });
 
-  await t.test('I10. Quick replies, assigning chats and labels', async () => {
+  await t.test('I10. Assigning chats and labels', async () => {
     const { ops } = await seed();
     await postWebhook(inbound('hello'));
     const contact = await PlatformWaContacts.findOne({}).lean();
     const api = (method, path) => request(app)[method](`/api/admin/inbox${path}`).set(bearer(ops));
-
-    const created = await api('post', '/quick-replies').send({ shortcut: '/Price', text: 'Plans start at ₹999 a month.' });
-    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
-    assert.strictEqual(created.body.quick_reply.shortcut, 'price');
-    assert.strictEqual((await api('post', '/quick-replies').send({ shortcut: 'price', text: 'again' })).status, 409);
-    assert.strictEqual((await api('post', '/quick-replies').send({ shortcut: 'has space', text: 'x' })).status, 400);
-    const edited = await api('patch', `/quick-replies/${created.body.quick_reply.id}`).send({ shortcut: 'price', text: 'From ₹999.' });
-    assert.strictEqual(edited.body.quick_reply.text, 'From ₹999.');
-    assert.strictEqual((await api('get', '/quick-replies')).body.quick_replies.length, 1);
-    await api('delete', `/quick-replies/${created.body.quick_reply.id}`);
-    assert.strictEqual((await api('get', '/quick-replies')).body.quick_replies.length, 0);
 
     const { staff } = (await api('get', '/staff')).body;
     assert.ok(staff.some((s) => s.id === ops.id), 'ops staff can be assigned');
@@ -370,6 +340,44 @@ test('Platform WhatsApp inbox', async (t) => {
     assert.strictEqual((await api('get', '/conversations?filter=unassigned')).body.conversations.length, 0);
     assert.strictEqual((await api('get', '/conversations?label=Paid')).body.conversations.length, 1);
     assert.ok((await api('get', '/labels')).body.labels.includes('Paid'));
+  });
+
+  await t.test('I11. Message info times, pin, star, forward and delete', async () => {
+    const { ops } = await seed();
+    await postWebhook(inbound('first chat', '919876543210'));
+    await postWebhook(inbound('second chat', '919800000001'));
+    const [a, b] = await PlatformWaContacts.find({}).sort({ id: 1 }).lean();
+    const api = (method, path) => request(app)[method](`/api/admin/inbox${path}`).set(bearer(ops));
+
+    const sent = (await api('post', `/conversations/${a.id}/messages`).send({ text: 'Price list attached' })).body.message;
+    const wamid = (await PlatformWaMessages.findOne({ id: sent.id }).lean()).wa_message_id;
+    const receipt = (status, ts) => JSON.stringify({ object: 'whatsapp_business_account', entry: [{ changes: [{ field: 'messages', value: {
+      metadata: { phone_number_id: PLATFORM_PHONE }, statuses: [{ id: wamid, status, timestamp: String(ts) }],
+    } }] }] });
+    await postWebhook(receipt('read', 1790000060)); // read can arrive before delivered
+    await postWebhook(receipt('delivered', 1790000000));
+    const info = (await api('get', `/conversations/${a.id}/messages`)).body.messages.find((m) => m.id === sent.id);
+    assert.strictEqual(info.status, 'read');
+    assert.strictEqual(new Date(info.read_at).getTime(), 1790000060000);
+    assert.strictEqual(new Date(info.delivered_at).getTime(), 1790000000000, 'the real delivered time replaces the stand-in');
+
+    const flagged = await api('patch', `/messages/${sent.id}`).send({ pinned: true, starred: true });
+    assert.strictEqual(flagged.status, 200, JSON.stringify(flagged.body));
+    assert.strictEqual(flagged.body.message.pinned, true);
+    assert.strictEqual(flagged.body.message.starred, true);
+
+    const fwd = await api('post', `/messages/${sent.id}/forward`).send({ contact_id: b.id });
+    assert.strictEqual(fwd.status, 201, JSON.stringify(fwd.body));
+    assert.strictEqual(fwd.body.message.is_forwarded, true);
+    assert.strictEqual(metaCalls.at(-1).data.to, '919800000001');
+    assert.strictEqual(metaCalls.at(-1).data.text.body, 'Price list attached');
+
+    const del = await api('post', '/messages/delete').send({ ids: [sent.id] });
+    assert.deepStrictEqual(del.body, { deleted: 1, files_deleted: 0 });
+    assert.strictEqual(await PlatformWaMessages.countDocuments({ id: sent.id }), 0);
+    const after = await PlatformWaContacts.findOne({ id: a.id }).lean();
+    assert.strictEqual(after.last_message_preview, 'first chat', 'the list shows the newest message left');
+    assert.strictEqual((await api('post', '/messages/delete').send({ ids: [] })).status, 400);
   });
 
   await t.test('I8. Media kinds follow Meta limits', () => {

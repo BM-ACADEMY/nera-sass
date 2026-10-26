@@ -81,23 +81,6 @@ const mediaInfoOf = (msg) => {
   return { filename: media.filename || null, mime_type: media.mime_type || null, voice: Boolean(media.voice) };
 };
 
-// Location and contact cards keep their details so the chat can show them.
-const structuredOf = (msg) => {
-  if (msg.type === 'location' && msg.location) {
-    const { latitude, longitude, name, address, url } = msg.location;
-    return { location: { latitude, longitude, name: name || null, address: address || null, url: url || null } };
-  }
-  if (msg.type === 'contacts' && Array.isArray(msg.contacts)) {
-    return { contacts: msg.contacts.slice(0, 10).map(contactCardOf) };
-  }
-  return {};
-};
-const contactCardOf = (c) => ({
-  name: c.name?.formatted_name || [c.name?.first_name, c.name?.last_name].filter(Boolean).join(' ') || 'Contact',
-  phones: (c.phones || []).map((p) => p.phone || p.wa_id).filter(Boolean).slice(0, 5),
-  emails: (c.emails || []).map((e) => e.email).filter(Boolean).slice(0, 3),
-});
-
 // Status only moves forward; a failure is always recorded.
 const STATUS_RANK = { sending: 0, sent: 1, delivered: 2, read: 3 };
 
@@ -159,7 +142,7 @@ async function handleWebhookValue(value = {}) {
     try {
       saved = await PlatformWaMessages.create({
         contact_id: contact.id, direction: 'inbound', type: msg.type || 'text', text,
-        media_id: mediaIdOf(msg), ...mediaInfoOf(msg), ...structuredOf(msg),
+        media_id: mediaIdOf(msg), ...mediaInfoOf(msg),
         reply_to_wa_id: msg.context?.id || null,
         wa_message_id: msg.id, status: 'received', created_at: at,
       });
@@ -182,12 +165,18 @@ async function handleWebhookValue(value = {}) {
     if (!s.id || !s.status) continue;
     const message = await PlatformWaMessages.findOne({ wa_message_id: s.id }, { _id: 0, id: 1, contact_id: 1, status: 1 }).lean();
     if (!message) continue;
+    // When each step happened, for "Message info".
+    const at = s.timestamp ? new Date(Number(s.timestamp) * 1000) : new Date();
+    // $min keeps the earliest time, so late or repeated receipts never move it
+    // forward; a read message was delivered by then at the latest.
+    const times = { delivered: { delivered_at: at }, read: { read_at: at, delivered_at: at } }[s.status];
+    if (times) await PlatformWaMessages.updateOne({ id: message.id }, { $min: times });
     if (s.status === 'failed') {
       const error = s.errors?.[0]?.title || s.errors?.[0]?.message || 'Delivery failed';
       await PlatformWaMessages.updateOne({ id: message.id }, { $set: { status: 'failed', error } });
     } else if ((STATUS_RANK[s.status] ?? -1) > (STATUS_RANK[message.status] ?? -1)) {
       await PlatformWaMessages.updateOne({ id: message.id }, { $set: { status: s.status } });
-    } else {
+    } else if (!times) {
       continue;
     }
     touched.add(message.contact_id);
@@ -285,77 +274,6 @@ async function sendReaction({ messageId, emoji }) {
   await PlatformWaMessages.updateOne({ id: message.id }, value ? { $set: { 'reactions.staff': value } } : { $unset: { 'reactions.staff': '' } });
   changed(contact.id);
   return { id: message.id, emoji: value };
-}
-
-async function sendLocation({ contactId, latitude, longitude, name, address, replyTo, staff }) {
-  const lat = Number(latitude);
-  const lng = Number(longitude);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
-    throw new InboxError(400, 'Enter a valid latitude and longitude');
-  }
-  const contact = await openContact(contactId);
-  const location = { latitude: lat, longitude: lng, name: String(name || '').trim().slice(0, 100) || undefined, address: String(address || '').trim().slice(0, 300) || undefined };
-  const text = ['📍', location.name, location.address].filter(Boolean).join(' ');
-  return deliver(contact, { type: 'location', text: '', preview: text || '📍 Location', extra: { location: { ...location, name: location.name || null, address: location.address || null } }, replyToWaId: await waIdOfMessage(contact, replyTo) },
-    { type: 'location', location }, staff);
-}
-
-async function sendContactCard({ contactId, name, phone, email, replyTo, staff }) {
-  const fullName = String(name || '').trim().slice(0, 100);
-  const number = String(phone || '').replace(/[^\d+]/g, '');
-  if (!fullName) throw new InboxError(400, 'Enter the contact name');
-  if (digits(number).length < 8) throw new InboxError(400, 'Enter the phone number with its country code');
-  const contact = await openContact(contactId);
-  const plus = number.startsWith('+') ? number : `+${number}`;
-  const card = {
-    name: { formatted_name: fullName, first_name: fullName.split(' ')[0] },
-    phones: [{ phone: plus, type: 'CELL', wa_id: digits(plus) }],
-    ...(email ? { emails: [{ email: String(email).trim().slice(0, 120), type: 'WORK' }] } : {}),
-  };
-  return deliver(contact, { type: 'contacts', text: '', preview: `👤 ${fullName}`, extra: { contacts: [contactCardOf(card)] }, replyToWaId: await waIdOfMessage(contact, replyTo) },
-    { type: 'contacts', contacts: [card] }, staff);
-}
-
-/**
- * Reply buttons (up to 3) or a list (up to 10 rows): Meta's interactive
- * messages, allowed only inside the 24-hour window.
- */
-async function sendInteractive({ contactId, kind, body, header, footer, buttons, buttonText, rows, replyTo, staff }) {
-  const text = String(body || '').trim();
-  if (!text) throw new InboxError(400, 'Type the message text');
-  if (text.length > 1024) throw new InboxError(400, 'The message text can be at most 1024 characters');
-  const clean = (value, max) => String(value || '').trim().slice(0, max);
-  const interactive = { body: { text } };
-  if (clean(header, 60)) interactive.header = { type: 'text', text: clean(header, 60) };
-  if (clean(footer, 60)) interactive.footer = { text: clean(footer, 60) };
-
-  let options;
-  if (kind === 'list') {
-    options = (rows || []).map((r) => ({ title: clean(r?.title, 24), description: clean(r?.description, 72) })).filter((r) => r.title);
-    if (!options.length || options.length > 10) throw new InboxError(400, 'A list needs 1 to 10 options');
-    const action = clean(buttonText, 20);
-    if (!action) throw new InboxError(400, 'Enter the list button text');
-    interactive.type = 'list';
-    interactive.action = {
-      button: action,
-      sections: [{ title: clean(header, 24) || 'Options', rows: options.map((r, i) => ({ id: `row_${i + 1}`, title: r.title, ...(r.description ? { description: r.description } : {}) })) }],
-    };
-  } else {
-    options = (buttons || []).map((b) => clean(b, 20)).filter(Boolean).map((title) => ({ title }));
-    if (!options.length || options.length > 3) throw new InboxError(400, 'Buttons need 1 to 3 options');
-    if (new Set(options.map((o) => o.title.toLowerCase())).size !== options.length) throw new InboxError(400, 'Button names must be different');
-    interactive.type = 'button';
-    interactive.action = { buttons: options.map((o, i) => ({ type: 'reply', reply: { id: `btn_${i + 1}`, title: o.title } })) };
-  }
-
-  const contact = await openContact(contactId);
-  return deliver(contact, {
-    type: 'interactive',
-    text: [interactive.header?.text, text, interactive.footer?.text].filter(Boolean).join('\n\n'),
-    preview: text,
-    extra: { interactive: { kind: interactive.type, options, button_text: interactive.action.button || null } },
-    replyToWaId: await waIdOfMessage(contact, replyTo),
-  }, { type: 'interactive', interactive }, staff);
 }
 
 // Shows "typing…" to the customer (and marks their last message read).
@@ -486,6 +404,71 @@ async function sendMedia({ contactId, buffer, mimeType, filename, caption, voice
  * The bytes of one chat file, for the admin panel: from the media server when
  * a copy exists, otherwise from Meta (which keeps files for about 30 days).
  */
+/**
+ * Deletes messages from the admin inbox for good: the rows and their files on
+ * the media server. WhatsApp has no "delete for everyone" in the Cloud API, so
+ * the customer's phone keeps its copy.
+ */
+async function deleteMessages(ids) {
+  const list = [...new Set((Array.isArray(ids) ? ids : [ids]).map(Number).filter(Number.isInteger))].slice(0, 500);
+  if (!list.length) throw new InboxError(400, 'Choose messages to delete');
+  const rows = await PlatformWaMessages.find({ id: { $in: list } }, { _id: 0, id: 1, contact_id: 1, media_ref: 1 }).lean();
+  let filesDeleted = 0;
+  for (const row of rows.filter((r) => r.media_ref)) {
+    try {
+      if (await runAsSystem(() => mediaStore.remove(row.media_ref), 'platform-inbox-delete')) filesDeleted++;
+    } catch (error) {
+      // Keep the message so the file is not orphaned; staff can retry.
+      throw new InboxError(502, `Could not delete a file from the media server: ${error.message}`, 'MEDIA_DELETE_FAILED');
+    }
+  }
+  await PlatformWaMessages.deleteMany({ id: { $in: rows.map((r) => r.id) } });
+
+  // The chat list shows the newest message that is left.
+  for (const contactId of new Set(rows.map((r) => r.contact_id))) {
+    const last = await PlatformWaMessages.findOne({ contact_id: contactId }, { _id: 0, text: 1, type: 1, filename: 1, direction: 1, created_at: 1 }).sort({ id: -1 }).lean();
+    await PlatformWaContacts.updateOne({ id: contactId }, { $set: {
+      last_message_preview: last ? String(last.text || (last.type === 'document' ? `📄 ${last.filename || 'Document'}` : MEDIA_PREVIEW[last.type] || '')).slice(0, 160) : '',
+      last_message_direction: last?.direction || null,
+      ...(last ? {} : { last_message_at: null }),
+    } });
+    changed(contactId);
+  }
+  return { deleted: rows.length, files_deleted: filesDeleted };
+}
+
+/** Sends a copy of a message (text or file) to another chat whose window is open. */
+async function forwardMessage({ messageId, contactId, staff }) {
+  const message = await PlatformWaMessages.findOne({ id: Number(messageId) }, { _id: 0 }).lean();
+  if (!message) throw new InboxError(404, 'Message not found');
+  let sent;
+  if (message.media_ref || message.media_id) {
+    const file = await messageMedia(message.id);
+    sent = await sendMedia({
+      contactId, buffer: file.buffer, mimeType: file.mimeType || message.mime_type, filename: file.filename || message.filename,
+      caption: message.text, staff,
+    });
+  } else if (message.text) {
+    sent = await sendText({ contactId, text: message.text, staff });
+  } else {
+    throw new InboxError(400, 'This message cannot be forwarded');
+  }
+  await PlatformWaMessages.updateOne({ id: sent.id }, { $set: { is_forwarded: true } });
+  return { ...sent, is_forwarded: true };
+}
+
+/** Pins or stars a message (only in the admin inbox; the customer does not see it). */
+async function flagMessage({ messageId, pinned, starred }) {
+  const set = {};
+  if (pinned !== undefined) set.pinned_at = pinned ? new Date() : null;
+  if (starred !== undefined) set.starred = Boolean(starred);
+  if (!Object.keys(set).length) throw new InboxError(400, 'Nothing to change');
+  const message = await PlatformWaMessages.findOneAndUpdate({ id: Number(messageId) }, { $set: set }, { new: true, projection: { _id: 0 } }).lean();
+  if (!message) throw new InboxError(404, 'Message not found');
+  changed(message.contact_id);
+  return message;
+}
+
 async function messageMedia(messageId) {
   const message = await PlatformWaMessages.findOne({ id: Number(messageId) }, { _id: 0, media_ref: 1, media_id: 1, mime_type: 1, filename: 1 }).lean();
   if (!message || (!message.media_ref && !message.media_id)) throw new InboxError(404, 'This message has no file');
@@ -691,10 +674,10 @@ module.exports = {
   uploadHeaderMedia,
   sendMedia,
   messageMedia,
+  deleteMessages,
+  forwardMessage,
+  flagMessage,
   sendReaction,
-  sendLocation,
-  sendContactCard,
-  sendInteractive,
   sendTyping,
   mediaKind,
   platformWabaId,

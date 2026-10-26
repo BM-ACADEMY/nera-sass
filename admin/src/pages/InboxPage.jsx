@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
-  FiSearch, FiPlus, FiArrowLeft, FiCheck, FiClock, FiAlertTriangle, FiInfo, FiX,
-  FiLock, FiUnlock, FiExternalLink, FiFileText, FiInbox, FiPaperclip,
+  FiSearch, FiPlus, FiArrowLeft, FiCheck, FiClock, FiAlertTriangle, FiX, FiCornerUpRight, FiStar, FiTrash2,
+  FiLock, FiUnlock, FiFileText, FiInbox, FiPaperclip,
 } from 'react-icons/fi';
+import { BsPinAngleFill } from 'react-icons/bs';
 import { FaWhatsapp } from 'react-icons/fa';
 import axiosClient from '../api/axiosClient';
 import { useLiveEvent, useLiveStatus } from '../api/realtime';
@@ -16,18 +17,19 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
-import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
-import { relativeTime, fullDateTime } from '../utils/time';
+import { fullDateTime } from '../utils/time';
 import { Composer } from '../components/inbox/Composer';
 import { MessageBubble } from '../components/inbox/MessageBubble';
 import { ImageViewer } from '../components/inbox/ImageViewer';
-import { ContactDialog, InteractiveDialog, LocationDialog, QuickRepliesDialog } from '../components/inbox/SendDialogs';
-import { AssignAndLabels, LabelChip, SharedMedia } from '../components/inbox/ContactExtras';
+import { ForwardDialog } from '../components/inbox/ForwardDialog';
+import { MAX_FILE, MAX_FILES, SendPreview, toPending } from '../components/inbox/SendPreview';
+import { saveFile } from '../components/inbox/ChatMedia';
+import { quoteText } from '../components/inbox/ChatCards';
+import { ContactInfoPanel, LabelChip, MessageInfoPanel, SharedMediaPanel, useShared } from '../components/inbox/ContactInfo';
 
 const apiError = (err, fallback) => err.response?.data?.error || fallback;
-const FILTERS = [['all', 'All'], ['unread', 'Unread'], ['mine', 'Mine'], ['unassigned', 'Unassigned'], ['open', 'Open'], ['closed', 'Closed']];
-const SPECIAL_PATHS = { location: 'location', contact: 'contact', interactive: 'interactive' };
+const FILTERS = [['all', 'All'], ['unread', 'Unread'], ['unassigned', 'Unassigned'], ['open', 'Open'], ['closed', 'Closed']];
 const TYPING_EVERY_MS = 20000;
 
 const formatNumber = (waId) => (waId ? `+${waId}` : '');
@@ -64,6 +66,38 @@ const Avatar = ({ name, size = 'size-10' }) => (
   <span className={cn(size, 'flex shrink-0 items-center justify-center rounded-full bg-green-100 font-bold text-green-700')}>{initials(name)}</span>
 );
 
+// Saves a message's file under its own name.
+async function saveMessageFile(m) {
+  const name = m.filename || `${m.type}-${m.id}`;
+  if (m.media_url) return saveFile(m.media_url, name);
+  const res = await axiosClient.get(`/admin/inbox/messages/${m.id}/media`, { responseType: 'blob' });
+  const url = URL.createObjectURL(res.data);
+  try { await saveFile(url, name); } finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+}
+
+const DeleteDialog = ({ count, onCancel, onConfirm }) => {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Dialog open={count > 0} onOpenChange={(o) => !o && !busy && onCancel()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Delete {count > 1 ? `${count} messages` : 'message'}?</DialogTitle>
+          <DialogDescription>
+            It is removed from this chat and its file is deleted from the media server for good.
+            WhatsApp cannot delete it from the customer's phone.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button variant="destructive" disabled={busy} onClick={async () => { setBusy(true); try { await onConfirm(); } finally { setBusy(false); } }}>
+            {busy && <Spinner />} Delete
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
 // The platform's own WhatsApp number as a full-screen inbox (opened in its own
 // tab from the admin panel). All sending goes through the server.
 // `embedded`: shown inside the admin panel (the dashboard owns the header and
@@ -87,20 +121,21 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
   const [hasMore, setHasMore] = useState(false);
   const [threadLoading, setThreadLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const composerRef = useRef(null);
+  const [pending, setPending] = useState([]); // files in the send preview
   const [templates, setTemplates] = useState([]);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [newChatOpen, setNewChatOpen] = useState(false);
-  const [showInfo, setShowInfo] = useState(false);
+  const [panel, setPanel] = useState(null); // { kind: 'contact' | 'shared' | 'info', id? }
   const [replyingTo, setReplyingTo] = useState(null);
-  const [special, setSpecial] = useState(null); // 'location' | 'contact' | 'interactive'
-  const [quickReplies, setQuickReplies] = useState([]);
-  const [quickOpen, setQuickOpen] = useState(false);
   const [staff, setStaff] = useState([]);
   const [knownLabels, setKnownLabels] = useState([]);
   const [labelFilter, setLabelFilter] = useState('');
   const [viewer, setViewer] = useState(null); // { images, index }
   const [highlightId, setHighlightId] = useState(null);
+  const [selected, setSelected] = useState(null); // Set of message ids while selecting
+  const [forwardIds, setForwardIds] = useState(null);
+  const [deleteIds, setDeleteIds] = useState(null);
+  const composerRef = useRef(null);
   const lastTyping = useRef(0);
   const bottomRef = useRef(null);
 
@@ -158,12 +193,14 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
     setDetail(null);
     setMessages([]);
     setReplyingTo(null);
+    setSelected(null);
+    setPending([]);
+    setPanel((p) => (p?.kind === 'info' ? null : p));
     loadThread(activeId);
   }, [activeId]); // eslint-disable-line react-hooks/exhaustive-deps
   const loadLabels = () => axiosClient.get('/admin/inbox/labels').then((r) => setKnownLabels(r.data.labels || [])).catch(() => {});
   useEffect(() => {
     axiosClient.get('/admin/inbox/templates').then((r) => setTemplates(r.data.templates || [])).catch(() => {});
-    axiosClient.get('/admin/inbox/quick-replies').then((r) => setQuickReplies(r.data.quick_replies || [])).catch(() => {});
     axiosClient.get('/admin/inbox/staff').then((r) => setStaff(r.data.staff || [])).catch(() => {});
     loadLabels();
   }, []);
@@ -188,6 +225,8 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
   const conversation = detail?.conversation;
   const windowOpen = Boolean(conversation?.window_open);
   const configured = status?.configured !== false;
+  const customerName = conversation ? conversation.name || formatNumber(conversation.wa_id) : '';
+  const { data: shared, refresh: refreshShared } = useShared(panel ? activeId : null, messages.length);
 
   // Shows the failed message (if the server recorded one) and the reason; rethrows
   // so the composer keeps what was not sent.
@@ -213,14 +252,35 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
     }
   };
 
-  // Location, contact card, buttons or list, built in a dialog.
-  const sendSpecial = async (kind, body) => {
+  const sendFile = async (file, { caption = '', voice = false, onProgress } = {}) => {
+    const form = new FormData();
+    form.append('file', file);
+    if (caption) form.append('caption', caption);
+    if (voice) form.append('voice', '1');
+    if (replyingTo) form.append('reply_to', String(replyingTo.id));
     try {
-      const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/${SPECIAL_PATHS[kind]}`, { ...body, ...replyField() });
+      const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/media`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 0,
+        onUploadProgress: (e) => e.total && onProgress?.(Math.round((e.loaded / e.total) * 100)),
+      });
       sent(res.data.message);
     } catch (err) {
-      sendFailed(err, 'Message not sent');
+      sendFailed(err, voice ? 'Voice message not sent' : `${file.name} not sent`);
     }
+  };
+
+  // Picked, pasted or dropped files go to the send preview.
+  const addFiles = (files) => {
+    const list = [...(files || [])];
+    const tooBig = list.filter((f) => f.size > MAX_FILE);
+    if (tooBig.length) toast.error(`${tooBig.map((f) => f.name).join(', ')}: a file can be at most 100 MB`);
+    setPending((current) => {
+      const room = MAX_FILES - current.length;
+      const ok = list.filter((f) => f.size <= MAX_FILE);
+      if (ok.length > room) toast.error(`You can send up to ${MAX_FILES} files at once`);
+      return [...current, ...toPending(ok.slice(0, Math.max(0, room)))];
+    });
   };
 
   const react = async (message, emoji) => {
@@ -235,6 +295,15 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
     }
   };
 
+  const flag = async (message, changes) => {
+    try {
+      const res = await axiosClient.patch(`/admin/inbox/messages/${message.id}`, changes);
+      setMessages((list) => list.map((m) => (m.id === message.id ? res.data.message : m)));
+    } catch (err) {
+      toast.error(apiError(err, 'Could not update the message'));
+    }
+  };
+
   // "typing…" for the customer, at most every 20 seconds.
   const typing = () => {
     if (Date.now() - lastTyping.current < TYPING_EVERY_MS) return;
@@ -243,9 +312,10 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
   };
 
   const chatImages = useMemo(() => messages.filter((m) => m.type === 'image' && (m.has_media || m.media_url)), [messages]);
-  const openImage = (message) => {
-    const index = chatImages.findIndex((m) => m.id === message.id);
-    setViewer(index >= 0 ? { images: chatImages, index } : { images: [message], index: 0 });
+  const openImage = (message, list = chatImages) => {
+    const images = list.filter((m) => m.type === 'image' || m.type === 'sticker');
+    const index = images.findIndex((m) => m.id === message.id);
+    setViewer(index >= 0 ? { images, index } : { images: [message], index: 0 });
   };
 
   const jumpTo = (id) => {
@@ -256,30 +326,63 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
     setTimeout(() => setHighlightId((h) => (h === id ? null : h)), 1600);
   };
 
-  const startReply = (message) => {
-    setReplyingTo(message);
-    requestAnimationFrame(() => composerRef.current?.focus());
+  const onAction = async (name, m, extra) => {
+    if (name === 'info') setPanel({ kind: 'info', id: m.id });
+    if (name === 'reply') { setReplyingTo(m); requestAnimationFrame(() => composerRef.current?.focus()); }
+    if (name === 'copy') {
+      try { await navigator.clipboard.writeText(m.text || ''); toast.success('Copied'); } catch { toast.error('Could not copy'); }
+    }
+    if (name === 'forward') setForwardIds([m.id]);
+    if (name === 'pin') flag(m, { pinned: !m.pinned });
+    if (name === 'star') flag(m, { starred: !m.starred });
+    if (name === 'select') setSelected(new Set([m.id]));
+    if (name === 'save') saveMessageFile(m).catch(() => toast.error('Could not download the file'));
+    if (name === 'delete') setDeleteIds([m.id]);
+    if (name === 'react') react(m, extra);
   };
 
-  const sendFile = async (file, { caption = '', voice = false, onProgress } = {}) => {
-    const form = new FormData();
-    form.append('file', file);
-    if (caption) form.append('caption', caption);
-    if (voice) form.append('voice', '1');
+  const toggleSelect = (m) => setSelected((s) => {
+    const next = new Set(s);
+    if (next.has(m.id)) next.delete(m.id); else next.add(m.id);
+    return next.size ? next : null;
+  });
+
+  const forward = async (contactIds) => {
+    let ok = 0;
+    let failed = 0;
+    for (const id of forwardIds) {
+      for (const contactId of contactIds) {
+        try {
+          await axiosClient.post(`/admin/inbox/messages/${id}/forward`, { contact_id: contactId });
+          ok++;
+        } catch (err) {
+          failed++;
+          toast.error(apiError(err, 'Could not forward'));
+        }
+      }
+    }
+    if (ok) toast.success(`Forwarded ${ok}`);
+    if (contactIds.includes(activeId)) loadThread(activeId, { quiet: true });
+    if (!failed) { setForwardIds(null); setSelected(null); }
+  };
+
+  const remove = async () => {
     try {
-      if (replyingTo) form.append('reply_to', String(replyingTo.id));
-      const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/media`, form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 0,
-        onUploadProgress: (e) => e.total && onProgress?.(Math.round((e.loaded / e.total) * 100)),
-      });
-      sent(res.data.message);
+      const res = await axiosClient.post('/admin/inbox/messages/delete', { ids: deleteIds });
+      const gone = new Set(deleteIds);
+      setMessages((list) => list.filter((m) => !gone.has(m.id)));
+      if (panel?.kind === 'info' && gone.has(panel.id)) setPanel(null);
+      toast.success(res.data.files_deleted ? `Deleted (${res.data.files_deleted} file${res.data.files_deleted > 1 ? 's' : ''} removed from the server)` : 'Deleted');
+      setDeleteIds(null);
+      setSelected(null);
+      refreshShared();
+      loadConversations({ quiet: true });
     } catch (err) {
-      sendFailed(err, voice ? 'Voice message not sent' : `${file.name} not sent`);
+      toast.error(apiError(err, 'Could not delete'));
     }
   };
 
-  const canAttach = configured && windowOpen;
+  const canAttach = configured && windowOpen && !selected;
   const dragProps = {
     onDragEnter: (e) => { if (canAttach && e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); setDragging(true); } },
     onDragOver: (e) => { if (canAttach && e.dataTransfer?.types?.includes('Files')) e.preventDefault(); },
@@ -288,7 +391,7 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
       if (!canAttach) return;
       e.preventDefault();
       setDragging(false);
-      composerRef.current?.addFiles(e.dataTransfer.files);
+      addFiles(e.dataTransfer.files);
     },
   };
 
@@ -315,6 +418,27 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
     }
     return out;
   }, [messages]);
+  const pinned = useMemo(() => [...messages].reverse().find((m) => m.pinned), [messages]);
+  const infoMessage = panel?.kind === 'info' ? messages.find((m) => m.id === panel.id) : null;
+
+  const bubble = (m, extra = {}) => (
+    <MessageBubble
+      key={m.id}
+      message={m}
+      customerName={customerName}
+      canInteract={configured && windowOpen}
+      selecting={Boolean(selected)}
+      selected={selected?.has(m.id)}
+      onToggleSelect={toggleSelect}
+      onAction={onAction}
+      onOpenImage={(msg) => openImage(msg)}
+      onJumpTo={jumpTo}
+      highlighted={highlightId === m.id}
+      time={<span title={fullDateTime(m.created_at)}>{timeOf(m.created_at)}</span>}
+      ticks={<Ticks status={m.status} />}
+      {...extra}
+    />
+  );
 
   if (!allowed) {
     return (
@@ -363,7 +487,7 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         {/* Conversations */}
         <aside className={cn('flex w-full shrink-0 flex-col border-r border-border bg-card md:w-80 lg:w-96', activeId && 'hidden md:flex')}>
           <div className="flex flex-col gap-2 border-b border-border p-3">
@@ -371,22 +495,22 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
               <FiSearch className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground" />
               <Input placeholder="Search name, number or message" value={search} onChange={(e) => setSearch(e.target.value)} className="h-9 pl-9" />
             </div>
-            <div className="flex gap-1 overflow-x-auto">
+            <div className="flex flex-wrap gap-1">
               {FILTERS.map(([key, label]) => (
                 <button
                   key={key}
                   type="button"
                   onClick={() => setFilter(key)}
-                  className={cn('cursor-pointer rounded-full px-3 py-1 text-xs font-semibold whitespace-nowrap transition-colors', filter === key ? 'bg-green-100 text-green-800' : 'text-muted-foreground hover:bg-muted')}
+                  className={cn('cursor-pointer rounded-full px-3 py-1 text-xs font-semibold whitespace-nowrap transition-colors', filter === key ? 'bg-green-100 text-green-800' : 'bg-muted/60 text-muted-foreground hover:bg-muted')}
                 >
                   {label}
                 </button>
               ))}
             </div>
             {knownLabels.length > 0 && (
-              <div className="flex gap-1 overflow-x-auto">
+              <div className="flex flex-wrap gap-1">
                 {knownLabels.map((l) => (
-                  <button key={l} type="button" onClick={() => setLabelFilter((cur) => (cur === l ? '' : l))} className={cn('shrink-0 cursor-pointer rounded-full', labelFilter && labelFilter !== l && 'opacity-50')} title={labelFilter === l ? 'Show all labels' : `Only "${l}"`}>
+                  <button key={l} type="button" onClick={() => setLabelFilter((cur) => (cur === l ? '' : l))} className={cn('cursor-pointer rounded-full', labelFilter && labelFilter !== l && 'opacity-50')} title={labelFilter === l ? 'Show all labels' : `Only "${l}"`}>
                     <LabelChip label={l} className={cn(labelFilter === l && 'ring-2 ring-offset-1 ring-green-500')} />
                   </button>
                 ))}
@@ -441,11 +565,19 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
         {/* Thread */}
         <section className={cn('relative flex min-w-0 flex-1 flex-col', !activeId && 'hidden md:flex')} {...dragProps}>
           {dragging && (
-            <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#25D366] bg-white/90 text-center">
+            <div className="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#25D366] bg-white/90 text-center">
               <FiPaperclip className="size-8 text-[#25D366]" />
               <div className="font-semibold">Drop files to send</div>
               <div className="text-xs text-muted-foreground">Photos, videos, documents and any other file up to 100 MB</div>
             </div>
+          )}
+          {pending.length > 0 && (
+            <SendPreview
+              items={pending}
+              onItems={setPending}
+              onClose={() => setPending([])}
+              onSend={(item, caption, onProgress) => sendFile(item.file, { caption, onProgress })}
+            />
           )}
           {!activeId ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-[#f0f2f5] p-6 text-center">
@@ -459,11 +591,14 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
             <>
               <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-3">
                 <Button variant="ghost" size="icon" className="size-8 md:hidden" onClick={() => openChat(null)} aria-label="Back to chats"><FiArrowLeft /></Button>
-                <Avatar name={conversation.name || conversation.wa_id} size="size-9" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-semibold">{conversation.name || formatNumber(conversation.wa_id)}</div>
-                  <div className="truncate text-[11px] text-muted-foreground">{formatNumber(conversation.wa_id)}</div>
-                </div>
+                {/* Like WhatsApp: the name opens Contact info */}
+                <button type="button" onClick={() => setPanel((p) => (p?.kind === 'contact' ? null : { kind: 'contact' }))} className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-md py-1 text-left hover:bg-muted/50" title="Contact info">
+                  <Avatar name={conversation.name || conversation.wa_id} size="size-9" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold">{customerName}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">Click here for contact info</span>
+                  </span>
+                </button>
                 <Badge variant={windowOpen ? 'success' : 'muted'} className="hidden sm:inline-flex" title="Meta allows free messages for 24 hours after the customer's last message">
                   <FiClock /> {windowOpen ? `Reply window: ${hoursLeft(conversation.window_closes_at)}h left` : 'Reply window closed'}
                 </Badge>
@@ -474,8 +609,15 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
                 >
                   {conversation.status === 'closed' ? <><FiUnlock /> Reopen</> : <><FiLock /> Close</>}
                 </Button>
-                <Button variant="ghost" size="icon" className="size-8 xl:hidden" onClick={() => setShowInfo((v) => !v)} aria-label="Contact info"><FiInfo /></Button>
               </div>
+
+              {pinned && (
+                <div className="flex shrink-0 items-center gap-2 border-b border-border bg-card px-4 py-2 text-sm">
+                  <BsPinAngleFill className="shrink-0 text-slate-500" />
+                  <button type="button" onClick={() => jumpTo(pinned.id)} className="min-w-0 flex-1 cursor-pointer truncate text-left text-slate-700 hover:underline">{quoteText(pinned)}</button>
+                  <button type="button" onClick={() => flag(pinned, { pinned: false })} className="shrink-0 cursor-pointer text-xs text-muted-foreground hover:text-foreground">Unpin</button>
+                </div>
+              )}
 
               <div className="min-h-0 flex-1 overflow-y-auto bg-[#efeae2] px-3 py-4 sm:px-8">
                 {hasMore && (
@@ -488,44 +630,35 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
                     <div key={item.key} className="my-2 flex justify-center">
                       <span className="rounded-md bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-slate-600 shadow-sm">{item.divider}</span>
                     </div>
-                  ) : (
-                    <MessageBubble
-                      key={item.id}
-                      message={item}
-                      customerName={conversation.name || formatNumber(conversation.wa_id)}
-                      canInteract={configured && windowOpen}
-                      onReply={startReply}
-                      onReact={react}
-                      onOpenImage={openImage}
-                      onJumpTo={jumpTo}
-                      highlighted={highlightId === item.id}
-                      sentBy={item.sent_by_name}
-                      time={<span title={fullDateTime(item.created_at)}>{timeOf(item.created_at)}</span>}
-                      ticks={<Ticks status={item.status} />}
-                    />
-                  )))}
+                  ) : bubble(item)))}
                   <div ref={bottomRef} />
                 </div>
               </div>
 
-              {/* Composer */}
-              <div className="shrink-0 border-t border-border bg-card p-3">
-                {!configured ? (
+              {/* Composer, or the selection bar while selecting */}
+              <div className="shrink-0 border-t border-border bg-[#f0f2f5] px-3 py-2.5">
+                {selected ? (
+                  <div className="flex items-center gap-3">
+                    <button type="button" onClick={() => setSelected(null)} className="flex size-9 cursor-pointer items-center justify-center rounded-full hover:bg-black/5" aria-label="Cancel selection"><FiX className="size-5" /></button>
+                    <span className="flex-1 text-sm">{selected.size} selected</span>
+                    <Button variant="ghost" size="icon" title="Star" onClick={() => { messages.filter((m) => selected.has(m.id)).forEach((m) => flag(m, { starred: true })); setSelected(null); }}><FiStar /></Button>
+                    <Button variant="ghost" size="icon" title="Delete" className="text-red-600" onClick={() => setDeleteIds([...selected])}><FiTrash2 /></Button>
+                    <Button variant="ghost" size="icon" title="Forward" onClick={() => setForwardIds([...selected])}><FiCornerUpRight /></Button>
+                  </div>
+                ) : !configured ? (
                   <div className="text-center text-xs text-muted-foreground">Sending is off until the platform number is set up.</div>
                 ) : windowOpen ? (
                   <Composer
                     key={activeId}
                     ref={composerRef}
                     onSendText={sendText}
-                    onSendFile={sendFile}
+                    onFiles={addFiles}
+                    onSendVoice={(file) => sendFile(file, { voice: true })}
                     onTemplate={() => setTemplateOpen(true)}
-                    onSpecial={setSpecial}
                     onTyping={typing}
                     replyingTo={replyingTo}
                     onCancelReply={() => setReplyingTo(null)}
-                    customerName={conversation.name || formatNumber(conversation.wa_id)}
-                    quickReplies={quickReplies}
-                    onManageQuickReplies={() => setQuickOpen(true)}
+                    customerName={customerName}
                   />
                 ) : (
                   <div className="flex flex-col items-center gap-2 text-center sm:flex-row sm:justify-between sm:text-left">
@@ -540,22 +673,39 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
           )}
         </section>
 
-        {/* Contact info */}
-        {activeId && conversation && (
-          <ContactPanel
-            key={conversation.id}
-            conversation={conversation}
-            workspaces={detail.workspaces || []}
-            className={cn(showInfo ? 'fixed inset-y-0 right-0 z-30 flex w-80 shadow-xl xl:static xl:shadow-none' : 'hidden xl:flex')}
-            onClose={() => setShowInfo(false)}
-            onSave={(changes) => updateConversation(changes, 'Saved')}
-            extras={(
-              <>
-                <AssignAndLabels conversation={conversation} staff={staff} knownLabels={knownLabels} onSave={(changes) => updateConversation(changes)} />
-                <SharedMedia conversationId={conversation.id} refreshKey={messages.length} onOpenImage={(m) => setViewer({ images: [m], index: 0 })} />
-              </>
+        {/* Right side: contact info, its media, or message info (WhatsApp layout) */}
+        {activeId && conversation && panel && (
+          <aside key={panel.kind} className="wa-slide-in absolute inset-y-0 right-0 z-30 flex w-full max-w-[420px] flex-col border-l border-border bg-card shadow-xl lg:static lg:w-[400px] lg:shadow-none">
+            {panel.kind === 'contact' && (
+              <ContactInfoPanel
+                conversation={conversation}
+                workspaces={detail.workspaces || []}
+                staff={staff}
+                knownLabels={knownLabels}
+                shared={shared}
+                onClose={() => setPanel(null)}
+                onSave={updateConversation}
+                onOpenShared={() => setPanel({ kind: 'shared' })}
+                onOpenImage={(m, list) => openImage(m, list)}
+              />
             )}
-          />
+            {panel.kind === 'shared' && (
+              <SharedMediaPanel
+                shared={shared}
+                onBack={() => setPanel({ kind: 'contact' })}
+                onOpenImage={(m, list) => openImage(m, list)}
+                onDeleted={(ids) => {
+                  const gone = new Set(ids);
+                  setMessages((list) => list.filter((m) => !gone.has(m.id)));
+                  refreshShared();
+                  loadConversations({ quiet: true });
+                }}
+              />
+            )}
+            {panel.kind === 'info' && (infoMessage
+              ? <MessageInfoPanel message={infoMessage} preview={<div className="w-full">{bubble(infoMessage, { readOnly: true, selecting: false })}</div>} onClose={() => setPanel(null)} />
+              : <div className="p-6 text-sm text-muted-foreground">This message is no longer in the chat. <button type="button" className="underline" onClick={() => setPanel(null)}>Close</button></div>)}
+          </aside>
         )}
       </div>
 
@@ -568,10 +718,8 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
           setMessages((m) => [...m, res.data.message]);
         }}
       />
-      <LocationDialog open={special === 'location'} onOpenChange={(o) => !o && setSpecial(null)} onSend={(body) => sendSpecial('location', body)} />
-      <ContactDialog open={special === 'contact'} onOpenChange={(o) => !o && setSpecial(null)} onSend={(body) => sendSpecial('contact', body)} />
-      <InteractiveDialog open={special === 'interactive'} onOpenChange={(o) => !o && setSpecial(null)} onSend={(body) => sendSpecial('interactive', body)} />
-      <QuickRepliesDialog open={quickOpen} onOpenChange={setQuickOpen} quickReplies={quickReplies} onChanged={setQuickReplies} />
+      <ForwardDialog open={Boolean(forwardIds)} onOpenChange={(o) => !o && setForwardIds(null)} conversations={conversations} count={forwardIds?.length || 0} onForward={forward} />
+      <DeleteDialog count={deleteIds?.length || 0} onCancel={() => setDeleteIds(null)} onConfirm={remove} />
       {viewer && <ImageViewer images={viewer.images} index={viewer.index} onIndex={(index) => setViewer((v) => ({ ...v, index }))} onClose={() => setViewer(null)} />}
       <NewChatDialog
         open={newChatOpen}
@@ -580,57 +728,6 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
         onStarted={(id) => { loadConversations({ quiet: true }); openChat(id); }}
       />
     </div>
-  );
-};
-
-const ContactPanel = ({ conversation, workspaces, className, onClose, onSave, extras }) => {
-  const [name, setName] = useState(conversation.name || '');
-  const [note, setNote] = useState(conversation.note || '');
-  const dirty = name !== (conversation.name || '') || note !== (conversation.note || '');
-  return (
-    <aside className={cn('w-80 shrink-0 flex-col gap-5 overflow-y-auto border-l border-border bg-card p-4', className)}>
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold">Contact info</span>
-        <Button variant="ghost" size="icon" className="size-7 xl:hidden" onClick={onClose} aria-label="Close"><FiX /></Button>
-      </div>
-      <div className="flex flex-col items-center gap-2 text-center">
-        <Avatar name={conversation.name || conversation.wa_id} size="size-16 text-xl" />
-        <div className="font-semibold">{conversation.name || formatNumber(conversation.wa_id)}</div>
-        <div className="text-xs text-muted-foreground">{formatNumber(conversation.wa_id)}</div>
-        {conversation.profile_name && conversation.profile_name !== conversation.name && (
-          <div className="text-[11px] text-muted-foreground">WhatsApp name: {conversation.profile_name}</div>
-        )}
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <div className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">Getnera customer</div>
-        {workspaces.length ? workspaces.map((w) => (
-          <a key={w.tenant_id} href={`/dashboard/workspaces/${w.tenant_id}`} target="_blank" rel="noopener noreferrer" className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted">
-            <span className="min-w-0">
-              <span className="block truncate font-semibold">{w.name}</span>
-              <span className="block text-[11px] text-muted-foreground">{w.matched_by} · {w.status}</span>
-            </span>
-            <FiExternalLink className="shrink-0 text-muted-foreground" />
-          </a>
-        )) : <div className="text-xs text-muted-foreground">This number is not linked to any workspace.</div>}
-      </div>
-
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="ci-name" className="text-xs">Name</Label>
-          <Input id="ci-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={conversation.profile_name || 'Add a name'} maxLength={80} />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="ci-note" className="text-xs">Internal note</Label>
-          <Textarea id="ci-note" rows={4} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Only staff see this" maxLength={2000} />
-        </div>
-        <Button size="sm" disabled={!dirty} onClick={() => onSave({ name, note })}>Save</Button>
-      </div>
-      {extras}
-      <div className="text-[11px] text-muted-foreground">
-        Reply window {conversation.window_open ? `closes ${relativeTime(conversation.window_closes_at)}` : 'is closed'}.
-      </div>
-    </aside>
   );
 };
 

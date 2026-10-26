@@ -3,7 +3,7 @@
  * Founder and ops staff only (platform.inbox). The Meta token never leaves
  * the server: the browser only ever sees conversations and messages.
  */
-const { PlatformWaContacts, PlatformWaMessages, PlatformQuickReplies, MetaWhatsappPhoneNumbers, Clients, Users, Tenants } = require('../models');
+const { PlatformWaContacts, PlatformWaMessages, MetaWhatsappPhoneNumbers, Clients, Users, Tenants } = require('../models');
 const { escapeRegex } = require('../db/mongo');
 const inbox = require('../services/platformInbox');
 const mediaStore = require('../services/mediaStore');
@@ -13,8 +13,6 @@ const fileUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize:
 const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
 // Labels stored for incoming files without a caption; the file itself is shown instead.
 const MEDIA_PLACEHOLDER = /^\[(Photo|Video|Voice message|Sticker|Document)\]( .*)?$/;
-// Location and contact messages are drawn as cards; their stored label is not shown.
-const CARD_PLACEHOLDER = /^\[(Location|Contact card)\]/;
 const LABEL_MAX = 10;
 const URL_PATTERN = /https?:\/\/[^\s<>"')]+/gi;
 
@@ -48,7 +46,7 @@ const presentContact = (c) => ({
   labels: c.labels || [],
 });
 
-const hiddenText = (m) => (MEDIA_TYPES.has(m.type) && MEDIA_PLACEHOLDER.test(m.text || '')) || (['location', 'contacts'].includes(m.type) && CARD_PLACEHOLDER.test(m.text || ''));
+const hiddenText = (m) => (MEDIA_TYPES.has(m.type) && MEDIA_PLACEHOLDER.test(m.text || ''));
 
 // `quote`: the message this one replies to, when it is in the chat.
 const presentMessage = (m, quote = null) => ({
@@ -65,11 +63,13 @@ const presentMessage = (m, quote = null) => ({
   mime_type: m.mime_type || null,
   file_size: m.file_size || null,
   voice: Boolean(m.voice),
-  location: m.location || null,
-  contacts: m.contacts || null,
-  interactive: m.interactive || null,
   reactions: m.reactions || {},
   can_reply: Boolean(m.wa_message_id),
+  is_forwarded: Boolean(m.is_forwarded),
+  pinned: Boolean(m.pinned_at),
+  starred: Boolean(m.starred),
+  delivered_at: m.delivered_at || null,
+  read_at: m.read_at || null,
   reply_to: quote ? {
     id: quote.id,
     direction: quote.direction,
@@ -275,59 +275,6 @@ module.exports = function registerAdminInboxRoutes(router, { permit, fail }) {
     }
   });
 
-  // Saved replies ("/" in the message box).
-  const presentQuickReply = (q) => ({ id: q.id, shortcut: q.shortcut, text: q.text });
-  const quickReplyInput = (body = {}) => {
-    const shortcut = String(body.shortcut || '').trim().replace(/^\//, '').toLowerCase();
-    const text = String(body.text || '').trim();
-    if (!/^[a-z0-9_-]{1,30}$/.test(shortcut)) return { error: 'Shortcut: 1 to 30 letters, numbers, - or _ (no spaces)' };
-    if (!text || text.length > 4096) return { error: 'The reply text must be 1 to 4096 characters' };
-    return { shortcut, text };
-  };
-
-  router.get('/inbox/quick-replies', can, async (req, res) => {
-    try {
-      const rows = await PlatformQuickReplies.find({}, { _id: 0 }).sort({ shortcut: 1 }).lean();
-      return res.json({ quick_replies: rows.map(presentQuickReply) });
-    } catch (error) {
-      return fail(res, error);
-    }
-  });
-
-  router.post('/inbox/quick-replies', can, async (req, res) => {
-    try {
-      const input = quickReplyInput(req.body);
-      if (input.error) return res.status(400).json({ error: input.error });
-      const row = await PlatformQuickReplies.create({ ...input, created_by: req.user.id });
-      return res.status(201).json({ quick_reply: presentQuickReply(row) });
-    } catch (error) {
-      if (error.code === 11000) return res.status(409).json({ error: 'That shortcut is already used' });
-      return fail(res, error);
-    }
-  });
-
-  router.patch('/inbox/quick-replies/:id', can, async (req, res) => {
-    try {
-      const input = quickReplyInput(req.body);
-      if (input.error) return res.status(400).json({ error: input.error });
-      const row = await PlatformQuickReplies.findOneAndUpdate({ id: Number(req.params.id) }, { $set: { ...input, updated_at: new Date() } }, { new: true, projection: { _id: 0 } }).lean();
-      if (!row) return res.status(404).json({ error: 'Quick reply not found' });
-      return res.json({ quick_reply: presentQuickReply(row) });
-    } catch (error) {
-      if (error.code === 11000) return res.status(409).json({ error: 'That shortcut is already used' });
-      return fail(res, error);
-    }
-  });
-
-  router.delete('/inbox/quick-replies/:id', can, async (req, res) => {
-    try {
-      await PlatformQuickReplies.deleteOne({ id: Number(req.params.id) });
-      return res.json({ deleted: true });
-    } catch (error) {
-      return fail(res, error);
-    }
-  });
-
   // "typing…" for the customer while staff write; never fails the page.
   router.post('/inbox/conversations/:id/typing', can, async (req, res) => {
     try {
@@ -386,25 +333,31 @@ module.exports = function registerAdminInboxRoutes(router, { permit, fail }) {
     message: await presentOne(await inbox.sendText({ contactId: req.params.id, text: req.body?.text, replyTo: req.body?.reply_to, staff: staffOf(req) })),
   }));
 
-  sendRoute('/inbox/conversations/:id/location', async (req) => ({
-    message: await presentOne(await inbox.sendLocation({
-      contactId: req.params.id, latitude: req.body?.latitude, longitude: req.body?.longitude, name: req.body?.name, address: req.body?.address,
-      replyTo: req.body?.reply_to, staff: staffOf(req),
-    })),
-  }));
-
-  sendRoute('/inbox/conversations/:id/contact', async (req) => ({
-    message: await presentOne(await inbox.sendContactCard({ contactId: req.params.id, name: req.body?.name, phone: req.body?.phone, email: req.body?.email, replyTo: req.body?.reply_to, staff: staffOf(req) })),
-  }));
-
-  sendRoute('/inbox/conversations/:id/interactive', async (req) => ({
-    message: await presentOne(await inbox.sendInteractive({
-      contactId: req.params.id, kind: req.body?.kind, body: req.body?.body, header: req.body?.header, footer: req.body?.footer,
-      buttons: req.body?.buttons, buttonText: req.body?.button_text, rows: req.body?.rows, replyTo: req.body?.reply_to, staff: staffOf(req),
-    })),
-  }));
-
   sendRoute('/inbox/messages/:id/reaction', async (req) => inbox.sendReaction({ messageId: req.params.id, emoji: req.body?.emoji }));
+
+  sendRoute('/inbox/messages/:id/forward', async (req) => ({
+    message: await presentOne(await inbox.forwardMessage({ messageId: req.params.id, contactId: req.body?.contact_id, staff: staffOf(req) })),
+  }));
+
+  // Pin / star, only inside the admin inbox.
+  router.patch('/inbox/messages/:id', can, async (req, res) => {
+    try {
+      return res.json({ message: await presentOne(await inbox.flagMessage({ messageId: req.params.id, pinned: req.body?.pinned, starred: req.body?.starred })) });
+    } catch (error) {
+      if (error instanceof inbox.InboxError) return res.status(error.status).json({ error: error.message, code: error.code });
+      return fail(res, error);
+    }
+  });
+
+  // Deletes messages and their stored files (the customer's phone keeps its copy).
+  router.post('/inbox/messages/delete', can, async (req, res) => {
+    try {
+      return res.json(await inbox.deleteMessages(req.body?.ids));
+    } catch (error) {
+      if (error instanceof inbox.InboxError) return res.status(error.status).json({ error: error.message, code: error.code });
+      return fail(res, error);
+    }
+  });
 
   // Photos, videos, documents, any file and recorded voice notes.
   sendRoute('/inbox/conversations/:id/media', async (req) => ({

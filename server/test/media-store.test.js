@@ -73,6 +73,16 @@ test('media store: tenant files, signed links and ownership', async (t) => {
     assert.strictEqual(await runAsTenant(1, () => mediaStore.resolveOwned('/uploads/media/file-1.jpg')), null);
   });
 
+  await t.test('remove deletes the encrypted file and its row', async () => {
+    const { MediaFiles } = require('../models');
+    const saved = await runAsTenant(1, () => mediaStore.save({ data: Buffer.from('to delete'), mime: 'text/plain', name: 'x.txt' }));
+    const link = mediaStore.signedUrl(saved.ref);
+    assert.strictEqual((await fetch(link)).status, 200);
+    assert.strictEqual(await runAsTenant(1, () => mediaStore.remove(saved.ref)), true);
+    assert.strictEqual((await fetch(link)).status, 404);
+    assert.strictEqual(await runAsTenant(1, () => MediaFiles.countDocuments({ file_id: saved.id })), 0);
+  });
+
   await t.test('expiry is rounded so repeated links are identical', () => {
     const ref = `media://t_1/202610-${'a'.repeat(32)}`;
     assert.strictEqual(mediaStore.signedUrl(ref), mediaStore.signedUrl(ref));

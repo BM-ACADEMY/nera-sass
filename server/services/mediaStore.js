@@ -154,6 +154,16 @@ async function resolveOwned(value) {
   return { ...parsed, mime: row.mime_type, filename: row.filename || parsed.name, size: row.file_size };
 }
 
+// Deletes a stored file for good: the encrypted bytes and its ownership row.
+async function remove(value) {
+  const parsed = parse(value);
+  if (!parsed || !enabled()) return false;
+  await internalFetch(`/internal/files/${parsed.scope}/${parsed.id}`, { method: 'DELETE' });
+  const { MediaFiles } = require('../models');
+  await MediaFiles.deleteOne({ file_id: parsed.id, scope: parsed.scope });
+  return true;
+}
+
 // Reads a stored file back as a Buffer (to upload it to Meta).
 async function read(value) {
   const parsed = parse(value);
@@ -190,5 +200,6 @@ module.exports = {
   save,
   resolveOwned,
   read,
+  remove,
   saveFromWhatsApp,
 };
