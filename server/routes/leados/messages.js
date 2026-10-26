@@ -18,6 +18,7 @@ const {
   mediaUpload,
   path,
 } = ctx;
+const mediaStore = require('../../services/mediaStore');
 // ══════════════════════════════════════════════════════════
 // MESSAGES ROUTES (CRM-SIDE)
 // ══════════════════════════════════════════════════════════
@@ -205,6 +206,21 @@ app.post('/api/messages/upload', auth, mediaUpload.single('file'), async (req, r
       await fs.promises.unlink(outputPath).catch(() => {});
       console.error('[Media Upload] Voice-note conversion failed:', err.message);
       return res.status(500).json({ error: 'Unable to prepare this voice note for WhatsApp. Please try recording it again.' });
+    }
+  }
+
+  // With the media server on, the file is stored encrypted there and the
+  // local copy is removed; the browser gets a short-lived signed link.
+  if (mediaStore.enabled()) {
+    const originalName = isWebm ? `${path.parse(req.file.originalname).name}.ogg` : req.file.originalname;
+    try {
+      const saved = await mediaStore.save({ filePath: uploadedFile.path, mime: uploadedFile.mimetype, name: originalName, source: 'upload' });
+      return res.json({ success: true, fileUrl: mediaStore.signedUrl(saved.ref), mediaRef: saved.ref, mimeType: uploadedFile.mimetype });
+    } catch (err) {
+      console.error('[Media Upload] Media server failed:', err.message);
+      return res.status(err.status === 413 ? 413 : 502).json({ error: err.status === 413 ? 'This file is too large.' : 'Could not store the file. Please try again.' });
+    } finally {
+      await fs.promises.unlink(uploadedFile.path).catch(() => {});
     }
   }
 

@@ -104,6 +104,16 @@ const getMessageTimestamp = (message) => {
   return Number.isNaN(timestamp) ? null : timestamp;
 };
 
+// File name from a media link, without the signed-link query string.
+const mediaFileName = (url = '') => {
+  const last = url.split(/[?#]/)[0].split('/').pop() || '';
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+};
+
 const getInboundDuplicateKey = (message) => {
   const isInbound = message?.direction === 'inbound' || message?.from === 'lead';
   if (!isInbound) return null;
@@ -111,7 +121,7 @@ const getInboundDuplicateKey = (message) => {
   return JSON.stringify([
     message?.type || message?.msg_type || 'text',
     (message?.content || message?.message || message?.text || '').trim(),
-    message?.media_url || '',
+    (message?.media_url || '').split('?')[0], // signed links change their query over time
   ]);
 };
 
@@ -653,11 +663,14 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   };
   const handleDownloadMedia = (mediaUrl) => {
     if (!mediaUrl) return;
-    const fullMediaUrl = mediaUrl.startsWith('http') ? mediaUrl : `${SOCKET_URL}${mediaUrl}`;
+    let fullMediaUrl = mediaUrl.startsWith('http') ? mediaUrl : `${SOCKET_URL}${mediaUrl}`;
+    // Signed media-server links: ask the server for a download, since the
+    // `download` attribute is ignored on another origin.
+    if (fullMediaUrl.includes('&sig=')) fullMediaUrl += '&dl=1';
     const link = document.createElement('a');
     link.href = fullMediaUrl;
     link.target = '_blank';
-    const filename = mediaUrl.split('/').pop() || 'download';
+    const filename = mediaFileName(mediaUrl) || 'download';
     link.setAttribute('download', filename);
     document.body.appendChild(link);
     link.click();
@@ -1501,10 +1514,10 @@ return (
                                       </div>
                                       <div style={{ flex: 1, overflow: 'hidden' }}>
                                         <div style={{ fontWeight: 600, fontSize: 14, color: '#111b21', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-                                          {fullMediaUrl.split('/').pop() || 'Document'}
+                                          {mediaFileName(fullMediaUrl) || 'Document'}
                                         </div>
                                         <div style={{ fontSize: 11, color: '#667781', marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
-                                          <span>{fullMediaUrl.split('.').pop().toUpperCase().substring(0,4)}</span>
+                                          <span>{mediaFileName(fullMediaUrl).split('.').pop().toUpperCase().substring(0,4)}</span>
                                           <span>•</span>
                                           <span>Open file</span>
                                         </div>

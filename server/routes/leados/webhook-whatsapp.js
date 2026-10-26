@@ -33,6 +33,7 @@ const SERVER_ROOT = ctx.SERVER_ROOT || path.resolve(__dirname, '../../');
 const { runAsSystem, runAsTenant } = require('../../services/tenantContext');
 const { requireMetaSignature } = require('../../services/metaWebhookSignature');
 const platformInbox = require('../../services/platformInbox');
+const mediaStore = require('../../services/mediaStore');
 const aiAutomation = require('../../services/aiAutomation');
 const { tenantLifecycle } = require('../../services/lifecycle');
  // Store timeouts for delayed AI replies
@@ -400,6 +401,17 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
               await Conversations.updateOne({ id: conversationId }, [{ $set: { unread_count: { $add: [{ $ifNull: ['$unread_count', 0] }, 1] } } }]);
 
               io.emit('incoming_message', { lead_id: String(lead.id), message: savedRows[0] });
+
+              // Copy inbound media to the media server in the background: Meta
+              // deletes it after about 30 days. Until the copy lands, the chat
+              // shows it through /api/whatsapp-media.
+              const inboundMediaId = ['image', 'audio', 'video', 'document'].includes(msg.type) ? msg[msg.type]?.id : null;
+              const inboundToken = lead.client_wa_token || client?.wa_access_token;
+              if (inboundMediaId && inboundToken && mediaStore.enabled()) {
+                mediaStore.saveFromWhatsApp({ mediaId: inboundMediaId, token: inboundToken, name: msg.document?.filename })
+                  .then((saved) => Messages.updateOne({ id: inbound.id }, { $set: { media_url: saved.ref } }))
+                  .catch((err) => console.error(`[Webhook] Media copy failed for msg ${inbound.id}:`, err.message));
+              }
               console.log(`[Webhook] ✅ Saved inbound ${msgType} from ${phone} → lead ${lead.id}, msg_id ${savedRows[0].id} (tenant ${client.tenant_id})`);
 
               // The customer wrote: the AI follow-up schedule starts again from now.

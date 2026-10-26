@@ -20,6 +20,7 @@ const {
   upsertOne,
   SERVER_ROOT,
 } = ctx;
+const mediaStore = require('../../services/mediaStore');
 // ══════════════════════════════════════════════════════════
 // WHATSAPP ROUTES
 // ══════════════════════════════════════════════════════════
@@ -132,24 +133,28 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
       payload.context = { message_id: reply_to_wa_id };
     }
 
+    // A file on the media server must belong to this workspace (throws 403).
+    const storedMedia = type !== 'text' ? await mediaStore.resolveOwned(media_url) : null;
+
     let waMediaId = null;
-    if (type !== 'text' && media_url && media_url.startsWith('/uploads/')) {
+    if (type !== 'text' && (storedMedia || (media_url && media_url.startsWith('/uploads/')))) {
       try {
-        const filePath = path.join(SERVER_ROOT, media_url);
-        const fileBuffer = fs.readFileSync(filePath);
+        const fileName = storedMedia ? (storedMedia.filename || storedMedia.id) : path.basename(media_url);
+        const fileBuffer = storedMedia ? await mediaStore.read(storedMedia.ref) : fs.readFileSync(path.join(SERVER_ROOT, media_url));
         const fd = new FormData();
         fd.append('messaging_product', 'whatsapp');
-        const ext = path.extname(media_url).toLowerCase();
+        const ext = path.extname(fileName).toLowerCase();
         let mimeType = 'application/octet-stream';
         // WhatsApp explicitly rejects bare "audio/ogg" for voice notes — it requires the
         // codecs parameter or the upload is rejected during processing (error 131053).
-        if (ext === '.ogg') mimeType = 'audio/ogg; codecs=opus';
+        if (ext === '.ogg' || /^audio\/ogg/i.test(storedMedia?.mime || '')) mimeType = 'audio/ogg; codecs=opus';
+        else if (storedMedia?.mime) mimeType = storedMedia.mime;
         else if (ext === '.mp4') mimeType = 'video/mp4';
         else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
         else if (ext === '.png') mimeType = 'image/png';
         else if (ext === '.pdf') mimeType = 'application/pdf';
-        
-        fd.append('file', new Blob([fileBuffer], { type: mimeType }), path.basename(media_url));
+
+        fd.append('file', new Blob([fileBuffer], { type: mimeType }), fileName);
         const uploadRes = await fetch(`https://graph.facebook.com/v19.0/${phoneNumberId}/media`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${waAccessToken}` },
@@ -175,8 +180,11 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
       if (waMediaId) {
         payload[type] = { id: waMediaId };
       } else {
-        const fullMediaUrl = media_url && media_url.startsWith('http') ? media_url : `${process.env.PUBLIC_API_URL}${media_url}`;
+        // Meta fetches the link itself, possibly with retries: give it hours, not minutes.
+        const fullMediaUrl = storedMedia ? mediaStore.signedUrl(storedMedia.ref, { ttl: 6 * 3600 })
+          : media_url && media_url.startsWith('http') ? media_url : `${process.env.PUBLIC_API_URL}${media_url}`;
         payload[type] = { link: fullMediaUrl };
+        if (type === 'document' && storedMedia?.filename) payload[type].filename = storedMedia.filename;
       }
       if (message && type !== 'audio') payload[type].caption = message; // Audio doesn't support caption
     }
@@ -204,12 +212,12 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
 
     // Insert message into messages table
     const sentMessage = await Messages.create({
-      conversation_id: conversationId, direction: 'outbound', content: message, msg_type: type, media_url: media_url || null,
+      conversation_id: conversationId, direction: 'outbound', content: message, msg_type: type, media_url: storedMedia?.ref || media_url || null,
       wa_msg_id: waMessageId, status: 'sent', sent_at: new Date(), reply_to_wa_id: reply_to_wa_id || null, is_forwarded: is_forwarded || false,
     });
     const savedRows = [{
       id: sentMessage.id, direction: sentMessage.direction, content: sentMessage.content, type: sentMessage.msg_type,
-      media_url: sentMessage.media_url, wa_msg_id: sentMessage.wa_msg_id, status: sentMessage.status, timestamp: sentMessage.sent_at,
+      media_url: mediaStore.presentUrl(sentMessage.media_url), wa_msg_id: sentMessage.wa_msg_id, status: sentMessage.status, timestamp: sentMessage.sent_at,
       is_deleted: sentMessage.is_deleted, reply_to_wa_id: sentMessage.reply_to_wa_id, is_forwarded: sentMessage.is_forwarded,
     }];
 
@@ -218,8 +226,9 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
 
     res.json({ success: true, message: savedRows[0] });
   } catch (err) {
+    if (err instanceof mediaStore.MediaStoreError && err.status === 403) return res.status(403).json({ error: err.message });
     console.error('WA send error:', err.response?.data || err.message, err.stack);
-    
+
     res.status(500).json({
       error: 'Failed to send message',
       detail: err.message,

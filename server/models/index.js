@@ -99,6 +99,7 @@ module.exports = {
   MafiyaRivalMetrics: require('./MafiyaRivalMetrics'),
   MafiyaRivals: require('./MafiyaRivals'),
   MafiyaTurfKeywords: require('./MafiyaTurfKeywords'),
+  MediaFiles: require('./MediaFiles'),
   Meetings: require('./Meetings'),
   Messages: require('./Messages'),
   MetaWhatsappAccounts: require('./MetaWhatsappAccounts'),

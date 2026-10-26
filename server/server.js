@@ -46,6 +46,7 @@ const { sanitizeClient } = require('./services/clientSecrets');
 const { assertPhoneNumberAvailable } = require('./services/whatsappIdentity');
 const { customerResponseGuard } = require('./services/responseGuard');
 const { inventoryAccessToken, requireInventoryAccessToken } = require('./services/metaInventoryCredentials');
+const mediaStore = require('./services/mediaStore');
 
 // Background jobs (crons, queue processor). Off in tests: JOBS_ENABLED=false.
 const jobsEnabled = () => process.env.JOBS_ENABLED !== 'false';
@@ -1434,7 +1435,7 @@ async function enrichLeadRows(leads) {
       facebook_page_name: facebookPages.find((page) => page.brand_name === brandName && String(page.account_name ?? '').trim() !== '')?.account_name ?? null,
       unread: own.reduce((sum, cv) => sum + (Number(cv.unread_count) || 0), 0),
       last_contact: contactTimes.length ? new Date(Math.max(...contactTimes)) : null,
-      last_msg: message ? { content: message.content ?? null, msg_type: message.msg_type ?? null, media_url: message.media_url ?? null, is_deleted: message.is_deleted ?? null } : null,
+      last_msg: message ? { content: message.content ?? null, msg_type: message.msg_type ?? null, media_url: mediaStore.presentUrl(message.media_url ?? null), is_deleted: message.is_deleted ?? null } : null,
       tags: tagLinks.filter((link) => link.lead_id === l.id && tags.has(link.tag_id))
         .map((link) => ({ id: link.tag_id, name: tags.get(link.tag_id).name, color: tags.get(link.tag_id).color })),
     };
@@ -1452,10 +1453,10 @@ async function leadInboxMessages(conversationIds, { sort = { sent_at: 1 }, skip 
   return rows.map((m) => {
     const reply = m.reply_to_wa_id ? replies.get(m.reply_to_wa_id) : null;
     return {
-      id: m.id, direction: m.direction, content: m.content, type: m.msg_type, media_url: m.media_url, wa_msg_id: m.wa_msg_id,
+      id: m.id, direction: m.direction, content: m.content, type: m.msg_type, media_url: mediaStore.presentUrl(m.media_url), wa_msg_id: m.wa_msg_id,
       status: m.status, is_ai: m.is_ai, timestamp: m.sent_at, read_at: m.read_at, is_deleted: m.is_deleted, is_forwarded: m.is_forwarded,
       pinned_until: m.pinned_until, is_starred: m.is_starred, reactions: m.reactions,
-      reply_to: reply ? { direction: reply.direction, media_url: reply.media_url, content: reply.content, msg_type: reply.msg_type } : null,
+      reply_to: reply ? { direction: reply.direction, media_url: mediaStore.presentUrl(reply.media_url), content: reply.content, msg_type: reply.msg_type } : null,
     };
   });
 }

@@ -34,6 +34,7 @@ const TENANT_SCOPED = new Map([
   ['leads', {}],
   ['conversations', {}],
   ['messages', {}],
+  ['media_files', { optional: true }],
   ['templates', {}],
   ['campaigns', {}],
   ['campaign_message_queue', {}],

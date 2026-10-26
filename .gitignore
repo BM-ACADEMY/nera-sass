@@ -11,3 +11,6 @@ server/.dev-outbox/
 
 # User uploads and exports (customer data): never commit
 server/uploads/
+
+# Encrypted media files (customer data): never commit
+mediaserver/storage/

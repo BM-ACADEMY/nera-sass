@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build and publish Getnera on the VPS. Run from the repo root:
 #   bash deploy/deploy.sh            # everything
-#   bash deploy/deploy.sh server     # only one part: landing | app | admin | server
+#   bash deploy/deploy.sh server     # only one part: landing | app | admin | server | media
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -39,6 +39,26 @@ if [[ "$PART" == all || "$PART" == server ]]; then
   for i in $(seq 1 30); do
     if curl -fsS "http://127.0.0.1:${API_PORT:-3601}/health"; then echo " <- API is up"; break; fi
     if [[ $i -eq 30 ]]; then echo "API did not answer in 60s. Check: pm2 logs getnera-api --lines 50 --nostream"; exit 1; fi
+    sleep 2
+  done
+fi
+
+# Media server first-time setup is in deploy/README.md (section 9). Until
+# mediaserver/.env exists, "all" skips it; "media" alone insists on it.
+if [[ "$PART" == media || ( "$PART" == all && -f "$ROOT/mediaserver/.env" ) ]]; then
+  echo "==> Media server"
+  [[ -f "$ROOT/mediaserver/.env" ]] || { echo "mediaserver/.env is missing. Create it first (see deploy/README.md)."; exit 1; }
+  (cd "$ROOT/mediaserver" && npm ci --omit=dev)
+  if pm2 describe getnera-media >/dev/null 2>&1; then
+    pm2 reload getnera-media --update-env
+  else
+    (cd "$ROOT/mediaserver" && pm2 start server.js --name getnera-media --time)
+    pm2 save
+  fi
+  MEDIA_PORT="$(grep -E '^PORT=' "$ROOT/mediaserver/.env" | cut -d= -f2 | tr -d '\r')"
+  for i in $(seq 1 15); do
+    if curl -fsS "http://127.0.0.1:${MEDIA_PORT:-3700}/health"; then echo " <- media server is up"; break; fi
+    if [[ $i -eq 15 ]]; then echo "Media server did not answer in 30s. Check: pm2 logs getnera-media --lines 50 --nostream"; exit 1; fi
     sleep 2
   done
 fi

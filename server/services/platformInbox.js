@@ -16,6 +16,8 @@
 const axios = require('axios');
 const { PlatformWaContacts, PlatformWaMessages, MetaWhatsappPhoneNumbers, MetaWhatsappTemplates } = require('../models');
 const { notifyStaff } = require('./realtime');
+const mediaStore = require('./mediaStore');
+const { runAsSystem } = require('./tenantContext');
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 const graphBase = () => `https://graph.facebook.com/${process.env.META_GRAPH_VERSION || 'v19.0'}`;
@@ -94,6 +96,16 @@ async function findOrCreateContact(waId, profileName) {
   return contact;
 }
 
+// Copies inbound media to the media server (scope "platform") in the
+// background, since Meta deletes it after about 30 days.
+function copyMedia(saved, msg) {
+  const mediaId = mediaIdOf(msg);
+  if (!mediaId || !platformToken() || !mediaStore.enabled()) return;
+  runAsSystem(() => mediaStore.saveFromWhatsApp({ mediaId, token: platformToken(), name: msg.document?.filename, scope: mediaStore.PLATFORM_SCOPE }), 'platform-inbox-media')
+    .then((file) => PlatformWaMessages.updateOne({ id: saved.id }, { $set: { media_ref: file.ref } }))
+    .catch((error) => console.error('[Platform inbox] Media copy failed:', error.message));
+}
+
 /** Stores one webhook `value` for the platform number: messages and statuses. */
 async function handleWebhookValue(value = {}) {
   const names = new Map((value.contacts || []).map((c) => [digits(c.wa_id), c.profile?.name || null]));
@@ -105,8 +117,9 @@ async function handleWebhookValue(value = {}) {
     const contact = await findOrCreateContact(waId, names.get(waId));
     const at = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : new Date();
     const text = messageText(msg);
+    let saved;
     try {
-      await PlatformWaMessages.create({
+      saved = await PlatformWaMessages.create({
         contact_id: contact.id, direction: 'inbound', type: msg.type || 'text', text,
         media_id: mediaIdOf(msg), wa_message_id: msg.id, status: 'received', created_at: at,
       });
@@ -114,6 +127,7 @@ async function handleWebhookValue(value = {}) {
       if (error.code === 11000) continue; // Meta retried a message we already have
       throw error;
     }
+    copyMedia(saved, msg);
     await PlatformWaContacts.updateOne({ id: contact.id }, {
       $set: {
         last_message_at: at, last_message_preview: text.slice(0, 160), last_message_direction: 'inbound',

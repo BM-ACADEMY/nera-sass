@@ -6,6 +6,7 @@
 const { PlatformWaContacts, PlatformWaMessages, MetaWhatsappPhoneNumbers, Clients, Users, Tenants } = require('../models');
 const { escapeRegex } = require('../db/mongo');
 const inbox = require('../services/platformInbox');
+const mediaStore = require('../services/mediaStore');
 
 const SEND_LIMIT = 30; // messages per staff member per minute
 const sendLog = new Map();
@@ -40,6 +41,7 @@ const presentMessage = (m) => ({
   type: m.type,
   text: m.text || '',
   template_name: m.template_name || null,
+  media_url: m.media_ref ? mediaStore.presentUrl(m.media_ref) : null,
   status: m.status,
   error: m.error || null,
   sent_by_name: m.sent_by_name || null,
