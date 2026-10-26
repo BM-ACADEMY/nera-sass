@@ -81,6 +81,23 @@ const mediaInfoOf = (msg) => {
   return { filename: media.filename || null, mime_type: media.mime_type || null, voice: Boolean(media.voice) };
 };
 
+// Location and contact cards keep their details so the chat can show them.
+const structuredOf = (msg) => {
+  if (msg.type === 'location' && msg.location) {
+    const { latitude, longitude, name, address, url } = msg.location;
+    return { location: { latitude, longitude, name: name || null, address: address || null, url: url || null } };
+  }
+  if (msg.type === 'contacts' && Array.isArray(msg.contacts)) {
+    return { contacts: msg.contacts.slice(0, 10).map(contactCardOf) };
+  }
+  return {};
+};
+const contactCardOf = (c) => ({
+  name: c.name?.formatted_name || [c.name?.first_name, c.name?.last_name].filter(Boolean).join(' ') || 'Contact',
+  phones: (c.phones || []).map((p) => p.phone || p.wa_id).filter(Boolean).slice(0, 5),
+  emails: (c.emails || []).map((e) => e.email).filter(Boolean).slice(0, 3),
+});
+
 // Status only moves forward; a failure is always recorded.
 const STATUS_RANK = { sending: 0, sent: 1, delivered: 2, read: 3 };
 
@@ -123,11 +140,28 @@ async function handleWebhookValue(value = {}) {
     const contact = await findOrCreateContact(waId, names.get(waId));
     const at = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : new Date();
     const text = messageText(msg);
+
+    // A reaction is shown on the message it reacts to, not as a message.
+    if (msg.type === 'reaction') {
+      const target = msg.reaction?.message_id;
+      if (target) {
+        const emoji = msg.reaction?.emoji || '';
+        await PlatformWaMessages.updateOne({ wa_message_id: target }, emoji ? { $set: { 'reactions.customer': emoji } } : { $unset: { 'reactions.customer': '' } });
+        if (emoji) {
+          await PlatformWaContacts.updateOne({ id: contact.id }, { $set: { last_message_at: at, last_message_preview: `Reacted ${emoji}`, last_message_direction: 'inbound', updated_at: new Date() } });
+        }
+        touched.add(contact.id);
+      }
+      continue;
+    }
+
     let saved;
     try {
       saved = await PlatformWaMessages.create({
         contact_id: contact.id, direction: 'inbound', type: msg.type || 'text', text,
-        media_id: mediaIdOf(msg), ...mediaInfoOf(msg), wa_message_id: msg.id, status: 'received', created_at: at,
+        media_id: mediaIdOf(msg), ...mediaInfoOf(msg), ...structuredOf(msg),
+        reply_to_wa_id: msg.context?.id || null,
+        wa_message_id: msg.id, status: 'received', created_at: at,
       });
     } catch (error) {
       if (error.code === 11000) continue; // Meta retried a message we already have
@@ -170,15 +204,18 @@ function requireConfigured() {
 }
 
 // Sends one payload to Meta and records the outbound message either way.
-async function deliver(contact, { type, text, templateName, preview, extra }, payload, staff) {
+// `replyToWaId`: quote that WhatsApp message (Meta's `context`).
+async function deliver(contact, { type, text, templateName, preview, extra, replyToWaId }, payload, staff) {
   const record = (await PlatformWaMessages.create({
     contact_id: contact.id, direction: 'outbound', type, text, template_name: templateName || null,
-    status: 'sending', sent_by: staff?.id ?? null, sent_by_name: staff?.name || null, ...(extra || {}),
+    status: 'sending', sent_by: staff?.id ?? null, sent_by_name: staff?.name || null,
+    reply_to_wa_id: replyToWaId || null, ...(extra || {}),
   })).toObject();
   let result;
   try {
     const res = await axios.post(`${graphBase()}/${platformPhoneId()}/messages`, {
       messaging_product: 'whatsapp', recipient_type: 'individual', to: contact.wa_id, ...payload,
+      ...(replyToWaId ? { context: { message_id: replyToWaId } } : {}),
     }, { headers: { Authorization: `Bearer ${platformToken()}` }, timeout: 20000 });
     const wamid = res.data?.messages?.[0]?.id || null;
     await PlatformWaMessages.updateOne({ id: record.id }, { $set: { status: 'sent', wa_message_id: wamid } });
@@ -203,16 +240,145 @@ async function loadContact(contactId) {
 }
 
 /** Free-form text: only inside the 24-hour window. */
-async function sendText({ contactId, text, staff }) {
+// The contact, when free-form messages are allowed (inside the 24-hour window).
+async function openContact(contactId) {
   requireConfigured();
-  const body = String(text || '').trim();
-  if (!body) throw new InboxError(400, 'Type a message');
-  if (body.length > 4096) throw new InboxError(400, 'A message can be at most 4096 characters');
   const contact = await loadContact(contactId);
   if (!windowOpen(contact)) {
     throw new InboxError(409, 'The 24-hour window is closed. Send an approved template to restart the conversation.', 'WINDOW_CLOSED');
   }
-  return deliver(contact, { type: 'text', text: body }, { type: 'text', text: { body, preview_url: false } }, staff);
+  return contact;
+}
+
+// The WhatsApp id of one of this chat's messages, for replies and reactions.
+async function waIdOfMessage(contact, messageId) {
+  if (messageId == null || messageId === '') return null;
+  const message = await PlatformWaMessages.findOne({ id: Number(messageId), contact_id: contact.id }, { _id: 0, wa_message_id: 1 }).lean();
+  if (!message?.wa_message_id) throw new InboxError(400, 'That message cannot be replied to', 'BAD_REPLY');
+  return message.wa_message_id;
+}
+
+async function sendText({ contactId, text, replyTo, staff }) {
+  const body = String(text || '').trim();
+  if (!body) throw new InboxError(400, 'Type a message');
+  if (body.length > 4096) throw new InboxError(400, 'A message can be at most 4096 characters');
+  const contact = await openContact(contactId);
+  const replyToWaId = await waIdOfMessage(contact, replyTo);
+  return deliver(contact, { type: 'text', text: body, replyToWaId }, { type: 'text', text: { body, preview_url: /https?:\/\//i.test(body) } }, staff);
+}
+
+/** Adds, changes or (empty emoji) removes the staff reaction on a message. */
+async function sendReaction({ messageId, emoji }) {
+  requireConfigured();
+  const message = await PlatformWaMessages.findOne({ id: Number(messageId) }, { _id: 0, id: 1, contact_id: 1, wa_message_id: 1 }).lean();
+  if (!message?.wa_message_id) throw new InboxError(404, 'Message not found');
+  const contact = await openContact(message.contact_id);
+  const value = String(emoji || '').slice(0, 16);
+  try {
+    await axios.post(`${graphBase()}/${platformPhoneId()}/messages`, {
+      messaging_product: 'whatsapp', recipient_type: 'individual', to: contact.wa_id,
+      type: 'reaction', reaction: { message_id: message.wa_message_id, emoji: value },
+    }, { headers: { Authorization: `Bearer ${platformToken()}` }, timeout: 20000 });
+  } catch (error) {
+    throw new InboxError(400, `Reaction not sent: ${error.response?.data?.error?.message || error.message}`, 'SEND_FAILED');
+  }
+  await PlatformWaMessages.updateOne({ id: message.id }, value ? { $set: { 'reactions.staff': value } } : { $unset: { 'reactions.staff': '' } });
+  changed(contact.id);
+  return { id: message.id, emoji: value };
+}
+
+async function sendLocation({ contactId, latitude, longitude, name, address, replyTo, staff }) {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    throw new InboxError(400, 'Enter a valid latitude and longitude');
+  }
+  const contact = await openContact(contactId);
+  const location = { latitude: lat, longitude: lng, name: String(name || '').trim().slice(0, 100) || undefined, address: String(address || '').trim().slice(0, 300) || undefined };
+  const text = ['📍', location.name, location.address].filter(Boolean).join(' ');
+  return deliver(contact, { type: 'location', text: '', preview: text || '📍 Location', extra: { location: { ...location, name: location.name || null, address: location.address || null } }, replyToWaId: await waIdOfMessage(contact, replyTo) },
+    { type: 'location', location }, staff);
+}
+
+async function sendContactCard({ contactId, name, phone, email, replyTo, staff }) {
+  const fullName = String(name || '').trim().slice(0, 100);
+  const number = String(phone || '').replace(/[^\d+]/g, '');
+  if (!fullName) throw new InboxError(400, 'Enter the contact name');
+  if (digits(number).length < 8) throw new InboxError(400, 'Enter the phone number with its country code');
+  const contact = await openContact(contactId);
+  const plus = number.startsWith('+') ? number : `+${number}`;
+  const card = {
+    name: { formatted_name: fullName, first_name: fullName.split(' ')[0] },
+    phones: [{ phone: plus, type: 'CELL', wa_id: digits(plus) }],
+    ...(email ? { emails: [{ email: String(email).trim().slice(0, 120), type: 'WORK' }] } : {}),
+  };
+  return deliver(contact, { type: 'contacts', text: '', preview: `👤 ${fullName}`, extra: { contacts: [contactCardOf(card)] }, replyToWaId: await waIdOfMessage(contact, replyTo) },
+    { type: 'contacts', contacts: [card] }, staff);
+}
+
+/**
+ * Reply buttons (up to 3) or a list (up to 10 rows): Meta's interactive
+ * messages, allowed only inside the 24-hour window.
+ */
+async function sendInteractive({ contactId, kind, body, header, footer, buttons, buttonText, rows, replyTo, staff }) {
+  const text = String(body || '').trim();
+  if (!text) throw new InboxError(400, 'Type the message text');
+  if (text.length > 1024) throw new InboxError(400, 'The message text can be at most 1024 characters');
+  const clean = (value, max) => String(value || '').trim().slice(0, max);
+  const interactive = { body: { text } };
+  if (clean(header, 60)) interactive.header = { type: 'text', text: clean(header, 60) };
+  if (clean(footer, 60)) interactive.footer = { text: clean(footer, 60) };
+
+  let options;
+  if (kind === 'list') {
+    options = (rows || []).map((r) => ({ title: clean(r?.title, 24), description: clean(r?.description, 72) })).filter((r) => r.title);
+    if (!options.length || options.length > 10) throw new InboxError(400, 'A list needs 1 to 10 options');
+    const action = clean(buttonText, 20);
+    if (!action) throw new InboxError(400, 'Enter the list button text');
+    interactive.type = 'list';
+    interactive.action = {
+      button: action,
+      sections: [{ title: clean(header, 24) || 'Options', rows: options.map((r, i) => ({ id: `row_${i + 1}`, title: r.title, ...(r.description ? { description: r.description } : {}) })) }],
+    };
+  } else {
+    options = (buttons || []).map((b) => clean(b, 20)).filter(Boolean).map((title) => ({ title }));
+    if (!options.length || options.length > 3) throw new InboxError(400, 'Buttons need 1 to 3 options');
+    if (new Set(options.map((o) => o.title.toLowerCase())).size !== options.length) throw new InboxError(400, 'Button names must be different');
+    interactive.type = 'button';
+    interactive.action = { buttons: options.map((o, i) => ({ type: 'reply', reply: { id: `btn_${i + 1}`, title: o.title } })) };
+  }
+
+  const contact = await openContact(contactId);
+  return deliver(contact, {
+    type: 'interactive',
+    text: [interactive.header?.text, text, interactive.footer?.text].filter(Boolean).join('\n\n'),
+    preview: text,
+    extra: { interactive: { kind: interactive.type, options, button_text: interactive.action.button || null } },
+    replyToWaId: await waIdOfMessage(contact, replyTo),
+  }, { type: 'interactive', interactive }, staff);
+}
+
+// Shows "typing…" to the customer (and marks their last message read).
+// Meta clears it after 25 seconds or when a message is sent.
+const lastTyping = new Map();
+async function sendTyping({ contactId }) {
+  requireConfigured();
+  const id = Number(contactId);
+  if (Date.now() - (lastTyping.get(id) || 0) < 20000) return { sent: false };
+  const contact = await loadContact(id);
+  if (!windowOpen(contact)) return { sent: false };
+  const last = await PlatformWaMessages.findOne({ contact_id: id, direction: 'inbound', wa_message_id: { $ne: null } }, { _id: 0, wa_message_id: 1 }).sort({ id: -1 }).lean();
+  if (!last) return { sent: false };
+  lastTyping.set(id, Date.now());
+  try {
+    await axios.post(`${graphBase()}/${platformPhoneId()}/messages`, {
+      messaging_product: 'whatsapp', status: 'read', message_id: last.wa_message_id, typing_indicator: { type: 'text' },
+    }, { headers: { Authorization: `Bearer ${platformToken()}` }, timeout: 10000 });
+    return { sent: true };
+  } catch (error) {
+    console.warn('[Platform inbox] Typing indicator failed:', error.response?.data?.error?.message || error.message);
+    return { sent: false };
+  }
 }
 
 // Meta Cloud API media rules: which files go as image / video / audio and the
@@ -274,14 +440,12 @@ function copyOutboundMedia(messageId, { buffer, mimeType, filename, waMediaId })
  * Any file, photo, video or recorded voice note, inside the 24-hour window.
  * `voice`: a browser recording, converted to an ogg/opus voice note.
  */
-async function sendMedia({ contactId, buffer, mimeType, filename, caption, voice, staff }) {
+async function sendMedia({ contactId, buffer, mimeType, filename, caption, voice, replyTo, staff }) {
   requireConfigured();
   if (!buffer?.length) throw new InboxError(400, 'Choose a file');
   if (buffer.length > DOCUMENT_MAX) throw new InboxError(400, 'A file can be at most 100 MB');
-  const contact = await loadContact(contactId);
-  if (!windowOpen(contact)) {
-    throw new InboxError(409, 'The 24-hour window is closed. Send an approved template to restart the conversation.', 'WINDOW_CLOSED');
-  }
+  const contact = await openContact(contactId);
+  const replyToWaId = await waIdOfMessage(contact, replyTo);
 
   let data = buffer;
   let mime = String(mimeType || 'application/octet-stream');
@@ -312,6 +476,7 @@ async function sendMedia({ contactId, buffer, mimeType, filename, caption, voice
     text,
     preview: text || label,
     extra: { media_id: waMediaId, filename: voice ? null : name, mime_type: mime, file_size: data.length, voice: Boolean(voice) },
+    replyToWaId,
   }, { type: kind, [kind]: media }, staff);
   copyOutboundMedia(message.id, { buffer: data, mimeType: mime, filename: name, waMediaId });
   return message;
@@ -526,6 +691,11 @@ module.exports = {
   uploadHeaderMedia,
   sendMedia,
   messageMedia,
+  sendReaction,
+  sendLocation,
+  sendContactCard,
+  sendInteractive,
+  sendTyping,
   mediaKind,
   platformWabaId,
 };

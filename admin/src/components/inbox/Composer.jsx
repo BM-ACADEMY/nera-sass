@@ -1,12 +1,13 @@
 import React, { lazy, Suspense, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { FiCamera, FiFileText, FiHeadphones, FiImage, FiMic, FiPaperclip, FiSend, FiSmile, FiTrash2, FiX } from 'react-icons/fi';
+import { FiCamera, FiFileText, FiHeadphones, FiImage, FiList, FiMapPin, FiMic, FiPaperclip, FiSend, FiSmile, FiTrash2, FiUser, FiX, FiZap } from 'react-icons/fi';
 import { Button } from '@/components/ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { FileTile, extensionOf, formatSize } from './ChatMedia';
+import { QuotedMessage } from './ChatCards';
 
 // The picker is large; load it the first time someone opens it.
 const EmojiPicker = lazy(() => import('emoji-picker-react'));
@@ -111,13 +112,24 @@ const ATTACH_OPTIONS = [
   { key: 'audio', label: 'Audio', Icon: FiHeadphones, color: 'text-orange-500', accept: 'audio/*' },
 ];
 
+// Messages built in a dialog by the page (onSpecial(key)).
+const SPECIAL_OPTIONS = [
+  { key: 'location', label: 'Location', Icon: FiMapPin, color: 'text-red-500' },
+  { key: 'contact', label: 'Contact', Icon: FiUser, color: 'text-sky-600' },
+  { key: 'interactive', label: 'Buttons or list', Icon: FiList, color: 'text-amber-500' },
+];
+
 /**
  * WhatsApp-style message box: emoji, attachments (any file, also pasted or
  * dropped), captions and voice notes. `ref.addFiles(files)` lets the chat
  * area hand over dropped files.
  */
-export const Composer = ({ ref, onSendText, onSendFile, onTemplate }) => {
+export const Composer = ({
+  ref, onSendText, onSendFile, onTemplate, onSpecial, onTyping,
+  replyingTo, onCancelReply, customerName, quickReplies = [], onManageQuickReplies,
+}) => {
   const [text, setText] = useState('');
+  const [pick, setPick] = useState(0); // highlighted quick reply
   const [files, setFiles] = useState([]); // { id, file, preview }
   const [recording, setRecording] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -145,7 +157,16 @@ export const Composer = ({ ref, onSendText, onSendFile, onTemplate }) => {
     textRef.current?.focus();
   };
 
-  useImperativeHandle(ref, () => ({ addFiles }));
+  useImperativeHandle(ref, () => ({ addFiles, focus: () => textRef.current?.focus() }));
+
+  // "/pri" shows saved replies whose shortcut starts with "pri".
+  const slash = /^\/(\S*)$/.exec(text);
+  const matches = slash ? quickReplies.filter((q) => q.shortcut.startsWith(slash[1].toLowerCase())).slice(0, 8) : [];
+  useEffect(() => { setPick(0); }, [text]);
+  const insertQuickReply = (q) => {
+    setText(q.text);
+    requestAnimationFrame(() => textRef.current?.focus());
+  };
 
   useEffect(() => () => files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview)), []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -222,7 +243,27 @@ export const Composer = ({ ref, onSendText, onSendFile, onTemplate }) => {
   const canSend = files.length > 0 || text.trim().length > 0;
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="relative flex flex-col gap-2">
+      {matches.length > 0 && (
+        <div className="absolute bottom-full left-0 z-30 mb-2 w-full max-w-md overflow-hidden rounded-lg border border-border bg-card shadow-xl">
+          <div className="flex items-center justify-between border-b border-border px-3 py-1.5 text-[11px] text-muted-foreground">
+            <span>Quick replies · ↑ ↓ to choose, Enter or Tab to insert</span>
+            {onManageQuickReplies && <button type="button" onClick={onManageQuickReplies} className="cursor-pointer font-semibold text-green-700 hover:underline">Manage</button>}
+          </div>
+          {matches.map((q, i) => (
+            <button key={q.id} type="button" onMouseDown={(e) => { e.preventDefault(); insertQuickReply(q); }} onMouseEnter={() => setPick(i)} className={cn('flex w-full cursor-pointer flex-col px-3 py-2 text-left', i === pick && 'bg-green-50')}>
+              <span className="text-xs font-semibold text-green-700">/{q.shortcut}</span>
+              <span className="line-clamp-1 text-xs text-muted-foreground">{q.text}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {replyingTo && (
+        <div className="flex items-center gap-2">
+          <QuotedMessage quote={replyingTo} customerName={customerName} className="mb-0 flex-1" onClick={() => textRef.current?.focus()} />
+          <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={onCancelReply} aria-label="Cancel reply"><FiX /></Button>
+        </div>
+      )}
       {files.length > 0 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
           {files.map((f) => (
@@ -284,9 +325,20 @@ export const Composer = ({ ref, onSendText, onSendFile, onTemplate }) => {
                     <o.Icon className={cn('size-4', o.color)} /> {o.label}
                   </DropdownMenuItem>
                 ))}
+                {SPECIAL_OPTIONS.map((o) => (
+                  <DropdownMenuItem key={o.key} onSelect={() => onSpecial?.(o.key)} className="gap-3 py-2">
+                    <o.Icon className={cn('size-4', o.color)} /> {o.label}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={onTemplate} className="gap-3 py-2">
                   <FiFileText className="size-4 text-green-600" /> Template
                 </DropdownMenuItem>
+                {onManageQuickReplies && (
+                  <DropdownMenuItem onSelect={onManageQuickReplies} className="gap-3 py-2">
+                    <FiZap className="size-4 text-amber-500" /> Quick replies
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
             {ATTACH_OPTIONS.map((o) => (
@@ -305,10 +357,19 @@ export const Composer = ({ ref, onSendText, onSendFile, onTemplate }) => {
             <Textarea
               ref={textRef}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => { setText(e.target.value); if (e.target.value.trim()) onTyping?.(); }}
               onPaste={onPaste}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-              placeholder={files.length ? 'Add a caption' : 'Type a message'}
+              onKeyDown={(e) => {
+                if (matches.length) {
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setPick((p) => (p + 1) % matches.length); return; }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); setPick((p) => (p - 1 + matches.length) % matches.length); return; }
+                  if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertQuickReply(matches[pick] || matches[0]); return; }
+                  if (e.key === 'Escape') { setText(''); return; }
+                }
+                if (e.key === 'Escape' && replyingTo) { onCancelReply?.(); return; }
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+              }}
+              placeholder={files.length ? 'Add a caption' : 'Type a message, or / for quick replies'}
               rows={1}
               maxLength={files.length ? 1024 : 4096}
               className="max-h-36 min-h-10 resize-none"
@@ -325,7 +386,7 @@ export const Composer = ({ ref, onSendText, onSendFile, onTemplate }) => {
           </>
         )}
       </div>
-      <div className="hidden text-[10.5px] text-muted-foreground sm:block">Enter to send · Shift+Enter for a new line · paste or drop files to attach</div>
+      <div className="hidden text-[10.5px] text-muted-foreground sm:block">Enter to send · Shift+Enter for a new line · / for quick replies · paste or drop files to attach</div>
     </div>
   );
 };

@@ -20,10 +20,15 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { relativeTime, fullDateTime } from '../utils/time';
 import { Composer } from '../components/inbox/Composer';
-import { MessageMedia } from '../components/inbox/ChatMedia';
+import { MessageBubble } from '../components/inbox/MessageBubble';
+import { ImageViewer } from '../components/inbox/ImageViewer';
+import { ContactDialog, InteractiveDialog, LocationDialog, QuickRepliesDialog } from '../components/inbox/SendDialogs';
+import { AssignAndLabels, LabelChip, SharedMedia } from '../components/inbox/ContactExtras';
 
 const apiError = (err, fallback) => err.response?.data?.error || fallback;
-const FILTERS = [['all', 'All'], ['unread', 'Unread'], ['open', 'Open'], ['closed', 'Closed']];
+const FILTERS = [['all', 'All'], ['unread', 'Unread'], ['mine', 'Mine'], ['unassigned', 'Unassigned'], ['open', 'Open'], ['closed', 'Closed']];
+const SPECIAL_PATHS = { location: 'location', contact: 'contact', interactive: 'interactive' };
+const TYPING_EVERY_MS = 20000;
 
 const formatNumber = (waId) => (waId ? `+${waId}` : '');
 const initials = (name) => String(name || '?').trim().charAt(0).toUpperCase();
@@ -87,6 +92,16 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
   const [templateOpen, setTemplateOpen] = useState(false);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [special, setSpecial] = useState(null); // 'location' | 'contact' | 'interactive'
+  const [quickReplies, setQuickReplies] = useState([]);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [staff, setStaff] = useState([]);
+  const [knownLabels, setKnownLabels] = useState([]);
+  const [labelFilter, setLabelFilter] = useState('');
+  const [viewer, setViewer] = useState(null); // { images, index }
+  const [highlightId, setHighlightId] = useState(null);
+  const lastTyping = useRef(0);
   const bottomRef = useRef(null);
 
   useEffect(() => { if (!embedded) document.title = 'WhatsApp Chat · Getnera Admin'; }, [embedded]);
@@ -102,7 +117,7 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
   const loadConversations = async ({ quiet = false } = {}) => {
     if (!quiet) setListLoading(true);
     try {
-      const res = await axiosClient.get('/admin/inbox/conversations', { params: { search: search.trim() || undefined, filter } });
+      const res = await axiosClient.get('/admin/inbox/conversations', { params: { search: search.trim() || undefined, filter, label: labelFilter || undefined } });
       setConversations(res.data.conversations || []);
     } catch (err) {
       if (err.response?.status === 403) setAllowed(false);
@@ -138,14 +153,19 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
   useEffect(() => {
     const t = setTimeout(() => loadConversations(), search ? 300 : 0);
     return () => clearTimeout(t);
-  }, [search, filter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [search, filter, labelFilter]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     setDetail(null);
     setMessages([]);
+    setReplyingTo(null);
     loadThread(activeId);
   }, [activeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadLabels = () => axiosClient.get('/admin/inbox/labels').then((r) => setKnownLabels(r.data.labels || [])).catch(() => {});
   useEffect(() => {
     axiosClient.get('/admin/inbox/templates').then((r) => setTemplates(r.data.templates || [])).catch(() => {});
+    axiosClient.get('/admin/inbox/quick-replies').then((r) => setQuickReplies(r.data.quick_replies || [])).catch(() => {});
+    axiosClient.get('/admin/inbox/staff').then((r) => setStaff(r.data.staff || [])).catch(() => {});
+    loadLabels();
   }, []);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' });
@@ -178,13 +198,67 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
     throw err;
   };
 
+  const replyField = () => (replyingTo ? { reply_to: replyingTo.id } : {});
+  const sent = (message) => {
+    setMessages((m) => [...m, message]);
+    setReplyingTo(null);
+  };
+
   const sendText = async (body) => {
     try {
-      const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/messages`, { text: body });
-      setMessages((m) => [...m, res.data.message]);
+      const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/messages`, { text: body, ...replyField() });
+      sent(res.data.message);
     } catch (err) {
       sendFailed(err, 'Message not sent');
     }
+  };
+
+  // Location, contact card, buttons or list, built in a dialog.
+  const sendSpecial = async (kind, body) => {
+    try {
+      const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/${SPECIAL_PATHS[kind]}`, { ...body, ...replyField() });
+      sent(res.data.message);
+    } catch (err) {
+      sendFailed(err, 'Message not sent');
+    }
+  };
+
+  const react = async (message, emoji) => {
+    const set = (value) => setMessages((list) => list.map((m) => (m.id === message.id ? { ...m, reactions: { ...m.reactions, staff: value || undefined } } : m)));
+    const before = message.reactions?.staff;
+    set(emoji);
+    try {
+      await axiosClient.post(`/admin/inbox/messages/${message.id}/reaction`, { emoji });
+    } catch (err) {
+      set(before);
+      toast.error(apiError(err, 'Reaction not sent'));
+    }
+  };
+
+  // "typing…" for the customer, at most every 20 seconds.
+  const typing = () => {
+    if (Date.now() - lastTyping.current < TYPING_EVERY_MS) return;
+    lastTyping.current = Date.now();
+    axiosClient.post(`/admin/inbox/conversations/${activeId}/typing`).catch(() => {});
+  };
+
+  const chatImages = useMemo(() => messages.filter((m) => m.type === 'image' && (m.has_media || m.media_url)), [messages]);
+  const openImage = (message) => {
+    const index = chatImages.findIndex((m) => m.id === message.id);
+    setViewer(index >= 0 ? { images: chatImages, index } : { images: [message], index: 0 });
+  };
+
+  const jumpTo = (id) => {
+    const el = document.getElementById(`msg-${id}`);
+    if (!el) { toast.info('That message is further up. Load older messages to see it.'); return; }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightId(id);
+    setTimeout(() => setHighlightId((h) => (h === id ? null : h)), 1600);
+  };
+
+  const startReply = (message) => {
+    setReplyingTo(message);
+    requestAnimationFrame(() => composerRef.current?.focus());
   };
 
   const sendFile = async (file, { caption = '', voice = false, onProgress } = {}) => {
@@ -193,12 +267,13 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
     if (caption) form.append('caption', caption);
     if (voice) form.append('voice', '1');
     try {
+      if (replyingTo) form.append('reply_to', String(replyingTo.id));
       const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/media`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 0,
         onUploadProgress: (e) => e.total && onProgress?.(Math.round((e.loaded / e.total) * 100)),
       });
-      setMessages((m) => [...m, res.data.message]);
+      sent(res.data.message);
     } catch (err) {
       sendFailed(err, voice ? 'Voice message not sent' : `${file.name} not sent`);
     }
@@ -222,6 +297,7 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
       const res = await axiosClient.patch(`/admin/inbox/conversations/${activeId}`, changes);
       setDetail((d) => ({ ...d, conversation: res.data.conversation }));
       setConversations((list) => list.map((c) => (c.id === activeId ? res.data.conversation : c)));
+      if (changes.labels) loadLabels();
       if (success) toast.success(success);
     } catch (err) {
       toast.error(apiError(err, 'Failed to update the chat'));
@@ -307,6 +383,15 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
                 </button>
               ))}
             </div>
+            {knownLabels.length > 0 && (
+              <div className="flex gap-1 overflow-x-auto">
+                {knownLabels.map((l) => (
+                  <button key={l} type="button" onClick={() => setLabelFilter((cur) => (cur === l ? '' : l))} className={cn('shrink-0 cursor-pointer rounded-full', labelFilter && labelFilter !== l && 'opacity-50')} title={labelFilter === l ? 'Show all labels' : `Only "${l}"`}>
+                    <LabelChip label={l} className={cn(labelFilter === l && 'ring-2 ring-offset-1 ring-green-500')} />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {listLoading ? (
@@ -318,7 +403,7 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
             ) : conversations.length === 0 ? (
               <div className="flex flex-col items-center gap-2 px-6 py-16 text-center text-sm text-muted-foreground">
                 <FiInbox className="size-8 text-slate-300" />
-                {search || filter !== 'all' ? 'No chat matches this search or filter.' : 'No chats yet. Messages to the platform number appear here.'}
+                {search || filter !== 'all' || labelFilter ? 'No chat matches this search or filter.' : 'No chats yet. Messages to the platform number appear here.'}
               </div>
             ) : conversations.map((c) => (
               <button
@@ -340,6 +425,13 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
                     {c.unread_count > 0 && <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-[#25D366] px-1.5 text-[11px] font-bold text-white">{c.unread_count}</span>}
                     {c.status === 'closed' && !c.unread_count && <FiLock className="size-3 shrink-0 text-muted-foreground" title="Closed" />}
                   </div>
+                  {(c.labels?.length > 0 || c.assigned_name) && (
+                    <div className="mt-1 flex items-center gap-1 overflow-hidden">
+                      {c.assigned_name && <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">@{c.assigned_name.split(' ')[0]}</span>}
+                      {c.labels?.slice(0, 3).map((l) => <LabelChip key={l} label={l} className="shrink-0 px-1.5 text-[10px]" />)}
+                      {c.labels?.length > 3 && <span className="text-[10px] text-muted-foreground">+{c.labels.length - 3}</span>}
+                    </div>
+                  )}
                 </div>
               </button>
             ))}
@@ -397,25 +489,20 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
                       <span className="rounded-md bg-white/90 px-2.5 py-1 text-[11px] font-semibold text-slate-600 shadow-sm">{item.divider}</span>
                     </div>
                   ) : (
-                    <div key={item.id} className={cn('flex', item.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
-                      <div className={cn(
-                        'max-w-[85%] rounded-lg px-3 py-1.5 text-sm shadow-sm sm:max-w-[70%]',
-                        item.direction === 'outbound' ? 'rounded-tr-none bg-[#d9fdd3]' : 'rounded-tl-none bg-white',
-                        item.status === 'failed' && 'ring-1 ring-red-300'
-                      )}>
-                        {item.template_name && (
-                          <div className="mb-0.5 inline-flex items-center gap-1 text-[10.5px] font-semibold text-green-800"><FiFileText /> Template · {item.template_name}</div>
-                        )}
-                        <MessageMedia message={item} />
-                        {(item.text || !(item.has_media || item.media_url)) && <div className="break-words whitespace-pre-wrap">{item.text || ' '}</div>}
-                        <div className="mt-0.5 flex items-center justify-end gap-1.5 text-[10.5px] text-slate-500">
-                          {item.direction === 'outbound' && item.sent_by_name && <span>{item.sent_by_name} ·</span>}
-                          <span title={fullDateTime(item.created_at)}>{timeOf(item.created_at)}</span>
-                          {item.direction === 'outbound' && <Ticks status={item.status} />}
-                        </div>
-                        {item.status === 'failed' && <div className="mt-0.5 text-[11px] text-red-600">Not delivered: {item.error || 'Meta refused it'}</div>}
-                      </div>
-                    </div>
+                    <MessageBubble
+                      key={item.id}
+                      message={item}
+                      customerName={conversation.name || formatNumber(conversation.wa_id)}
+                      canInteract={configured && windowOpen}
+                      onReply={startReply}
+                      onReact={react}
+                      onOpenImage={openImage}
+                      onJumpTo={jumpTo}
+                      highlighted={highlightId === item.id}
+                      sentBy={item.sent_by_name}
+                      time={<span title={fullDateTime(item.created_at)}>{timeOf(item.created_at)}</span>}
+                      ticks={<Ticks status={item.status} />}
+                    />
                   )))}
                   <div ref={bottomRef} />
                 </div>
@@ -426,7 +513,20 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
                 {!configured ? (
                   <div className="text-center text-xs text-muted-foreground">Sending is off until the platform number is set up.</div>
                 ) : windowOpen ? (
-                  <Composer key={activeId} ref={composerRef} onSendText={sendText} onSendFile={sendFile} onTemplate={() => setTemplateOpen(true)} />
+                  <Composer
+                    key={activeId}
+                    ref={composerRef}
+                    onSendText={sendText}
+                    onSendFile={sendFile}
+                    onTemplate={() => setTemplateOpen(true)}
+                    onSpecial={setSpecial}
+                    onTyping={typing}
+                    replyingTo={replyingTo}
+                    onCancelReply={() => setReplyingTo(null)}
+                    customerName={conversation.name || formatNumber(conversation.wa_id)}
+                    quickReplies={quickReplies}
+                    onManageQuickReplies={() => setQuickOpen(true)}
+                  />
                 ) : (
                   <div className="flex flex-col items-center gap-2 text-center sm:flex-row sm:justify-between sm:text-left">
                     <span className="text-xs text-muted-foreground">
@@ -449,6 +549,12 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
             className={cn(showInfo ? 'fixed inset-y-0 right-0 z-30 flex w-80 shadow-xl xl:static xl:shadow-none' : 'hidden xl:flex')}
             onClose={() => setShowInfo(false)}
             onSave={(changes) => updateConversation(changes, 'Saved')}
+            extras={(
+              <>
+                <AssignAndLabels conversation={conversation} staff={staff} knownLabels={knownLabels} onSave={(changes) => updateConversation(changes)} />
+                <SharedMedia conversationId={conversation.id} refreshKey={messages.length} onOpenImage={(m) => setViewer({ images: [m], index: 0 })} />
+              </>
+            )}
           />
         )}
       </div>
@@ -462,6 +568,11 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
           setMessages((m) => [...m, res.data.message]);
         }}
       />
+      <LocationDialog open={special === 'location'} onOpenChange={(o) => !o && setSpecial(null)} onSend={(body) => sendSpecial('location', body)} />
+      <ContactDialog open={special === 'contact'} onOpenChange={(o) => !o && setSpecial(null)} onSend={(body) => sendSpecial('contact', body)} />
+      <InteractiveDialog open={special === 'interactive'} onOpenChange={(o) => !o && setSpecial(null)} onSend={(body) => sendSpecial('interactive', body)} />
+      <QuickRepliesDialog open={quickOpen} onOpenChange={setQuickOpen} quickReplies={quickReplies} onChanged={setQuickReplies} />
+      {viewer && <ImageViewer images={viewer.images} index={viewer.index} onIndex={(index) => setViewer((v) => ({ ...v, index }))} onClose={() => setViewer(null)} />}
       <NewChatDialog
         open={newChatOpen}
         onOpenChange={setNewChatOpen}
@@ -472,7 +583,7 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
   );
 };
 
-const ContactPanel = ({ conversation, workspaces, className, onClose, onSave }) => {
+const ContactPanel = ({ conversation, workspaces, className, onClose, onSave, extras }) => {
   const [name, setName] = useState(conversation.name || '');
   const [note, setNote] = useState(conversation.note || '');
   const dirty = name !== (conversation.name || '') || note !== (conversation.note || '');
@@ -515,6 +626,7 @@ const ContactPanel = ({ conversation, workspaces, className, onClose, onSave }) 
         </div>
         <Button size="sm" disabled={!dirty} onClick={() => onSave({ name, note })}>Save</Button>
       </div>
+      {extras}
       <div className="text-[11px] text-muted-foreground">
         Reply window {conversation.window_open ? `closes ${relativeTime(conversation.window_closes_at)}` : 'is closed'}.
       </div>

@@ -36,7 +36,7 @@ export const FileTile = ({ name, className }) => {
 
 // A message's file as a URL the browser can show: the signed media-server
 // link when there is one, otherwise loaded through the API with the login.
-function useMediaSrc(message) {
+export function useMediaSrc(message) {
   const [src, setSrc] = useState(message.media_url || null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -97,7 +97,8 @@ const DocumentCard = ({ message, src }) => {
 };
 
 /** The file part of a chat message: photo, video, voice note, sticker or document card. */
-export const MessageMedia = ({ message }) => {
+// `onOpenImage(message)`: show a photo in the full-screen viewer.
+export const MessageMedia = ({ message, onOpenImage }) => {
   const { src, failed } = useMediaSrc(message);
   if (!message.has_media && !message.media_url) return null;
   if (failed) return <div className="mb-1 rounded-md bg-black/5 px-3 py-2 text-xs text-slate-500">This file is no longer available on WhatsApp.</div>;
@@ -106,7 +107,7 @@ export const MessageMedia = ({ message }) => {
   if (!src) return <div className="mb-1 h-40 w-64 max-w-full animate-pulse rounded-md bg-black/10" />;
   if (message.type === 'image' || message.type === 'sticker') {
     return (
-      <button type="button" onClick={() => window.open(src, '_blank', 'noopener')} className="mb-1 block cursor-zoom-in">
+      <button type="button" onClick={() => (onOpenImage ? onOpenImage(message) : window.open(src, '_blank', 'noopener'))} className="mb-1 block cursor-zoom-in">
         <img src={src} alt={message.filename || 'Photo'} className={cn('rounded-md object-cover', message.type === 'sticker' ? 'size-32 bg-transparent' : 'max-h-80 max-w-full sm:max-w-72')} />
       </button>
     );

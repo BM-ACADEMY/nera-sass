@@ -285,6 +285,93 @@ test('Platform WhatsApp inbox', async (t) => {
     }
   });
 
+  await t.test('I9. Replies, reactions, location, contact cards, buttons, lists and typing', async () => {
+    const { ops } = await seed();
+    await postWebhook(inbound('Do you have a demo video? https://getnera.in/demo'));
+    const contact = await PlatformWaContacts.findOne({}).lean();
+    const first = await PlatformWaMessages.findOne({ contact_id: contact.id }).lean();
+    const post = (path, body) => request(app).post(`/api/admin/inbox${path}`).set(bearer(ops)).send(body);
+
+    const reply = await post(`/conversations/${contact.id}/messages`, { text: 'Yes, here it is', reply_to: first.id });
+    assert.strictEqual(reply.status, 201, JSON.stringify(reply.body));
+    assert.deepStrictEqual(metaCalls.at(-1).data.context, { message_id: first.wa_message_id });
+    assert.strictEqual(reply.body.message.reply_to.text, 'Do you have a demo video? https://getnera.in/demo');
+
+    const reacted = await post(`/messages/${first.id}/reaction`, { emoji: '👍' });
+    assert.strictEqual(reacted.status, 201, JSON.stringify(reacted.body));
+    assert.deepStrictEqual(metaCalls.at(-1).data.reaction, { message_id: first.wa_message_id, emoji: '👍' });
+
+    // The customer reacts to our reply: shown on that message, not as a new one.
+    const ours = await PlatformWaMessages.findOne({ id: reply.body.message.id }).lean();
+    const count = await PlatformWaMessages.countDocuments({});
+    await postWebhook(JSON.stringify({ object: 'whatsapp_business_account', entry: [{ changes: [{ field: 'messages', value: {
+      metadata: { phone_number_id: PLATFORM_PHONE }, contacts: [{ wa_id: '919876543210' }],
+      messages: [{ from: '919876543210', id: 'wamid.react', timestamp: String(Math.floor(Date.now() / 1000)), type: 'reaction', reaction: { message_id: ours.wa_message_id, emoji: '❤️' } }],
+    } }] }] }));
+    assert.strictEqual(await PlatformWaMessages.countDocuments({}), count);
+    const list = await request(app).get(`/api/admin/inbox/conversations/${contact.id}/messages`).set(bearer(ops));
+    assert.deepStrictEqual(list.body.messages.find((m) => m.id === ours.id).reactions, { customer: '❤️' });
+    assert.deepStrictEqual(list.body.messages.find((m) => m.id === first.id).reactions, { staff: '👍' });
+
+    const loc = await post(`/conversations/${contact.id}/location`, { latitude: '11.9416', longitude: '79.8083', name: 'Getnera office', address: 'Puducherry' });
+    assert.strictEqual(loc.status, 201, JSON.stringify(loc.body));
+    assert.deepStrictEqual(metaCalls.at(-1).data.location, { latitude: 11.9416, longitude: 79.8083, name: 'Getnera office', address: 'Puducherry' });
+    assert.strictEqual(loc.body.message.location.name, 'Getnera office');
+    assert.strictEqual((await post(`/conversations/${contact.id}/location`, { latitude: 200, longitude: 0 })).status, 400);
+
+    const card = await post(`/conversations/${contact.id}/contact`, { name: 'Priya Sales', phone: '+91 98765 00000' });
+    assert.strictEqual(card.status, 201, JSON.stringify(card.body));
+    assert.strictEqual(metaCalls.at(-1).data.contacts[0].phones[0].phone, '+919876500000');
+    assert.deepStrictEqual(card.body.message.contacts, [{ name: 'Priya Sales', phones: ['+919876500000'], emails: [] }]);
+
+    const buttons = await post(`/conversations/${contact.id}/interactive`, { kind: 'buttons', body: 'Book a demo?', buttons: ['Yes', 'Later', 'Call me'] });
+    assert.strictEqual(buttons.status, 201, JSON.stringify(buttons.body));
+    assert.deepStrictEqual(metaCalls.at(-1).data.interactive.action.buttons.map((b) => b.reply.title), ['Yes', 'Later', 'Call me']);
+    assert.strictEqual((await post(`/conversations/${contact.id}/interactive`, { kind: 'buttons', body: 'x', buttons: ['a', 'b', 'c', 'd'] })).status, 400);
+    const listMsg = await post(`/conversations/${contact.id}/interactive`, { kind: 'list', body: 'Pick a plan', button_text: 'Plans', rows: [{ title: 'Starter', description: '₹999' }, { title: 'Pro' }] });
+    assert.strictEqual(listMsg.status, 201, JSON.stringify(listMsg.body));
+    assert.strictEqual(metaCalls.at(-1).data.interactive.action.sections[0].rows[1].title, 'Pro');
+
+    const typing = await post(`/conversations/${contact.id}/typing`, {});
+    assert.strictEqual(typing.body.sent, true);
+    assert.deepStrictEqual(metaCalls.at(-1).data.typing_indicator, { type: 'text' });
+    assert.strictEqual((await post(`/conversations/${contact.id}/typing`, {})).body.sent, false, 'throttled');
+
+    const shared = await request(app).get(`/api/admin/inbox/conversations/${contact.id}/shared`).set(bearer(ops));
+    assert.deepStrictEqual(shared.body.links.map((l) => l.url), ['https://getnera.in/demo']);
+  });
+
+  await t.test('I10. Quick replies, assigning chats and labels', async () => {
+    const { ops } = await seed();
+    await postWebhook(inbound('hello'));
+    const contact = await PlatformWaContacts.findOne({}).lean();
+    const api = (method, path) => request(app)[method](`/api/admin/inbox${path}`).set(bearer(ops));
+
+    const created = await api('post', '/quick-replies').send({ shortcut: '/Price', text: 'Plans start at ₹999 a month.' });
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    assert.strictEqual(created.body.quick_reply.shortcut, 'price');
+    assert.strictEqual((await api('post', '/quick-replies').send({ shortcut: 'price', text: 'again' })).status, 409);
+    assert.strictEqual((await api('post', '/quick-replies').send({ shortcut: 'has space', text: 'x' })).status, 400);
+    const edited = await api('patch', `/quick-replies/${created.body.quick_reply.id}`).send({ shortcut: 'price', text: 'From ₹999.' });
+    assert.strictEqual(edited.body.quick_reply.text, 'From ₹999.');
+    assert.strictEqual((await api('get', '/quick-replies')).body.quick_replies.length, 1);
+    await api('delete', `/quick-replies/${created.body.quick_reply.id}`);
+    assert.strictEqual((await api('get', '/quick-replies')).body.quick_replies.length, 0);
+
+    const { staff } = (await api('get', '/staff')).body;
+    assert.ok(staff.some((s) => s.id === ops.id), 'ops staff can be assigned');
+    const assigned = await api('patch', `/conversations/${contact.id}`).send({ assigned_to: ops.id, labels: ['Hot lead', ' hot  lead ', 'Paid'] });
+    assert.strictEqual(assigned.status, 200, JSON.stringify(assigned.body));
+    assert.strictEqual(assigned.body.conversation.assigned_name, 'Priya');
+    assert.deepStrictEqual(assigned.body.conversation.labels, ['Hot lead', 'Paid'], 'trimmed, same label once');
+    assert.strictEqual((await api('patch', `/conversations/${contact.id}`).send({ assigned_to: 99999 })).status, 400);
+
+    assert.strictEqual((await api('get', '/conversations?filter=mine')).body.conversations.length, 1);
+    assert.strictEqual((await api('get', '/conversations?filter=unassigned')).body.conversations.length, 0);
+    assert.strictEqual((await api('get', '/conversations?label=Paid')).body.conversations.length, 1);
+    assert.ok((await api('get', '/labels')).body.labels.includes('Paid'));
+  });
+
   await t.test('I8. Media kinds follow Meta limits', () => {
     const { mediaKind } = require('../services/platformInbox');
     assert.strictEqual(mediaKind('image/jpeg', 1000), 'image');
