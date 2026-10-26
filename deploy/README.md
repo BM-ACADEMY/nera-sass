@@ -76,6 +76,10 @@ sudo certbot --nginx -d getnera.in -d www.getnera.in -d app.getnera.in -d admin.
 ```
 Choose "redirect" when certbot asks, so http goes to https.
 
+**Copying `getnera.conf` again later wipes the HTTPS blocks certbot added** (every
+domain then shows ERR_CERT_COMMON_NAME_INVALID). Right after any such copy, run the
+same certbot command again and pick "1: Attempt to reinstall this existing certificate".
+
 ## 6. Build and start
 
 ```bash

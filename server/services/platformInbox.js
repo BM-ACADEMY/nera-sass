@@ -219,17 +219,73 @@ async function platformWabaId() {
   return phone?.waba_id || null;
 }
 
-const bodyOf = (template) => (template.components || []).find((c) => String(c.type).toUpperCase() === 'BODY')?.text || '';
-// Templates that need values ({{1}}) or media headers cannot be sent from the inbox yet.
-const sendable = (template) => !(template.components || []).some((c) => /\{\{\s*\w+\s*\}\}/.test(c.text || '')
-  || (String(c.type).toUpperCase() === 'HEADER' && c.format && String(c.format).toUpperCase() !== 'TEXT'));
+const VARIABLE = /\{\{\s*([a-z0-9_]+)\s*\}\}/gi;
+const MEDIA_HEADERS = ['IMAGE', 'VIDEO', 'DOCUMENT'];
+// Meta's sample template: it can only be sent from Meta's public test numbers
+// (error 131058), never from a real business number like the platform's.
+const TEST_ONLY_TEMPLATES = new Set(['hello_world']);
 
-/** Approved templates of the platform number that can be sent as they are. */
+const upper = (value) => String(value || '').toUpperCase();
+const componentOf = (template, type) => (template.components || []).find((c) => upper(c.type) === type);
+const variablesIn = (text) => [...new Set([...String(text || '').matchAll(VARIABLE)].map((m) => m[1]))];
+
+/**
+ * What staff must fill in before a template can be sent: header text value or
+ * header file, body values, and values for website / offer-code buttons.
+ * Meta's review samples are offered as placeholders.
+ */
+function templateFields(template) {
+  const header = componentOf(template, 'HEADER');
+  const body = componentOf(template, 'BODY');
+  const named = upper(template.raw_data?.parameter_format) === 'NAMED' || variablesIn(body?.text).some((v) => !/^\d+$/.test(v));
+
+  const bodyVars = variablesIn(body?.text);
+  const bodySamples = named
+    ? Object.fromEntries((body?.example?.body_text_named_params || []).map((p) => [p.param_name, p.example]))
+    : Object.fromEntries((body?.example?.body_text?.[0] || []).map((value, i) => [String(i + 1), value]));
+
+  let headerField = null;
+  if (header && MEDIA_HEADERS.includes(upper(header.format))) {
+    headerField = { format: upper(header.format) };
+  } else if (header && upper(header.format) === 'TEXT' && variablesIn(header.text).length) {
+    const sample = header.example?.header_text?.[0] || header.example?.header_text_named_params?.[0]?.example || '';
+    headerField = { format: 'TEXT', name: variablesIn(header.text)[0], sample };
+  }
+
+  const buttons = (componentOf(template, 'BUTTONS')?.buttons || []).flatMap((button, index) => {
+    const type = upper(button.type);
+    if (type === 'URL' && /\{\{\s*1\s*\}\}/.test(button.url || '')) {
+      return [{ index, type: 'URL', text: button.text, url: button.url, sample: button.example?.[0] || '' }];
+    }
+    if (type === 'COPY_CODE') return [{ index, type: 'COPY_CODE', text: 'Offer code', sample: button.example || '' }];
+    return [];
+  });
+
+  return {
+    named,
+    header: headerField,
+    body: bodyVars.map((name) => ({ name, sample: bodySamples[name] || '' })),
+    buttons,
+  };
+}
+
+/** Approved templates of the platform number, with the values each one needs. */
 async function listTemplates() {
   const wabaId = await platformWabaId();
   if (!wabaId) return [];
-  const rows = await MetaWhatsappTemplates.find({ waba_id: wabaId, status: 'APPROVED' }, { _id: 0, name: 1, language: 1, category: 1, components: 1 }).sort({ name: 1 }).lean();
-  return rows.filter(sendable).map((t) => ({ name: t.name, language: t.language, category: t.category, body: bodyOf(t) }));
+  const rows = await MetaWhatsappTemplates.find(
+    { waba_id: wabaId, status: 'APPROVED', category: { $ne: 'AUTHENTICATION' } },
+    { _id: 0, name: 1, language: 1, category: 1, components: 1, 'raw_data.parameter_format': 1 },
+  ).sort({ name: 1 }).lean();
+  return rows.filter((t) => !TEST_ONLY_TEMPLATES.has(t.name)).map((t) => ({
+    name: t.name,
+    language: t.language,
+    category: t.category,
+    header_text: componentOf(t, 'HEADER')?.text || '',
+    body: componentOf(t, 'BODY')?.text || '',
+    footer: componentOf(t, 'FOOTER')?.text || '',
+    fields: templateFields(t),
+  }));
 }
 
 async function findTemplate(name, language) {
@@ -238,27 +294,103 @@ async function findTemplate(name, language) {
   return match;
 }
 
-async function sendTemplate({ contactId, name, language, staff }) {
+// Meta refuses parameters with new lines, tabs or more than 4 spaces in a row.
+const cleanParam = (value) => String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/ {5,}/g, '    ').trim();
+
+/**
+ * Builds the Meta `template` payload from the staff's values and the text
+ * that is saved in the chat. values = { header, header_media_id, body: {name: value}, buttons: {index: value} }.
+ */
+function buildTemplateMessage(template, values = {}) {
+  const { fields } = template;
+  const components = [];
+  const textParam = (name, value) => ({ type: 'text', text: value, ...(fields.named ? { parameter_name: name } : {}) });
+  const need = (value, label) => {
+    const clean = cleanParam(value);
+    if (!clean) throw new InboxError(400, `Fill in ${label}`, 'TEMPLATE_VALUE_MISSING');
+    if (clean.length > 1024) throw new InboxError(400, `${label} is too long`, 'TEMPLATE_VALUE_TOO_LONG');
+    return clean;
+  };
+
+  let headerText = template.header_text;
+  if (fields.header?.format === 'TEXT') {
+    const value = need(values.header, 'the header value');
+    components.push({ type: 'header', parameters: [textParam(fields.header.name, value)] });
+    headerText = headerText.replace(VARIABLE, value);
+  } else if (fields.header) {
+    const id = String(values.header_media_id || '').trim();
+    if (!id) throw new InboxError(400, `Add the header ${fields.header.format.toLowerCase()}`, 'TEMPLATE_VALUE_MISSING');
+    const kind = fields.header.format.toLowerCase();
+    components.push({ type: 'header', parameters: [{ type: kind, [kind]: { id } }] });
+  }
+
+  const bodyValues = {};
+  for (const variable of fields.body) bodyValues[variable.name] = need(values.body?.[variable.name], `{{${variable.name}}}`);
+  if (fields.body.length) components.push({ type: 'body', parameters: fields.body.map((v) => textParam(v.name, bodyValues[v.name])) });
+
+  for (const button of fields.buttons) {
+    const value = need(values.buttons?.[button.index], button.type === 'URL' ? `the link for "${button.text}"` : 'the offer code');
+    components.push(button.type === 'URL'
+      ? { type: 'button', sub_type: 'url', index: String(button.index), parameters: [{ type: 'text', text: value }] }
+      : { type: 'button', sub_type: 'copy_code', index: String(button.index), parameters: [{ type: 'coupon_code', coupon_code: value }] });
+  }
+
+  const body = template.body.replace(VARIABLE, (_m, name) => bodyValues[name] ?? `{{${name}}}`);
+  const text = [headerText, body, template.footer].filter(Boolean).join('\n\n') || `[Template] ${template.name}`;
+  return {
+    text,
+    payload: { type: 'template', template: { name: template.name, language: { code: template.language }, ...(components.length ? { components } : {}) } },
+  };
+}
+
+async function sendTemplate({ contactId, name, language, values, staff }) {
   requireConfigured();
   const template = await findTemplate(name, language);
+  const message = buildTemplateMessage(template, values);
   const contact = await loadContact(contactId);
-  return deliver(contact, { type: 'template', text: template.body || `[Template] ${template.name}`, templateName: template.name },
-    { type: 'template', template: { name: template.name, language: { code: template.language } } }, staff);
+  return deliver(contact, { type: 'template', text: message.text, templateName: template.name }, message.payload, staff);
 }
 
 /** A new conversation always opens with an approved template. */
-async function startConversation({ phone, name, templateName, language, staff }) {
+async function startConversation({ phone, name, templateName, language, values, staff }) {
   requireConfigured();
   const waId = digits(phone);
   if (waId.length < 10 || waId.length > 15) throw new InboxError(400, 'Enter the number with its country code, for example 919876543210');
   const template = await findTemplate(templateName, language);
+  const built = buildTemplateMessage(template, values);
   const contact = await findOrCreateContact(waId, null);
   if (name && !contact.name) {
     await PlatformWaContacts.updateOne({ id: contact.id }, { $set: { name: String(name).trim().slice(0, 80) } });
   }
-  const message = await deliver(contact, { type: 'template', text: template.body || `[Template] ${template.name}`, templateName: template.name },
-    { type: 'template', template: { name: template.name, language: { code: template.language } } }, staff);
+  const message = await deliver(contact, { type: 'template', text: built.text, templateName: template.name }, built.payload, staff);
   return { contact_id: contact.id, message };
+}
+
+const HEADER_MEDIA_LIMITS = { IMAGE: 5, VIDEO: 16, DOCUMENT: 100 }; // MB, Meta's limits
+
+/**
+ * Uploads a template header file to Meta for the platform number and returns
+ * its media id. A copy is also kept on the media server (scope "platform").
+ */
+async function uploadHeaderMedia({ buffer, mimeType, filename, format }) {
+  requireConfigured();
+  const kind = upper(format);
+  if (!MEDIA_HEADERS.includes(kind)) throw new InboxError(400, 'Unknown header type');
+  if (!buffer?.length) throw new InboxError(400, 'Choose a file');
+  if (buffer.length > HEADER_MEDIA_LIMITS[kind] * 1024 * 1024) throw new InboxError(400, `A header ${kind.toLowerCase()} can be at most ${HEADER_MEDIA_LIMITS[kind]} MB`);
+  const fd = new FormData();
+  fd.append('messaging_product', 'whatsapp');
+  fd.append('file', new Blob([buffer], { type: mimeType || 'application/octet-stream' }), filename || 'file');
+  const res = await fetch(`${graphBase()}/${platformPhoneId()}/media`, {
+    method: 'POST', headers: { Authorization: `Bearer ${platformToken()}` }, body: fd, signal: AbortSignal.timeout(60000),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.id) throw new InboxError(400, `Meta did not accept the file: ${data.error?.error_user_msg || data.error?.message || res.status}`);
+  if (mediaStore.enabled()) {
+    runAsSystem(() => mediaStore.save({ data: buffer, mime: mimeType, name: filename, source: 'upload', scope: mediaStore.PLATFORM_SCOPE, waMediaId: data.id }), 'platform-inbox-media')
+      .catch((error) => console.error('[Platform inbox] Header copy failed:', error.message));
+  }
+  return { media_id: data.id };
 }
 
 module.exports = {
@@ -274,5 +406,8 @@ module.exports = {
   sendTemplate,
   startConversation,
   listTemplates,
+  templateFields,
+  buildTemplateMessage,
+  uploadHeaderMedia,
   platformWabaId,
 };

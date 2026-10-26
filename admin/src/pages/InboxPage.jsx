@@ -431,8 +431,8 @@ const InboxPage = ({ embedded = false, conversationId: conversationIdProp, baseP
         open={templateOpen}
         onOpenChange={setTemplateOpen}
         templates={templates}
-        onSend={async (template) => {
-          const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/template`, { name: template.name, language: template.language });
+        onSend={async (template, values) => {
+          const res = await axiosClient.post(`/admin/inbox/conversations/${activeId}/template`, { name: template.name, language: template.language, values });
           setMessages((m) => [...m, res.data.message]);
         }}
       />
@@ -508,27 +508,110 @@ const TemplatePicker = ({ templates, value, onChange }) => (
   </div>
 );
 
+const EMPTY_VALUES = { header: '', header_media_id: '', header_file: '', body: {}, buttons: {} };
+const ACCEPT = { IMAGE: 'image/jpeg,image/png', VIDEO: 'video/mp4,video/3gpp', DOCUMENT: '.pdf,application/pdf' };
+
+// True when every value the template needs has been filled in.
+const templateReady = (template, values) => {
+  if (!template) return false;
+  const { fields } = template;
+  if (fields.header?.format === 'TEXT' && !values.header.trim()) return false;
+  if (fields.header && fields.header.format !== 'TEXT' && !values.header_media_id) return false;
+  if (fields.body.some((v) => !String(values.body[v.name] || '').trim())) return false;
+  return fields.buttons.every((b) => String(values.buttons[b.index] || '').trim());
+};
+
+const fill = (text, values, fallback) => String(text || '').replace(/\{\{\s*([a-z0-9_]+)\s*\}\}/gi, (m, name) => String(values?.[name] || '').trim() || fallback(name, m));
+
+// Inputs for a template's values, with a live preview of the message.
+const TemplateValues = ({ template, values, onChange }) => {
+  const [uploading, setUploading] = useState(false);
+  const { fields } = template;
+  const set = (patch) => onChange({ ...values, ...patch });
+  const headerText = fields.header?.format === 'TEXT' ? fill(template.header_text, { [fields.header.name]: values.header }, (_n, m) => m) : template.header_text;
+  const body = fill(template.body, values.body, (_n, m) => m);
+
+  const upload = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('format', fields.header.format);
+      const res = await axiosClient.post('/admin/inbox/template-media', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      set({ header_media_id: res.data.media_id, header_file: file.name });
+    } catch (err) {
+      set({ header_media_id: '', header_file: '' });
+      toast.error(apiError(err, 'Upload failed'));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      {fields.header?.format === 'TEXT' && (
+        <div className="flex flex-col gap-1.5">
+          <Label className="text-xs">Header {`{{${fields.header.name}}}`}</Label>
+          <Input value={values.header} onChange={(e) => set({ header: e.target.value })} placeholder={fields.header.sample || 'Value'} maxLength={60} />
+        </div>
+      )}
+      {fields.header && fields.header.format !== 'TEXT' && (
+        <div className="flex flex-col gap-1.5">
+          <Label className="text-xs">Header {fields.header.format.toLowerCase()}</Label>
+          <Input type="file" accept={ACCEPT[fields.header.format]} disabled={uploading} onChange={(e) => upload(e.target.files?.[0])} />
+          <span className="text-[11px] text-muted-foreground">
+            {uploading ? 'Uploading to WhatsApp…' : values.header_media_id ? `Ready: ${values.header_file}` : 'Choose the file to send in the header.'}
+          </span>
+        </div>
+      )}
+      {fields.body.map((v) => (
+        <div key={v.name} className="flex flex-col gap-1.5">
+          <Label className="text-xs">{`{{${v.name}}}`}</Label>
+          <Input value={values.body[v.name] || ''} onChange={(e) => set({ body: { ...values.body, [v.name]: e.target.value } })} placeholder={v.sample || 'Value'} maxLength={1024} />
+        </div>
+      ))}
+      {fields.buttons.map((b) => (
+        <div key={b.index} className="flex flex-col gap-1.5">
+          <Label className="text-xs">{b.type === 'URL' ? `Button "${b.text}" link: ${b.url.replace(/\{\{\s*1\s*\}\}/, '…')}` : 'Offer code'}</Label>
+          <Input value={values.buttons[b.index] || ''} onChange={(e) => set({ buttons: { ...values.buttons, [b.index]: e.target.value } })} placeholder={b.type === 'URL' ? (b.sample.split('/').pop() || 'Value') : (b.sample || 'CODE')} maxLength={b.type === 'URL' ? 2000 : 15} />
+        </div>
+      ))}
+      <div className="rounded-lg bg-[#d9fdd3] px-3 py-2 text-sm whitespace-pre-wrap">
+        {fields.header && fields.header.format !== 'TEXT' && <div className="mb-1 text-[11px] font-semibold text-green-800">[{fields.header.format.toLowerCase()}]</div>}
+        {headerText && <div className="mb-1 font-semibold">{headerText}</div>}
+        {body || template.name}
+        {template.footer && <div className="mt-1 text-[11px] text-muted-foreground">{template.footer}</div>}
+      </div>
+    </div>
+  );
+};
+
+const valuesPayload = (values) => ({ header: values.header, header_media_id: values.header_media_id, body: values.body, buttons: values.buttons });
+
 const TemplateDialog = ({ open, onOpenChange, templates, onSend }) => {
   const [value, setValue] = useState('');
+  const [values, setValues] = useState(EMPTY_VALUES);
   const [sending, setSending] = useState(false);
   const template = templates.find((t) => `${t.name}|${t.language}` === value);
   useEffect(() => { if (open) setValue(''); }, [open]);
+  useEffect(() => { setValues(EMPTY_VALUES); }, [value]);
   return (
     <Dialog open={open} onOpenChange={(o) => !sending && onOpenChange(o)}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Send a template</DialogTitle>
-          <DialogDescription>Approved templates can be sent at any time. Templates that need values are not listed yet.</DialogDescription>
+          <DialogDescription>Approved templates can be sent at any time. Fill in the values the template needs.</DialogDescription>
         </DialogHeader>
         <TemplatePicker templates={templates} value={value} onChange={setValue} />
-        {template && <div className="rounded-lg bg-[#d9fdd3] px-3 py-2 text-sm whitespace-pre-wrap">{template.body || template.name}</div>}
+        {template && <TemplateValues template={template} values={values} onChange={setValues} />}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>Cancel</Button>
           <Button
-            disabled={!template || sending}
+            disabled={!templateReady(template, values) || sending}
             onClick={async () => {
               setSending(true);
-              try { await onSend(template); toast.success('Template sent'); onOpenChange(false); } catch (err) { toast.error(apiError(err, 'Template not sent')); } finally { setSending(false); }
+              try { await onSend(template, valuesPayload(values)); toast.success('Template sent'); onOpenChange(false); } catch (err) { toast.error(apiError(err, 'Template not sent')); } finally { setSending(false); }
             }}
           >
             {sending && <Spinner />} Send
@@ -543,13 +626,15 @@ const NewChatDialog = ({ open, onOpenChange, templates, onStarted }) => {
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
   const [value, setValue] = useState('');
+  const [values, setValues] = useState(EMPTY_VALUES);
   const [sending, setSending] = useState(false);
   const template = templates.find((t) => `${t.name}|${t.language}` === value);
   useEffect(() => { if (open) { setPhone(''); setName(''); setValue(''); } }, [open]);
-  const valid = phone.replace(/\D/g, '').length >= 10 && template;
+  useEffect(() => { setValues(EMPTY_VALUES); }, [value]);
+  const valid = phone.replace(/\D/g, '').length >= 10 && templateReady(template, values);
   return (
     <Dialog open={open} onOpenChange={(o) => !sending && onOpenChange(o)}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>New chat</DialogTitle>
           <DialogDescription>A new conversation must start with an approved template (Meta rule).</DialogDescription>
@@ -564,7 +649,7 @@ const NewChatDialog = ({ open, onOpenChange, templates, onStarted }) => {
             <Input id="nc-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
           </div>
           <TemplatePicker templates={templates} value={value} onChange={setValue} />
-          {template && <div className="rounded-lg bg-[#d9fdd3] px-3 py-2 text-sm whitespace-pre-wrap">{template.body || template.name}</div>}
+          {template && <TemplateValues template={template} values={values} onChange={setValues} />}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={sending}>Cancel</Button>
@@ -573,7 +658,7 @@ const NewChatDialog = ({ open, onOpenChange, templates, onStarted }) => {
             onClick={async () => {
               setSending(true);
               try {
-                const res = await axiosClient.post('/admin/inbox/conversations', { phone, name: name.trim() || undefined, template_name: template.name, language: template.language });
+                const res = await axiosClient.post('/admin/inbox/conversations', { phone, name: name.trim() || undefined, template_name: template.name, language: template.language, values: valuesPayload(values) });
                 toast.success('Chat started');
                 onOpenChange(false);
                 onStarted(res.data.contact_id);

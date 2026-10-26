@@ -7,6 +7,9 @@ const { PlatformWaContacts, PlatformWaMessages, MetaWhatsappPhoneNumbers, Client
 const { escapeRegex } = require('../db/mongo');
 const inbox = require('../services/platformInbox');
 const mediaStore = require('../services/mediaStore');
+const multer = require('multer');
+
+const headerUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 1 } });
 
 const SEND_LIMIT = 30; // messages per staff member per minute
 const sendLog = new Map();
@@ -172,6 +175,18 @@ module.exports = function registerAdminInboxRoutes(router, { permit, fail }) {
     }
   });
 
+  // Header image / video / document for a template, uploaded to Meta first.
+  router.post('/inbox/template-media', can, headerUpload.single('file'), async (req, res) => {
+    try {
+      return res.status(201).json(await inbox.uploadHeaderMedia({
+        buffer: req.file?.buffer, mimeType: req.file?.mimetype, filename: req.file?.originalname, format: req.body?.format,
+      }));
+    } catch (error) {
+      if (error instanceof inbox.InboxError) return res.status(error.status).json({ error: error.message, code: error.code });
+      return fail(res, error);
+    }
+  });
+
   const sendRoute = (path, handler) => router.post(path, can, async (req, res) => {
     try {
       if (rateLimited(req.user.id)) return res.status(429).json({ error: 'Too many messages in a minute. Wait a moment.', code: 'RATE_LIMITED' });
@@ -189,12 +204,12 @@ module.exports = function registerAdminInboxRoutes(router, { permit, fail }) {
   }));
 
   sendRoute('/inbox/conversations/:id/template', async (req) => ({
-    message: presentMessage(await inbox.sendTemplate({ contactId: req.params.id, name: req.body?.name, language: req.body?.language, staff: staffOf(req) })),
+    message: presentMessage(await inbox.sendTemplate({ contactId: req.params.id, name: req.body?.name, language: req.body?.language, values: req.body?.values, staff: staffOf(req) })),
   }));
 
   sendRoute('/inbox/conversations', async (req) => {
     const result = await inbox.startConversation({
-      phone: req.body?.phone, name: req.body?.name, templateName: req.body?.template_name, language: req.body?.language, staff: staffOf(req),
+      phone: req.body?.phone, name: req.body?.name, templateName: req.body?.template_name, language: req.body?.language, values: req.body?.values, staff: staffOf(req),
     });
     return { contact_id: result.contact_id, message: presentMessage(result.message) };
   });

@@ -68,6 +68,12 @@ test('Platform WhatsApp inbox', async (t) => {
       { template_id: 'T1', waba_id: 'WABA_P', name: 'hello_support', language: 'en', status: 'APPROVED', components: [{ type: 'BODY', text: 'Hi, this is Getnera support.' }] },
       { template_id: 'T2', waba_id: 'WABA_P', name: 'needs_value', language: 'en', status: 'APPROVED', components: [{ type: 'BODY', text: 'Hi {{1}}' }] },
       { template_id: 'T3', waba_id: 'WABA_P', name: 'pending_one', language: 'en', status: 'PENDING', components: [{ type: 'BODY', text: 'x' }] },
+      { template_id: 'T4', waba_id: 'WABA_P', name: 'hello_world', language: 'en_US', status: 'APPROVED', components: [{ type: 'BODY', text: 'Welcome' }] },
+      { template_id: 'T5', waba_id: 'WABA_P', name: 'demo_offer', language: 'en', status: 'APPROVED', components: [
+        { type: 'HEADER', format: 'IMAGE', example: { header_handle: ['https://example.test/h.jpg'] } },
+        { type: 'BODY', text: 'Hi {{customer_name}}, your demo is on {{demo_date}}.', example: { body_text_named_params: [{ param_name: 'customer_name', example: 'Ravi' }, { param_name: 'demo_date', example: '1 Nov' }] } },
+        { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'OK' }, { type: 'URL', text: 'Join', url: 'https://getnera.in/d/{{1}}', example: ['https://getnera.in/d/abc'] }] },
+      ], raw_data: { parameter_format: 'NAMED' } },
     ]));
     return { ops, support, owner };
   }
@@ -139,9 +145,29 @@ test('Platform WhatsApp inbox', async (t) => {
     assert.strictEqual(metaCalls.length, 0, 'nothing sent to Meta');
 
     const templates = await request(app).get('/api/admin/inbox/templates').set(bearer(ops));
-    assert.deepStrictEqual(templates.body.templates.map((x) => x.name), ['hello_support'], 'approved, no variables');
+    assert.deepStrictEqual(templates.body.templates.map((x) => x.name), ['demo_offer', 'hello_support', 'needs_value'], 'approved only, no test-only hello_world');
+    assert.deepStrictEqual(templates.body.templates.find((x) => x.name === 'needs_value').fields.body, [{ name: '1', sample: '' }]);
     const bad = await request(app).post(`/api/admin/inbox/conversations/${contact.id}/template`).set(bearer(ops)).send({ name: 'needs_value' });
     assert.strictEqual(bad.status, 400);
+    assert.strictEqual(bad.body.code, 'TEMPLATE_VALUE_MISSING');
+    assert.strictEqual(metaCalls.length, 0, 'a template with missing values never reaches Meta');
+
+    const filled = await request(app).post(`/api/admin/inbox/conversations/${contact.id}/template`).set(bearer(ops)).send({ name: 'needs_value', language: 'en', values: { body: { 1: 'Ravi\nKumar' } } });
+    assert.strictEqual(filled.status, 201, JSON.stringify(filled.body));
+    assert.deepStrictEqual(metaCalls.at(-1).data.template.components, [{ type: 'body', parameters: [{ type: 'text', text: 'Ravi Kumar' }] }]);
+    assert.strictEqual(filled.body.message.text, 'Hi Ravi Kumar');
+
+    const full = await request(app).post(`/api/admin/inbox/conversations/${contact.id}/template`).set(bearer(ops)).send({
+      name: 'demo_offer', language: 'en',
+      values: { header_media_id: 'MEDIA_1', body: { customer_name: 'Ravi', demo_date: '2 Nov' }, buttons: { 1: 'xyz' } },
+    });
+    assert.strictEqual(full.status, 201, JSON.stringify(full.body));
+    assert.deepStrictEqual(metaCalls.at(-1).data.template.components, [
+      { type: 'header', parameters: [{ type: 'image', image: { id: 'MEDIA_1' } }] },
+      { type: 'body', parameters: [{ type: 'text', text: 'Ravi', parameter_name: 'customer_name' }, { type: 'text', text: '2 Nov', parameter_name: 'demo_date' }] },
+      { type: 'button', sub_type: 'url', index: '1', parameters: [{ type: 'text', text: 'xyz' }] },
+    ]);
+    assert.strictEqual(full.body.message.text, 'Hi Ravi, your demo is on 2 Nov.');
     const ok = await request(app).post(`/api/admin/inbox/conversations/${contact.id}/template`).set(bearer(ops)).send({ name: 'hello_support', language: 'en' });
     assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
     assert.strictEqual(metaCalls.at(-1).data.template.name, 'hello_support');
