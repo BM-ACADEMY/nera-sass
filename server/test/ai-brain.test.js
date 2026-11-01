@@ -31,6 +31,7 @@ test.before(async () => {
   process.env.AUTH_RATE_LIMIT = 'off';
   process.env.EMAIL_DELIVERY = 'memory';
   process.env.MFA_ENFORCED = 'false';
+  process.env.AI_HANDOVER_PAUSES = 'true';
   process.env.N8N_BRAIN_WEBHOOK_URL = 'http://n8n.test/brain';
   await startTestDb();
   ({ app } = require('../server'));
@@ -316,6 +317,24 @@ test('AI Brain', async (t) => {
     const tanglish = await inbound(1, conversation, 'Kurti irukka?');
     await reply(1, lead.id, tanglish.id);
     assert.ok(prompts[0].user.includes('Tanglish:'));
+  });
+
+  await t.test('By default a handover tells the team and the AI keeps replying', async () => {
+    process.env.AI_HANDOVER_PAUSES = '';
+    try {
+      const { lead, conversation } = await seed();
+      llmReturns({ reply: 'I will check.', handoff: true, handoff_reason: 'Not in the brain' });
+      const first = await inbound(1, conversation, 'Do you do surgery?');
+      await reply(1, lead.id, first.id);
+      const saved = await leadOf(1, lead.id);
+      assert.strictEqual(saved.needs_human, true);
+      assert.notStrictEqual(saved.ai_paused, true);
+      llmReturns({ reply: 'We are open.' });
+      const second = await inbound(1, conversation, 'Open today?');
+      assert.strictEqual((await reply(1, lead.id, second.id)).body.sent, true);
+    } finally {
+      process.env.AI_HANDOVER_PAUSES = 'true';
+    }
   });
 
   await t.test('An AI failure hands over and sends nothing', async () => {

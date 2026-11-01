@@ -18,6 +18,7 @@ test.before(async () => {
   process.env.AUTH_RATE_LIMIT = 'off';
   process.env.EMAIL_DELIVERY = 'memory';
   process.env.MFA_ENFORCED = 'false';
+  process.env.AI_HANDOVER_PAUSES = 'true';
   process.env.AI_SENDING_HOURS = '0-24'; // F4 checks the real hours
   await startTestDb();
   ({ app } = require('../server'));

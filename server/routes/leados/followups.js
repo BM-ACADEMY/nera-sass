@@ -441,13 +441,12 @@ app.get('/api/leads/:id', auth, async (req, res) => {
   try {
     const leadRow = await Leads.findOne({ id: req.params.id }, NO_ID).lean();
     if (!leadRow) return res.status(404).json({ error: 'Lead not found' });
-    const leadClient = leadRow.client_id != null ? await Clients.findOne({ id: leadRow.client_id }, { name: 1, phone_number_id: 1, wa_access_token: 1 }).lean() : null;
+    const leadClient = leadRow.client_id != null ? await Clients.findOne({ id: leadRow.client_id }, { name: 1, phone_number_id: 1 }).lean() : null;
     const [enriched] = await enrichLeadRows([leadRow]);
     const lead = {
       ...leadRow,
       brand_name: leadClient?.name ?? null,
       phone_number_id: leadClient?.phone_number_id ?? null,
-      wa_access_token: leadClient?.wa_access_token ?? null,
       assigned_name: enriched.assigned_name,
       tags: enriched.tags,
     };

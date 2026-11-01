@@ -64,7 +64,7 @@ async function recordInbound(leadId, at = new Date()) {
 
 /**
  * Hands a chat to a person.
- *   pause  (default) AI stops replying to this lead until a person resumes it
+ *   pause  (default) a person is told; AI stops only with AI_HANDOVER_PAUSES=true
  *   notify a person is told, AI keeps working (technical failures)
  *   hot    hot-lead alert, sent once per lead
  * Returns { notified } so callers know whether anything was raised.
@@ -82,10 +82,13 @@ async function handover(io, { leadId, reason, draft, mode = 'pause' }) {
   }
   const set = { needs_human: true, handover_reason: text, handover_at: now, updated_at: now };
   if (draft) set.ai_draft = String(draft).slice(0, 2000);
-  if (mode !== 'notify') Object.assign(set, { ai_paused: true, ai_paused_at: now });
+  // A handover tells the team and the AI keeps answering, unless
+  // AI_HANDOVER_PAUSES=true. A person can still pause a chat by hand.
+  const pauses = mode !== 'notify' && process.env.AI_HANDOVER_PAUSES === 'true';
+  if (pauses) Object.assign(set, { ai_paused: true, ai_paused_at: now });
   await Leads.updateOne({ id: lead.id }, { $set: set });
   io.emit('ai_typing', { lead_id: String(lead.id), typing: false });
-  io.emit('lead_handover', { lead_id: String(lead.id), reason: text, mode, paused: mode !== 'notify' });
+  io.emit('lead_handover', { lead_id: String(lead.id), reason: text, mode, paused: pauses });
   return { notified: true };
 }
 
