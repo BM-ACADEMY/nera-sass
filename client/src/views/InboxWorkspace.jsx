@@ -191,6 +191,8 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   const { leads, loading: loadingLeads, hasMore: hasMoreLeads, loadingMore: loadingMoreLeads, loadMoreLeads, refetch: refetchLeadsList } = useInboxList({ search });
   const [activeLeadId, setActiveLeadId] = useState(location.state?.leadId || null);
   const { lead: activeLead, conversations, loadingMore, hasMore, loadMoreMessages, refetch: refetchLead, loading: loadingLead } = useInboxLead(activeLeadId);
+  const [aiPause, setAiPause] = useState({ paused: false, reason: null });
+  const [resumingAi, setResumingAi] = useState(false);
   const [msg, setMsg] = useState('');
   const [sending, setSending] = useState(false);
   const [suggestingReply, setSuggestingReply] = useState(false);
@@ -425,6 +427,24 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
     }
   }, [activeLeadId]);
 
+  useEffect(() => {
+    const current = String(activeLead?.id) === String(activeLeadId) ? activeLead : null;
+    setAiPause({ paused: Boolean(current?.ai_paused), reason: current?.handover_reason || null });
+  }, [activeLead, activeLeadId]);
+
+  const resumeAi = async () => {
+    setResumingAi(true);
+    try {
+      await api.post(`/leads/${activeLeadId}/ai`, { paused: false });
+      setAiPause({ paused: false, reason: null });
+      toast.success('AI will reply to this chat again');
+    } catch (err) {
+      toast.error(err.message || 'Could not resume the AI');
+    } finally {
+      setResumingAi(false);
+    }
+  };
+
   const clearTypingIndicator = (leadId) => {
     const key = String(leadId);
     if (typingTimeoutsRef.current[key]) {
@@ -485,6 +505,11 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
 
     if (alliance) {
       socket.on('alliance_contacts_changed', () => refetchLeadsListRef.current());
+    } else {
+      // The AI handed this chat to a person while it is open.
+      socket.on('lead_handover', ({ lead_id, reason, paused }) => {
+        if (paused && String(lead_id) === String(activeLeadIdRef.current)) setAiPause({ paused: true, reason: reason || null });
+      });
     }
 
     // AI is waiting in queue / composing a reply to the customer's last message
@@ -1087,10 +1112,26 @@ return (
                   </div>
                 )}
               </div>
-              <p style={{ fontSize: 9, color: C.green, margin: 0, marginTop: 4 }}>AI Agent Active - {activeObj?.brand_name || activeObj?.brand || 'Manual'}</p>
+              {!alliance && aiPause.paused ? (
+                <p title={aiPause.reason || undefined} style={{ fontSize: 11, fontWeight: 600, color: '#b45309', margin: 0, marginTop: 4, wordBreak: 'break-word' }}>
+                  AI paused{aiPause.reason ? ` - ${aiPause.reason}` : ''}
+                </p>
+              ) : (
+                <p style={{ fontSize: 9, color: C.green, margin: 0, marginTop: 4 }}>AI Agent Active - {activeObj?.brand_name || activeObj?.brand || 'Manual'}</p>
+              )}
             </div>
           </div>
           <div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
+            {!alliance && aiPause.paused && (
+              <button
+                type="button"
+                onClick={resumeAi}
+                disabled={resumingAi}
+                style={{ background: C.accent, border: 'none', borderRadius: 7, color: '#fff', minHeight: 36, padding: '0 12px', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', cursor: resumingAi ? 'not-allowed' : 'pointer', opacity: resumingAi ? 0.6 : 1 }}
+              >
+                {resumingAi ? 'Resuming…' : 'Resume AI'}
+              </button>
+            )}
             <button
               onClick={() => {
                 setShowMessageSearchPanel(!showMessageSearchPanel);
