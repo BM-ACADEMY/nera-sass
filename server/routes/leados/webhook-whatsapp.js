@@ -432,7 +432,7 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
               }
               if (aiWanted && !aiBlocked) {
                 // Workspaces with the AI Brain turned on use its own workflow.
-                const aiWebhookUrl = process.env.N8N_BRAIN_WEBHOOK_URL && await brainEngine.brainActive(aiTenant)
+                const aiWebhookUrl = process.env.N8N_BRAIN_WEBHOOK_URL && await brainEngine.brainActive()
                   ? process.env.N8N_BRAIN_WEBHOOK_URL
                   : process.env.N8N_WEBHOOK_URL;
                 if (aiReplyQueue.has(lead.id)) {

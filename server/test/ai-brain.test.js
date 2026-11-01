@@ -84,9 +84,9 @@ test('AI Brain', async (t) => {
     return { Authorization: `Bearer ${makeToken(user)}` };
   }
 
-  // One approved workspace with its AI on, a lead and an open conversation.
-  async function seed(tenantId = 1, { profile = PROFILE, on = true, approved = true, tenant = {} } = {}) {
-    await sys(() => Tenants.create({ id: tenantId, name: `T${tenantId}`, status: 'active', timezone: 'Asia/Kolkata', ai_g6_approved_at: approved ? new Date() : null, ...tenant }));
+  // One workspace with its AI on, a lead and an open conversation.
+  async function seed(tenantId = 1, { profile = PROFILE, on = true, tenant = {} } = {}) {
+    await sys(() => Tenants.create({ id: tenantId, name: `T${tenantId}`, status: 'active', timezone: 'Asia/Kolkata', ...tenant }));
     return runAsTenant(tenantId, async () => {
       const brand = (await Clients.create({ name: `Brand ${tenantId}`, phone_number_id: `PN${tenantId}`, wa_access_token: 'test-dummy-token' })).toObject();
       await BrainProfiles.create({ profile, ai_enabled: on, brain_version: 3, version_type: 'client' });
@@ -235,14 +235,9 @@ test('AI Brain', async (t) => {
     assert.strictEqual((await leadOf(1, lead.id)).needs_human, true);
   });
 
-  await t.test('AI toggle: refused until staff approve and all required fields are filled', async () => {
-    await seed(1, { approved: false, on: false, profile: { business_name: 'X' } });
+  await t.test('AI toggle: any workspace can turn it on once all required fields are filled', async () => {
+    await seed(1, { on: false, profile: { business_name: 'X' } });
     const who = await owner(1);
-    const notApproved = await request(app).post('/api/brain/ai-toggle').set(who).send({ enabled: true });
-    assert.strictEqual(notApproved.status, 403);
-    assert.strictEqual(notApproved.body.code, 'AI_NOT_APPROVED');
-
-    await sys(() => Tenants.updateOne({ id: 1 }, { $set: { ai_g6_approved_at: new Date() } }));
     const missing = await request(app).post('/api/brain/ai-toggle').set(who).send({ enabled: true });
     assert.strictEqual(missing.status, 400);
     assert.ok(missing.body.missing.includes('Tone'));

@@ -328,19 +328,6 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
             <Field label="Language">{tenant.language || null}</Field>
             <Field label="Currency">{tenant.currency || null}</Field>
             <Field label="Timezone">{tenant.timezone || null}</Field>
-            <Field label="AI replies">
-              <span className="flex flex-wrap items-center gap-2">
-                <Badge variant={tenant.ai_g6_approved_at ? 'success' : 'muted'}>{tenant.ai_g6_approved_at ? 'Approved' : 'Not approved'}</Badge>
-                <Button size="sm" variant="outline" onClick={() => setConfirm({
-                  title: tenant.ai_g6_approved_at ? `Withdraw AI approval for ${tenant.name}?` : `Approve AI replies for ${tenant.name}?`,
-                  description: tenant.ai_g6_approved_at
-                    ? 'Their AI Brain turns off now and cannot be turned on again until you approve it.'
-                    : 'They can then turn on their AI Brain once its required fields are filled.',
-                  actionLabel: tenant.ai_g6_approved_at ? 'Withdraw' : 'Approve',
-                  run: act(() => axiosClient.post(`/admin/tenants/${tenant.id}/ai-approval`, { approved: !tenant.ai_g6_approved_at }), 'AI approval updated', 'Failed to update AI approval'),
-                })}>{tenant.ai_g6_approved_at ? 'Withdraw' : 'Approve'}</Button>
-              </span>
-            </Field>
             <Field label="Created">{fullDateTime(tenant.created_at)}</Field>
             <Field label="Created by">{tenant.created_by_name || null}</Field>
             <Field label="Logins">{summary?.users?.active ?? 0} active{summary?.users?.pending_invitations ? `, ${summary.users.pending_invitations} invited` : ''}</Field>

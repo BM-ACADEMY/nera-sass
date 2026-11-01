@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { FiBook, FiCheckCircle, FiClock, FiCpu, FiEye, FiEyeOff, FiMessageCircle, FiPlus, FiSave, FiSend, FiTrash2, FiUpload } from 'react-icons/fi';
+import { FiBook, FiCheckCircle, FiCpu, FiEye, FiEyeOff, FiMessageCircle, FiPlus, FiSave, FiSend, FiTrash2, FiUpload } from 'react-icons/fi';
 import { api } from '../../services/api.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -50,11 +50,10 @@ const Section = ({ title, children }) => (
 );
 
 function StatusCard({ brain, busy, onToggle }) {
-  const ready = brain.g6_approved && !brain.missing.length;
+  const ready = !brain.missing.length;
   let note = 'The AI is answering your customers from this brain.';
   if (!brain.ai_enabled) {
-    if (!brain.g6_approved) note = 'The Getnera team must approve AI replies for this workspace before you can turn this on.';
-    else if (brain.missing.length) note = `Fill these first: ${brain.missing.join(', ')}.`;
+    if (brain.missing.length) note = `Fill these first: ${brain.missing.join(', ')}.`;
     else note = 'Everything is ready. Test it below, then turn it on.';
   }
   return (
@@ -67,7 +66,6 @@ function StatusCard({ brain, busy, onToggle }) {
             {brain.ai_enabled
               ? <Badge variant="success"><FiCheckCircle /> On</Badge>
               : <Badge variant="muted">Off</Badge>}
-            {!brain.g6_approved && <Badge variant="warning"><FiClock /> Approval pending</Badge>}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">{note}</p>
         </div>

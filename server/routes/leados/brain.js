@@ -57,7 +57,6 @@ async function brainResponse(req, brain = undefined) {
     version_type: saved?.version_type || 'client',
     brain_version: saved?.brain_version || 0,
     ai_enabled: Boolean(saved?.ai_enabled),
-    g6_approved: Boolean(tenant?.ai_g6_approved_at),
     missing: prompts.missingRequired(profile),
     updated_at: saved?.updated_at || null,
     // ABM's own server keeps its multi-brand editor; DISABLED_MODULES is empty there.
@@ -228,8 +227,6 @@ app.post('/api/brain/ai-toggle', auth, workspaceOnly, adminOnly, async (req, res
     const current = await loadBrain();
     const tenantId = req.identity.tenantId;
     if (enabled) {
-      const tenant = await loadTenant(tenantId);
-      if (!tenant?.ai_g6_approved_at) return res.status(403).json({ error: 'Getnera has not approved AI replies for this workspace yet', code: 'AI_NOT_APPROVED' });
       const missing = current?.version_type === 'nera' ? [] : prompts.missingRequired(current?.profile);
       if (!current || missing.length) return res.status(400).json({ error: `Fill these first: ${(missing.length ? missing : Object.values(prompts.REQUIRED_FIELDS)).join(', ')}`, missing });
       if (!process.env.N8N_BRAIN_WEBHOOK_URL) return res.status(409).json({ error: 'AI Brain replies are not set up on the server yet', code: 'AI_BRAIN_NOT_CONFIGURED' });

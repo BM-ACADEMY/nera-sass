@@ -5,7 +5,7 @@
  * runAsTenant(tenantId) for the one tenant being managed.
  */
 const express = require('express');
-const { BrainProfiles, Tenants, Users, Clients, Invitations, AuditEvents, WorkflowLogs, AiDecisions, Leads, Conversations, Messages, Campaigns, MetaWhatsappPhoneNumbers } = require('../models');
+const { Tenants, Users, Clients, Invitations, AuditEvents, WorkflowLogs, AiDecisions, Leads, Conversations, Messages, Campaigns, MetaWhatsappPhoneNumbers } = require('../models');
 const { runAsSystem, runAsTenant } = require('../services/tenantContext');
 const { can, describeUser } = require('../services/permissions');
 const { computeLifecycle } = require('../services/lifecycle');
@@ -183,25 +183,6 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       const tenant = await Tenants.findOneAndUpdate({ id: tenantIdParam(req), status: { $ne: 'deleted' } }, { $set: { ...changes, updated_at: new Date() } }, { new: true, projection: { _id: 0 } }).lean();
       if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
       await audit.record(audit.EVENTS.TENANT_UPDATED, { tenantId: tenant.id, req, targetType: 'tenant', targetId: tenant.id, meta: { changes } });
-      return res.json({ tenant });
-    } catch (error) {
-      return fail(res, error);
-    }
-  });
-
-  // Gate G6: staff approval that lets this workspace turn on its AI Brain.
-  // Withdrawing approval also turns its AI Brain off.
-  router.post('/tenants/:id/ai-approval', permit('platform.tenants.manage'), async (req, res) => {
-    try {
-      const approved = req.body?.approved === true;
-      const tenant = await Tenants.findOneAndUpdate(
-        { id: tenantIdParam(req), status: { $ne: 'deleted' } },
-        { $set: { ai_g6_approved_at: approved ? new Date() : null, ai_g6_approved_by: approved ? req.user?.id || null : null, updated_at: new Date() } },
-        { new: true, projection: { _id: 0 } },
-      ).lean();
-      if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
-      if (!approved) await runAsTenant(tenant.id, () => BrainProfiles.updateOne({}, { $set: { ai_enabled: false, updated_at: new Date() } }));
-      await audit.record(audit.EVENTS.TENANT_UPDATED, { tenantId: tenant.id, req, targetType: 'tenant', targetId: tenant.id, meta: { ai_g6_approved: approved } });
       return res.json({ tenant });
     } catch (error) {
       return fail(res, error);

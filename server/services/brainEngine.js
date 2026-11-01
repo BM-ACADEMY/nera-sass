@@ -20,8 +20,7 @@ const OPT_OUT_MESSAGE = /^\s*(stop|unsubscribe|opt[\s-]?out)[\s.!]*$/i;
 const PRICE = /(?:₹|\brs\.?|\binr|\$)\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:rupees|lakhs?|crores?|\/-)/gi;
 
 /** Whether this workspace answers through the AI Brain instead of the older flow. */
-async function brainActive(tenant) {
-  if (!tenant?.ai_g6_approved_at) return false;
+async function brainActive() {
   return Boolean(await BrainProfiles.exists({ ai_enabled: true }));
 }
 
@@ -121,7 +120,7 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
   if (!message) return { status: 404, error: 'Message not found on this lead' };
 
   const brain = await BrainProfiles.findOne({}, { _id: 0 }).lean();
-  if (!brain?.ai_enabled || !tenant.ai_g6_approved_at) return { sent: false, reason: 'AI Brain is not turned on for this workspace' };
+  if (!brain?.ai_enabled) return { sent: false, reason: 'AI Brain is not turned on for this workspace' };
   const blocked = await ai.aiBlockReason(tenant, lead);
   if (blocked) return { sent: false, reason: blocked };
 
