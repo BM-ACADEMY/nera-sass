@@ -102,6 +102,27 @@ class LeadOSAPI {
     });
   }
 
+  async patch(endpoint, body, options = {}) {
+    const path = endpoint.startsWith('/api') ? endpoint : `/api${endpoint}`;
+    return this.request(path, {
+      ...options,
+      method: 'PATCH',
+      body: JSON.stringify(body)
+    });
+  }
+
+  async upload(endpoint, formData) {
+    const path = endpoint.startsWith('/api') ? endpoint : `/api${endpoint}`;
+    const response = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${this.token}` },
+      body: formData
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP error! status: ${response.status}`);
+    return data;
+  }
+
   async delete(endpoint, options = {}) {
     const path = endpoint.startsWith('/api') ? endpoint : `/api${endpoint}`;
     return this.request(path, {

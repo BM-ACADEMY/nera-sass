@@ -39,3 +39,10 @@ What the server enforces (n8n cannot bypass it):
 
 Each workspace's WhatsApp account needs approved templates with the names in
 Config (welcome_message, follow_up), each taking the customer name as {{1}}.
+
+WF1B-ai-brain-reply.json (AI Brain)
+  Sends only tenant_id, lead_id and message_id to POST /api/internal/ai/reply. The server
+  builds the prompt, applies every check, sends the reply and writes ai_reply_logs.
+  Import it inactive, set its two credentials, activate it, then set N8N_BRAIN_WEBHOOK_URL
+  to its production webhook URL. A workspace moves to it only after staff approve AI
+  replies and the workspace turns on its AI Brain; every other workspace stays on WF1.

@@ -61,13 +61,16 @@ async function generateContent({ model = DEFAULT_MODEL, contents, config = {} })
 
   const completion = await client.chat.completions.create({
     model: model.includes('/') ? model : DEFAULT_MODEL,
-    messages: [{ role: 'user', content: convertContents(contents) }],
+    messages: [
+      ...(config.system ? [{ role: 'system', content: config.system }] : []),
+      { role: 'user', content: convertContents(contents) },
+    ],
     ...(config.temperature !== undefined && { temperature: config.temperature }),
     ...(config.maxOutputTokens && { max_tokens: config.maxOutputTokens }),
     ...(config.responseMimeType === 'application/json' && { response_format: { type: 'json_object' } }),
   });
 
-  return { text: completion.choices?.[0]?.message?.content || '' };
+  return { text: completion.choices?.[0]?.message?.content || '', usage: completion.usage || null };
 }
 
 async function createEmbedding(input, dimensions = 768) {

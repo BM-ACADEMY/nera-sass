@@ -18,6 +18,11 @@ module.exports = defineModel('tenants', {
   currency: { type: String, default: 'INR' },
   tax_treatment: { type: String, default: 'gst' },
   timezone: { type: String, default: 'Asia/Kolkata' },
+  // Staff approval (Gate G6) that lets this workspace turn on its AI Brain.
+  ai_g6_approved_at: { type: Date, default: null },
+  ai_g6_approved_by: { type: Number, default: null },
+  // AI Brain replies allowed per calendar month; empty means no limit yet.
+  ai_reply_quota_month: { type: Number, default: null },
   suspended_at: { type: Date },
   suspended_reason: { type: String },
   suspended_by: { type: Number },

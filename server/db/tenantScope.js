@@ -43,6 +43,8 @@ const TENANT_SCOPED = new Map([
   ['campaign_import_recipients', {}],
   ['payments', {}],
   ['brain_docs', {}],
+  ['brain_profiles', {}],
+  ['ai_reply_logs', {}],
   ['brands', {}],
   ['sales_tasks', {}],
   ['sales_lead_notes', {}],

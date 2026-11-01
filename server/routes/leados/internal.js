@@ -18,6 +18,7 @@ const { tenantCanSend, tenantLifecycle } = require('../../services/lifecycle');
 const { internalPlatformAuth } = require('../../middleware/authMiddleware');
 const ai = require('../../services/aiAutomation');
 const aiLatency = require('../../services/aiLatency');
+const brainEngine = require('../../services/brainEngine');
 const { BrainDocs } = ctx;
 // ── INTERNAL (called by n8n) ──────────────────────────────
 
@@ -126,6 +127,32 @@ app.post('/api/internal/send-reply', internalAuth, sendRoute('send-reply', (req)
     .then((result) => { aiLatency.replied(req.body?.lead_id); return result; });
 }));
 
+// POST /api/internal/ai/reply   { lead_id, message_id }
+// The AI Brain workflow sends only these ids; the tenant comes from the service
+// call, and a lead or message of another tenant is 404. The server builds the
+// prompt, applies every check, sends the reply and writes ai_reply_logs.
+app.post('/api/internal/ai/reply', internalAuth, async (req, res) => {
+  try {
+    const leadId = Number(req.body?.lead_id);
+    const messageId = Number(req.body?.message_id);
+    if (!Number.isInteger(leadId) || leadId <= 0 || !Number.isInteger(messageId) || messageId <= 0) {
+      return res.status(400).json({ error: 'lead_id and message_id are required' });
+    }
+    const send = async (message) => {
+      const result = await sendToLead(req, leadId, message, () => ({ type: 'text', text: { body: message } }));
+      aiLatency.replied(leadId);
+      return result.message_id;
+    };
+    const result = await brainEngine.respond({ io, tenant: req.tenant, leadId, messageId, send });
+    if (result.status) return res.status(result.status).json({ error: result.error });
+    io.emit('ai_typing', { lead_id: String(leadId), typing: false });
+    res.json(result);
+  } catch (err) {
+    console.error('[internal/ai/reply]', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // POST /api/internal/send-template   { lead_id, template, language?, body_params? }
 // Approved templates (welcome, payment confirmation); work outside the window.
 app.post('/api/internal/send-template', internalAuth, sendRoute('send-template', (req) => {
@@ -158,7 +185,7 @@ app.get('/api/internal/context', internalAuth, async (req, res) => {
     const filter = { conversation_id: { $in: conversationIds } };
     if (Number.isInteger(before) && before > 0) filter.id = { $lt: before };
     const [brain, messages] = await Promise.all([
-      lead.client_id != null ? BrainDocs.find({ client_id: lead.client_id }, { _id: 0, doc_type: 1, content: 1 }).lean() : [],
+      lead.client_id != null ? BrainDocs.find({ client_id: lead.client_id, is_active: { $ne: false } }, { _id: 0, doc_type: 1, content: 1 }).lean() : [],
       Messages.find(filter, { _id: 0, id: 1, direction: 1, content: 1, is_ai: 1, sent_at: 1 }).sort({ id: -1 }).limit(limit).lean(),
     ]);
     const tenant = req.tenant || {};

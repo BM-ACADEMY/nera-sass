@@ -35,6 +35,7 @@ const { requireMetaSignature } = require('../../services/metaWebhookSignature');
 const platformInbox = require('../../services/platformInbox');
 const mediaStore = require('../../services/mediaStore');
 const aiAutomation = require('../../services/aiAutomation');
+const brainEngine = require('../../services/brainEngine');
 const { tenantLifecycle } = require('../../services/lifecycle');
  // Store timeouts for delayed AI replies
 
@@ -430,6 +431,10 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
                 }
               }
               if (aiWanted && !aiBlocked) {
+                // Workspaces with the AI Brain turned on use its own workflow.
+                const aiWebhookUrl = process.env.N8N_BRAIN_WEBHOOK_URL && await brainEngine.brainActive(aiTenant)
+                  ? process.env.N8N_BRAIN_WEBHOOK_URL
+                  : process.env.N8N_WEBHOOK_URL;
                 if (aiReplyQueue.has(lead.id)) {
                   clearTimeout(aiReplyQueue.get(lead.id));
                 }
@@ -444,7 +449,7 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
 
                   // No WhatsApp credential leaves the server: n8n returns its
                   // reply to /api/internal/send-reply, which sends it.
-                  postToN8n(process.env.N8N_WEBHOOK_URL, {
+                  postToN8n(aiWebhookUrl, {
                     lead_id: lead.id,
                     tenant_id: client.tenant_id,
                     message_id: inbound.id,
