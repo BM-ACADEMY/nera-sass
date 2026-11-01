@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Virtuoso } from 'react-virtuoso';
 import { useFloating, autoUpdate, offset, flip, shift, FloatingPortal, useDismiss, useInteractions } from '@floating-ui/react';
-import { Search, Send, ChevronLeft, ChevronRight, ChevronDown, Wifi, WifiOff, Check, Paperclip, Copy, Edit2, Trash2, X, MoreVertical, Image, Film, Music, FileText, Smile, Mic, Square, CornerUpLeft, CornerUpRight, Pin, Star, CheckSquare, Forward, Download, ZoomIn, ZoomOut, Phone, Video, User, Sparkles, ExternalLink, Plus, Tag } from 'lucide-react';
+import { MessageCircle, Search, Send, ChevronLeft, ChevronRight, ChevronDown, Wifi, WifiOff, Check, Paperclip, Copy, Edit2, Trash2, X, MoreVertical, Image, Film, Music, FileText, Smile, Mic, Square, CornerUpLeft, CornerUpRight, Pin, Star, CheckSquare, Forward, Download, ZoomIn, ZoomOut, Phone, Video, User, Sparkles, ExternalLink, Plus, Tag } from 'lucide-react';
 import EmojiPicker from 'emoji-picker-react';
 import { io as socketIO } from 'socket.io-client';
 import { C } from '../constants/theme.js';
@@ -75,6 +75,27 @@ const formatBytes = (bytes) => {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
+const WA_GREEN = '#25D366';
+
+const initialsOf = (name) => String(name || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
+
+const InitialsAvatar = ({ name, size = 44 }) => (
+  <span aria-hidden="true" style={{ width: size, height: size, flexShrink: 0, borderRadius: '50%', background: '#dcfce7', color: '#15803d', fontWeight: 700, fontSize: size * 0.36, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    {initialsOf(name)}
+  </span>
+);
+
+// Today: time; this week: weekday; older: date.
+const listTime = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const days = (now - d) / 86400000;
+  if (days < 7) return d.toLocaleDateString([], { weekday: 'short' });
+  return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
+};
+
 const getNameColor = (name) => {
   if (!name) return '#e91e63';
   const colors = [
@@ -1013,29 +1034,32 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   const isActiveLeadTyping = !!activeLeadTypingStatus;
 
 return (
-    <div style={{ height: '100%', display: 'flex' }}>
+    <div style={{ height: '100%', minHeight: 0, display: 'flex', overflow: 'hidden', background: '#fff' }}>
       <style>{`@keyframes typingBounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-4px); opacity: 1; } }`}</style>
       {/* ── SIDEBAR ─────────────────────────────────── */}
       <div
         className={showChatOnMobile ? 'hide-mobile' : 'w-full-mobile'}
-        style={{ width: 290, borderRight: '1px solid ' + C.border, display: 'flex', flexDirection: 'column', flexShrink: 0 }}
+        style={{ width: 340, minHeight: 0, borderRight: '1px solid ' + C.border, display: 'flex', flexDirection: 'column', flexShrink: 0, background: '#fff' }}
       >
-        <div style={{ padding: '18px 14px', borderBottom: '1px solid ' + C.border }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 11 }}>
-            <h2 style={{ fontFamily: "'Inter',sans-serif", fontSize: 14, fontWeight: 700, color: C.text }}>WhatsApp Chat</h2>
+        <div style={{ padding: '12px 12px 10px', borderBottom: '1px solid ' + C.border }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <h2 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 700, color: C.text, margin: 0 }}>
+              <span style={{ width: 28, height: 28, borderRadius: 8, background: WA_GREEN, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><MessageCircle size={16} color="#fff" /></span>
+              Chats
+            </h2>
             <div title={connected ? 'Live – Socket.io connected' : 'Polling mode'} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9, color: connected ? C.green : C.muted }}>
               {connected ? <Wifi size={11} /> : <WifiOff size={11} />}
               <span>{connected ? 'Live' : 'Offline'}</span>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: C.card, border: '1px solid ' + C.border, borderRadius: 7, padding: '7px 11px' }}>
-            <Search size={11} color={C.muted} />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or phone..." style={{ background: 'transparent', border: 'none', color: C.text, fontSize: 11, outline: 'none', width: '100%' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f0f2f5', borderRadius: 8, padding: '0 12px', height: 36 }}>
+            <Search size={15} color="#54656f" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or phone" aria-label="Search chats" style={{ background: 'transparent', border: 'none', color: C.text, fontSize: 14, outline: 'none', width: '100%' }} />
           </div>
         </div>
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <Virtuoso
-            style={{ flex: 1 }}
+            style={{ flex: 1, minHeight: 0 }}
             data={displayLeads}
             endReached={() => {
               if (hasMoreLeads && !loadingMoreLeads) {
@@ -1045,45 +1069,41 @@ return (
             components={{
               Footer: () => loadingMoreLeads ? <div style={{ padding: 10, textAlign: 'center', color: C.muted, fontSize: 11 }}>Loading more...</div> : null
             }}
-            itemContent={(index, l) => (
-              <div
-              key={l.id}
-              onClick={() => { setActiveLeadId(l.id); setShowChatOnMobile(true); }}
-              style={{ padding: '13px 14px', borderBottom: '1px solid ' + C.border, cursor: 'pointer', background: activeLeadId === l.id ? C.accent + '10' : 'transparent', borderLeft: activeLeadId === l.id ? '3px solid ' + C.accent : '3px solid transparent' }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <img
-                    src={`https://ui-avatars.com/api/?name=${encodeURIComponent(l.name || 'User')}&background=0d5c4f&color=fff&size=100&rounded=true`}
-                    alt={l.name}
-                    style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, objectFit: 'cover' }}
-                  />
-                  <div>
-                    <p style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{l.name}</p>
-                    <p style={{ fontSize: 9, color: C.muted }}>{l.brand_name || l.brand || 'Manual'}</p>
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <p style={{ fontSize: 9, color: C.dim }}>{l.last_contact ? new Date(l.last_contact).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A'}</p>
-                  {Number(l.unread || 0) > 0 && (
-                    <div style={{ marginTop: 4, background: C.accent, color: '#fff', fontSize: 9, fontWeight: 700, width: 18, height: 18, borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContext: 'center', justifyContent: 'center' }}>
-                      {Number(l.unread)}
+            itemContent={(index, l) => {
+              const active = activeLeadId === l.id;
+              const unread = Number(l.unread || 0);
+              return (
+                <button
+                  key={l.id}
+                  type="button"
+                  onClick={() => { setActiveLeadId(l.id); setShowChatOnMobile(true); }}
+                  style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 12, padding: '12px', border: 'none', borderBottom: '1px solid ' + C.border, background: active ? '#f0fdf4' : 'transparent', cursor: 'pointer', textAlign: 'left' }}
+                >
+                  <InitialsAvatar name={l.name} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ fontSize: 14, fontWeight: unread ? 700 : 600, color: C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name || l.phone}</span>
+                      <span style={{ flexShrink: 0, fontSize: 11, fontWeight: unread ? 600 : 400, color: unread ? '#15803d' : C.muted }}>{listTime(l.last_contact)}</span>
                     </div>
-                  )}
-                </div>
-              </div>
-              <p style={{ fontSize: 10, color: C.muted, paddingLeft: 40, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4 }}>
-                {renderLastMessage(l)}
-              </p>
-            </div>
-            )}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
+                      <span style={{ fontSize: 12.5, color: C.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                        {renderLastMessage(l)}
+                      </span>
+                      {unread > 0 && (
+                        <span style={{ flexShrink: 0, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 10, background: WA_GREEN, color: '#fff', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{unread}</span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              );
+            }}
           />
         </div>
       </div>
 
       {/* ── CHAT PANEL ──────────────────────────────── */}
-      <div className={!showChatOnMobile ? 'hide-mobile' : 'w-full-mobile'} style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '13px 18px', borderBottom: '1px solid ' + C.border, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div className={!showChatOnMobile ? 'hide-mobile' : 'w-full-mobile'} style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ minHeight: 60, padding: '8px 16px', borderBottom: '1px solid ' + C.border, background: '#f0f2f5', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
           <div
             style={{ display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer' }}
             onClick={() => {
@@ -1094,14 +1114,10 @@ return (
             <button className="show-mobile" onClick={(e) => { e.stopPropagation(); setShowChatOnMobile(false); }} style={{ background: 'transparent', border: 'none', color: C.muted, display: 'none' }}>
               <ChevronLeft size={20} />
             </button>
-            <img
-              src={`https://ui-avatars.com/api/?name=${encodeURIComponent(activeObj?.name || 'User')}&background=0d5c4f&color=fff&size=100&rounded=true`}
-              alt={activeObj?.name}
-              style={{ width: 36, height: 36, borderRadius: '50%', flexShrink: 0, objectFit: 'cover' }}
-            />
+            <InitialsAvatar name={activeObj?.name} size={40} />
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <p style={{ fontSize: 13, fontWeight: 600, color: C.text, margin: 0 }}>{activeObj?.name}</p>
+                <p style={{ fontSize: 15, fontWeight: 600, color: C.text, margin: 0 }}>{activeObj?.name}</p>
                 {activeObj?.tags && activeObj.tags.length > 0 && (
                   <div style={{ display: 'flex', gap: 4 }}>
                     {activeObj.tags.map(tag => (
@@ -1117,7 +1133,7 @@ return (
                   AI paused{aiPause.reason ? ` - ${aiPause.reason}` : ''}
                 </p>
               ) : (
-                <p style={{ fontSize: 9, color: C.green, margin: 0, marginTop: 4 }}>AI Agent Active - {activeObj?.brand_name || activeObj?.brand || 'Manual'}</p>
+                <p style={{ fontSize: 12, color: '#15803d', margin: 0, marginTop: 2 }}>AI active</p>
               )}
             </div>
           </div>
@@ -1158,9 +1174,9 @@ return (
           </div>
         </div>
 
-        <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden', position: 'relative' }}>
           {/* Main Chat Flow */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
             {/* Pinned Messages Bar */}
         {(() => {
@@ -1224,7 +1240,7 @@ return (
         })()}
 
         {/* Messages area */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#efeae2', position: 'relative' }}>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: '#efeae2', position: 'relative', overflow: 'hidden' }}>
           {/* WhatsApp wallpaper overlay */}
           <div style={{
             position: 'absolute',
@@ -1246,7 +1262,7 @@ return (
           {filteredMessages.length > 0 && (
             <Virtuoso
               ref={messageListRef}
-              style={{ flex: 1, zIndex: 1, background: 'transparent' }}
+              style={{ flex: 1, minHeight: 0, zIndex: 1, background: 'transparent' }}
               data={filteredMessages}
               computeItemKey={(_, message) => getMessageIdentity(message) || `message-${_}`}
               firstItemIndex={messageFirstItemIndex}
@@ -1374,7 +1390,7 @@ return (
                     />
                   </div>
                 )}
-                <div style={{ position: 'relative', maxWidth: '60%' }}>
+                <div style={{ position: 'relative', maxWidth: 'min(70%, 560px)' }}>
                   <div
                     style={{
                       position: 'relative',
@@ -1477,9 +1493,9 @@ return (
                           {activeObj?.name || 'Contact'}
                         </p>
                       )}
-                      {isAI && <p style={{ fontSize: 8, color: C.accent, fontWeight: 700, letterSpacing: 0.8, marginBottom: 4 }}>AI AGENT</p>}
-                      {isAutomation && <p style={{ fontSize: 8, color: C.green, fontWeight: 700, letterSpacing: 0.8, marginBottom: 4 }}>AUTOMATED REMINDER</p>}
-                      {!isLead && !isAI && !isAutomation && <p style={{ fontSize: 8, color: C.blue, fontWeight: 700, letterSpacing: 0.8, marginBottom: 4 }}>HUMAN AGENT</p>}
+                      {isAI && <p style={{ fontSize: 10.5, color: '#15803d', fontWeight: 600, margin: '0 0 2px' }}>AI</p>}
+                      {isAutomation && <p style={{ fontSize: 10.5, color: '#15803d', fontWeight: 600, margin: '0 0 2px' }}>Automated reminder</p>}
+                      {!isLead && !isAI && !isAutomation && <p style={{ fontSize: 10.5, color: '#475569', fontWeight: 600, margin: '0 0 2px' }}>You</p>}
 
                       {m.reply_to && (
                         <div style={{ padding: '6px 10px', background: C.bg + '50', borderLeft: `4px solid ${C.accent}`, borderRadius: 4, marginBottom: 6, opacity: 0.8 }}>
