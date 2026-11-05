@@ -189,11 +189,20 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
       if (message && type !== 'audio') payload[type].caption = message; // Audio doesn't support caption
     }
 
-    const waRes = await axios.post(
-      `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
-      payload,
-      { headers: { Authorization: `Bearer ${waAccessToken}`, 'Content-Type': 'application/json' } }
-    );
+    let waRes;
+    try {
+      waRes = await axios.post(
+        `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+        payload,
+        { headers: { Authorization: `Bearer ${waAccessToken}`, 'Content-Type': 'application/json' } }
+      );
+    } catch (err) {
+      // Tell the agent why Meta refused it; nothing was sent or stored.
+      const metaError = err.response?.data?.error;
+      console.error('WA send refused:', err.response?.data || err.message);
+      const reason = metaError?.error_data?.details || metaError?.message || 'WhatsApp refused the message';
+      return res.status(502).json({ error: metaError?.code ? `${reason} (Meta error ${metaError.code})` : reason, code: 'WHATSAPP_SEND_FAILED' });
+    }
 
     const waMessageId = waRes.data.messages?.[0]?.id;
     // Same normalization the inbound webhook uses (server.js ~2991) — conversations.phone
@@ -227,14 +236,9 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
     res.json({ success: true, message: savedRows[0] });
   } catch (err) {
     if (err instanceof mediaStore.MediaStoreError && err.status === 403) return res.status(403).json({ error: err.message });
-    console.error('WA send error:', err.response?.data || err.message, err.stack);
+    console.error('WA send error:', err.message, err.stack);
 
-    res.status(500).json({
-      error: 'Failed to send message',
-      detail: err.message,
-      meta_response: err.response?.data || null,
-      stack: err.stack
-    });
+    res.status(500).json({ error: 'Failed to send message' });
   }
 });
 };

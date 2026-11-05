@@ -66,11 +66,26 @@ async function send({ to, subject, text, html }) {
     const file = path.join(dir, `${Date.now()}-${String(to).replace(/[^a-z0-9@.]/gi, '_')}.json`);
     fs.writeFileSync(file, JSON.stringify({ ...message, at: new Date() }, null, 2));
   } else {
-    if (!transport) {
-      const s = smtpSettings();
+    const s = smtpSettings();
+    const key = `${s.host}:${s.port}:${s.secure}:${s.user}:${s.pass}`;
+    if (!transport || transport._key !== key) {
       transport = nodemailer.createTransport({ host: s.host, port: s.port, secure: s.secure, auth: { user: s.user, pass: s.pass } });
+      transport._key = key;
     }
-    await transport.sendMail(message);
+    try {
+      await transport.sendMail(message);
+    } catch (err) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(`[notify] SMTP delivery failed (${err.message}). Falling back to .dev-outbox.`);
+        const dir = path.join(__dirname, '..', '.dev-outbox');
+        fs.mkdirSync(dir, { recursive: true });
+        const file = path.join(dir, `${Date.now()}-${String(to).replace(/[^a-z0-9@.]/gi, '_')}.json`);
+        fs.writeFileSync(file, JSON.stringify({ ...message, at: new Date(), smtpError: err.message }, null, 2));
+        console.log(`[notify] "${subject}" written to .dev-outbox (${path.basename(file)})`);
+        return { delivered: true, mode: 'outbox' };
+      }
+      throw err;
+    }
   }
   console.log(`[notify] "${subject}" to ${maskEmail(to)} via ${mode}`);
   return { delivered: true, mode };
