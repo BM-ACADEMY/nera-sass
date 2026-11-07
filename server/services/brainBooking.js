@@ -8,6 +8,7 @@
 const googleCalendar = require('./googleCalendar');
 const { sendBookingNotification } = require('./bookingNotifications');
 const { Leads } = require('../models');
+const { notifyWorkspace } = require('./realtime');
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const LOCAL_TIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/;
@@ -61,7 +62,11 @@ async function context(lead) {
   return { ...booking, upcoming, lead_email: lead?.email || null };
 }
 
-const setLead = (leadId, set) => Leads.updateOne({ id: leadId }, { $set: { ...set, updated_at: new Date() } });
+async function setLead(leadId, set) {
+  await Leads.updateOne({ id: leadId }, { $set: { ...set, updated_at: new Date() } });
+  // The Calendar page refreshes its meeting lists when a booking changes.
+  if (set.booking_status) notifyWorkspace('calendar_meetings_update', { lead_id: leadId, booking_status: set.booking_status });
+}
 
 /**
  * Acts on the model's proposal. Returns null when there is nothing to do, or

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import { io as socketIO } from 'socket.io-client';
 import { FiCheckCircle, FiAlertTriangle, FiRefreshCw, FiVideo, FiExternalLink, FiX, FiClock } from 'react-icons/fi';
 import { api } from '../../services/api.js';
 import { Badge } from '@/components/ui/badge';
@@ -52,6 +53,25 @@ const CalendarPage = () => {
     }
   };
   useEffect(() => { load(); }, []);
+
+  // Live: the server tells this workspace when a meeting is booked, moved,
+  // requested or cancelled (WhatsApp AI or another team member), and the
+  // lists reload without a page refresh.
+  const [live, setLive] = useState(false);
+  const reloadTimer = useRef(null);
+  useEffect(() => {
+    const socket = socketIO(api.baseUrl, { auth: { token: localStorage.getItem('leados_token') }, transports: ['websocket', 'polling'] });
+    socket.on('connect', () => setLive(true));
+    socket.on('disconnect', () => setLive(false));
+    socket.on('calendar_meetings_update', (data) => {
+      if (data?.booking_status === 'confirmed') toast.success('New meeting booked');
+      clearTimeout(reloadTimer.current);
+      reloadTimer.current = setTimeout(() => {
+        api.get('/calendar/meetings').then(setMeetings).catch(() => {});
+      }, 400);
+    });
+    return () => { clearTimeout(reloadTimer.current); socket.disconnect(); };
+  }, []);
 
   // Google sends people back here with ?calendar=connected|error.
   useEffect(() => {
@@ -243,7 +263,10 @@ const CalendarPage = () => {
       {/* Meetings */}
       <Card className="gap-3 px-5 py-5 md:px-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-bold">Upcoming meetings</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-base font-bold">Upcoming meetings</h2>
+            {live && <span className="inline-flex items-center gap-1 text-xs font-medium text-green-600" title="New bookings appear here automatically"><span className="size-1.5 rounded-full bg-green-500" /> Live</span>}
+          </div>
           <Button variant="ghost" size="sm" onClick={load}><FiRefreshCw /> Refresh</Button>
         </div>
         {meetings.upcoming.length === 0
