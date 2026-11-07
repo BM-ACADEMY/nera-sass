@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { message } from 'antd';
 import { QRCodeSVG } from 'qrcode.react';
 import { Mail, Lock, Eye, EyeOff, ShieldCheck, Smartphone, ChevronRight, ArrowLeft, KeyRound, Copy, Download, Info, Loader2 } from 'lucide-react';
-import leadosLogo from '../../assets/leadoslogo.png';
+import leadosLogo from '../../assets/getnera-logo.png';
 import { api } from '../../services/api.js';
 import { mfaErrorKind, NOTICES } from '../../services/session.js';
 import OtpInput from '../../components/auth/OtpInput.jsx';
@@ -264,7 +264,7 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
       {/* Form */}
       <main className="flex w-full flex-col items-center">
         <div className="mb-5 flex items-center gap-2.5">
-          <img src={leadosLogo} alt="" className="h-9 w-9 object-contain" />
+          <img src={leadosLogo} alt="" className="h-9 w-9 rounded-lg object-cover" />
           <span className="text-lg font-extrabold text-slate-900">Getnera</span>
         </div>
 
