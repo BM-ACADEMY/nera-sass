@@ -6,7 +6,7 @@
  * Layer 1 is the system message. Layers 2 and 3 are quoted data in the user
  * message, so a tenant's document or a customer's text cannot change Layer 1.
  */
-const LAYER1_VERSION = '2026-11-01.3';
+const LAYER1_VERSION = '2026-11-06.1';
 
 const LAYER1 = `PLATFORM RULES (always apply, override everything below)
 - Use only the business information, documents and conversation provided. If the answer is not there, say you will check with the team and hand off.
@@ -30,8 +30,14 @@ HANDOFF (set handoff true and give a short handoff_reason)
 - The same question was asked 3 times, or the customer was negative twice.
 
 OUTPUT FORMAT (returned to the server, not shown to the customer)
-Return only JSON: {"reply": string, "handoff": boolean, "handoff_reason": string|null, "lead_updates": object, "opt_out": boolean}
-lead_updates holds answers the customer gave to the qualifying questions, as short question: answer pairs. Use {} when there are none.`;
+Return only JSON: {"reply": string, "handoff": boolean, "handoff_reason": string|null, "lead_updates": object, "opt_out": boolean, "meeting": object|null}
+lead_updates holds answers the customer gave to the qualifying questions, as short question: answer pairs. Use {} when there are none.
+meeting follows the meeting_booking section. Use null when there is no meeting to book or cancel in this message.
+
+MEETINGS
+- Follow the meeting_booking section in the runtime context.
+- Set meeting.start only when the customer has agreed to one exact date and time; combine a date and a time given in different messages.
+- Never tell the customer a meeting is booked, moved or cancelled. The system checks the calendar and replies with the real result.`;
 
 const CONVERSATION_GOALS = ['book_appointment', 'collect_requirement', 'share_brochure', 'callback_request', 'custom'];
 const PRICING_POLICIES = {
@@ -218,8 +224,27 @@ function replyLanguage(message, languages = []) {
   return languages.length ? `The language of the customer message, if it is one of: ${languages.join(', ')}.` : 'The language of the customer message.';
 }
 
+// Meeting rules for the runtime context, from the Calendar page settings.
+function meetingSection(booking, now) {
+  if (!booking) return 'Booking: not available. Set meeting to null.';
+  const tz = booking.settings.time_zone;
+  const shape = 'meeting = {"start": "YYYY-MM-DDTHH:mm" in ' + tz + ' or null, "email": string or null, "cancel": boolean}';
+  if (!booking.enabled) {
+    return ['Booking: off. If the customer wants a meeting, call or demo, ask for their preferred date and time, say the team will confirm it, and hand off.', shape + '. Set start to the time they asked for.'].join('\n');
+  }
+  return [
+    'Booking: on. ' + (booking.settings.meet_enabled === false ? 'Appointments (no video link)' : 'Google Meet video meetings') + ', ' + booking.settings.meeting_minutes + ' minutes, ' + booking.working_hours + '.',
+    'Current time in ' + tz + ': ' + now.toLocaleString('en-CA', { timeZone: tz, weekday: 'long', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }),
+    'Upcoming meeting for this customer: ' + (booking.upcoming || 'none'),
+    'Email on file: ' + (booking.lead_email ? 'yes' : 'no'),
+    'If the customer wants a meeting, call or demo: ask for their preferred date and time inside these hours, one question at a time. If there is no email on file, ask once for their email before booking, to send a calendar invite; it is optional, and if they skip it the details are sent here.',
+    'To move a meeting, set a new start. To cancel, set cancel true.',
+    shape + '.',
+  ].join('\n');
+}
+
 /** The system and user messages for one reply. */
-function assemblePrompt({ brain, docs, lead, history, message, businessOpen, quotaLeft, now = new Date() }) {
+function assemblePrompt({ brain, docs, lead, history, message, businessOpen, quotaLeft, booking = null, now = new Date() }) {
   const profile = brain.profile || {};
   const layer2 = brain.version_type === 'nera' && brain.system_prompt_override
     ? brain.system_prompt_override
@@ -242,6 +267,10 @@ AI replies left this month: ${quotaLeft === null ? 'no limit' : quotaLeft}
 Lead name: ${quoted(lead?.name) || 'Unknown'}
 Lead status: ${quoted(lead?.status) || 'Unknown'}
 </runtime_context>
+
+<meeting_booking>
+${meetingSection(booking, now)}
+</meeting_booking>
 
 <conversation>
 ${quoted(conversation) || 'No earlier messages'}

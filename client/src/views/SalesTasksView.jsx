@@ -303,8 +303,8 @@ export const SalesTasksView = () => {
           Refresh Tasks
         </button>
         <button
-          onClick={() => calendarStatus?.connected ? fetchCalendarStatus() : window.open(`${api.baseUrl}/api/auth/google`, '_blank', 'noopener,noreferrer')}
-          title={calendarStatus?.connected ? 'Google Calendar is connected' : 'Connect the organizer Google Calendar'}
+          onClick={() => navigate('/calendar')}
+          title={calendarStatus?.connected ? 'Google Calendar is connected — open Calendar settings' : 'Connect your Google Calendar'}
           style={{ background: calendarStatus?.connected ? 'rgba(16,185,129,.12)' : C.surface, border: `1px solid ${calendarStatus?.connected ? C.green : C.border}`, color: calendarStatus?.connected ? C.green : C.text, padding: '9px 13px', borderRadius: 9, cursor: 'pointer', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}
         >
           <CalendarDays size={13} />

@@ -21,6 +21,8 @@ const LABELS = {
   clients: 'Clients',
   settings: 'Settings',
   'sales-tasks': 'Sales Tasks',
+  calendar: 'Calendar',
+  plugins: 'Plugins',
 };
 
 // Only the pages in the sidebar; other addresses are not routed.
@@ -28,6 +30,8 @@ const SEARCH_PAGES = [
   { path: '/dashboard', label: 'Dashboard', desc: 'Overview and quick stats' },
   { path: '/leads', label: 'Leads', desc: 'View, filter, and manage all leads' },
   { path: '/sales-tasks', label: 'Sales Task', desc: 'Manage your daily sales activities' },
+  { path: '/calendar', label: 'Calendar', desc: 'Google Calendar, booking hours and meetings' },
+  { path: '/plugins', label: 'Plugins', desc: 'Google Calendar, Google Meet and more' },
   { path: '/inbox', label: 'WhatsApp Chat', desc: 'Chat directly with your leads' },
   { path: '/whatsapp', label: 'WhatsApp Number', desc: 'Your connected number, status and profile' },
   { path: '/templates', label: 'Templates', desc: 'Your WhatsApp message templates' },

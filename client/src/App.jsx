@@ -18,6 +18,8 @@ import { InboxView } from './views/InboxView.jsx';
 import { CampaignsView } from './views/CampaignsView.jsx';
 import TemplatesPage from './components/templates/TemplatesPage.jsx';
 import BrainPage from './views/brain/BrainPage.jsx';
+import CalendarPage from './views/calendar/CalendarPage.jsx';
+import PluginsPage from './views/plugins/PluginsPage.jsx';
 import { ReportsView } from './views/ReportsView.jsx';
 import { SettingsView } from './views/SettingsView.jsx';
 import { LoginScreen } from './views/auth/LoginScreen.jsx';
@@ -76,6 +78,8 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
               <Route path="/whatsapp" element={<WhatsAppNumberPage />} />
               <Route path="/templates/:itemId?" element={<TemplatesRoute />} />
               <Route path="/campaigns" element={<CampaignsView />} />
+              <Route path="/calendar" element={<CalendarPage />} />
+              <Route path="/plugins" element={<PluginsPage />} />
               <Route path="/brain" element={<BrainPage />} />
               <Route path="/reports" element={<ReportsView />} />
               <Route path="/settings" element={<SettingsView />} />
