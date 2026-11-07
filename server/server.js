@@ -112,6 +112,8 @@ const io = {
 app.set('io', io);
 // Admin panel live updates go to the platform staff room only.
 require('./services/realtime').setStaffSender((event, payload) => socketServer.to('platform').emit(event, payload));
+// Customer panel live updates go to the current tenant's room (scoped io.emit).
+require('./services/realtime').setWorkspaceSender((event, payload) => io.emit(event, payload));
 
 socketServer.on('connection', (socket) => {
   console.log(`[Socket.io] Client connected: ${socket.id}`);

@@ -4,6 +4,8 @@
  * Events go only to the platform staff room, never to customer workspaces.
  */
 let sendToStaff = null;
+// Sends to the current tenant's room only (server.js passes its scoped io.emit).
+let sendToWorkspace = null;
 
 function setStaffSender(fn) {
   sendToStaff = fn;
@@ -18,4 +20,18 @@ function notifyStaff(event, payload = {}) {
   }
 }
 
-module.exports = { setStaffSender, notifyStaff };
+function setWorkspaceSender(fn) {
+  sendToWorkspace = fn;
+}
+
+/** Live update for the customer panel of the workspace in the current context. */
+function notifyWorkspace(event, payload = {}) {
+  if (!sendToWorkspace) return;
+  try {
+    sendToWorkspace(event, { ...payload, at: new Date().toISOString() });
+  } catch (error) {
+    console.error('[realtime] Could not notify workspace:', error.message);
+  }
+}
+
+module.exports = { setStaffSender, notifyStaff, setWorkspaceSender, notifyWorkspace };

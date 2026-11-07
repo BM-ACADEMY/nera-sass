@@ -98,6 +98,7 @@ const TASK_FIELDS = { _id: 0, id: 1, lead_id: 1, task_type: 1, status: 1, unread
 const axios = require('axios');
 const { buildBmAcademyCatalog, findBmAcademyCourseFamily, resolveBmAcademyCourseContext } = require('../services/bmAcademySyllabus');
 const googleCalendar = require('../services/googleCalendar');
+const { notifyWorkspace } = require('../services/realtime');
 const { sendBookingNotification } = require('../services/bookingNotifications');
 const { getLeadOSBrand } = require('../services/leadosBrand');
 
@@ -1349,6 +1350,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
                  booking_status: 'cancelled', calendar_event_id: null, calendar_event_url: null,
                  google_meet_link: null, call_booked_at: null, updated_at: new Date(),
                } });
+               notifyWorkspace('calendar_meetings_update', { lead_id: lead_id, booking_status: 'cancelled' });
                ai_reply = 'Your meeting has been cancelled.';
              } else {
                ai_reply = "I couldn't find an upcoming meeting booked for you to cancel.";
@@ -1375,6 +1377,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
              meeting_requested_for: Number.isNaN(requested.getTime()) ? null : requested,
              updated_at: new Date(),
            } });
+           notifyWorkspace('calendar_meetings_update', { lead_id: lead_id, booking_status: 'requested' });
            await ensureSalesTask(req, lead_id, 'hot_lead');
            ai_reply = Number.isNaN(requested.getTime())
              ? 'Thanks! Our team will contact you shortly to confirm the meeting time.'
@@ -1407,6 +1410,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
                  calendar_event_id: calendarBooking.event_id, calendar_event_url: calendarBooking.event_url,
                  google_meet_link: calendarBooking.meet_link, updated_at: new Date(),
                } });
+               notifyWorkspace('calendar_meetings_update', { lead_id: lead_id, booking_status: 'confirmed' });
                await ensureSalesTask(req, lead_id, 'call');
                try {
                  await sendBookingNotification({
@@ -3151,6 +3155,7 @@ router.post('/leads/book-call', internalAuth, async (req, res) => {
       } },
       { new: true, projection: { _id: 0, id: 1, call_booked_at: 1, status: 1, booking_status: 1, calendar_event_url: 1, google_meet_link: 1 } }
     ).lean();
+    notifyWorkspace('calendar_meetings_update', { lead_id: lead_id, booking_status: 'confirmed' });
     const result = { rows: bookedLead ? [bookedLead] : [] };
 
     if (result.rows.length === 0) {

@@ -7,6 +7,7 @@ const { runAsTenant } = require('../../services/tenantContext');
 const { requirePermission, can } = require('../../services/permissions');
 const audit = require('../../services/audit');
 const googleCalendar = require('../../services/googleCalendar');
+const { notifyWorkspace } = require('../../services/realtime');
 
 const appUrl = () => (process.env.NERA_APP_URL || process.env.PORTAL_URL || 'http://localhost:5173').replace(/\/+$/, '');
 
@@ -112,6 +113,7 @@ module.exports = function registerCalendarRoutes(app, ctx) {
         booking_status: 'cancelled', calendar_event_id: null, calendar_event_url: null,
         google_meet_link: null, call_booked_at: null, updated_at: new Date(),
       } });
+      notifyWorkspace('calendar_meetings_update', { lead_id: leadId, booking_status: 'cancelled' });
       res.json({ success: true, cancelled: result.cancelled });
     } catch (error) {
       if (googleCalendar.isDisconnectedError(error)) return res.status(409).json({ error: 'Connect your Google Calendar first.', code: 'CALENDAR_NOT_CONNECTED' });
