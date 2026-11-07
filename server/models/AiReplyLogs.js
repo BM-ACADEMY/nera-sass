@@ -1,4 +1,4 @@
-const { defineModel } = require('../db/mongo');
+const { defineModel, Mixed } = require('../db/mongo');
 
 // One row per customer message the AI Brain answered, for tracing and usage.
 // The unique key also stops an n8n retry from answering a message twice.
@@ -16,6 +16,7 @@ module.exports = defineModel('ai_reply_logs', {
   handoff: { type: Boolean, default: false },
   handoff_reason: { type: String, default: null },
   opt_out: { type: Boolean, default: false },
+  meeting: { type: Mixed, default: null }, // the model's booking proposal, for debugging
   prompt_tokens: { type: Number, default: null },
   completion_tokens: { type: Number, default: null },
   latency_ms: { type: Number, default: null },

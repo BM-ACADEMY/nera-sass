@@ -23,6 +23,7 @@ const SETTINGS_DEFAULTS = {
   calendar_id: 'primary',
   time_zone: DEFAULT_TIME_ZONE,
   booking_enabled: true,
+  meet_enabled: true,
   meeting_minutes: 30,
   work_days: [1, 2, 3, 4, 5, 6],
   work_start: '10:00',
@@ -186,6 +187,7 @@ const updateSettings = async (input = {}) => {
   const $set = { updated_at: new Date() };
   const time = /^([01]\d|2[0-3]):[0-5]\d$/;
   if ('booking_enabled' in input) $set.booking_enabled = Boolean(input.booking_enabled);
+  if ('meet_enabled' in input) $set.meet_enabled = Boolean(input.meet_enabled);
   if ('meeting_minutes' in input) {
     const minutes = Number(input.meeting_minutes);
     if (![15, 30, 45, 60, 90, 120].includes(minutes)) throw new CalendarError('Meeting length must be 15, 30, 45, 60, 90 or 120 minutes', 'INVALID');
@@ -324,9 +326,12 @@ const bookMeeting = async ({ leadId, brand, name, email, phone, start, durationM
       start: { dateTime: startDate.toISOString(), timeZone: settings.time_zone },
       end: { dateTime: endDate.toISOString(), timeZone: settings.time_zone },
       attendees: email ? [{ email }] : [],
-      conferenceData: {
-        createRequest: { requestId: `leados-${leadId}-${crypto.randomUUID()}`, conferenceSolutionKey: { type: 'hangoutsMeet' } },
-      },
+      // Google Meet plugin: only when the workspace has it switched on.
+      ...(settings.meet_enabled !== false && {
+        conferenceData: {
+          createRequest: { requestId: `leados-${leadId}-${crypto.randomUUID()}`, conferenceSolutionKey: { type: 'hangoutsMeet' } },
+        },
+      }),
       extendedProperties: { private: { lead_id: String(leadId), source: 'LeadOS' } },
     },
   });

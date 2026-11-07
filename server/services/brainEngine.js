@@ -7,6 +7,7 @@
 const openRouter = require('./openrouter');
 const ai = require('./aiAutomation');
 const prompts = require('./brainPrompt');
+const booking = require('./brainBooking');
 const { AiReplyLogs, BrainDocs, BrainProfiles, Clients, Conversations, Leads, Messages } = require('../models');
 
 // The same model the older reply workflow (WF1) uses.
@@ -47,6 +48,7 @@ function parseOutput(raw) {
     handoff_reason: parsed.handoff_reason ? String(parsed.handoff_reason).slice(0, 300) : null,
     lead_updates: parsed.lead_updates && typeof parsed.lead_updates === 'object' && !Array.isArray(parsed.lead_updates) ? parsed.lead_updates : {},
     opt_out: parsed.opt_out === true,
+    meeting: booking.cleanMeeting(parsed.meeting),
   };
 }
 
@@ -65,8 +67,8 @@ function breaksPriceRule(reply, brain, source) {
   return prices.some((price) => !known.has(price));
 }
 
-async function draft({ brain, docs, lead, history, message, businessOpen, left, now }) {
-  const prompt = prompts.assemblePrompt({ brain, docs, lead, history, message, businessOpen, quotaLeft: left, now });
+async function draft({ brain, docs, lead, history, message, businessOpen, left, bookingContext = null, now }) {
+  const prompt = prompts.assemblePrompt({ brain, docs, lead, history, message, businessOpen, quotaLeft: left, booking: bookingContext, now });
   const started = Date.now();
   const response = await openRouter.models.generateContent({
     model: BRAIN_MODEL,
@@ -165,21 +167,35 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
     { _id: 0, direction: 1, content: 1 },
   ).sort({ id: -1 }).limit(HISTORY_LIMIT).lean()).reverse();
   const businessOpen = prompts.isOpenNow(brain.profile, now);
+  const bookingContext = await booking.context(lead);
 
   let result;
   try {
-    result = await draft({ brain, docs, lead, history, message: message.content, businessOpen, left, now });
+    result = await draft({ brain, docs, lead, history, message: message.content, businessOpen, left, bookingContext, now });
   } catch (err) {
     console.error(`[AI Brain] Could not draft a reply for lead ${lead.id}:`, err.message);
     return finishWithoutSend('The AI could not answer: please reply yourself');
   }
-  const { output, afterHours, prompt, latency, usage } = result;
+  const { output, prompt, latency, usage } = result;
+  let { afterHours } = result;
+
+  // The model only proposes a meeting; the real Calendar outcome writes the reply.
+  if (output.meeting && !output.opt_out && !/^safety\b/i.test(output.handoff_reason || '')) {
+    const outcome = await booking.apply({ lead, meeting: output.meeting, booking: bookingContext, brandName: brain.profile?.business_name || tenant?.name });
+    if (outcome?.reply) {
+      output.reply = outcome.reply;
+      afterHours = false;
+    }
+    // Tells the team (a booking needs no takeover, so the AI is not paused).
+    if (outcome?.handoffReason && !output.handoff) Object.assign(output, { handoff: true, handoff_reason: outcome.handoffReason, handoff_mode: 'notify' });
+  }
   const trace = {
     retrieved_doc_ids: docs.map((d) => d.id),
     prompt: `${prompt.user}`.slice(0, 20000),
     handoff: output.handoff,
     handoff_reason: output.handoff_reason,
     opt_out: output.opt_out,
+    meeting: output.meeting,
     prompt_tokens: usage.prompt_tokens ?? null,
     completion_tokens: usage.completion_tokens ?? null,
     latency_ms: latency,
@@ -209,7 +225,7 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
   if (output.opt_out) await markOptedOut(lead.id, now);
   if (output.handoff) {
     const reason = output.handoff_reason || 'The AI asked for a person';
-    await ai.handover(io, { leadId: lead.id, reason });
+    await ai.handover(io, { leadId: lead.id, reason, ...(output.handoff_mode && { mode: output.handoff_mode }) });
     if (/^safety\b/i.test(reason)) await Leads.updateOne({ id: lead.id }, { $set: { handover_priority: true } });
   }
   await finish({ ...trace, status: 'sent', sent_message_id: sentId });
@@ -231,6 +247,7 @@ async function sandbox({ brain, clientId, message, history = [], now = new Date(
     message,
     businessOpen: prompts.isOpenNow(brain.profile, now),
     left: null,
+    bookingContext: await booking.context(null),
     now,
   });
   return { ...output, retrieved: docs.map((d) => d.title || d.doc_type), latency_ms: latency };

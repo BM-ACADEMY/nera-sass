@@ -71,7 +71,7 @@ function issueAccessToken(user, { mfa = false } = {}) {
   return jwt.sign(
     { id: user.id, tid: user.tenant_id ?? null, tv: Number(user.token_version || 0), mfa: Boolean(mfa), typ: 'access' },
     jwtSecret(),
-    { expiresIn: process.env.JWT_EXPIRES_IN || '1d' },
+    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' },
   );
 }
 

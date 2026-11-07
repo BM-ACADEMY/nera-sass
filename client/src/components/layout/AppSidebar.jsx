@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { io as socketIO } from 'socket.io-client';
-import { FiGrid, FiUsers, FiCheckSquare, FiSmartphone, FiFileText, FiSend, FiCpu, FiBarChart2, FiSettings, FiLogOut, FiMoreVertical } from 'react-icons/fi';
+import { FiGrid, FiUsers, FiCheckSquare, FiSmartphone, FiFileText, FiSend, FiCpu, FiBarChart2, FiSettings, FiCalendar, FiPackage, FiLogOut, FiMoreVertical } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import getneraLogo from '../../assets/getnera-logo.png';
 import { api } from '../../services/api.js';
@@ -34,6 +34,13 @@ export const SECTIONS = [
     ],
   },
   { label: 'AI', items: [{ path: '/brain', icon: FiCpu, label: 'AI Brain' }] },
+  {
+    label: 'Plugins',
+    items: [
+      { path: '/plugins', icon: FiPackage, label: 'Plugins' },
+      { path: '/calendar', icon: FiCalendar, label: 'Calendar' },
+    ],
+  },
   { label: 'Insights', items: [{ path: '/reports', icon: FiBarChart2, label: 'Reports' }] },
 ];
 

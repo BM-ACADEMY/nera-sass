@@ -10,6 +10,7 @@ module.exports = defineModel('google_calendar_credentials', {
   calendar_id: { type: String, default: 'primary' },
   time_zone: { type: String, default: 'Asia/Kolkata' },
   booking_enabled: { type: Boolean, default: true },
+  meet_enabled: { type: Boolean, default: true }, // Google Meet plugin: add a Meet link to each booking
   meeting_minutes: { type: Number, default: 30 },
   work_days: { type: [Number], default: [1, 2, 3, 4, 5, 6] }, // 0 = Sunday
   work_start: { type: String, default: '10:00' },

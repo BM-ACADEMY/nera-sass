@@ -1220,7 +1220,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
       - REQUIRED RESPONSE LANGUAGE FOR THIS TURN: ${responseLanguageTarget}
       - Current date/time: ${new Date().toLocaleString('en-US', { timeZone: bookingTimeZone })} (Local time in ${bookingTimeZone}). Scheduling timezone: ${bookingTimeZone}.
       - ${booking.enabled
-        ? `Google Meet bookings are available ${booking.working_hours}, ${booking.settings.meeting_minutes} minutes each. Only suggest or accept times inside these hours.`
+        ? `${booking.settings.meet_enabled === false ? 'Appointment' : 'Google Meet'} bookings are available ${booking.working_hours}, ${booking.settings.meeting_minutes} minutes each. Only suggest or accept times inside these hours.`
         : 'Online meeting booking is not available right now. If the lead wants a meeting, take their preferred date and time and say the team will confirm it; never say a meeting is booked.'}
       - Reply in the same language the lead's current message is written in, regardless of what language earlier turns used. Judge this by the actual words used, not the script: Tamil/Hindi words typed in English letters (Tanglish/Hinglish, e.g. "eppo course start pannuvinga", "kitna fees hai") are that language, not English — reply in that same romanized Tanglish/Hinglish, not in English and not by switching to Tamil/Devanagari script. If the message is written in native Tamil/Hindi script, reply in that same native script. If the message mixes languages, mirror that mix rather than picking one.
       - Current contact name: "${leadName || 'unknown'}". Current locked brand: "${effectiveBrand}".
@@ -1237,7 +1237,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
       - If a course was identified earlier, keep it as the active course until the user explicitly selects a different course. Do not ask "which course?" again for a follow-up about that active course.
       - If the user asks a FAQ (like contact number, timings, or fees) mid-booking, provide the answer inline and immediately resume the booking flow. Do not reset the conversation or ask for information again.
       - When a lead requests a call, meeting, or demo, you MUST ask: "Would you prefer an online video meeting via Google Meet or a normal phone call?"
-      - If they choose Google Meet (video meeting): Proceed with Google Calendar booking (collect date, time, name, and email one field at a time). Only ask for email if they choose Google Meet.
+      - If they choose Google Meet (video meeting): Proceed with Google Calendar booking (collect date, time, name, and email one field at a time). Only ask for email if they choose Google Meet. Email is optional: if the lead says "skip" or does not want to share it, set extracted_booking_time again from chat history so the meeting is booked and the link is sent on WhatsApp.
       - If they choose a normal phone call: Do NOT ask for email and do NOT trigger calendar booking. Directly reply with the contact number "80725 03693" and tell them to call us directly, or ask for their preferred time so we can call them back.
       - If the lead gave a date in an earlier message and now gives only a time (or vice versa), combine them from chat history into one extracted_booking_time instead of asking for the date again.
       - Send exactly one concise WhatsApp reply for this user message.
@@ -1383,8 +1383,11 @@ router.post('/ai/response', internalAuth, async (req, res) => {
          }
 
          if (extractedData.extracted_booking_time) {
-           if (!leadEmail) {
-             ai_reply = 'Please share your email address so I can check the slot and send the Calendar and Google Meet invitation.';
+           // Email is optional: ask once for it (for the calendar invite); if the
+           // lead skips it, book anyway and send the Meet link here on WhatsApp.
+           const askedForEmail = (await Leads.findOne({ id: lead_id }, { _id: 0, booking_status: 1 }).lean())?.booking_status === 'awaiting_email';
+           if (!leadEmail && !askedForEmail) {
+             ai_reply = 'Please share your email address so I can send the Calendar and Google Meet invitation. If you prefer not to, reply "skip" and I\'ll send the meeting link here.';
              await Leads.updateOne({ id: lead_id }, { $set: { booking_status: 'awaiting_email', updated_at: new Date() } });
              return res.json({ ...req.body, ai_reply, booking_status: 'awaiting_email' });
            }

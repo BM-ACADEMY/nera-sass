@@ -4,7 +4,7 @@
  * workspace's working hours; the team sees and cancels them here.
  */
 const { runAsTenant } = require('../../services/tenantContext');
-const { requirePermission } = require('../../services/permissions');
+const { requirePermission, can } = require('../../services/permissions');
 const audit = require('../../services/audit');
 const googleCalendar = require('../../services/googleCalendar');
 
@@ -24,7 +24,9 @@ module.exports = function registerCalendarRoutes(app, ctx) {
 
   app.get('/api/calendar/status', internalAuth, async (req, res) => {
     try {
-      res.json(await googleCalendar.getConnectionStatus());
+      const status = await googleCalendar.getConnectionStatus();
+      // Lets the Calendar page show Connect/Save only to people allowed to use them.
+      res.json({ ...status, can_manage: req.identity?.kind === 'service' ? false : can(req.identity, 'calendar.manage') });
     } catch (error) {
       fail(res, error);
     }
