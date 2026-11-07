@@ -28,12 +28,6 @@ export const IconPhone = (p) => (<svg {...base} {...p}><path d="M5 4h4l2 5-2.5 1
 
 export function Logo({ size = 30 }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
-      <rect width="64" height="64" rx="16" fill="#0f3d2a" />
-      <path d="M32 14c-10 0-18 7.4-18 16.6 0 4.2 1.7 8 4.5 11L17 50l8.6-3.4c2 .7 4.1 1 6.4 1 10 0 18-7.4 18-16.6S42 14 32 14z" fill="#3ddc84" />
-      <circle cx="25" cy="31" r="2.6" fill="#0f3d2a" />
-      <circle cx="32" cy="31" r="2.6" fill="#0f3d2a" />
-      <circle cx="39" cy="31" r="2.6" fill="#0f3d2a" />
-    </svg>
+    <img src="/logo.png" width={size} height={size} alt="" aria-hidden="true" style={{ borderRadius: size * 0.25, display: 'block' }} />
   )
 }

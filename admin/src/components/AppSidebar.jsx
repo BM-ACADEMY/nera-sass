@@ -1,6 +1,6 @@
 import React from 'react';
 import { FiLogOut, FiMoreVertical, FiSettings, FiUser, FiShield } from 'react-icons/fi';
-import { MdOutlineSpaceDashboard } from 'react-icons/md';
+import getneraLogo from '@/assets/getnera-logo.png';
 import { FaWhatsapp } from 'react-icons/fa';
 import UserAvatar from './UserAvatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -50,9 +50,7 @@ const AppSidebar = ({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" className="hover:bg-transparent active:bg-transparent">
-              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-                <MdOutlineSpaceDashboard className="size-5" />
-              </div>
+              <img src={getneraLogo} alt="" className="aspect-square size-8 shrink-0 rounded-lg object-cover" />
               <div className="grid flex-1 text-left leading-tight">
                 <span className="truncate text-[15px] font-extrabold">Getnera Admin</span>
                 <span className="truncate text-[11px] text-slate-400">

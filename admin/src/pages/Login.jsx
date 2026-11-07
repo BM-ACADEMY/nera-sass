@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { FiMail, FiShield, FiCopy, FiArrowLeft, FiSmartphone, FiChevronRight, FiKey, FiCheckCircle, FiDownload } from 'react-icons/fi';
-import { MdOutlineSpaceDashboard } from 'react-icons/md';
+import getneraLogo from '@/assets/getnera-logo.png';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import axiosClient from '../api/axiosClient';
@@ -271,7 +271,7 @@ const Login = () => {
         <div className="pointer-events-none absolute -top-24 -right-24 size-80 rounded-full bg-white/10 blur-2xl" />
         <div className="pointer-events-none absolute -bottom-32 -left-20 size-96 rounded-full bg-sky-400/20 blur-3xl" />
         <div className="relative flex items-center gap-3">
-          <span className="flex size-10 items-center justify-center rounded-xl bg-white text-[#1d4ed8] shadow-lg"><MdOutlineSpaceDashboard size={22} /></span>
+          <img src={getneraLogo} alt="" className="size-10 rounded-xl object-cover shadow-lg" />
           <div>
             <div className="text-lg font-extrabold tracking-tight">Getnera</div>
             <div className="text-xs text-blue-200">Admin panel</div>
@@ -295,7 +295,7 @@ const Login = () => {
       {/* Form */}
       <main className="flex flex-1 flex-col items-center justify-center px-4 py-10 sm:px-8">
         <div className="mb-8 flex items-center gap-2.5 lg:hidden">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-primary text-white"><MdOutlineSpaceDashboard size={20} /></span>
+          <img src={getneraLogo} alt="" className="size-9 rounded-xl object-cover" />
           <span className="text-lg font-extrabold">Getnera <span className="font-medium text-slate-400">Admin</span></span>
         </div>
 

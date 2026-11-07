@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { io as socketIO } from 'socket.io-client';
 import { FiGrid, FiUsers, FiCheckSquare, FiSmartphone, FiFileText, FiSend, FiCpu, FiBarChart2, FiSettings, FiLogOut, FiMoreVertical } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
+import getneraLogo from '../../assets/getnera-logo.png';
 import { api } from '../../services/api.js';
 import { roleLabel } from '../../views/settings/settingsPolicy.js';
 import { useAuth } from '../../hooks/useAuth.js';
@@ -78,9 +79,7 @@ const AppSidebar = ({ onLogout }) => {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" className="hover:bg-transparent active:bg-transparent">
-              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-                <FaWhatsapp className="size-[18px]" />
-              </div>
+              <img src={getneraLogo} alt="" className="aspect-square size-8 shrink-0 rounded-lg object-cover" />
               <div className="grid flex-1 text-left leading-tight">
                 <span className="truncate text-[15px] font-extrabold">Getnera</span>
                 <span className="truncate text-[11px] text-slate-400">{user?.tenant_name || 'Your workspace'}</span>
