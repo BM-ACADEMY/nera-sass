@@ -26,6 +26,7 @@ const {
   phoneTailRegex,
   upsertOne,
 } = ctx;
+const MetaWhatsappPhoneNumbers = ctx.MetaWhatsappPhoneNumbers || require('../../models').MetaWhatsappPhoneNumbers;
 const path = ctx.path || require('path');
 const fs = ctxFs || require('fs');
 const axios = ctxAxios || require('axios');
@@ -37,7 +38,46 @@ const mediaStore = require('../../services/mediaStore');
 const aiAutomation = require('../../services/aiAutomation');
 const brainEngine = require('../../services/brainEngine');
 const { tenantLifecycle } = require('../../services/lifecycle');
- // Store timeouts for delayed AI replies
+const consent = require('../../services/consent');
+const numberHealth = require('../../services/numberHealth');
+const optOutKeywords = require('../../services/optOutKeywords');
+
+const digitsOnly = (value) => String(value || '').replace(/\D/g, '');
+
+// Which workspace numbers a WABA-level quality event is about. Quality
+// webhooks name the number by its display phone, account events by the WABA.
+async function numbersForQualityEvent({ wabaId, displayPhone }) {
+  return runAsSystem(async () => {
+    const projection = { _id: 0, id: 1, tenant_id: 1, phone_number_id: 1 };
+    const digits = digitsOnly(displayPhone);
+    if (digits.length >= 10) {
+      const inventory = await MetaWhatsappPhoneNumbers.find({ display_phone_number: phoneTailRegex(digits) }, { _id: 0, phone_number_id: 1 }).lean();
+      const ids = inventory.map((row) => String(row.phone_number_id));
+      const byInventory = ids.length ? await Clients.find({ phone_number_id: { $in: ids } }, projection).lean() : [];
+      if (byInventory.length) return byInventory;
+      const byNumber = await Clients.find({ whatsapp_number: phoneTailRegex(digits), phone_number_id: { $nin: [null, ''] } }, projection).lean();
+      if (byNumber.length) return byNumber;
+    }
+    if (wabaId) return Clients.find({ wa_business_id: String(wabaId), phone_number_id: { $nin: [null, ''] } }, projection).lean();
+    return [];
+  }, 'webhook-wa-quality-lookup');
+}
+
+// Confirms a STOP or START inside the open 24-hour window (the customer just
+// wrote), with the brand's own token. Best effort: never blocks the webhook.
+async function sendConsentConfirmation({ client, to, kind, language }) {
+  const token = client?.wa_access_token;
+  if (!token || !client?.phone_number_id) return;
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v21.0/${client.phone_number_id}/messages`,
+      { messaging_product: 'whatsapp', to, type: 'text', text: { body: optOutKeywords.confirmationText(kind, language) } },
+      { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 10000 },
+    );
+  } catch (err) {
+    console.error('[Webhook] Consent confirmation not sent:', err.response?.data?.error?.message || err.message);
+  }
+}
 
 // GET — Meta webhook verification
 app.get('/webhook/whatsapp', (req, res) => {
@@ -195,6 +235,32 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
           continue;
         }
 
+        // ── META QUALITY SIGNALS ─────────────────────────────
+        // phone_number_quality_update: { display_phone_number, event: FLAGGED |
+        // UNFLAGGED | ONBOARDING | UPGRADE | DOWNGRADE, current_limit: TIER_* }
+        // account_update: { event: DISABLED_UPDATE | ACCOUNT_RESTRICTION | ...,
+        // ban_info?, restriction_info? } for the whole WABA (entry.id).
+        if (change.field === 'phone_number_quality_update' || change.field === 'account_update') {
+          const value = change.value || {};
+          const event = value.event ? String(value.event).toUpperCase() : null;
+          const detail = value.ban_info?.waba_ban_state || value.restriction_info?.map?.((r) => r.restriction_type).join(', ') || null;
+          const numbers = await numbersForQualityEvent({ wabaId: entry.id, displayPhone: value.display_phone_number || value.phone_number });
+          if (!numbers.length) {
+            console.warn(`[WA Webhook] Quality event ${change.field}/${event} for an unmanaged number`);
+            continue;
+          }
+          for (const number of numbers) {
+            if (!number.tenant_id) continue;
+            await runAsTenant(number.tenant_id, async () => {
+              const result = await numberHealth.recordQuality(number.phone_number_id, {
+                event, messagingLimit: value.current_limit || null, source: change.field, clientId: number.id, detail,
+              });
+              console.log(`[WA Webhook] Quality ${change.field}/${event} on ${number.phone_number_id} (tenant ${number.tenant_id})${result.paused ? ': marketing paused' : result.resumed ? ': marketing resumed' : ''}`);
+            }).catch((err) => console.error('[WA Webhook] Quality update failed:', err.message));
+          }
+          continue;
+        }
+
         // ── INCOMING MESSAGES & DELIVERY STATUSES ────────────
         if (change.field !== 'messages') continue;
         const value = change.value || {};
@@ -227,6 +293,14 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
               if (!wamid) continue;
 
               await Messages.updateMany({ wa_msg_id: wamid }, { $set: { status: newStatus } });
+              if (newStatus === 'failed') {
+                // Rate-limit and spam-rate errors are signals about the number.
+                const errorCode = s.errors?.[0]?.code;
+                if (errorCode != null) {
+                  await numberHealth.recordSendError(String(phoneNumberId), { code: errorCode, message: errorMsg })
+                    .catch((err) => console.error('[Webhook Status] Number health update failed:', err.message));
+                }
+              }
               if (newStatus === 'failed' && errorMsg) {
                 await CampaignLogs.updateMany({ wa_message_id: wamid }, { $set: { status: newStatus, error_message: errorMsg } });
               } else {
@@ -416,7 +490,33 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
               // The customer wrote: the AI follow-up schedule starts again from now.
               await aiAutomation.recordInbound(lead.id);
 
-              const shouldTriggerAI = ['text', 'button', 'interactive', 'audio'].includes(msg.type);
+              // STOP / unsubscribe (English and Tamil) ends all marketing to this
+              // contact at once; START opts them back in. Both are confirmed in
+              // the customer's language inside the window they just opened.
+              let consentChange = null;
+              if (['text', 'button', 'interactive'].includes(msg.type) && text) {
+                const stop = optOutKeywords.detectOptOut(text);
+                const start = stop.matched ? { matched: false } : optOutKeywords.detectOptIn(text);
+                if (stop.matched) {
+                  const result = await consent.recordOptOut({ leadId: lead.id, phone: phoneDigits, source: 'inbound_keyword', text });
+                  consentChange = { kind: 'opt_out', language: stop.language, keyword: stop.keyword, cancelled: result.cancelled_queued };
+                  lead = { ...lead, opted_out: true, whatsapp_opt_out: true };
+                  if (aiReplyQueue.has(lead.id)) { clearTimeout(aiReplyQueue.get(lead.id)); aiReplyQueue.delete(lead.id); }
+                  io.emit('ai_typing', { lead_id: String(lead.id), typing: false });
+                  console.log(`[Webhook] Opt-out keyword "${stop.keyword}" from lead ${lead.id}: ${result.cancelled_queued} queued marketing message(s) cancelled`);
+                } else if (start.matched) {
+                  await consent.recordOptIn({ leadId: lead.id, phone: phoneDigits, source: 'inbound_keyword', text });
+                  consentChange = { kind: 'opt_in', language: start.language, keyword: start.keyword };
+                  lead = { ...lead, opted_out: false, whatsapp_opt_out: false };
+                  console.log(`[Webhook] Opt-in keyword "${start.keyword}" from lead ${lead.id}`);
+                }
+                if (consentChange) {
+                  io.emit('contact_consent_changed', { lead_id: String(lead.id), status: consentChange.kind === 'opt_out' ? 'opted_out' : 'opted_in', source: 'inbound_keyword' });
+                  await sendConsentConfirmation({ client, to: phoneDigits, kind: consentChange.kind, language: consentChange.language });
+                }
+              }
+
+              const shouldTriggerAI = ['text', 'button', 'interactive', 'audio'].includes(msg.type) && consentChange?.kind !== 'opt_out';
               const aiWanted = shouldTriggerAI && process.env.N8N_WEBHOOK_URL && process.env.NODE_ENV !== 'test';
               // Paused chats (handed to a person), opted-out customers, blocked
               // workspaces and the hourly cap never reach n8n.

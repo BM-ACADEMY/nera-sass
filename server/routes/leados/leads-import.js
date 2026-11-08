@@ -5,6 +5,8 @@
  */
 const { currentTenantId } = require('../../services/tenantContext');
 const { postToN8n } = require('../../services/n8n');
+const consent = require('../../services/consent');
+const OPT_IN_YES = new Set(['yes', 'y', 'true', '1', 'opted in', 'opted_in', 'opt in', 'opt-in', 'ஆம்']);
 module.exports = function registerLeadsImportRoutes(app, ctx) {
 const {
   CampaignImportRecipients,
@@ -217,6 +219,18 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
                 .catch(e => console.error(`[Import Welcome] Failed for lead ${importedLeadId}:`, e.message));
             }, delay);
           }
+        }
+
+        // A sheet may carry the contact's marketing consent: an opt-in column
+        // (yes/true/1) with, optionally, where and with which wording it was
+        // given. Without it the contact stays without consent and campaigns
+        // skip them.
+        const optInCell = row.whatsapp_opt_in ?? row['WhatsApp Opt-In'] ?? row['WhatsApp Opt In'] ?? row.opt_in ?? row['Opt In'] ?? row['Opt-In'] ?? row.consent ?? row.Consent;
+        if (phoneDigits && importedLeadId && OPT_IN_YES.has(String(optInCell ?? '').trim().toLowerCase())) {
+          const optInText = String(row.opt_in_text ?? row['Opt-In Text'] ?? row['Opt In Text'] ?? row.consent_text ?? '').trim()
+            || `Imported with consent from ${req.file?.originalname || 'a sheet'}`;
+          await consent.recordOptIn({ leadId: importedLeadId, phone, source: row.opt_in_source || row['Opt-In Source'] || 'import', text: optInText, by: req.user?.id ?? null })
+            .catch((err) => console.error(`[Import] Consent not recorded for lead ${importedLeadId}:`, err.message));
         }
 
         if (isCampaignImport) {

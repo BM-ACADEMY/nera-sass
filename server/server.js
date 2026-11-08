@@ -393,7 +393,7 @@ async function syncMetaWhatsAppInventory() {
       await upsertOne(MetaWhatsappAccounts, { waba_id: String(waba.id) }, { $set: wabaFields }, wabaFields);
       const [phones, templates] = await Promise.all([
         graphPageData(`${base}/${waba.id}/phone_numbers`, token,
-          { fields: 'id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type,status,name_status,new_name_status' })
+          { fields: 'id,display_phone_number,verified_name,quality_rating,messaging_limit_tier,code_verification_status,platform_type,status,name_status,new_name_status' })
           .catch(() => graphPageData(`${base}/${waba.id}/phone_numbers`, token)),
         graphPageData(`${base}/${waba.id}/message_templates`, token),
       ]);
@@ -420,6 +420,16 @@ async function syncMetaWhatsAppInventory() {
         };
         await upsertOne(MetaWhatsappPhoneNumbers, { phone_number_id: String(phone.id) }, { $set: phoneFields }, phoneFields);
         seenPhoneIds.push(String(phone.id));
+        // A number linked to a workspace: its quality rating feeds that
+        // workspace's sending health (pause marketing on a drop, tell the owner).
+        if (phone.quality_rating) {
+          const linked = await Clients.findOne({ phone_number_id: String(phone.id) }, { _id: 0, id: 1, tenant_id: 1 }).lean();
+          if (linked?.tenant_id) {
+            await runAsTenant(linked.tenant_id, () => numberHealth.recordQuality(String(phone.id), {
+              rating: phone.quality_rating, messagingLimit: phone.messaging_limit_tier || null, source: 'inventory_sync', clientId: linked.id,
+            })).catch((err) => console.error(`[Meta Inventory] Quality update failed for ${phone.id}:`, err.message));
+          }
+        }
       }
       for (const template of templates) {
         const templateFields = {
@@ -492,536 +502,29 @@ const { getLeadOSBrand } = require('./services/leadosBrand');
 const { checkNewDriveVideos, publishPost } = require("./controllers/contentController");
 
 // ═══════════════════════════════════════════════════════════════════
-// CAMPAIGN MESSAGE QUEUE SYSTEM
-// Persistent queue with intelligent rate limiting to prevent
-// WhatsApp/Meta rate limits ("healthy ecosystem" errors)
+// WHATSAPP SEND QUEUE
+// services/whatsappSendQueue.js: per-number rate limits, a daily cap that
+// grows slowly for new numbers, retries with backoff, and the send policy
+// (consent, STOP, quality pause, 24-hour window) checked before every send.
 // ═══════════════════════════════════════════════════════════════════
+const sendQueue = require('./services/whatsappSendQueue');
+const numberHealth = require('./services/numberHealth');
+const {
+  getTemplateVariableNumbers, validateCampaignTemplate, resolveCampaignParameter, validateCampaignParameterMappings,
+} = require('./services/campaignTemplates');
+const rateLimiter = sendQueue.rateLimiter;
 
-// Queue settings - safe defaults to avoid rate limiting
-const QUEUE_SETTINGS = {
-  MESSAGES_PER_MINUTE: 15,      // Max 15 messages per minute (Meta recommends 250/24h for new numbers)
-  MESSAGES_PER_HOUR: 500,        // Max 500 per hour
-  MESSAGES_PER_DAY: 5000,        // Max 5000 per day (well under Meta's 250k limit)
-  RETRY_DELAY_MS: 5000,         // Wait 5s before retry on rate limit
-  MAX_RETRIES: 3,               // Max 3 retries for failed messages
-  BATCH_SIZE: 10                 // Process 10 messages at a time
-};
+const addToCampaignQueue = (campaign_id, leads, campaign) => sendQueue.enqueueCampaign(campaign_id, leads, campaign);
 
-// Adaptive rate limiter state
-let rateLimiter = {
-  messagesThisMinute: 0,
-  messagesThisHour: 0,
-  messagesThisDay: 0,
-  lastResetMinute: Date.now(),
-  lastResetHour: Date.now(),
-  lastResetDay: Date.now(),
-  consecutiveRateLimits: 0,
-  currentDelayMs: 1000          // Start with 1s delay between messages
-};
-
-// Reset counters periodically
-function resetRateCounters() {
-  const now = Date.now();
-  if (now - rateLimiter.lastResetMinute > 60000) {
-    rateLimiter.messagesThisMinute = 0;
-    rateLimiter.lastResetMinute = now;
-  }
-  if (now - rateLimiter.lastResetHour > 3600000) {
-    rateLimiter.messagesThisHour = 0;
-    rateLimiter.lastResetHour = now;
-  }
-  if (now - rateLimiter.lastResetDay > 86400000) {
-    rateLimiter.messagesThisDay = 0;
-    rateLimiter.lastResetDay = now;
-  }
-}
-
-// Check if we can send a message
-function canSendMessage() {
-  resetRateCounters();
-
-  // Check all limits
-  if (rateLimiter.messagesThisMinute >= QUEUE_SETTINGS.MESSAGES_PER_MINUTE) return false;
-  if (rateLimiter.messagesThisHour >= QUEUE_SETTINGS.MESSAGES_PER_HOUR) return false;
-  if (rateLimiter.messagesThisDay >= QUEUE_SETTINGS.MESSAGES_PER_DAY) return false;
-
-  return true;
-}
-
-// Get recommended delay based on rate limit status
-function getRecommendedDelay() {
-  resetRateCounters();
-
-  // If we're hitting rate limits, increase delay
-  if (rateLimiter.consecutiveRateLimits > 0) {
-    // Exponential backoff: 2s, 4s, 8s, 16s...
-    return Math.min(rateLimiter.currentDelayMs * Math.pow(2, rateLimiter.consecutiveRateLimits), 30000);
-  }
-
-  // If we're close to limits, slow down
-  const minutePercent = rateLimiter.messagesThisMinute / QUEUE_SETTINGS.MESSAGES_PER_MINUTE;
-  if (minutePercent > 0.8) return 5000;
-  if (minutePercent > 0.6) return 3000;
-
-  // Default safe delay
-  return rateLimiter.currentDelayMs;
-}
-
-// Record a successful send
-function recordSendSuccess() {
-  rateLimiter.messagesThisMinute++;
-  rateLimiter.messagesThisHour++;
-  rateLimiter.messagesThisDay++;
-  rateLimiter.consecutiveRateLimits = 0;
-
-  // Gradually reduce delay if things are working well
-  if (rateLimiter.currentDelayMs > 1000 && rateLimiter.messagesThisMinute % 50 === 0) {
-    rateLimiter.currentDelayMs = Math.max(1000, rateLimiter.currentDelayMs - 100);
-  }
-}
-
-// Record a rate limit hit
-function recordRateLimit() {
-  rateLimiter.consecutiveRateLimits++;
-  // Increase delay significantly on rate limit
-  rateLimiter.currentDelayMs = Math.min(rateLimiter.currentDelayMs * 2, 30000);
-}
-
-// Prepare campaign queue collections (indexes only — MongoDB needs no table DDL)
-async function initCampaignQueue() {
-  await connectMongo();
-  await Promise.all([CampaignMessageQueue.createIndexes(), CampaignRateStats.createIndexes()]);
-  await CampaignMessageQueue.collection.createIndex({ status: 1 }).catch(() => {});
-  await CampaignMessageQueue.collection.createIndex({ campaign_id: 1, lead_id: 1 }).catch(() => {});
-  console.log('[Campaign Queue] Database collections initialized');
-}
-
-const utcToday = () => { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d; };
-
-// INSERT INTO campaign_rate_stats ... ON CONFLICT (campaign_id, date) DO UPDATE SET <field> = <field> + 1
-async function bumpCampaignRateStat(campaignId, field) {
-  const key = { campaign_id: campaignId, date: utcToday() };
-  const updated = await CampaignRateStats.updateOne(key, { $inc: { [field]: 1 } });
-  if (updated.matchedCount) return;
-  try {
-    await CampaignRateStats.create({ ...key, [field]: 1 });
-  } catch (error) {
-    if (error.code !== 11000) throw error;
-    await CampaignRateStats.updateOne(key, { $inc: { [field]: 1 } });
-  }
-}
-
-// Add messages to queue
-async function addToCampaignQueue(campaign_id, leads, campaign) {
-  if (leads.length > 0) {
-    const alreadyQueued = new Set(await CampaignMessageQueue.distinct('lead_id', { campaign_id, lead_id: { $in: leads.map((lead) => lead.id) } }));
-    const fresh = [];
-    for (const lead of leads) {
-      if (alreadyQueued.has(Number(lead.id))) continue;
-      alreadyQueued.add(Number(lead.id));
-      fresh.push(lead);
-    }
-    if (!fresh.length) return;
-    const ids = await CampaignMessageQueue.allocIds(fresh.length);
-    await CampaignMessageQueue.insertMany(fresh.map((lead, index) => ({
-      id: ids[index],
-      campaign_id,
-      lead_id: lead.id,
-      phone: lead.phone,
-      name: lead.name || '',
-      template_name: campaign.template_name,
-      template_language: campaign.template_language || 'en',
-      template_body: campaign.template_body || '',
-      template_header: campaign.template_header || '',
-      template_parameters: campaign.template_parameters || {},
-      recipient_parameters: lead.template_parameters || {},
-      recipient_data: {
-        recipient_email: lead.email || '', lead_status: lead.status || '',
-        lead_source: lead.source || '', lead_interest: lead.interest || '', lead_score: lead.score ?? '',
-      },
-      campaign_name: campaign.campaign_name || '',
-      brand_name: campaign.brand_name || '',
-      phone_number_id: campaign.phone_number_id || '',
-    })));
-  }
-}
-
-// Process queue - runs continuously. Claiming looks across all tenants
-// (system context); each claimed message is then handled inside its own tenant.
-function processCampaignQueue() {
-  return runAsSystem(processCampaignQueueBatch, 'campaign-queue');
-}
-
-async function processCampaignQueueBatch() {
-  try {
-    // Recover jobs abandoned by a crashed/restarted worker. A normal send has
-    // a 15-second HTTP timeout, so five minutes safely indicates a stale claim.
-    await CampaignMessageQueue.updateMany(
-      { status: 'processing', last_attempt_at: { $lt: new Date(Date.now() - 5 * 60 * 1000) } },
-      { $set: { status: 'pending' } }
-    );
-
-    // Quarantine duplicate queue rows left by older executions before any
-    // recipient is claimed. Keep the oldest row as the canonical send.
-    const openRows = await CampaignMessageQueue.find({ status: { $in: ['pending', 'processing'] } }, { id: 1, campaign_id: 1, lead_id: 1 })
-      .sort({ id: 1 }).lean();
-    if (openRows.length) {
-      const sentPairs = new Set((await CampaignMessageQueue.find(
-        { status: 'sent', campaign_id: { $in: [...new Set(openRows.map((row) => row.campaign_id))] } },
-        { campaign_id: 1, lead_id: 1 }
-      ).lean()).map((row) => `${row.campaign_id}:${row.lead_id}`));
-      const seenPairs = new Set();
-      const duplicateIds = [];
-      for (const row of openRows) {
-        const pair = `${row.campaign_id}:${row.lead_id}`;
-        if (seenPairs.has(pair) || sentPairs.has(pair)) duplicateIds.push(row.id);
-        seenPairs.add(pair);
-      }
-      if (duplicateIds.length) {
-        await CampaignMessageQueue.updateMany(
-          { id: { $in: duplicateIds } },
-          { $set: { status: 'failed', processed_at: new Date(), error_message: 'Duplicate queue entry skipped before send' } }
-        );
-      }
-    }
-
-    // Atomically claim rows before doing any network work. FOR UPDATE SKIP
-    // LOCKED prevents overlapping queue intervals (or multiple API instances)
-    // from sending the same recipient at the same time.
-    // Atomically claim rows before doing any network work (replaces FOR UPDATE SKIP LOCKED)
-    const claimable = await CampaignMessageQueue.find(
-      { status: 'pending', $or: [{ attempts: null }, { attempts: { $lt: QUEUE_SETTINGS.MAX_RETRIES } }] },
-      { id: 1 }
-    ).sort({ created_at: 1 }).limit(QUEUE_SETTINGS.BATCH_SIZE).lean();
-    const pending = [];
-    for (const row of claimable) {
-      const claimed = await CampaignMessageQueue.findOneAndUpdate(
-        { id: row.id, status: 'pending' },
-        { $set: { status: 'processing', last_attempt_at: new Date() }, $inc: { attempts: 1 } },
-        { new: true, projection: NO_ID }
-      ).lean();
-      if (claimed) pending.push(claimed);
-    }
-
-    if (pending.length === 0) return;
-
-    // Wait for rate limit if needed
-    while (!canSendMessage()) {
-      const delay = getRecommendedDelay();
-      console.log(`[Campaign Queue] Rate limited, waiting ${delay}ms...`);
-      await new Promise(r => setTimeout(r, delay));
-      resetRateCounters();
-    }
-
-    // Process each message inside its own tenant.
-    for (const msg of pending) {
-      if (!msg.tenant_id) {
-        await CampaignMessageQueue.updateOne({ id: msg.id }, { $set: { status: 'failed', processed_at: new Date(), error_message: 'Queue row has no tenant' } });
-        continue;
-      }
-      await runAsTenant(msg.tenant_id, async () => {
-      try {
-        // A restricted or suspended workspace may not send (plan U6): hand
-        // the row back untouched so it can go out after renewal.
-        if (!(await tenantCanSend(msg.tenant_id))) {
-          await CampaignMessageQueue.updateOne({ id: msg.id }, { $set: { status: 'pending', error_message: 'Workspace cannot send in its current subscription state' }, $inc: { attempts: -1 } });
-          return;
-        }
-        // Check if we can send (rate limit check)
-        if (!canSendMessage()) {
-          await new Promise(r => setTimeout(r, getRecommendedDelay()));
-        }
-
-        const result = await sendWhatsAppMessage(msg);
-
-        if (result.success) {
-          // Mark as sent
-          await CampaignMessageQueue.updateOne({ id: msg.id }, { $set: { status: 'sent', processed_at: new Date(), error_message: null } });
-
-          // Update campaign log
-          await CampaignLogs.create({ campaign_id: msg.campaign_id, lead_id: msg.lead_id, wa_message_id: result.messageId, status: 'sent', sent_at: new Date() });
-
-          // Mirror the successful WhatsApp send into the LeadOS Inbox. Keep
-          // this non-retryable: Meta has already accepted the message, so a CRM
-          // persistence error must never cause the recipient to receive it
-          // again.
-          try {
-            const parameterMappings = typeof msg.template_parameters === 'string'
-              ? JSON.parse(msg.template_parameters)
-              : (msg.template_parameters || {});
-            const renderedBody = getTemplateVariableNumbers(msg.template_body).reduce(
-              (body, number) => body.replace(
-                new RegExp(`\\{\\{\\s*${number}\\s*\\}\\}`, 'g'),
-                resolveCampaignParameter(parameterMappings.body?.[String(number)], msg)
-              ),
-              String(msg.template_body || '')
-            );
-            let conversationId = null;
-            if (await Campaigns.exists({ id: msg.campaign_id })) {
-              // One conversation per phone number (ON CONFLICT (phone) DO UPDATE)
-              const conversation = await upsertOne(
-                Conversations,
-                { phone: msg.phone },
-                { $set: { lead_id: msg.lead_id, status: 'open', last_message: renderedBody, last_message_at: new Date() } },
-                { lead_id: msg.lead_id, status: 'open', last_message: renderedBody, last_message_at: new Date(), created_at: new Date() }
-              );
-              conversationId = conversation?.id;
-            }
-            if (conversationId) {
-              const savedMessage = await Messages.create({
-                conversation_id: conversationId, direction: 'outbound', content: renderedBody, msg_type: 'template',
-                wa_msg_id: result.messageId, status: 'sent', is_ai: false, sent_at: new Date(),
-              });
-              const messageResult = { rows: [{
-                id: savedMessage.id, conversation_id: savedMessage.conversation_id, direction: savedMessage.direction,
-                content: savedMessage.content, type: savedMessage.msg_type, wa_msg_id: savedMessage.wa_msg_id,
-                status: savedMessage.status, is_ai: savedMessage.is_ai, timestamp: savedMessage.sent_at,
-              }] };
-
-              io.emit('outgoing_message', {
-                lead_id: Number(msg.lead_id),
-                message: {
-                  ...messageResult.rows[0],
-                  campaign_id: msg.campaign_id,
-                },
-              });
-            }
-          } catch (crmErr) {
-            console.error(
-              `[Campaign Queue] WhatsApp message ${result.messageId} sent, but Inbox sync failed:`,
-              crmErr.message
-            );
-          }
-
-          // Update stats
-          await bumpCampaignRateStat(msg.campaign_id, 'messages_sent');
-
-          recordSendSuccess();
-        } else if (result.rateLimited) {
-          // Release the claim so a later queue pass can retry it.
-          await CampaignMessageQueue.updateOne({ id: msg.id }, { $set: { status: 'pending', error_message: result.error ?? null } });
-          recordRateLimit();
-
-          // Update rate limit stat
-          await bumpCampaignRateStat(msg.campaign_id, 'rate_limited_count');
-
-          console.warn(`[Campaign Queue] Rate limited: ${result.error}`);
-        } else {
-          // Permanent failure
-          await CampaignMessageQueue.updateOne({ id: msg.id }, { $set: { status: 'failed', processed_at: new Date(), error_message: result.error ?? null } });
-
-          // Log failure
-          await CampaignLogs.create({ campaign_id: msg.campaign_id, lead_id: msg.lead_id, status: 'failed', error_message: result.error ?? null, sent_at: new Date() });
-
-          // Update stats
-          await bumpCampaignRateStat(msg.campaign_id, 'messages_failed');
-        }
-
-        // Wait between messages
-        const delay = getRecommendedDelay();
-        await new Promise(r => setTimeout(r, delay));
-
-      } catch (err) {
-        console.error(`[Campaign Queue] Error processing message ${msg.id}:`, err.message);
-        // The external result is unknown for unexpected errors. Do not
-        // immediately release the row and risk a duplicate send; leave it
-        // claimed for stale-job review/recovery.
-        await CampaignMessageQueue.updateOne({ id: msg.id }, { $set: { error_message: `Worker error after claim: ${err.message}` } }).catch(() => {});
-      }
-      });
-    }
-
-    // A queue batch can contain more than one campaign.
-    for (const item of [...new Map(pending.filter((row) => row.tenant_id).map((row) => [row.campaign_id, row])).values()]) {
-      await runAsTenant(item.tenant_id, () => checkCampaignCompletion(item.campaign_id));
-    }
-
-  } catch (err) {
-    console.error('[Campaign Queue] Queue processing error:', err.message);
-  }
-}
-
-function getTemplateVariableNumbers(value) {
-  const numbers = [...String(value || '').matchAll(/\{\{\s*(\d+)\s*\}\}/g)]
-    .map((match) => Number(match[1]));
-  return [...new Set(numbers)].sort((a, b) => a - b);
-}
-
-function validateCampaignTemplate(template) {
-  const bodyVariables = getTemplateVariableNumbers(template.body);
-  const headerVariables = getTemplateVariableNumbers(template.header);
-  const expectedBodyVariables = bodyVariables.length
-    ? Array.from({ length: bodyVariables.at(-1) }, (_, index) => index + 1)
-    : [];
-
-  if (bodyVariables.some((value, index) => value !== expectedBodyVariables[index])) {
-    return 'Template body variables must be consecutive and start at {{1}}.';
-  }
-  if (headerVariables.some((value, index) => value !== index + 1)) {
-    return 'Template header variables must be consecutive and start at {{1}}.';
-  }
-  return null;
-}
-
-function resolveCampaignParameter(mapping, msg) {
-  const source = mapping?.source;
-  if (source === 'recipient_name') return String(msg.name || 'Friend');
-  if (source === 'recipient_phone') return String(msg.phone || '');
-  if (source === 'campaign_name') return String(msg.campaign_name || '');
-  if (source === 'brand_name') return String(msg.brand_name || '');
-  if (source === 'custom') return String(mapping?.value || '');
-  if (['recipient_email', 'lead_status', 'lead_source', 'lead_interest', 'lead_score'].includes(source)) {
-    const data = typeof msg.recipient_data === 'string' ? JSON.parse(msg.recipient_data) : (msg.recipient_data || {});
-    return String(data[source] ?? '');
-  }
-  if (source === 'excel_parameter') {
-    const values = typeof msg.recipient_parameters === 'string'
-      ? JSON.parse(msg.recipient_parameters)
-      : (msg.recipient_parameters || {});
-    return String(values?.[mapping.section || 'body']?.[String(mapping.number)] || '');
-  }
-  return '';
-}
-
-function validateCampaignParameterMappings(template, mappings) {
-  for (const [section, content] of [['body', template.body], ['header', template.header]]) {
-    for (const number of getTemplateVariableNumbers(content)) {
-      const mapping = mappings?.[section]?.[String(number)];
-      if (!mapping || !['recipient_name', 'recipient_phone', 'recipient_email', 'lead_status', 'lead_source', 'lead_interest', 'lead_score', 'campaign_name', 'brand_name', 'custom', 'excel_parameter'].includes(mapping.source)) {
-        return `Choose a value for ${section} parameter {{${number}}}.`;
-      }
-      if (mapping.source === 'custom' && !String(mapping.value || '').trim()) {
-        return `Enter a custom value for ${section} parameter {{${number}}}.`;
-      }
-    }
-  }
-  return null;
-}
-
-// Send single WhatsApp message
-async function sendWhatsAppMessage(msg) {
-  try {
-    const digits = (msg.phone || '').replace(/\D/g, '');
-    if (digits.length < 10) {
-      return { success: false, error: 'Invalid phone number' };
-    }
-
-    const sender = await tenantWhatsAppSender();
-    const waToken = sender?.token;
-    const phoneId = sender?.phoneNumberId;
-
-    if (!waToken || !phoneId) {
-      return { success: false, error: 'WhatsApp is not connected for this workspace' };
-    }
-
-    // Build template payload
-    const templatePayload = {
-      name: msg.template_name,
-      language: { code: msg.template_language || 'en' }
-    };
-
-    const bodyVariables = getTemplateVariableNumbers(msg.template_body);
-    const headerVariables = getTemplateVariableNumbers(msg.template_header);
-    const mappings = typeof msg.template_parameters === 'string'
-      ? JSON.parse(msg.template_parameters)
-      : (msg.template_parameters || {});
-    const components = [];
-    if (headerVariables.length) {
-      components.push({
-        type: 'header',
-        parameters: headerVariables.map((number) => ({
-          type: 'text', text: resolveCampaignParameter(mappings.header?.[String(number)], msg)
-        }))
-      });
-    }
-    if (bodyVariables.length) {
-      components.push({
-        type: 'body',
-        parameters: bodyVariables.map((number) => ({
-          type: 'text', text: resolveCampaignParameter(mappings.body?.[String(number)], msg)
-        }))
-      });
-    }
-    if (components.length > 0) {
-      templatePayload.components = components;
-    }
-
-    const payload = {
-      messaging_product: 'whatsapp',
-      to: digits,
-      type: 'template',
-      template: templatePayload
-    };
-
-    const response = await axios.post(
-      `https://graph.facebook.com/v18.0/${phoneId}/messages`,
-      payload,
-      {
-        headers: {
-          Authorization: `Bearer ${waToken}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 15000
-      }
-    );
-
-    return {
-      success: true,
-      messageId: response.data.messages?.[0]?.id
-    };
-
-  } catch (err) {
-    const status = err.response?.status;
-    const errorMsg = err.response?.data?.error?.message || err.message;
-
-    // Check for rate limit (429)
-    if (status === 429) {
-      return { success: false, rateLimited: true, error: errorMsg };
-    }
-
-    // Check for other retryable errors
-    if (status >= 500 && status < 600) {
-      return { success: false, rateLimited: true, error: errorMsg };
-    }
-
-    return { success: false, error: errorMsg };
-  }
-}
-
-// Check if campaign is complete
-async function checkCampaignCompletion(campaign_id) {
-  if (!campaign_id) return;
-
-  const [pendingCount, sentCount, failedCount] = await Promise.all([
-    CampaignMessageQueue.countDocuments({ campaign_id, status: { $in: ['pending', 'processing'] } }),
-    CampaignMessageQueue.countDocuments({ campaign_id, status: 'sent' }),
-    CampaignMessageQueue.countDocuments({ campaign_id, status: 'failed' }),
-  ]);
-
-  if (pendingCount === 0) {
-    const finalStatus = sentCount > 0 ? 'completed' : 'failed';
-    await Campaigns.updateOne({ id: campaign_id }, { $set: { status: finalStatus } });
-    console.log(`[Campaign ${campaign_id}] Completed: ${sentCount} sent, ${failedCount} failed`);
-  }
-}
-
-// Start queue processor
-let queueProcessorInterval;
 let queueProcessorRetryTimeout;
-
 function startCampaignQueueProcessor() {
-  if (queueProcessorInterval || queueProcessorRetryTimeout) return;
-
-  initCampaignQueue()
-    .then(() => {
-      // Run every 2 seconds
-      queueProcessorInterval = setInterval(processCampaignQueue, 2000);
-      console.log('[Campaign Queue] Processor started - running every 2s');
-    })
+  if (queueProcessorRetryTimeout) return;
+  connectMongo()
+    .then(() => sendQueue.start({ io }))
     .catch((err) => {
       // Queue processing is a background feature. A temporarily unavailable DB
       // must not terminate the HTTP server and turn every request into an nginx 502.
-      console.error('[Campaign Queue] Initialization failed; retrying in 30 seconds:', err.message);
+      console.error('[Send Queue] Initialization failed; retrying in 30 seconds:', err.message);
       queueProcessorRetryTimeout = setTimeout(() => {
         queueProcessorRetryTimeout = null;
         startCampaignQueueProcessor();
@@ -1029,13 +532,8 @@ function startCampaignQueueProcessor() {
     });
 }
 
-// Stop queue processor
 function stopCampaignQueueProcessor() {
-  if (queueProcessorInterval) {
-    clearInterval(queueProcessorInterval);
-    queueProcessorInterval = null;
-    console.log('[Campaign Queue] Processor stopped');
-  }
+  sendQueue.stop();
   if (queueProcessorRetryTimeout) {
     clearTimeout(queueProcessorRetryTimeout);
     queueProcessorRetryTimeout = null;
@@ -1633,17 +1131,7 @@ async function executeCampaign(campaign_id) {
 // ══════════════════════════════════════════════════════════
 
 async function campaignQueueStats(match) {
-  const [stats] = await CampaignMessageQueue.aggregate([
-    { $match: match },
-    { $group: {
-      _id: null,
-      pending: { $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] } },
-      sent: { $sum: { $cond: [{ $eq: ['$status', 'sent'] }, 1, 0] } },
-      failed: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
-      total: { $sum: 1 },
-    } },
-  ]);
-  return { pending: stats?.pending || 0, sent: stats?.sent || 0, failed: stats?.failed || 0, total: stats?.total || 0 };
+  return sendQueue.stats(match);
 }
 
 const REPORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -1986,6 +1474,7 @@ const leadosRouteContext = {
   'reports',
   'users',
   'internal',
+  'send-safety',
 ].forEach((name) => require(`./routes/leados/${name}`)(app, leadosRouteContext));
 
 // ── ERRORS ────────────────────────────────────────────────

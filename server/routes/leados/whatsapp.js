@@ -21,6 +21,9 @@ const {
   SERVER_ROOT,
 } = ctx;
 const mediaStore = require('../../services/mediaStore');
+const sendPolicy = require('../../services/sendPolicy');
+const numberHealth = require('../../services/numberHealth');
+const WAKEUP_TEMPLATE = process.env.WA_WAKEUP_TEMPLATE || 'common_welcome_message';
 // ══════════════════════════════════════════════════════════
 // WHATSAPP ROUTES
 // ══════════════════════════════════════════════════════════
@@ -75,7 +78,19 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
       });
 
       if (!recentTemplate) {
-        // Send the common_welcome_message template to reopen the 24-hour window
+        // The wake-up template is a business-initiated message: it needs the
+        // contact's consent when Meta classes it as marketing, is never sent
+        // to a contact who said STOP, and counts against the number's cap.
+        const wakeupKind = await sendPolicy.templateKind(WAKEUP_TEMPLATE);
+        const wakeupCheck = await sendPolicy.checkSend({ lead, kind: wakeupKind, messageType: 'template', phoneNumberId });
+        if (!wakeupCheck.ok) {
+          return res.status(200).json({ window_closed: true, blocked: true, code: wakeupCheck.code, message: wakeupCheck.message });
+        }
+        const slot = await numberHealth.reserveSlot(phoneNumberId, { countsTowardDailyCap: true });
+        if (!slot.ok) {
+          return res.status(200).json({ window_closed: true, blocked: true, code: slot.reason === 'daily_cap' ? 'DAILY_CAP_REACHED' : 'RATE_LIMITED', message: slot.message });
+        }
+        // Send the wake-up template to reopen the 24-hour window
         try {
           const templateRes = await axios.post(
             `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
@@ -84,14 +99,14 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
               to: (lead.phone || '').replace(/\D/g, ''),
               type: 'template',
               template: {
-                name: 'common_welcome_message',
+                name: WAKEUP_TEMPLATE,
                 language: { code: 'en' }
               }
             },
             { headers: { Authorization: `Bearer ${waAccessToken}`, 'Content-Type': 'application/json' } }
           );
           const waMsgId = templateRes.data?.messages?.[0]?.id;
-          console.log('[Template Wakeup] Sent common_welcome_message to', lead.phone, waMsgId);
+          console.log(`[Template Wakeup] Sent ${WAKEUP_TEMPLATE} to`, lead.phone, waMsgId);
 
           // Save template message to DB so it appears in inbox
           const convCheck = await Conversations.findOne({ lead_id }, { id: 1 }).lean();
@@ -100,12 +115,12 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
             const existingTemplateMsg = waMsgId ? await Messages.exists({ wa_msg_id: waMsgId }) : null;
             if (!existingTemplateMsg) {
               await Messages.create({
-                conversation_id: convId, direction: 'outbound', content: 'common_welcome_message', msg_type: 'template',
+                conversation_id: convId, direction: 'outbound', content: WAKEUP_TEMPLATE, msg_type: 'template',
                 wa_msg_id: waMsgId, status: 'sent', is_ai: false, sent_at: new Date(),
               });
             }
             // Push to inbox in real-time
-            io.emit('outgoing_message', { lead_id: String(lead.id), message: { direction: 'outbound', content: '[Template] common_welcome_message', msg_type: 'template', sent_at: new Date() } });
+            io.emit('outgoing_message', { lead_id: String(lead.id), message: { direction: 'outbound', content: `[Template] ${WAKEUP_TEMPLATE}`, msg_type: 'template', sent_at: new Date() } });
           }
         } catch (err) {
           console.error('[Template Wakeup Error]', JSON.stringify(err.response?.data) || err.message);

@@ -137,8 +137,10 @@ test('n8n AI automation', async (t) => {
     const { brand } = await seed();
     const past = new Date(Date.now() - DAY);
     await runAsTenant(1, () => Leads.create([
-      { name: 'Sales call', phone: '919000000001', client_id: brand.id, status: 'new', next_followup_due: past },
-      { name: 'Quiet one', phone: '919000000002', client_id: brand.id, status: 'new', ai_followup_due: past, ai_followup_step: 0 },
+      { name: 'Sales call', phone: '919000000001', client_id: brand.id, status: 'new', next_followup_due: past, whatsapp_opt_in: true },
+      { name: 'Quiet one', phone: '919000000002', client_id: brand.id, status: 'new', ai_followup_due: past, ai_followup_step: 0, whatsapp_opt_in: true },
+      // Outside the 24-hour window a follow-up is a marketing template: no opt-in, no follow-up (N1).
+      { name: 'No consent', phone: '919000000009', client_id: brand.id, status: 'new', ai_followup_due: past, ai_followup_step: 0 },
     ]));
     const res = await request(app).get('/api/internal/followups/due').set(platform);
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
@@ -151,15 +153,18 @@ test('n8n AI automation', async (t) => {
     const { brand } = await seed();
     const past = new Date(Date.now() - DAY);
     await runAsTenant(1, () => Leads.create([
-      { name: 'Due', phone: '919000000003', client_id: brand.id, status: 'new', ai_followup_due: past },
-      { name: 'Paused', phone: '919000000004', client_id: brand.id, status: 'new', ai_followup_due: past, ai_paused: true },
-      { name: 'Opted out', phone: '919000000005', client_id: brand.id, status: 'new', ai_followup_due: past, opted_out: true },
-      { name: 'Won', phone: '919000000006', client_id: brand.id, status: 'converted', ai_followup_due: past },
-      { name: 'Done', phone: '919000000007', client_id: brand.id, status: 'new', ai_followup_due: past, ai_followup_step: 3 },
+      { name: 'Due', phone: '919000000003', client_id: brand.id, status: 'new', ai_followup_due: past, whatsapp_opt_in: true },
+      { name: 'Paused', phone: '919000000004', client_id: brand.id, status: 'new', ai_followup_due: past, ai_paused: true, whatsapp_opt_in: true },
+      { name: 'Opted out', phone: '919000000005', client_id: brand.id, status: 'new', ai_followup_due: past, opted_out: true, whatsapp_opt_in: true },
+      { name: 'Won', phone: '919000000006', client_id: brand.id, status: 'converted', ai_followup_due: past, whatsapp_opt_in: true },
+      { name: 'Done', phone: '919000000007', client_id: brand.id, status: 'new', ai_followup_due: past, ai_followup_step: 3, whatsapp_opt_in: true },
+      // Still inside the window: a free-text follow-up needs no marketing opt-in.
+      { name: 'In window', phone: '919000000008', client_id: brand.id, status: 'new', ai_followup_due: past, last_inbound_at: new Date(Date.now() - 3600000) },
     ]));
     const first = await request(app).get('/api/internal/followups/due').set(platform);
     const second = await request(app).get('/api/internal/followups/due').set(platform);
-    assert.deepStrictEqual(first.body.items.map((i) => i.name), ['Due']);
+    assert.deepStrictEqual(first.body.items.map((i) => i.name).sort(), ['Due', 'In window']);
+    assert.strictEqual(first.body.items.find((i) => i.name === 'In window').in_window, true);
     assert.deepStrictEqual(second.body.items, [], 'a leased lead is not returned twice');
   });
 

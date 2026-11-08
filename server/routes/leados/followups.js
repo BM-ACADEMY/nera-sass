@@ -3,6 +3,8 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const sendPolicy = require('../../services/sendPolicy');
+const numberHealth = require('../../services/numberHealth');
 module.exports = function registerFollowupsRoutes(app, ctx) {
 const {
   Clients,
@@ -127,9 +129,18 @@ app.post('/api/communication/send-template', auth, async (req, res) => {
       return res.status(409).json({ error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
     }
 
+    // Consent, STOP, quality pause and the number's limits apply to every
+    // template sent by hand too.
+    const templateName = String(template_name || '').trim();
+    if (!/^[a-z0-9_]{1,512}$/.test(templateName)) return res.status(400).json({ error: 'Choose an approved template' });
+    const templateCheck = await sendPolicy.checkSend({ lead, kind: await sendPolicy.templateKind(templateName), messageType: 'template', phoneNumberId: phoneId });
+    if (!templateCheck.ok) return sendPolicy.respondBlocked(res, templateCheck);
+    const slot = await numberHealth.reserveSlot(phoneId, { countsTowardDailyCap: true });
+    if (!slot.ok) return res.status(429).json({ error: slot.message, code: slot.reason === 'daily_cap' ? 'DAILY_CAP_REACHED' : 'RATE_LIMITED', retry_at: slot.retryAt });
+
     // Build template payload
     const digits = (lead.phone || '').replace(/\D/g, '');
-    const templatePayload = { name: template_name, language: { code: 'en' } };
+    const templatePayload = { name: templateName, language: { code: 'en' } };
 
     const components = [];
     if (template_params && typeof template_params === 'object') {
@@ -154,7 +165,10 @@ app.post('/api/communication/send-template', auth, async (req, res) => {
 
     res.json({ success: true, message_id: response.data.messages?.[0]?.id });
   } catch (err) {
-    res.status(500).json({ error: err.response?.data?.error?.message || err.message });
+    const metaReason = err.response?.data?.error?.message;
+    if (metaReason) return res.status(502).json({ error: metaReason, code: 'WHATSAPP_SEND_FAILED' });
+    console.error('[send-template]', err.message);
+    res.status(500).json({ error: 'Failed to send template' });
   }
 });
 
@@ -196,6 +210,12 @@ app.post('/api/ai/followup', auth, async (req, res) => {
       return sendError(res, err);
     }
     if (lead.phone) {
+      // Free text only inside the 24-hour window; outside it the agent must
+      // use a template.
+      const textCheck = await sendPolicy.checkSend({ lead, kind: 'service', messageType: 'text', phoneNumberId: sender.phoneNumberId });
+      if (!textCheck.ok) return sendPolicy.respondBlocked(res, textCheck);
+      const slot = await numberHealth.reserveSlot(sender.phoneNumberId, { countsTowardDailyCap: false });
+      if (!slot.ok) return res.status(429).json({ error: slot.message, code: 'RATE_LIMITED', retry_at: slot.retryAt });
       const digits = lead.phone.replace(/\D/g, '');
       await axios.post(
         `https://graph.facebook.com/v18.0/${sender.phoneNumberId}/messages`,
@@ -211,7 +231,10 @@ app.post('/api/ai/followup', auth, async (req, res) => {
 
     res.json({ success: true, message: aiMessage });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const metaReason = err.response?.data?.error?.message;
+    if (metaReason) return res.status(502).json({ error: metaReason, code: 'WHATSAPP_SEND_FAILED' });
+    console.error('[ai/followup]', err.message);
+    res.status(500).json({ error: 'Failed to send follow-up' });
   }
 });
 

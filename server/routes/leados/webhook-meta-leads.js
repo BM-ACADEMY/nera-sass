@@ -4,6 +4,7 @@
  * arrive through `ctx`.
  */
 const { postToN8n } = require('../../services/n8n');
+const consent = require('../../services/consent');
 module.exports = function registerWebhookMetaLeadsRoutes(app, ctx) {
 const {
   Clients,
@@ -108,6 +109,13 @@ app.post('/webhook/meta-leads', requireMetaSignature, async (req, res) => {
 
         if (!phone) continue;
 
+        // A lead form question about WhatsApp / consent / opt-in records the
+        // contact's marketing opt-in with the answer they gave. A form with no
+        // such question gives no marketing consent.
+        const consentField = Object.entries(fields).find(([key]) => /whatsapp|consent|opt[_-]?in|marketing|agree/i.test(key));
+        const consentAnswer = consentField ? String(consentField[1] ?? '').trim() : '';
+        const consentGiven = Boolean(consentAnswer) && !/^(no|false|0|never|decline|declined|இல்லை)$/i.test(consentAnswer);
+
         // 3. Process lead under the resolved tenant context
         await runAsTenant(tenantId, async () => {
           // Deduplicate using leadgen_id within this tenant
@@ -138,6 +146,13 @@ app.post('/webhook/meta-leads', requireMetaSignature, async (req, res) => {
               { new: true, projection: NO_ID }
             ).lean();
             if (!newLead) return;
+          }
+
+          if (newLead && consentGiven) {
+            await consent.recordOptIn({
+              leadId: newLead.id, phone, source: 'lead_form',
+              text: `Meta lead form ${metaLead.data?.form_id || ''} — ${consentField[0]}: ${consentAnswer}`.trim(),
+            }).catch((err) => console.error('[Meta Leads] Consent not recorded:', err.message));
           }
 
           // Trigger n8n webhook for Meta leads to send welcome template
