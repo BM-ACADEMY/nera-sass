@@ -11,6 +11,7 @@ const {
   Messages,
   escapeRegex,
 } = ctx;
+const { requireMetaSignature } = require('../../services/metaWebhookSignature');
 // ══════════════════════════════════════════════════════════
 // META WHATSAPP WEBHOOKS
 // ══════════════════════════════════════════════════════════
@@ -32,8 +33,8 @@ app.get('/api/webhooks/meta', (req, res) => {
   res.sendStatus(400);
 });
 
-// Receive Live Status Updates
-app.post('/api/webhooks/meta', async (req, res) => {
+// Receive Live Status Updates. Signed requests only, like /webhook/whatsapp.
+app.post('/api/webhooks/meta', requireMetaSignature, async (req, res) => {
   try {
     const { object, entry } = req.body;
 

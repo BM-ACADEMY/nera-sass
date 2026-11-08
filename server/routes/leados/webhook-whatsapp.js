@@ -74,12 +74,8 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
       if (platformValues.length && (body.entry || []).every((entry) => !entry.changes.length)) return res.sendStatus(200);
     }
 
-    try {
-      if (fs && fs.appendFileSync) {
-        fs.appendFileSync(path.join(SERVER_ROOT, 'uploads', 'incoming_payloads.log'), `[${new Date().toISOString()}] ${JSON.stringify(body, null, 2)}\n\n`);
-      }
-    } catch (_) {}
-    
+    // Raw webhook payloads are never written to disk: they hold customer
+    // phone numbers and message text.
     if (!body.object || body.object !== 'whatsapp_business_account') {
       return res.sendStatus(200);
     }
@@ -94,6 +90,12 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
       )
     );
     if (isAllianceEvent) {
+      // The Alliance relay refuses unauthenticated calls, so without the key
+      // there is nothing to relay to.
+      if (!process.env.INTERNAL_API_KEY) {
+        console.error('[Alliance Webhook] INTERNAL_API_KEY is not set; Alliance event dropped');
+        return res.sendStatus(200);
+      }
       const localPort = Number(process.env.PORT) || 3601;
       await axios.post(
         `http://127.0.0.1:${localPort}/api/alliance-inbox/webhook`,
@@ -101,7 +103,7 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
         {
           headers: {
             'Content-Type': 'application/json',
-            'x-internal-key': process.env.INTERNAL_API_KEY || '',
+            'x-internal-key': process.env.INTERNAL_API_KEY,
           },
           timeout: 10000,
         }
@@ -118,12 +120,9 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
           hasValidPhoneNumber = false;
           const phoneNumberId = change.value?.metadata?.phone_number_id;
           if (phoneNumberId) {
-            if (phoneNumberId === process.env.WA_PHONE_NUMBER_ID) {
+            // Only numbers connected to a brand profile are managed; no environment number.
+            if (await runAsSystem(() => Clients.exists({ phone_number_id: String(phoneNumberId) }), 'webhook-wa-check')) {
               hasValidPhoneNumber = true;
-            } else {
-              if (await runAsSystem(() => Clients.exists({ phone_number_id: String(phoneNumberId) }), 'webhook-wa-check')) {
-                hasValidPhoneNumber = true;
-              }
             }
           }
         } else {
@@ -368,7 +367,6 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
                 }
               } catch (err) {
                 console.error('[Audio Transcription Error]', err.response?.data || err.message);
-                fs.appendFileSync(path.join(SERVER_ROOT, 'uploads', 'audio_error.txt'), `[${new Date().toISOString()}] ${err.message}\n${err.stack}\n`);
               }
             }
 

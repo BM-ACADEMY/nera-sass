@@ -29,6 +29,7 @@ const {
   socialPageId,
   trigramSimilarity,
 } = ctx;
+const { requireBrandSender, sendError } = require('../../services/tenantSender');
 // ═══════════════════════════════════════════════════════════════════
 // FOLLOWUP ENGINE APIs (WF02)
 // ═══════════════════════════════════════════════════════════════════
@@ -185,21 +186,26 @@ app.post('/api/ai/followup', auth, async (req, res) => {
       aiMessage = `Hi ${lead.name || 'there'}, just checking in on our conversation. Would love to hear from you!`;
     }
 
-    // Send WhatsApp text
-    const waToken = process.env.META_PAGE_ACCESS_TOKEN;
-    const phoneId = process.env.WA_PHONE_NUMBER_ID;
-
-    if (waToken && phoneId && lead.phone) {
+    // Send WhatsApp text from the lead's own brand number. There is no shared
+    // or environment credential to fall back to: a brand without WhatsApp
+    // gets a clear 409 instead.
+    let sender;
+    try {
+      sender = await requireBrandSender(lead);
+    } catch (err) {
+      return sendError(res, err);
+    }
+    if (lead.phone) {
       const digits = lead.phone.replace(/\D/g, '');
       await axios.post(
-        `https://graph.facebook.com/v18.0/${phoneId}/messages`,
+        `https://graph.facebook.com/v18.0/${sender.phoneNumberId}/messages`,
         {
           messaging_product: 'whatsapp',
           to: digits,
           type: 'text',
           text: { body: aiMessage }
         },
-        { headers: { Authorization: `Bearer ${waToken}`, 'Content-Type': 'application/json' }, timeout: 15000 }
+        { headers: { Authorization: `Bearer ${sender.token}`, 'Content-Type': 'application/json' }, timeout: 15000 }
       );
     }
 

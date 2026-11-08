@@ -31,6 +31,7 @@ const { getAllianceBrainContext } = require('../services/alliance-brain-context'
 const { getAlliancePromptRules } = require('../services/alliance-prompt-rules');
 const { getAllianceLeadMemory, saveAllianceLeadMemory } = require('../services/alliance-lead-memory');
 const { scoreAllianceProspect } = require('../services/alliance-lead-scoring');
+const { hasInternalKey } = require('../middleware/authMiddleware');
 
 function createAllianceInboxRouter({ auth, io }) {
   const router = express.Router();
@@ -53,10 +54,9 @@ function createAllianceInboxRouter({ auth, io }) {
   };
   const accessToken = (settings) => process.env[settings?.access_token_env || 'ALLIANCE_WA_ACCESS_TOKEN'];
   const normalizePhone = (value) => String(value || '').replace(/\D/g, '');
-  const relayAuthorized = (req) => {
-    const expected = String(process.env.INTERNAL_API_KEY || '');
-    return !expected || String(req.get('x-internal-key') || '') === expected;
-  };
+  // Fails closed: with INTERNAL_API_KEY unset every relay call is refused
+  // (constant-time compare in middleware/authMiddleware.js).
+  const relayAuthorized = (req) => hasInternalKey(req);
   // Keeps the inbox contacts/conversations in step with imported prospects and
   // queues the welcome template for newly eligible conversations.
   const syncImportedProspects = async () => {

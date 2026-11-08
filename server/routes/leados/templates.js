@@ -192,12 +192,17 @@ app.post('/api/templates/:id/submit', auth, async (req, res) => {
 app.post('/api/templates/upload-media', auth, templateMediaMulter.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const { client_id } = req.body;
-  let waToken = process.env.META_PAGE_ACCESS_TOKEN;
-  
+  const discardUpload = () => { try { require('fs').unlinkSync(req.file.path); } catch (_) {} };
+
   try {
-    if (client_id && client_id !== 'null' && client_id !== 'undefined') {
-      const tokenClient = await Clients.findOne({ id: client_id }, { wa_access_token: 1 }).lean();
-      if (tokenClient && tokenClient.wa_access_token) waToken = tokenClient.wa_access_token;
+    // The brand's own token only; no environment token to fall back to.
+    const tokenClient = client_id && client_id !== 'null' && client_id !== 'undefined'
+      ? await Clients.findOne({ id: client_id }, { wa_access_token: 1 }).lean()
+      : null;
+    const waToken = tokenClient?.wa_access_token;
+    if (!waToken) {
+      discardUpload();
+      return res.status(409).json({ error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
     }
 
     // 1. Get App ID from the token
@@ -250,16 +255,16 @@ app.get('/api/templates/:id/sync', auth, async (req, res) => {
     const tpl = await Templates.findOne({ id: req.params.id }, NO_ID).lean();
     if (!tpl) return res.status(404).json({ error: 'Template not found' });
 
+    // Status is read with the brand's own token and WABA, whatever the
+    // template's scope; shared environment tokens are not used.
     const client = tpl.client_id ? await Clients.findOne({ id: tpl.client_id }, NO_ID).lean() : null;
-    const sharedWaToken = process.env.META_SYSTEM_USER_ACCESS_TOKEN || process.env.META_PAGE_ACCESS_TOKEN;
-    const isAllianceTemplate = ['alliance', 'shared'].includes(String(tpl.template_scope || '').toLowerCase());
-    const waToken = isAllianceTemplate ? (sharedWaToken || client?.wa_access_token) : client?.wa_access_token;
-    const waBusinessId = isAllianceTemplate ? (process.env.WA_BUSINESS_ACCOUNT_ID || client?.wa_business_id) : client?.wa_business_id;
+    const waToken = client?.wa_access_token;
+    const waBusinessId = client?.wa_business_id;
 
     if (!waToken) {
       return res.status(409).json({
-        error: 'Meta access token is not configured. Add a client WhatsApp token, META_SYSTEM_USER_ACCESS_TOKEN, or META_PAGE_ACCESS_TOKEN and restart the backend.',
-        code: 'META_TOKEN_MISSING',
+        error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.',
+        code: 'WHATSAPP_NOT_CONNECTED',
       });
     }
     if (!tpl.meta_template_id && !waBusinessId) {
