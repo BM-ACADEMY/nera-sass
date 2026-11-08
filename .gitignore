@@ -14,3 +14,5 @@ server/uploads/
 
 # Encrypted media files (customer data): never commit
 mediaserver/storage/
+
+.claude/settings.local.json
