@@ -6,12 +6,14 @@ export const ROLE_LABELS = { owner: 'Owner', admin: 'Admin', manager: 'Manager',
 
 export const roleLabel = (role) => ROLE_LABELS[role] || '';
 
-// There are no plans, so there is no Billing tab.
+// Billing (plan, wallet, payments) is shown to everyone; only Owners and
+// Admins can pay or change the plan (the server's manage_billing flag).
 export function settingsTabs() {
   const tabs = [
     { key: 'workspace', label: 'Workspace' },
     { key: 'brand', label: 'Brand Profile' },
     { key: 'whatsapp', label: 'WhatsApp' },
+    { key: 'billing', label: 'Billing' },
     { key: 'account', label: 'Account' },
   ];
   return tabs;

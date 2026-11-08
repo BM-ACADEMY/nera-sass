@@ -8,6 +8,7 @@ import { WorkspaceTab } from './settings/WorkspaceTab.jsx';
 import { BrandProfileTab } from './settings/BrandProfileTab.jsx';
 import { WhatsAppTab } from './settings/WhatsAppTab.jsx';
 import { AccountTab } from './settings/AccountTab.jsx';
+import { BillingTab } from './settings/BillingTab.jsx';
 import { Notice } from './settings/ui.jsx';
 
 // Customer Settings. Everything is read from the signed-in user's own
@@ -85,6 +86,7 @@ export const SettingsView = () => {
             {activeTab === 'workspace' && <WorkspaceTab key={version} tenantInfo={tenantInfo} onSaved={load} />}
             {activeTab === 'brand' && <BrandProfileTab key={version} brand={brand} tenantInfo={tenantInfo} onSaved={load} />}
             {activeTab === 'whatsapp' && <WhatsAppTab brand={brand} tenantInfo={tenantInfo} signupConfig={signupConfig} />}
+            {activeTab === 'billing' && <BillingTab key={version} tenantInfo={tenantInfo} me={me} />}
             {activeTab === 'account' && <AccountTab me={me} onChanged={load} onSignedOutEverywhere={signedOutEverywhere} />}
           </div>
         </div>

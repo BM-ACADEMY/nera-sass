@@ -211,9 +211,31 @@ function qualityAlertEmail({ to, ownerName, workspaceName, kind, rating, event, 
   return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: 'Open WhatsApp settings' }) });
 }
 
+// Billing notices to a workspace owner (AI allowance or wallet at 20 percent,
+// AI paused). Plain facts and a link to Billing; never an amount of money
+// beyond what the message itself states.
+function billingAlertEmail({ to, name, workspaceName, kind, message }) {
+  const product = productName();
+  const titles = {
+    ai_allowance_low: `${workspaceName}: AI replies running low`,
+    wallet_low: `${workspaceName}: wallet running low`,
+    ai_blocked: `${workspaceName}: AI replies are paused`,
+    plan_expired: `${workspaceName}: your plan has ended`,
+  };
+  const title = titles[kind] || `${workspaceName}: billing notice`;
+  const url = `${appUrl()}/settings`;
+  const lines = [
+    `Hi ${name || 'there'},`,
+    message,
+    `Open Settings > Billing in ${product} to top up the wallet or change your plan.`,
+  ];
+  return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: 'Open Billing' }) });
+}
+
 module.exports = {
   send,
   qualityAlertEmail,
+  billingAlertEmail,
   signInCodeEmail,
   deliveryMode,
   invitationEmail,

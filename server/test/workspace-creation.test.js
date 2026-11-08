@@ -81,8 +81,9 @@ test('Workspace creation without plans', async (t) => {
     const summary = await request(app).get('/api/tenant').set({ Authorization: `Bearer ${login.body.token}` });
     assert.strictEqual(summary.status, 200);
     assert.strictEqual(summary.body.lifecycle.access, 'full');
-    assert.strictEqual(summary.body.usage.max_users, -1);
-    assert.strictEqual(summary.body.subscription, undefined);
+    // No plan is bought at creation: one seat, no subscription (N3).
+    assert.strictEqual(summary.body.usage.max_users, 1);
+    assert.strictEqual(summary.body.subscription, null);
   });
 
   await t.test('W2. Staff (ops), customers and anonymous callers cannot create a workspace; nothing is created', async () => {

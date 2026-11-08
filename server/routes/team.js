@@ -12,6 +12,8 @@ const { runAsSystem } = require('../services/tenantContext');
 const { requirePermission, can } = require('../services/permissions');
 const { auth } = require('../middleware/authMiddleware');
 const { seatUsage } = require('../services/entitlements');
+const billingLimits = require('../services/billing/limits');
+const billingSubscriptions = require('../services/billing/subscriptions');
 const invitations = require('../services/invitations');
 const userAdmin = require('../services/userAdmin');
 const audit = require('../services/audit');
@@ -34,16 +36,25 @@ const actorOf = (req) => ({ id: req.user.id, kind: 'tenant', role: req.identity.
 router.get('/tenant', async (req, res) => {
   try {
     const tenantId = req.identity.tenantId;
-    const [tenant, seats] = await Promise.all([
+    const [tenant, seats, limits, subscription] = await Promise.all([
       runAsSystem(() => Tenants.findOne({ id: tenantId }, { _id: 0, id: 1, name: 1, status: 1, language: 1, currency: 1, tax_treatment: 1, timezone: 1, owner_user_id: 1, created_at: 1 }).lean(), 'team'),
       seatUsage(tenantId),
+      billingLimits.limits(null),
+      billingSubscriptions.current(),
     ]);
     return res.json({
       tenant,
       lifecycle: { state: req.lifecycle.state, access: req.lifecycle.access },
-      // There are no plans: every workspace has full access with no limits.
-      usage: { users: seats.activeUsers, pending_invitations: seats.pendingInvitations, max_users: -1 },
-      permissions: { manage_team: can(req.identity, 'team.manage'), manage_settings: can(req.identity, 'tenant.settings'), manage_whatsapp: can(req.identity, 'whatsapp.manage') },
+      // Seats come from the plan (plus extra seats from the wallet); a
+      // workspace without a plan keeps its single login.
+      usage: { users: seats.activeUsers, pending_invitations: seats.pendingInvitations, max_users: limits.seats },
+      subscription: billingSubscriptions.publicSubscription(subscription),
+      permissions: {
+        manage_team: can(req.identity, 'team.manage'),
+        manage_settings: can(req.identity, 'tenant.settings'),
+        manage_whatsapp: can(req.identity, 'whatsapp.manage'),
+        manage_billing: can(req.identity, 'billing.manage'),
+      },
     });
   } catch (error) {
     return fail(res, error);
@@ -82,7 +93,7 @@ router.get('/team/users', requirePermission('team.view'), async (req, res) => {
     return res.json({
       users,
       invitations: pending.map(invitations.publicInvitation),
-      seats: { max_users: -1, used: seats.used, active_users: seats.activeUsers, pending_invitations: seats.pendingInvitations },
+      seats: { max_users: await billingLimits.seatLimit(null), used: seats.used, active_users: seats.activeUsers, pending_invitations: seats.pendingInvitations },
     });
   } catch (error) {
     return fail(res, error);

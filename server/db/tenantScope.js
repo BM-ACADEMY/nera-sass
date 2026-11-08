@@ -60,6 +60,11 @@ const TENANT_SCOPED = new Map([
   ['reports', {}],
   ['google_calendar_credentials', {}],
   ['workflow_logs', { optional: true }],
+  // billing (plans is the platform price list and is not scoped)
+  ['subscriptions', {}],
+  ['wallet_ledger', {}],
+  ['billing_orders', {}],
+  ['billing_alerts', {}],
 ]);
 
 const QUERY_OPS = [

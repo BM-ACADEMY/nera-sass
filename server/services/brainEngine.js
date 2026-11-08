@@ -9,6 +9,7 @@ const ai = require('./aiAutomation');
 const prompts = require('./brainPrompt');
 const booking = require('./brainBooking');
 const { AiReplyLogs, BrainDocs, BrainProfiles, Clients, Conversations, Leads, Messages } = require('../models');
+const aiAllowance = require('./billing/aiAllowance');
 
 // The same model the older reply workflow (WF1) uses.
 const BRAIN_MODEL = process.env.AI_BRAIN_MODEL || 'openai/gpt-4o-mini';
@@ -30,12 +31,10 @@ const activeDocs = (clientId) => (clientId == null ? [] : BrainDocs.find(
   { _id: 0, id: 1, doc_type: 1, title: 1, content: 1 },
 ).lean());
 
+// Plan allowance and wallet (services/billing/aiAllowance.js): replies left
+// on the plan, whether one more may go out, and what it costs the wallet.
 async function quotaLeft(tenant, now = new Date()) {
-  const limit = Number(tenant?.ai_reply_quota_month);
-  if (!Number.isFinite(limit) || limit <= 0) return null;
-  const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const used = await AiReplyLogs.countDocuments({ status: 'sent', created_at: { $gte: from } });
-  return Math.max(limit - used, 0);
+  return aiAllowance.check(tenant, now);
 }
 
 function parseOutput(raw) {
@@ -156,8 +155,12 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
   if (now.getTime() - lastInbound >= WINDOW_MS) {
     return finishWithoutSend('Outside the WhatsApp 24-hour window: send an approved template');
   }
-  const left = await quotaLeft(tenant, now);
-  if (left === 0) return finishWithoutSend('AI reply limit reached for this month: please reply yourself');
+  const gate = await quotaLeft(tenant, now);
+  if (!gate.allowed) {
+    await aiAllowance.notifyBlocked(gate);
+    return finishWithoutSend(gate.reason);
+  }
+  const left = gate.left;
 
   const client = lead.client_id != null ? lead.client_id : (await Clients.findOne({}, { _id: 0, id: 1 }).lean())?.id;
   const allDocs = await activeDocs(client);
@@ -229,6 +232,8 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
     if (/^safety\b/i.test(reason)) await Leads.updateOne({ id: lead.id }, { $set: { handover_priority: true } });
   }
   await finish({ ...trace, status: 'sent', sent_message_id: sentId });
+  // Overage is paid from the wallet per sent reply; the 20 percent notices go out here.
+  await aiAllowance.settle(gate, { referenceType: 'message', referenceId: sentId, now });
   return { sent: true, handoff: output.handoff, opt_out: output.opt_out };
 }
 
