@@ -167,9 +167,13 @@ router.post('/refresh/:business_id', async (req, res) => {
   }
 });
 
-// Daily Cron Job for Rival Metrics (Runs at midnight)
+// Daily Cron Job for Rival Metrics (Runs at midnight). Started only when
+// background jobs are on and the Mafiya module is enabled; otherwise the
+// timer would run on every server (and keep test processes alive).
 const cron = require('node-cron');
-cron.schedule('0 0 * * *', async () => {
+const mafiyaJobsEnabled = process.env.JOBS_ENABLED !== 'false'
+  && !String(process.env.DISABLED_MODULES || '').split(',').map((name) => name.trim().toLowerCase()).includes('mafiya');
+if (mafiyaJobsEnabled) cron.schedule('0 0 * * *', async () => {
   console.log('[Mafiya Rivals] Running daily metrics refresh...');
   try {
     const businessIds = await MafiyaRivals.distinct('business_id');
