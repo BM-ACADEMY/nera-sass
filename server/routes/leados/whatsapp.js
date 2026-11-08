@@ -163,14 +163,11 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
         const uploadData = await uploadRes.json();
         if (uploadRes.ok && uploadData.id) {
           waMediaId = uploadData.id;
-          fs.appendFileSync(path.join(SERVER_ROOT, 'uploads', 'media_upload.log'), `[SUCCESS] ID: ${waMediaId}\n`);
         } else {
           console.warn('[WhatsApp Send] Direct media upload failed:', uploadData);
-          fs.appendFileSync(path.join(SERVER_ROOT, 'uploads', 'media_upload.log'), `[FAILED API] ${JSON.stringify(uploadData)}\n`);
         }
       } catch (e) {
         console.warn('[WhatsApp Send] Failed to upload media directly:', e.message);
-        fs.appendFileSync(path.join(SERVER_ROOT, 'uploads', 'media_upload.log'), `[FAILED EXCEPTION] ${e.message}\n`);
       }
     }
 

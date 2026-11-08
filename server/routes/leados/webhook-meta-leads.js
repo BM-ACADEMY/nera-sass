@@ -19,6 +19,7 @@ const {
 const axios = ctxAxios || require('axios');
 const cryptoHelper = ctxCryptoHelper || require('../../utils/crypto');
 const { runAsSystem, runAsTenant } = require('../../services/tenantContext');
+const { requireMetaSignature } = require('../../services/metaWebhookSignature');
 // ── META LEADS WEBHOOK ────────────────────────────────────
 
 app.get('/webhook/meta-leads', (req, res) => {
@@ -27,7 +28,8 @@ app.get('/webhook/meta-leads', (req, res) => {
   res.sendStatus(403);
 });
 
-app.post('/webhook/meta-leads', async (req, res) => {
+// Only requests signed by Meta (X-Hub-Signature-256 over the raw body) get in.
+app.post('/webhook/meta-leads', requireMetaSignature, async (req, res) => {
   try {
     const { entry } = req.body || {};
     for (const e of entry || []) {

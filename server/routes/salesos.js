@@ -28,6 +28,7 @@ const {
   AllianceInboxTags,
 } = require('../models');
 const { NO_ID, ieq, escapeRegex, insertIgnore, phoneTailRegex, withLock } = require('../db/mongo');
+const founderNotify = require('../services/founderNotify');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -671,12 +672,8 @@ router.post('/brand/detect', internalAuth, async (req, res) => {
       return res.status(409).json({ error: 'AllianceOS callback ignored by LeadOS.', ignored: true, owner: 'alliance' });
     }
     if (phone_number_id) {
-      let isManaged = false;
-      if (phone_number_id === process.env.WA_PHONE_NUMBER_ID) {
-        isManaged = true;
-      } else {
-        if (await Clients.exists({ phone_number_id })) isManaged = true;
-      }
+      // Only numbers connected to a brand profile are managed; no environment number.
+      const isManaged = Boolean(await Clients.exists({ phone_number_id }));
       if (!isManaged) {
         console.log('🚫 [Brand Detect] Halted n8n workflow for unmanaged phone_number_id:', phone_number_id);
         return res.status(403).json({ error: 'Unmanaged phone_number_id', ignored: true });
@@ -1642,38 +1639,17 @@ router.post('/communication/send', internalAuth, async (req, res) => {
 router.post('/communication/send-founder', internalAuth, async (req, res) => {
   const { channel, type, content } = req.body;
   try {
-    const founderPhone = process.env.FOUNDER_WHATSAPP_PHONE;
-    const phoneNumberId = process.env.WA_PHONE_NUMBER_ID;
-    const waAccessToken = process.env.META_PAGE_ACCESS_TOKEN;
-
-    let waMessageId = null;
-    if (channel === 'whatsapp' && founderPhone && phoneNumberId && waAccessToken) {
-      try {
-        const phoneDigits = founderPhone.replace(/\D/g, '');
-        const payload = {
-          messaging_product: 'whatsapp',
-          to: phoneDigits,
-          type: 'text',
-          text: { body: content }
-        };
-
-        console.log(`[Send Founder Report] Sending to ${phoneDigits} via Meta API...`);
-        const waRes = await axios.post(
-          `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
-          payload,
-          { headers: { Authorization: `Bearer ${waAccessToken}`, 'Content-Type': 'application/json' } }
-        );
-        waMessageId = waRes.data?.messages?.[0]?.id || null;
-        console.log(`✅ [Send Founder Report] Meta WhatsApp delivered successfully! Message ID: ${waMessageId}`);
-      } catch (waErr) {
-        console.error(`⚠️ [Send Founder Report] Meta Graph API Error:`, waErr.response?.data || waErr.message);
-      }
-    }
+    // Internal message to the owner: the named NERA_FOUNDER_NOTIFY_* settings
+    // only (services/founderNotify.js). Unconfigured means not sent, with the
+    // reason in the response and the log; no tenant or platform number is used.
+    const delivery = channel === 'whatsapp'
+      ? await founderNotify.sendText({ content, label: `WF06 founder report (${type || 'report'})` })
+      : { delivered: false, reason: 'CHANNEL_NOT_WHATSAPP' };
 
     // Founder reports are platform-level: logged with no workspace (FounderReportsView).
     await recordPlatformWorkflowLog({ workflow: 'WF06', status: 'success', message: content });
 
-    res.json({ success: true, delivered: true, content, wa_msg_id: waMessageId });
+    res.json({ success: true, delivered: delivery.delivered, reason: delivery.reason || null, missing: delivery.missing || undefined, content, wa_msg_id: delivery.wa_msg_id || null });
   } catch (err) {
     console.error('[Send Founder Report Error]', err);
     res.status(500).json({ error: err.message });
@@ -2072,6 +2048,10 @@ router.post('/ai/followup', internalAuth, async (req, res) => {
       || lead.sales_followup_stopped || ['converted', 'closed', 'not_interested'].includes(lead.sales_status)
       || (lead.sales_followup_at && new Date(lead.sales_followup_at) > new Date())) {
       return res.json({ ...req.body, success: true, delivered: false, skipped: true, reason: 'stop_condition' });
+    }
+    // The brand's own WhatsApp credentials, or a clear error; never a shared number.
+    if (!lead.phone_number_id || !lead.client_wa_token) {
+      return res.status(409).json({ ...req.body, success: false, delivered: false, error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
     }
 
     const recentHistory = (await leadMessages(lead_id, hasText, { limit: 10, projection: { _id: 0, direction: 1, content: 1, sent_at: 1 } })).reverse();
@@ -2794,36 +2774,15 @@ router.get('/reports/reminder-bundle', internalAuth, async (req, res) => {
 });
 
 // Direct staff/founder notification - does NOT touch leads/conversations tables,
-// since this isn't lead messaging. Requires FOUNDER_WHATSAPP_PHONE (or an explicit
-// `phone`) to actually deliver; otherwise it no-ops with delivered:false so callers
-// can see nothing was sent instead of silently failing.
+// since this isn't lead messaging. Sent only through the named
+// NERA_FOUNDER_NOTIFY_* settings (services/founderNotify.js); an explicit
+// `phone` overrides the owner's number. Unconfigured means delivered:false with
+// the reason, never a fallback to another number or token.
 router.post('/communication/notify-staff', internalAuth, async (req, res) => {
   const { phone, content, label } = req.body;
   try {
-    const targetPhone = phone || process.env.FOUNDER_WHATSAPP_PHONE;
-    if (!targetPhone) {
-      console.warn(`[notify-staff] No phone configured for "${label || 'recipient'}" - skipping. Set FOUNDER_WHATSAPP_PHONE in .env or pass phone explicitly.`);
-      return res.json({ ...req.body, success: true, delivered: false, reason: 'no_phone_configured' });
-    }
-
-    const phoneNumberId = process.env.WA_PHONE_NUMBER_ID;
-    const waAccessToken = process.env.META_PAGE_ACCESS_TOKEN;
-    let delivered = false, waMessageId = null;
-    if (phoneNumberId && waAccessToken) {
-      try {
-        const phoneDigits = targetPhone.replace(/\D/g, '');
-        const waRes = await axios.post(
-          `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
-          { messaging_product: 'whatsapp', to: phoneDigits, type: 'text', text: { body: content } },
-          { headers: { Authorization: `Bearer ${waAccessToken}`, 'Content-Type': 'application/json' } }
-        );
-        waMessageId = waRes.data?.messages?.[0]?.id || null;
-        delivered = true;
-      } catch (waErr) {
-        console.error('[notify-staff send error]', waErr.response?.data || waErr.message);
-      }
-    }
-    res.json({ ...req.body, success: true, delivered, wa_msg_id: waMessageId });
+    const delivery = await founderNotify.sendText({ content, to: phone || null, label: label || 'staff notification' });
+    res.json({ ...req.body, success: true, delivered: delivery.delivered, reason: delivery.reason || null, missing: delivery.missing || undefined, wa_msg_id: delivery.wa_msg_id || null });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

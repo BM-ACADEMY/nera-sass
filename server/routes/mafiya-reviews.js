@@ -2404,9 +2404,14 @@ async function publishPostToGmb(postId) {
   }
 }
 
-// node-cron job to run every 5 seconds and publish scheduled posts
+// node-cron job to run every 5 seconds and publish scheduled posts. Started
+// only when background jobs are on and the Mafiya module is enabled; otherwise
+// the timer would run on every server (and keep test processes alive) for a
+// module that is switched off.
 const cron = require('node-cron');
-cron.schedule('*/5 * * * * *', async () => {
+const mafiyaJobsEnabled = process.env.JOBS_ENABLED !== 'false'
+  && !String(process.env.DISABLED_MODULES || '').split(',').map((name) => name.trim().toLowerCase()).includes('mafiya');
+if (mafiyaJobsEnabled) cron.schedule('*/5 * * * * *', async () => {
   try {
     const duePosts = await MafiyaGmbPosts.find({ status: 'scheduled', scheduled_at: { $lte: new Date() } }, { id: 1 }).lean();
     for (const row of duePosts) {

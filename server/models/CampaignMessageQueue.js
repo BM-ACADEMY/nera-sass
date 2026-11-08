@@ -15,7 +15,6 @@ module.exports = defineModel('campaign_message_queue', {
   recipient_data: { type: Mixed, default: () => ({}) },
   campaign_name: { type: String },
   brand_name: { type: String },
-  wa_token: { type: String },
   phone_number_id: { type: String },
   status: { type: String, default: "pending" },
   attempts: { type: Number, default: 0 },

@@ -31,12 +31,14 @@ test('P0 Webhook Tenant Context & Isolation Suite', async (t) => {
   // Same raw-body capture as server.js, needed for X-Hub-Signature-256.
   app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
-  // POSTs a WhatsApp webhook signed the way Meta signs it.
-  const signedWebhook = (payload) => {
+  // POSTs a Meta webhook signed the way Meta signs it (every Meta-facing
+  // webhook route checks X-Hub-Signature-256).
+  const signedPost = (url, payload) => {
     const body = JSON.stringify(payload);
     const signature = 'sha256=' + crypto.createHmac('sha256', process.env.NERA_META_APP_SECRET).update(body).digest('hex');
-    return request(app).post('/webhook/whatsapp').set('Content-Type', 'application/json').set('X-Hub-Signature-256', signature).send(body);
+    return request(app).post(url).set('Content-Type', 'application/json').set('X-Hub-Signature-256', signature).send(body);
   };
+  const signedWebhook = (payload) => signedPost('/webhook/whatsapp', payload);
 
   const emittedSocketEvents = [];
   const io = {
@@ -277,7 +279,7 @@ test('P0 Webhook Tenant Context & Isolation Suite', async (t) => {
       }],
     };
 
-    const res = await request(app).post('/webhook/meta-leads').send(metaLeadPayload);
+    const res = await signedPost('/webhook/meta-leads', metaLeadPayload);
     assert.strictEqual(res.status, 200);
 
     // Verify lead stored in Tenant 201
@@ -406,7 +408,7 @@ test('P0 Webhook Tenant Context & Isolation Suite', async (t) => {
         }],
       }],
     };
-    const res3 = await request(app).post('/webhook/meta-leads').send(metaUnmapped);
+    const res3 = await signedPost('/webhook/meta-leads', metaUnmapped);
     assert.strictEqual(res3.status, 200);
 
     // Verify FailedWebhooks contains sanitized diagnostic record
