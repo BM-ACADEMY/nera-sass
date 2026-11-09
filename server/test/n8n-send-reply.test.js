@@ -45,7 +45,9 @@ test('n8n AI reply relay', async (t) => {
   async function seed() {
     await runAsSystem(() => Tenants.create([{ id: 1, name: 'Acme', status: 'active' }, { id: 2, name: 'Beta', status: 'active' }]), 'test');
     const brand = (await runAsTenant(1, () => Clients.create({ name: 'Acme Brand', phone_number_id: 'PN1', wa_access_token: 'test-dummy-acme-token' }))).toObject();
-    const lead = (await runAsTenant(1, () => Leads.create({ name: 'Ravi', phone: '919876543210', client_id: brand.id, status: 'new' }))).toObject();
+    // The customer wrote a minute ago: the 24-hour window is open (N1: free
+    // text is only sent inside it).
+    const lead = (await runAsTenant(1, () => Leads.create({ name: 'Ravi', phone: '919876543210', client_id: brand.id, status: 'new', last_inbound_at: new Date(Date.now() - 60000) }))).toObject();
     return { brand, lead };
   }
 
@@ -107,6 +109,12 @@ test('n8n AI reply relay', async (t) => {
     const bad = await request(app).post('/api/internal/send-template').set(service(1)).send({ lead_id: lead.id, template: 'Bad Name!' });
     assert.strictEqual(bad.status, 400);
     assert.strictEqual(metaCalls.length, 0);
+    // An unknown template counts as marketing: it needs the contact's opt-in (N1).
+    const noConsent = await request(app).post('/api/internal/send-template').set(service(1))
+      .send({ lead_id: lead.id, template: 'getnera_welcome', language: 'en', body_params: ['Ravi'] });
+    assert.strictEqual(noConsent.status, 403, JSON.stringify(noConsent.body));
+    assert.strictEqual(noConsent.body.code, 'CONSENT_REQUIRED');
+    await runAsTenant(1, () => require('../services/consent').recordOptIn({ leadId: lead.id, source: 'form', text: 'Agreed to WhatsApp updates' }));
     const res = await request(app).post('/api/internal/send-template').set(service(1))
       .send({ lead_id: lead.id, template: 'getnera_welcome', language: 'en', body_params: ['Ravi'] });
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));

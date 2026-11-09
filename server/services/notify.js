@@ -187,8 +187,33 @@ function signInCodeEmail({ to, name, code, minutes, purpose }) {
   return send({ to, subject: title, text: `${lines.join('\n\n')}\n`, html });
 }
 
+/**
+ * Tells the workspace owner that Meta's quality signal for their WhatsApp
+ * number changed: marketing paused (kind 'paused'), a warning while already
+ * paused ('warning'), or marketing resumed ('resumed').
+ */
+function qualityAlertEmail({ to, ownerName, workspaceName, kind, rating, event, paused, dailyCap, detail }) {
+  const product = productName();
+  const where = workspaceName ? `the ${workspaceName} workspace` : 'your workspace';
+  const signal = [rating && rating !== 'UNKNOWN' ? `quality rating ${rating}` : null, event ? `event ${event}` : null].filter(Boolean).join(', ') || 'a quality change';
+  const title = kind === 'resumed'
+    ? `WhatsApp marketing resumed for ${workspaceName || product}`
+    : `WhatsApp marketing paused for ${workspaceName || product}`;
+  const lines = [
+    `Hi ${ownerName || 'there'},`,
+    kind === 'resumed'
+      ? `Meta reports that the WhatsApp number of ${where} is healthy again (${signal}). Marketing messages are flowing again with a daily limit of ${dailyCap} business-initiated messages.`
+      : `Meta reported ${signal} for the WhatsApp number of ${where}. ${paused ? `Marketing messages are paused on this number and its daily limit is now ${dailyCap}.` : 'Please review recent sends.'} Replies to customers and transactional messages continue.`,
+  ];
+  if (detail) lines.push(String(detail).slice(0, 500));
+  if (kind !== 'resumed') lines.push('Check which campaigns went out recently, remove contacts who did not opt in, and resume marketing from WhatsApp settings once the rating recovers.');
+  const url = `${appUrl()}/settings/whatsapp`;
+  return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: 'Open WhatsApp settings' }) });
+}
+
 module.exports = {
   send,
+  qualityAlertEmail,
   signInCodeEmail,
   deliveryMode,
   invitationEmail,

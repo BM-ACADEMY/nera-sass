@@ -17,6 +17,8 @@ const {
 const { tenantCanSend, tenantLifecycle } = require('../../services/lifecycle');
 const { internalPlatformAuth } = require('../../middleware/authMiddleware');
 const ai = require('../../services/aiAutomation');
+const sendPolicy = require('../../services/sendPolicy');
+const numberHealth = require('../../services/numberHealth');
 const aiLatency = require('../../services/aiLatency');
 const brainEngine = require('../../services/brainEngine');
 const { BrainDocs } = ctx;
@@ -68,17 +70,30 @@ class SendError extends Error {
 // Sends one WhatsApp message to a lead of the calling tenant with the brand's
 // own token (never handed to n8n), then stores it on the lead's thread.
 // `build(to)` returns the Graph payload; `content` is what the inbox shows.
-async function sendToLead(req, leadIdRaw, content, build) {
+// Every send passes the send policy first: free text only inside the 24-hour
+// window, marketing templates only to opted-in contacts on a healthy number,
+// and the number's per-minute and daily limits.
+async function sendToLead(req, leadIdRaw, content, build, { kind = 'service', messageType = 'text', templateName = null } = {}) {
   const leadId = Number(leadIdRaw);
   if (!Number.isInteger(leadId) || leadId <= 0) throw new SendError(400, 'lead_id is required');
   if (!(await tenantCanSend(req.tenant.id))) throw new SendError(403, 'This workspace cannot send messages', 'SEND_BLOCKED');
 
-  const lead = await Leads.findOne({ id: leadId }, { _id: 0, id: 1, phone: 1, client_id: 1 }).lean();
+  const lead = await Leads.findOne({ id: leadId }, { _id: 0 }).lean();
   if (!lead || !lead.phone) throw new SendError(404, 'Lead not found');
   const brand = lead.client_id != null
     ? await Clients.findOne({ id: lead.client_id }, { _id: 0, id: 1, phone_number_id: 1, wa_access_token: 1 }).lean()
     : null;
   if (!brand?.phone_number_id || !brand?.wa_access_token) throw new SendError(409, 'WhatsApp is not connected for this lead', 'WHATSAPP_NOT_CONNECTED');
+
+  const resolvedKind = messageType === 'template' && templateName ? await sendPolicy.templateKind(templateName) : kind;
+  const check = await sendPolicy.checkSend({ lead, kind: resolvedKind, messageType, phoneNumberId: brand.phone_number_id });
+  if (!check.ok) throw new SendError(check.status, check.message, check.code);
+  const slot = await numberHealth.reserveSlot(brand.phone_number_id, { countsTowardDailyCap: messageType === 'template' });
+  if (!slot.ok) {
+    const err = new SendError(429, slot.message, slot.reason === 'daily_cap' ? 'DAILY_CAP_REACHED' : 'RATE_LIMITED');
+    err.retryAt = slot.retryAt;
+    throw err;
+  }
 
   const to = String(lead.phone).replace(/\D/g, '');
   let waMessageId = null;
@@ -112,7 +127,7 @@ const sendRoute = (name, handler) => async (req, res) => {
   try {
     res.json(await handler(req));
   } catch (err) {
-    if (err instanceof SendError) return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}) });
+    if (err instanceof SendError) return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}), ...(err.retryAt ? { retry_at: err.retryAt } : {}) });
     console.error(`[internal/${name}]`, err.message);
     res.status(500).json({ error: 'Server error' });
   }
@@ -165,7 +180,7 @@ app.post('/api/internal/send-template', internalAuth, sendRoute('send-template',
   const components = params.length ? [{ type: 'body', parameters: params.map((v) => ({ type: 'text', text: String(v ?? '') })) }] : undefined;
   return sendToLead(req, req.body?.lead_id, `[Template] ${template}`, () => ({
     type: 'template', template: { name: template, language: { code: language }, ...(components ? { components } : {}) },
-  }));
+  }), { messageType: 'template', templateName: template });
 }));
 
 // GET /api/internal/context?lead_id=&before_message_id=&limit=
@@ -242,7 +257,7 @@ app.get('/api/internal/followups/due', internalPlatformAuth, async (req, res) =>
       whatsapp_opt_out: { $ne: true },
       status: { $nin: ai.CLOSED_STATUSES },
       phone: { $nin: [null, ''] },
-    }, { _id: 0, id: 1, tenant_id: 1, name: 1, ai_followup_step: 1, ai_followup_due: 1, last_inbound_at: 1 }).sort({ ai_followup_due: 1 }).limit(100).lean();
+    }, { _id: 0, id: 1, tenant_id: 1, name: 1, ai_followup_step: 1, ai_followup_due: 1, last_inbound_at: 1, whatsapp_opt_in: 1 }).sort({ ai_followup_due: 1 }).limit(100).lean();
 
     const tenants = new Map();
     const items = [];
@@ -254,6 +269,10 @@ app.get('/api/internal/followups/due', internalPlatformAuth, async (req, res) =>
       }
       const tenant = tenants.get(lead.tenant_id);
       if (!tenant || !ai.inSendingHours(tenant, now)) continue;
+      // Outside the 24-hour window the follow-up is a marketing template:
+      // only contacts who opted in get one (send-template refuses the rest).
+      const inboundAt = lead.last_inbound_at ? new Date(lead.last_inbound_at).getTime() : 0;
+      if (!(inboundAt > 0 && now.getTime() - inboundAt < ai.DAY_MS) && lead.whatsapp_opt_in !== true) continue;
       const leased = await Leads.updateOne(
         { id: lead.id, tenant_id: lead.tenant_id, ai_followup_due: lead.ai_followup_due },
         { $set: { ai_followup_due: new Date(now.getTime() + ai.HOUR_MS) } },

@@ -6,6 +6,7 @@
 const { currentTenantId } = require('../../services/tenantContext');
 const { postToN8n } = require('../../services/n8n');
 const aiAutomation = require('../../services/aiAutomation');
+const consent = require('../../services/consent');
 module.exports = function registerLeadsCrudRoutes(app, ctx) {
 const {
   Clients,
@@ -26,19 +27,30 @@ const {
 // POST /api/leads
 app.post('/api/leads', auth, async (req, res) => {
   try {
-    const { name, phone, source, interest, assigned_to } = req.body;
+    const { name, phone, source, interest, assigned_to, whatsapp_opt_in, opt_in_source, opt_in_text } = req.body;
     const leadOSBrand = await getLeadOSBrand();
     if (!name || !phone) return res.status(400).json({ error: 'Name and phone required' });
     // Strip formatting (spaces/dashes/parens) so this matches the digits-only format
     // every phone-matching query in the app expects. Does not add/assume a country code.
     const normalizedPhone = String(phone).replace(/\D/g, '');
     if (!normalizedPhone) return res.status(400).json({ error: 'Enter a valid phone number' });
+    // Marketing consent is recorded only when the agent says the contact gave
+    // it, with the wording they agreed to. Checked before the lead is created.
+    const wantsOptIn = whatsapp_opt_in === true || whatsapp_opt_in === 'true';
+    const consentText = String(opt_in_text || '').trim();
+    if (wantsOptIn && !consentText) return res.status(400).json({ error: 'opt_in_text is required: the wording the contact agreed to' });
 
     const createdLead = await Leads.create({
       name, phone: normalizedPhone, source: source || 'Manual', client_id: leadOSBrand.id, interest: interest || '',
       assigned_to: assigned_to || null, status: 'new', score: 0, created_at: new Date(),
     });
     const rows = [createdLead.toObject()];
+
+    if (wantsOptIn) {
+      const recorded = await consent.recordOptIn({ leadId: rows[0].id, phone: normalizedPhone, source: opt_in_source || 'manual', text: consentText, by: req.user.id });
+      rows[0].whatsapp_opt_in = true;
+      rows[0].whatsapp_opt_in_at = recorded.opt_in_at;
+    }
 
     // n8n sends the welcome template back through /api/internal/send-template;
     // it never receives a WhatsApp credential.
