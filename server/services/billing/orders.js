@@ -22,6 +22,7 @@ const plansService = require('./plans');
 const subscriptions = require('./subscriptions');
 const wallet = require('./wallet');
 const alerts = require('./alerts');
+const customerAlerts = require('../alerts');
 const razorpay = require('./razorpay');
 
 class BillingError extends Error {
@@ -137,6 +138,9 @@ async function fulfil(order, { paymentId, source, now = new Date() }) {
       });
       Object.assign(changes, { status: 'fulfilled', fulfilled_at: now, fulfilled_by: source });
       outcome = { credited: !credited.duplicate, balance_paise: credited.balance_paise };
+      // A top-up lands: the low-wallet and failed-payment notices no longer apply.
+      await customerAlerts.evaluateWallet().catch((error) => console.error('[billing/orders] Wallet notice failed:', error.message));
+      await customerAlerts.resolve('payment_failed').catch((error) => console.error('[billing/orders] Notice close failed:', error.message));
       await audit.record(audit.EVENTS.PAYMENT_VERIFIED, {
         tenantId: fresh.tenant_id, targetType: 'wallet_ledger', targetId: credited.row?.id,
         actor: { actor_type: 'system', actor_user_id: null },
@@ -173,6 +177,20 @@ async function verifyCheckout({ orderId, paymentId, signature, userId = null }) 
 const WEBHOOK_EVENTS = new Set(['payment.captured', 'order.paid']);
 
 /**
+ * A failed payment becomes a notice for the workspace that owns the order. The
+ * tenant and amount come from our own order row, never from the webhook notes.
+ */
+async function handleFailedPayment(event) {
+  const payment = event?.payload?.payment?.entity;
+  if (!payment?.order_id || !payment?.id) return { handled: false, status: 200, reason: 'no order or payment id' };
+  const order = await runAsSystem(() => BillingOrders.findOne({ razorpay_order_id: String(payment.order_id) }, { _id: 0 }).lean(), 'billing:webhook');
+  if (!order) return { handled: false, status: 200, reason: 'not a billing order' };
+  if (order.status === 'fulfilled') return { handled: true, status: 200, reason: 'order already paid' };
+  await runAsTenant(order.tenant_id, () => customerAlerts.paymentFailed({ reference: payment.id, amount: Number(order.amount_paise) / 100, currency: order.currency || 'INR' }));
+  return { handled: true, status: 200, tenant_id: order.tenant_id, reason: 'payment failed' };
+}
+
+/**
  * Razorpay webhook (no tenant context: the tenant comes from the order row).
  * Returns { handled, reason } and never throws for a bad payload; the route
  * answers 200 to anything signed so Razorpay does not retry forever.
@@ -181,6 +199,7 @@ async function handleWebhook({ rawBody, signature, event }) {
   if (!razorpay.webhookConfigured()) return { handled: false, status: 503, reason: 'RAZORPAY_WEBHOOK_SECRET is not configured' };
   if (!razorpay.verifyWebhookSignature({ rawBody, signature })) return { handled: false, status: 401, reason: 'invalid signature' };
   const name = event?.event;
+  if (name === 'payment.failed') return handleFailedPayment(event);
   if (!WEBHOOK_EVENTS.has(name)) return { handled: false, status: 200, reason: `ignored event ${name || 'unknown'}` };
   const payment = event?.payload?.payment?.entity;
   const razorpayOrderId = payment?.order_id || event?.payload?.order?.entity?.id;

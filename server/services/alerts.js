@@ -3,7 +3,7 @@
  *
  * Five kinds of problem a workspace owner must hear about:
  *   template_rejected   Meta did not approve (or paused) a template
- *   wallet_low          balance under 20% of the last top-up
+ *   wallet_low          balance under 20% of the last top-up (the billing wallet ledger)
  *   number_quality      Meta's quality signal for the WhatsApp number dropped
  *   setup_unfinished    a setup step is still open after SETUP_ALERT_AFTER_HOURS
  *   payment_failed      a payment did not go through
@@ -23,7 +23,6 @@
  * stored or shown.
  *
  *   SETUP_ALERT_AFTER_HOURS   age of a workspace before unfinished setup is flagged (default 24)
- *   WALLET_LOW_PERCENT        wallet threshold as % of the last top-up (default 20)
  */
 const { CustomerAlerts, Tenants, Users, Clients, Templates, MetaWhatsappTemplates, WhatsappNumberState } = require('../models');
 const { NO_ID } = require('../db/mongo');
@@ -31,7 +30,8 @@ const { currentTenantId, runAsSystem, runAsTenant } = require('./tenantContext')
 const { explainRejection, cleanReasonCode } = require('./templateRejection');
 const alertWhatsapp = require('./alertWhatsapp');
 const notify = require('./notify');
-const wallet = require('./wallet');
+const billingWallet = require('./billing/wallet');
+const { WARN_FRACTION } = require('./billing/aiAllowance');
 
 const TYPES = Object.freeze({
   template_rejected: { severity: 'warning', path: '/templates', label: 'Template rejected' },
@@ -161,17 +161,27 @@ const money = (value, currency = 'INR') => {
   try { return new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 2 }).format(Number(value) || 0); } catch { return String(value); }
 };
 
-async function evaluateWallet(row = null) {
-  const current = row || await wallet.getWallet();
-  if (!wallet.isLow(current)) return resolve('wallet_low');
-  const percent = Math.max(0, Math.round((Number(current.balance) / Number(current.reference_amount)) * 100));
+/**
+ * Wallet notice from the billing ledger (services/billing/wallet.js): low when
+ * the balance is at or under 20 percent of the last top-up, the same rule the
+ * billing module's own email uses. Closes itself after a top-up.
+ */
+async function evaluateWallet({ emailAlreadySent = false } = {}) {
+  const topup = await billingWallet.lastTopup();
+  if (!topup) return resolve('wallet_low');
+  const balance = await billingWallet.balancePaise();
+  const percent = Math.max(0, Math.round((balance / Number(topup.amount_paise)) * 100));
+  if (balance > Math.ceil(Number(topup.amount_paise) * WARN_FRACTION)) return resolve('wallet_low');
   return raise({
     type: 'wallet_low', key: 'wallet',
-    title: 'Your wallet is running low',
-    message: `Your wallet balance is ${money(current.balance, current.currency)}, which is ${percent}% of your last top-up. Campaigns and messages stop when it reaches zero.`,
-    advice: 'Add money to your wallet to keep sending.',
-    details: { balance: current.balance, reference_amount: current.reference_amount, percent, currency: current.currency },
+    title: balance <= 0 ? 'Your wallet is empty' : 'Your wallet is running low',
+    message: balance <= 0
+      ? 'Your wallet is empty. AI replies and paid extras stop until you top it up.'
+      : `Your wallet is down to ${billingWallet.formatInr(balance)}, which is ${percent}% of your last top-up. Paid usage stops when it reaches zero.`,
+    advice: 'Top up your wallet in Settings > Billing to keep going.',
+    details: { balance_paise: balance, last_topup_paise: Number(topup.amount_paise), percent },
     whatsappSummary: `wallet at ${percent}% of your last top-up`,
+    emailAlreadySent,
   });
 }
 

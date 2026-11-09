@@ -47,6 +47,15 @@ async function raise({ key, kind, message, meta = {} }) {
   } catch (error) {
     console.error(`[billing/alerts] Could not email the owner of workspace ${tenantId}:`, error.message);
   }
+  // The same facts in the customer's Notices box (and the WhatsApp copy for opted-in numbers).
+  // The email above is that notice's email, so no second one goes out.
+  if (kind === 'wallet_low') {
+    try {
+      await require('../alerts').evaluateWallet({ emailAlreadySent: delivered });
+    } catch (error) {
+      console.error('[billing/alerts] Notice failed:', error.message);
+    }
+  }
   if (delivered) {
     // Delivery status is bookkeeping on the alert row (not a ledger row).
     await BillingAlerts.updateOne({ id: row.id }, { $set: { delivered: true } }).catch(() => {});

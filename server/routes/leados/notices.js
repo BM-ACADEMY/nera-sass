@@ -48,7 +48,8 @@ module.exports = function registerNoticeRoutes(app, ctx) {
 
   app.get('/api/notices/preferences', auth, async (req, res) => {
     try {
-      const tenant = await runAsSystem(() => Tenants.findOne({ id: currentTenantId() }, { _id: 0, alerts_whatsapp: 1 }).lean(), 'notice-preferences');
+      const tenantId = currentTenantId(); // read before entering the system context
+      const tenant = await runAsSystem(() => Tenants.findOne({ id: tenantId }, { _id: 0, alerts_whatsapp: 1 }).lean(), 'notice-preferences');
       const prefs = tenant?.alerts_whatsapp;
       return res.json({
         email: true,
@@ -66,7 +67,8 @@ module.exports = function registerNoticeRoutes(app, ctx) {
       if (!can(req.identity, 'tenant.settings')) return res.status(403).json({ error: 'You do not have permission to change this' });
       if (req.body?.whatsapp_opt_in === true) return res.status(400).json({ error: 'WhatsApp alerts can only be turned on when the workspace is created.', code: 'OPT_IN_AT_SIGNUP' });
       if (req.body?.whatsapp_opt_out === true) {
-        await runAsSystem(() => Tenants.updateOne({ id: currentTenantId(), 'alerts_whatsapp.opted_in': true }, { $set: { 'alerts_whatsapp.opted_in': false, 'alerts_whatsapp.opted_out_at': new Date() } }), 'notice-preferences');
+        const tenantId = currentTenantId();
+        await runAsSystem(() => Tenants.updateOne({ id: tenantId, 'alerts_whatsapp.opted_in': true }, { $set: { 'alerts_whatsapp.opted_in': false, 'alerts_whatsapp.opted_out_at': new Date() } }), 'notice-preferences');
       }
       return res.json({ success: true });
     } catch (error) {
