@@ -240,6 +240,36 @@ class LeadOSAPI {
     return this.request('/api/billing/orders', { method: 'POST', body: JSON.stringify(order) });
   }
 
+  // N7: the free trial and invoices.
+  async startBillingTrial(details) {
+    return this.request('/api/billing/trial/start', { method: 'POST', body: JSON.stringify(details) });
+  }
+
+  async getBillingInvoices(limit = 20) {
+    return this.request(`/api/billing/invoices?limit=${encodeURIComponent(limit)}`);
+  }
+
+  // The invoice PDF needs the session token, so it is fetched and saved from a blob.
+  async downloadBillingInvoice(invoice) {
+    const response = await fetch(`${API_URL}/api/billing/invoices/${encodeURIComponent(invoice.id)}/pdf`, {
+      headers: { Authorization: `Bearer ${this.token}` },
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || 'Could not download the invoice');
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${invoice.invoice_number}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return true;
+  }
+
   async verifyBillingPayment(result) {
     return this.request('/api/billing/orders/verify', { method: 'POST', body: JSON.stringify(result) });
   }

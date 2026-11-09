@@ -731,16 +731,20 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       const tenant = await loadTenant(tenantIdParam(req));
       if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
       const data = await runAsTenant(tenant.id, async () => {
-        const [sub, balance, ledger, orders, alerts, gate] = await Promise.all([
+        const [sub, balance, ledger, orders, alerts, gate, trialRow, invoices] = await Promise.all([
           billing.subscriptions.current(),
           billing.wallet.balancePaise(),
           billing.wallet.ledger({ limit: 50 }),
           billing.orders.listOrders(20),
           billing.alerts.recent(20),
           billing.aiAllowance.check(tenant),
+          billing.trial.current(),
+          billing.invoices.list(20),
         ]);
         return {
           subscription: billing.subscriptions.publicSubscription(sub),
+          trial: trialRow ? { ...billing.trial.publicTrial(trialRow), extensions: trialRow.extensions || [] } : null,
+          invoices,
           wallet: { balance_paise: balance, balance_inr: balance / 100 },
           ledger: ledger.map((row) => ({ id: row.id, direction: row.direction, amount_paise: row.amount_paise, reason: row.reason, description: row.description, reference_type: row.reference_type, created_by: row.created_by, created_at: row.created_at })),
           orders,
@@ -772,6 +776,25 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       }));
       await audit.record(audit.EVENTS.WALLET_ADJUSTED, { tenantId: tenant.id, req, targetType: 'wallet_ledger', targetId: result.row?.id, meta: { direction, amount_paise: amountPaise, note } });
       return res.json({ balance_paise: result.balance_paise, entry_id: result.row?.id });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // N7: extends a workspace's free trial, to 14 days in all. The reason is
+  // required and lands in the audit log and on the trial row.
+  router.post('/tenants/:id/billing/trial/extend', permit('platform.billing.manage'), async (req, res) => {
+    try {
+      const tenant = await loadTenant(tenantIdParam(req));
+      if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
+      const result = await billing.trial.extend({
+        tenantId: tenant.id,
+        days: req.body?.days === undefined || req.body?.days === null || req.body?.days === '' ? null : Number(req.body.days),
+        reason: req.body?.reason,
+        staffUserId: req.user.id,
+        ip: req.ip || null,
+      });
+      return res.json({ trial: result.trial, subscription: billing.subscriptions.publicSubscription(result.subscription) });
     } catch (error) {
       return fail(res, error);
     }

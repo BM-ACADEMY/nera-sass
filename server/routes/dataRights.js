@@ -23,6 +23,8 @@ const exporter = require('../services/dataExport');
 const { startCsv, writeRows } = require('../services/csvExport');
 const erasure = require('../services/erasure');
 const replyWebhook = require('../services/replyWebhook');
+// N7: exports are not part of the free trial (deletion on request still is).
+const noTrialExport = require('../services/billing/trial').guard('exports');
 
 const router = express.Router();
 router.use(['/contacts', '/data-export', '/reply-webhook'], auth);
@@ -49,7 +51,7 @@ async function streamCsv(res, { filename, columns, batches }) {
 const stamp = () => new Date().toISOString().slice(0, 10);
 
 // ── exports ──────────────────────────────────────────────────────────────────
-router.get('/contacts/:id/export.csv', requirePermission('leads.export'), async (req, res) => {
+router.get('/contacts/:id/export.csv', requirePermission('leads.export'), noTrialExport, async (req, res) => {
   try {
     const lead = await exporter.findContact(req.params.id);
     if (!lead) return res.status(404).json({ error: 'Contact not found' });
@@ -67,7 +69,7 @@ router.get('/contacts/:id/export.csv', requirePermission('leads.export'), async 
   }
 });
 
-router.get('/data-export/workspace.csv', requirePermission('workspace.export'), async (req, res) => {
+router.get('/data-export/workspace.csv', requirePermission('workspace.export'), noTrialExport, async (req, res) => {
   try {
     const part = req.query.part === 'contacts' ? 'contacts' : 'messages';
     const rows = await exporter.countWorkspace(part);

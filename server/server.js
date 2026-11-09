@@ -1305,8 +1305,12 @@ if (jobsEnabled()) scheduleJob('* * * * *', async () => {
 // (the live check in services/billing/aiAllowance.js already stops the AI).
 if (jobsEnabled()) scheduleJob('45 0 * * *', () => {
   require('./services/billing/orders').expireLapsed()
-    .then((result) => { if (result.expired) console.log(`[Billing] ${result.expired} subscription(s) expired`); })
+    .then((result) => { if (result.expired) console.log(`[Billing] ${result.expired} subscription(s) expired (${result.trials || 0} trial(s))`); })
     .catch((error) => console.error('[Billing] Expiry sweep failed:', error.message));
+  // N7: the day-5 "your trial ends soon" email, once per trial.
+  require('./services/billing/trial').sweep()
+    .then((result) => { if (result.notified) console.log(`[Billing] ${result.notified} trial day-5 notice(s) sent`); })
+    .catch((error) => console.error('[Billing] Trial sweep failed:', error.message));
 });
 
 // Tenant lifecycle (plan U6): stores each workspace's state daily and archives

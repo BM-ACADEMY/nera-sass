@@ -70,6 +70,9 @@ const TENANT_SCOPED = new Map([
   ['wallet_ledger', {}],
   ['billing_orders', {}],
   ['billing_alerts', {}],
+  ['billing_invoices', {}],
+  ['billing_trials', {}],
+  ['billing_trial_attempts', {}],
 ]);
 
 const QUERY_OPS = [

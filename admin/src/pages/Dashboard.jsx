@@ -303,6 +303,7 @@ const Dashboard = () => {
             <WorkspaceDetail
               tenantId={detailTenantId}
               refreshKey={detailRefresh}
+              canManageBilling={Boolean(permissions['platform.billing.manage'])}
               onSuspend={(tenant) => { setSuspendModalTenant(tenant); setSuspendReason(''); }}
               onReinstate={handleReinstate}
             />

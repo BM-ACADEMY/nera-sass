@@ -11,6 +11,7 @@ import ConfirmDialog from '../ConfirmDialog';
 import EditBrandDialog from './EditBrandDialog';
 import WhatsAppProfileDialog from './WhatsAppProfileDialog';
 import BusinessProfileCard from './BusinessProfileCard';
+import TrialCard from './TrialCard';
 import { Spinner } from '@/components/ui/spinner';
 import UserAvatar from '../UserAvatar';
 import { Badge } from '@/components/ui/badge';
@@ -64,7 +65,7 @@ const DetailSkeleton = () => (
 
 // Everything about one workspace: who owns it, its login, WhatsApp number,
 // brand profile, usage and the audit trail of what staff did to it.
-const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) => {
+const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0, canManageBilling = false }) => {
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -345,6 +346,9 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
         ) : (
           <Section icon={FiTag} title="Brand profile"><div className="text-sm text-muted-foreground">No brand profile.</div></Section>
         )}
+
+        {/* N7: plan, free trial (staff may extend it) and invoices */}
+        <TrialCard tenantId={tenant.id} canManageBilling={canManageBilling} />
       </div>
 
       {/* Activity */}

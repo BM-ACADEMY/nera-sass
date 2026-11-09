@@ -221,15 +221,20 @@ function billingAlertEmail({ to, name, workspaceName, kind, message }) {
     wallet_low: `${workspaceName}: wallet running low`,
     ai_blocked: `${workspaceName}: AI replies are paused`,
     plan_expired: `${workspaceName}: your plan has ended`,
+    trial_day5: `${workspaceName}: your free trial ends soon`,
+    trial_expired: `${workspaceName}: your free trial has ended`,
   };
   const title = titles[kind] || `${workspaceName}: billing notice`;
   const url = `${appUrl()}/settings`;
+  const trial = String(kind || '').startsWith('trial_');
   const lines = [
     `Hi ${name || 'there'},`,
     message,
-    `Open Settings > Billing in ${product} to top up the wallet or change your plan.`,
+    trial
+      ? `Open Settings > Billing in ${product} and upgrade with one click. No data is lost.`
+      : `Open Settings > Billing in ${product} to top up the wallet or change your plan.`,
   ];
-  return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: 'Open Billing' }) });
+  return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: trial ? 'Upgrade now' : 'Open Billing' }) });
 }
 
 module.exports = {

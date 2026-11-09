@@ -8,6 +8,14 @@ module.exports = defineModel('billing_orders', {
   purpose: { type: String }, // subscription | wallet_topup
   plan_id: { type: Number, default: null },
   plan_code: { type: String, default: null },
+  // N7: billing period bought (1, 3 or 6 months) for a plan order.
+  period_months: { type: Number, default: null },
+  // N7: the price, the GST on it and the total, kept apart. amount_paise is
+  // what Razorpay is asked to charge and always equals total_paise.
+  price_paise: { type: Number, default: null },
+  gst_rate_percent: { type: Number, default: 0 },
+  gst_paise: { type: Number, default: 0 },
+  total_paise: { type: Number, default: null },
   amount_paise: { type: Number },
   currency: { type: String, default: 'INR' },
   razorpay_order_id: { type: String },
@@ -17,6 +25,8 @@ module.exports = defineModel('billing_orders', {
   signature_verified_at: { type: Date, default: null },
   fulfilled_at: { type: Date, default: null },
   fulfilled_by: { type: String, default: null }, // webhook | checkout
+  // N7: the tax invoice written when the order was fulfilled.
+  invoice_id: { type: Number, default: null },
   created_by: { type: Number, default: null },
   meta: { type: Mixed, default: () => ({}) },
   created_at: { type: Date, default: Date.now },
