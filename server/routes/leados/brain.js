@@ -5,7 +5,7 @@
  */
 const crypto = require('crypto');
 const multer = require('multer');
-const { BrainProfiles, Clients, Tenants } = require('../../models');
+const { AiReplyLogs, BrainProfiles, Clients, Tenants } = require('../../models');
 const { requirePermission } = require('../../services/permissions');
 const { runAsSystem } = require('../../services/tenantContext');
 const prompts = require('../../services/brainPrompt');
@@ -197,6 +197,57 @@ app.delete('/api/brain/docs/:id', auth, workspaceOnly, manageBrain, async (req, 
     res.json({ success: true });
   } catch (err) {
     console.error('[brain/docs]', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── AI reply cost: tokens and estimated USD per reply, this workspace only ─
+// GET /api/brain/usage?from=YYYY-MM-DD&to=YYYY-MM-DD  (default: this month)
+app.get('/api/brain/usage', auth, workspaceOnly, manageBrain, async (req, res) => {
+  try {
+    const now = new Date();
+    const from = req.query.from ? new Date(`${req.query.from}T00:00:00Z`) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const to = req.query.to ? new Date(`${req.query.to}T23:59:59.999Z`) : now;
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) return res.status(400).json({ error: 'from and to must be dates (YYYY-MM-DD)' });
+    // The tenant-scope plugin adds the workspace filter to this aggregate.
+    const rows = await AiReplyLogs.aggregate([
+      { $match: { created_at: { $gte: from, $lte: to }, status: { $in: ['sent', 'failed', 'no_send'] } } },
+      { $group: {
+        _id: { language: '$language', status: '$status' },
+        replies: { $sum: 1 },
+        prompt_tokens: { $sum: { $ifNull: ['$prompt_tokens', 0] } },
+        completion_tokens: { $sum: { $ifNull: ['$completion_tokens', 0] } },
+        cost_usd: { $sum: { $ifNull: ['$cost_usd', 0] } },
+        unknown_cost: { $sum: { $cond: [{ $eq: ['$cost_usd', null] }, 1, 0] } },
+      } },
+    ]);
+    const total = { replies: 0, sent_replies: 0, prompt_tokens: 0, completion_tokens: 0, cost_usd: 0, replies_without_cost: 0 };
+    const byLanguage = {};
+    for (const row of rows) {
+      const lang = row._id.language || 'unknown';
+      const bucket = byLanguage[lang] || (byLanguage[lang] = { replies: 0, cost_usd: 0 });
+      bucket.replies += row.replies;
+      bucket.cost_usd += row.cost_usd;
+      total.replies += row.replies;
+      if (row._id.status === 'sent') total.sent_replies += row.replies;
+      total.prompt_tokens += row.prompt_tokens;
+      total.completion_tokens += row.completion_tokens;
+      total.cost_usd += row.cost_usd;
+      total.replies_without_cost += row.unknown_cost;
+    }
+    // Every model call is counted (a failed or unsent draft was still billed);
+    // the average is per reply actually sent.
+    const round = (n) => Number(n.toFixed(6));
+    res.json({
+      from, to,
+      ...total,
+      cost_usd: round(total.cost_usd),
+      cost_per_sent_reply_usd: total.sent_replies ? round(total.cost_usd / total.sent_replies) : null,
+      by_language: Object.fromEntries(Object.entries(byLanguage).map(([k, v]) => [k, { replies: v.replies, cost_usd: round(v.cost_usd) }])),
+      note: 'Estimated from the provider token counts and the AI_PRICE_* environment prices.',
+    });
+  } catch (err) {
+    console.error('[brain/usage]', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });

@@ -11,7 +11,6 @@ const { Leads } = require('../models');
 const { notifyWorkspace } = require('./realtime');
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const LOCAL_TIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/;
 
 /** Cleans the model's `meeting` field; null when it proposes nothing usable. */
 function cleanMeeting(value) {
@@ -23,32 +22,7 @@ function cleanMeeting(value) {
   return { start: start || null, email, cancel };
 }
 
-/**
- * "2026-11-10T15:30" in `timeZone` -> Date. A value that carries its own
- * offset ("Z", "+05:30") is taken as is. Returns null when it is not a time.
- */
-function toDate(value, timeZone) {
-  const text = String(value || '').trim();
-  const local = text.match(LOCAL_TIME);
-  if (!local) {
-    if (!/(Z|[+-]\d{2}:?\d{2})$/.test(text)) return null;
-    const parsed = new Date(text);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  }
-  const [, y, mo, d, h, mi] = local.map(Number);
-  const asUtc = Date.UTC(y, mo - 1, d, h, mi);
-  // The zone's offset at that moment; checked twice so a DST edge settles.
-  const offsetAt = (ms) => {
-    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-      timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-    }).formatToParts(new Date(ms)).map((p) => [p.type, p.value]));
-    return Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute) - ms;
-  };
-  let ms = asUtc - offsetAt(asUtc);
-  ms = asUtc - offsetAt(ms);
-  const date = new Date(ms);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
+const { localToDate: toDate } = require('./appointmentRules');
 
 const formatTime = (value, timeZone) => new Date(value).toLocaleString('en-IN', { timeZone, dateStyle: 'medium', timeStyle: 'short' });
 

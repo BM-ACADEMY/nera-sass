@@ -66,6 +66,7 @@ const FOREIGN_KEYS = [
   ['conversations', 'id', 'messages', 'conversation_id', 'cascade'],
   ['departments', 'id', 'users', 'department_id', 'restrict'],
   ['gmb_keywords', 'id', 'gmb_keyword_history', 'keyword_id', 'cascade'],
+  ['leads', 'id', 'appointments', 'lead_id', 'cascade'],
   ['leads', 'id', 'campaign_import_recipients', 'lead_id', 'cascade'],
   ['leads', 'id', 'campaign_logs', 'lead_id', 'cascade'],
   ['leads', 'id', 'chatbot_userprogresses', 'lead_id', 'cascade'],
