@@ -59,6 +59,9 @@ const TENANT_SCOPED = new Map([
   ['ai_decisions', {}],
   ['reports', {}],
   ['google_calendar_credentials', {}],
+  ['contact_erasures', {}],
+  ['reply_webhooks', {}],
+  ['webhook_deliveries', {}],
   ['workflow_logs', { optional: true }],
   // billing (plans is the platform price list and is not scoped)
   ['subscriptions', {}],

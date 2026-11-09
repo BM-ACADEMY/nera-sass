@@ -36,6 +36,8 @@ const { requireMetaSignature } = require('../../services/metaWebhookSignature');
 const platformInbox = require('../../services/platformInbox');
 const mediaStore = require('../../services/mediaStore');
 const aiAutomation = require('../../services/aiAutomation');
+const erasure = require('../../services/erasure');
+const replyWebhook = require('../../services/replyWebhook');
 const brainEngine = require('../../services/brainEngine');
 const { tenantLifecycle } = require('../../services/lifecycle');
 const consent = require('../../services/consent');
@@ -320,6 +322,12 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
           // Handle ALL incoming messages from customers (text, image, audio, video, document)
           for (const msg of value.messages || []) {
             const phone = msg.from;       // e.g. '919876543210'
+            // A contact deleted on request is not stored again and gets no AI
+            // reply or webhook event; nothing about the message is logged.
+            if (await erasure.isErased(phone)) {
+              console.log(`[Webhook] Ignored a message from an erased contact (tenant ${client.tenant_id})`);
+              continue;
+            }
             const isForwarded = msg.context?.forwarded || msg.context?.frequently_forwarded || false;
             const waMessageId = msg.id;
             const referralAdId = msg.referral?.source_id ? String(msg.referral.source_id) : null;
@@ -474,6 +482,9 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
               await Conversations.updateOne({ id: conversationId }, [{ $set: { unread_count: { $add: [{ $ifNull: ['$unread_count', 0] }, 1] } } }]);
 
               io.emit('incoming_message', { lead_id: String(lead.id), message: savedRows[0] });
+
+              // The business's own reply webhook (signed, retried, logged without content).
+              await replyWebhook.notifyReply({ leadId: lead.id, messageId: inbound.id });
 
               // Copy inbound media to the media server in the background: Meta
               // deletes it after about 30 days. Until the copy lands, the chat

@@ -32,6 +32,7 @@ const {
   trigramSimilarity,
 } = ctx;
 const { requireBrandSender, sendError } = require('../../services/tenantSender');
+const erasure = require('../../services/erasure');
 // ═══════════════════════════════════════════════════════════════════
 // FOLLOWUP ENGINE APIs (WF02)
 // ═══════════════════════════════════════════════════════════════════
@@ -112,6 +113,7 @@ app.post('/api/communication/send-template', auth, async (req, res) => {
     if (!leadRow) {
       return res.status(404).json({ error: 'Lead not found' });
     }
+    if (await erasure.isErased(leadRow.phone)) return res.status(409).json({ error: erasure.ERASED_MESSAGE, code: 'CONTACT_ERASED' });
     const leadClient = leadRow.client_id != null ? await Clients.findOne({ id: leadRow.client_id }, { wa_access_token: 1, phone_number_id: 1, whatsapp_status: 1 }).lean() : null;
     const lead = {
       ...leadRow,
@@ -185,6 +187,7 @@ app.post('/api/ai/followup', auth, async (req, res) => {
     }
 
     const lead = leadRes.rows[0];
+    if (await erasure.isErased(lead.phone)) return res.status(409).json({ error: erasure.ERASED_MESSAGE, code: 'CONTACT_ERASED' });
 
     // Generate AI response
     const fullPrompt = `${prompt}\n\nLead Name: ${lead.name}\nLead Status: ${lead.status}\nBrand: ${lead.client_id}`;

@@ -22,6 +22,7 @@ const numberHealth = require('../../services/numberHealth');
 const aiLatency = require('../../services/aiLatency');
 const brainEngine = require('../../services/brainEngine');
 const aiAllowance = require('../../services/billing/aiAllowance');
+const erasure = require('../../services/erasure');
 const { BrainDocs } = ctx;
 // ── INTERNAL (called by n8n) ──────────────────────────────
 
@@ -81,6 +82,7 @@ async function sendToLead(req, leadIdRaw, content, build, { kind = 'service', me
 
   const lead = await Leads.findOne({ id: leadId }, { _id: 0 }).lean();
   if (!lead || !lead.phone) throw new SendError(404, 'Lead not found');
+  if (await erasure.isErased(lead.phone)) throw new SendError(409, erasure.ERASED_MESSAGE, 'CONTACT_ERASED');
   const brand = lead.client_id != null
     ? await Clients.findOne({ id: lead.client_id }, { _id: 0, id: 1, phone_number_id: 1, wa_access_token: 1 }).lean()
     : null;

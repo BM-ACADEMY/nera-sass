@@ -4,6 +4,7 @@ const express = require('express');
 // service key or founder/ops platform staff only, never a customer token.
 const { internalAuth, internalPlatformAuth, staffAuth, hasInternalKey } = require('../middleware/authMiddleware');
 const audit = require('../services/audit');
+const erasure = require('../services/erasure');
 const { recordTenantWorkflowLog, recordPlatformWorkflowLog, WorkflowLogError } = require('../services/workflowLog');
 const fs = require('fs');
 const path = require('path');
@@ -609,6 +610,7 @@ async function getOrUpsertConversation(lead_id) {
 async function sendWhatsAppText(lead_id, content) {
   const lead = await leadWithClient(lead_id, { phone_number_id: 'phone_number_id', client_wa_token: 'wa_access_token' });
   if (!lead) return { delivered: false, reason: 'lead_not_found' };
+  if (await erasure.isErased(lead.phone)) return { delivered: false, reason: 'contact_erased' };
 
   const phoneNumberId = lead.phone_number_id;
   const waAccessToken = lead.client_wa_token;
@@ -1578,7 +1580,7 @@ router.post('/communication/send', internalAuth, async (req, res) => {
 
     // 2. Send real outbound message via Meta WhatsApp Cloud API (`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`)
     let waMessageId = null;
-    if (channel === 'whatsapp' && lead && lead.phone && phoneNumberId && waAccessToken) {
+    if (channel === 'whatsapp' && lead && lead.phone && phoneNumberId && waAccessToken && !(await erasure.isErased(lead.phone))) {
       try {
         const phoneDigits = lead.phone.replace(/\D/g, '');
         const payload = {
@@ -2093,7 +2095,7 @@ Write one natural follow-up that continues the unfinished topic. Reference the s
     let outboundMessageType = 'text';
     const phoneNumberId = lead?.phone_number_id;
     const waAccessToken = lead?.client_wa_token;
-    if (lead && lead.phone && phoneNumberId && waAccessToken) {
+    if (lead && lead.phone && phoneNumberId && waAccessToken && !(await erasure.isErased(lead.phone))) {
       try {
         const phoneDigits = lead.phone.replace(/\D/g, '');
         const waRes = await axios.post(
@@ -2234,7 +2236,7 @@ Naturally reference relevant details already discussed when useful. Do not inven
     let outboundMessageType = 'text';
     const phoneNumberId = lead.phone_number_id;
     const waAccessToken = lead.client_wa_token;
-    if (lead.phone && phoneNumberId && waAccessToken) {
+    if (lead.phone && phoneNumberId && waAccessToken && !(await erasure.isErased(lead.phone))) {
       try {
         let messagePayload;
         if (within24Hours) {
