@@ -16,6 +16,7 @@ import { Badge, ScoreBar } from '../components/ui.jsx';
 import { useLeads, useLead } from '../hooks/useLeads.js';
 import { useAuth } from '../hooks/useAuth.js';
 import { api } from '../services/api.js';
+import { OnboardingPanel } from './onboarding/OnboardingPanel.jsx';
 
 // --- Sparkline Component for Stats Cards ---
 const MiniSparkline = ({ data, strokeColor }) => {
@@ -250,6 +251,9 @@ export const Dashboard = () => {
           border-color: ${C.accent};
         }
       `}</style>
+
+      {/* Notices and the setup checklist (N5): the first thing on Home */}
+      <OnboardingPanel />
 
       {/* --- HEADER CONTROLS --- */}
       <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, marginBottom: 26 }}>

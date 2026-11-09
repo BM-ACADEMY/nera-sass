@@ -20,6 +20,10 @@ export const launchMetaEmbeddedSignup = async config => {
   const FB = await loadFacebookSdk(config.app_id);
   return new Promise((resolve, reject) => {
     let settled = false;
+    // Meta returns the account ids in a window message and the one-time code in
+    // the login callback; the server needs both, in either order.
+    let details = null;
+    let code = null;
     const timeout = window.setTimeout(() => finish(new Error('Meta finished without returning the WhatsApp account details. Please retry the verification.')), 3 * 60 * 1000);
     const finish = (error, data) => {
       if (settled) return;
@@ -40,7 +44,8 @@ export const launchMetaEmbeddedSignup = async config => {
       try { if (typeof data === 'string') data = JSON.parse(data); } catch { return; }
       if (data?.type !== 'WA_EMBEDDED_SIGNUP') return;
       if (data.event === 'FINISH' || data.event === 'FINISH_ONLY_WABA') {
-        finish(null, data.data || {});
+        details = data.data || {};
+        if (code) finish(null, { ...details, code });
       } else if (data.event === 'CANCEL') {
         finish(new Error('Meta Embedded Signup was cancelled'));
       } else if (data.event === 'ERROR') {
@@ -49,7 +54,9 @@ export const launchMetaEmbeddedSignup = async config => {
     };
     window.addEventListener('message', onMessage);
     FB.login(response => {
-      if (!response.authResponse) finish(new Error('Meta login or authorization was not completed'));
+      if (!response.authResponse) { finish(new Error('Meta login or authorization was not completed')); return; }
+      code = response.authResponse.code || null;
+      if (code && details) finish(null, { ...details, code });
     }, {
       config_id: config.config_id,
       auth_type: 'rerequest',

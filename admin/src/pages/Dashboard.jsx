@@ -24,6 +24,7 @@ import WorkflowLogsView from '../components/WorkflowLogsView';
 import FounderReportsView from '../components/FounderReportsView';
 import AdminSettingsView from '../components/AdminSettingsView';
 import TemplatesPage from '../components/templates/TemplatesPage';
+import OnboardingQueue from '../components/onboarding/OnboardingQueue';
 import axiosClient from '../api/axiosClient';
 import { disconnectRealtime, useLiveEvent, useLiveRefresh, useLiveStatus } from '../api/realtime';
 import { Button } from '@/components/ui/button';
@@ -42,6 +43,7 @@ import { cn } from '@/lib/utils';
 const TAB_SLUGS = {
   inbox: 'whatsapp-inbox',
   tenants: 'workspaces',
+  onboarding: 'onboarding',
   clients: 'whatsapp-numbers',
   templates: 'templates',
   workflows: 'workflow-logs',
@@ -204,7 +206,13 @@ const Dashboard = () => {
 
   // Sidebar sections; account settings open from the profile menu.
   const menuSections = [
-    { label: 'Customers', items: [{ key: 'tenants', icon: MdOutlineSpaceDashboard, label: 'Workspaces' }] },
+    {
+      label: 'Customers',
+      items: [
+        { key: 'tenants', icon: MdOutlineSpaceDashboard, label: 'Workspaces' },
+        ...(permissions['platform.whatsapp.connect'] ? [{ key: 'onboarding', icon: FiSmartphone, label: 'Onboarding' }] : []),
+      ],
+    },
     {
       label: 'WhatsApp',
       items: [
@@ -226,6 +234,7 @@ const Dashboard = () => {
   const getTabTitle = () => {
     switch (activeTab) {
       case 'tenants': return detailTenantId ? 'Workspace Details' : 'Workspaces & Tenants';
+      case 'onboarding': return 'Customer Onboarding';
       case 'clients': return 'WhatsApp Numbers & Meta Inventory';
       case 'templates': return itemId === 'new' ? 'New template' : itemId ? 'Edit template' : 'Template Management';
       case 'workflows': return 'Workflow Automation Engines';
@@ -344,6 +353,8 @@ const Dashboard = () => {
           )}
 
           {activeTab === 'users' && <UsersPage currentUser={userProfile} permissions={permissions} onChanged={fetchUsers} />}
+
+          {activeTab === 'onboarding' && permissions['platform.whatsapp.connect'] && <OnboardingQueue />}
 
           {activeTab === 'clients' && <ClientsManagement />}
 

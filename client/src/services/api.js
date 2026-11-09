@@ -222,6 +222,41 @@ class LeadOSAPI {
     });
   }
 
+  // ─── ONBOARDING (setup checklist, notices, services, test message, go live) ───
+  async getOnboarding() {
+    return this.request('/api/onboarding');
+  }
+
+  async requestWhatsappConnect() {
+    return this.request('/api/onboarding/whatsapp/request', { method: 'POST' });
+  }
+
+  async completeEmbeddedSignup(details) {
+    return this.request('/api/onboarding/whatsapp/embedded-signup', { method: 'POST', body: JSON.stringify(details) });
+  }
+
+  async getOnboardingServices() {
+    return this.request('/api/onboarding/services');
+  }
+
+  async saveOnboardingService(service, id = null) {
+    return this.request(id ? `/api/onboarding/services/${id}` : '/api/onboarding/services', {
+      method: id ? 'PUT' : 'POST', body: JSON.stringify(service),
+    });
+  }
+
+  async deleteOnboardingService(id) {
+    return this.request(`/api/onboarding/services/${id}`, { method: 'DELETE' });
+  }
+
+  async sendOnboardingTestMessage(body) {
+    return this.request('/api/onboarding/test-message', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async goLive() {
+    return this.request('/api/onboarding/go-live', { method: 'POST' });
+  }
+
   // ─── BILLING (plan, wallet, Razorpay; tenant from the session) ───
   async getBillingPlans() {
     return this.request('/api/billing/plans');
