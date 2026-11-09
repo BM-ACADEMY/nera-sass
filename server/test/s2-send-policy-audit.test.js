@@ -20,6 +20,7 @@ const SKIP_DIRS = new Set(['node_modules', 'test', 'scripts', 'uploads', 'migrat
 // Files that send WhatsApp messages without sendPolicy, and why that is intended.
 const EXEMPT = {
   'services/founderNotify.js': 'Alerts the platform owner on their own number; not a contact of any tenant.',
+  'services/alertWhatsapp.js': 'Customer notices (N4) from the platform number to the workspace owner, not to a tenant contact: no lead or tenant wallet. It enforces its own rules (alert opt-in at signup, approved UTILITY template from the platform WABA only), tested in n4-campaigns-alerts B6.',
   'services/platformInbox.js': 'Platform-staff inbox on the platform\'s own number (opt-in contacts who wrote to Nera); no tenant lead, consent or wallet.',
   'routes/leados/webhook-whatsapp.js': 'STOP/START confirmation sent inside the window the customer just opened; it is the consent confirmation itself.',
   'routes/alliance.js': 'AllianceOS is a separate, tenant-less module with its own prospects, suppression list and caps (reported in the PR, not routed here).',
