@@ -31,6 +31,9 @@ test.before(async () => {
   process.env.RAZORPAY_SECRET = KEY_SECRET;
   process.env.RAZORPAY_WEBHOOK_SECRET = WEBHOOK_SECRET;
   delete process.env.BILLING_REQUIRE_PLAN;
+  // The N1 per-number send limit (60 a minute) is not what this suite tests;
+  // A2 sends over a hundred AI replies in a few seconds.
+  process.env.WA_SEND_PER_MINUTE = '100000';
   await startTestDb();
   ({ app } = require('../server'));
 });
@@ -407,7 +410,7 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.strictEqual(debit.tenant_id, 1);
 
     // Spend down to the 20 percent line: 79 more replies leave ₹20.
-    for (let i = 0; i < 79; i += 1) assert.strictEqual((await aiReply(1, ws, `o${i}`)).body.sent, true);
+    for (let i = 0; i < 79; i += 1) { const r = await aiReply(1, ws, `o${i}`); assert.strictEqual(r.body.sent, true, `overage reply ${i}: ${JSON.stringify(r.body)}`); }
     assert.strictEqual(await balance(1), 2000);
     assert.strictEqual(await runAsTenant(1, () => BillingAlerts.countDocuments({ kind: 'wallet_low' })), 1);
     for (let i = 0; i < 20; i += 1) assert.strictEqual((await aiReply(1, ws, `z${i}`)).body.sent, true);
