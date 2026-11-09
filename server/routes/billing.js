@@ -49,12 +49,12 @@ router.get('/plans', async (req, res) => {
   }
 });
 
-// GET /api/billing/summary — plan, period, wallet, usage and notices.
+// GET /api/billing/summary — plan, period, wallet, usage, trial and notices.
 router.get('/summary', async (req, res) => {
   try {
     const tenantId = req.identity.tenantId;
     const now = new Date();
-    const [sub, balance, seats, numbers, gate, limits, notices] = await Promise.all([
+    const [sub, balance, seats, numbers, gate, limits, notices, trialRow] = await Promise.all([
       billing.subscriptions.current(),
       billing.wallet.balancePaise(),
       seatUsage(tenantId),
@@ -62,11 +62,27 @@ router.get('/summary', async (req, res) => {
       billing.aiAllowance.check(req.tenant, now),
       billing.limits(null, now),
       billing.alerts.recent(10),
+      billing.trial.current(),
     ]);
     const subscription = billing.subscriptions.publicSubscription(sub, now);
+    const trialInfo = billing.trial.publicTrial(trialRow, now);
+    const onTrial = Boolean(sub?.is_trial);
     res.json({
       subscription,
-      plan: gate.plan || (sub ? await billing.plans.planById(sub.plan_id) : null),
+      plan: gate.plan || (sub && !sub.is_trial ? await billing.plans.planById(sub.plan_id) : (sub?.is_trial ? billing.trial.trialPlan() : null)),
+      // N7: the free trial. `available` means the Start button may be shown;
+      // `upgrade` is the one-click target (the WhatsApp plan, 1 month) when
+      // the trial is running or has ended.
+      trial: {
+        ...(trialInfo || {}),
+        active: onTrial && subscription?.status === 'active',
+        ended: onTrial && subscription?.status !== 'active',
+        available: !trialRow && !(subscription && subscription.status === 'active'),
+        requirements: ['business_name', 'website'],
+        limits: { seats: billing.trial.TRIAL.seats, numbers: billing.trial.TRIAL.numbers, ai_replies_total: billing.trial.TRIAL.aiRepliesTotal, days: billing.trial.TRIAL.days },
+        upgrade: trialRow ? { plan_code: 'whatsapp', period_months: 1 } : null,
+      },
+      gst_rate_percent: billing.gst.ratePercent(),
       wallet: { balance_paise: balance, balance_inr: balance / 100, currency: 'INR', topup_min_inr: billing.orders.topupMinInr(), topup_max_inr: billing.orders.topupMaxInr() },
       ai: {
         allowed: gate.allowed,
@@ -77,7 +93,8 @@ router.get('/summary', async (req, res) => {
         left: gate.left,
         overage_price_paise: gate.plan ? gate.plan.ai_overage_price_paise : 0,
         period_start: gate.period_start,
-        period_end: subscription?.current_period_end || null,
+        // The allowance resets here (monthly inside a 3 or 6 month period).
+        period_end: gate.period_end || subscription?.allowance_resets_at || subscription?.current_period_end || null,
       },
       seats: { used: seats.used, active_users: seats.activeUsers, pending_invitations: seats.pendingInvitations, limit: limits.seats, extra: subscription?.extra_seats || 0 },
       numbers: { used: numbers, limit: limits.numbers, extra: subscription?.extra_numbers || 0 },
@@ -116,13 +133,14 @@ router.get('/orders', requirePermission('billing.view'), async (req, res) => {
   }
 });
 
-// POST /api/billing/orders { purpose: 'subscription', plan_code } | { purpose: 'wallet_topup', amount_inr }
+// POST /api/billing/orders { purpose: 'subscription', plan_code, period_months? } | { purpose: 'wallet_topup', amount_inr }
 router.post('/orders', requirePermission('billing.manage'), async (req, res) => {
   try {
     const purpose = String(req.body?.purpose || '');
     const result = await billing.orders.createOrder({
       purpose,
       planCode: req.body?.plan_code,
+      periodMonths: req.body?.period_months ?? 1,
       amountInr: req.body?.amount_inr,
       userId: req.user.id,
     });
@@ -144,10 +162,11 @@ router.post('/orders/verify', requirePermission('billing.manage'), async (req, r
       verified: true,
       order: result.order,
       subscription: result.subscription || null,
+      invoice: result.invoice || null,
       wallet_credit_pending: Boolean(result.pending_webhook),
       message: result.pending_webhook
         ? 'Payment received. Your wallet will be credited as soon as Razorpay confirms it (usually within a minute).'
-        : (result.subscription ? `Your ${result.subscription.plan_name} plan is active.` : 'Payment confirmed.'),
+        : (result.subscription ? `Your ${result.subscription.plan_name} plan is active${result.upgraded_from_trial ? ': the trial limits are lifted' : ''}.` : 'Payment confirmed.'),
     });
   } catch (error) {
     fail(res, error, 'verify order');
@@ -161,6 +180,52 @@ router.post('/extras', requirePermission('billing.manage'), async (req, res) => 
     res.json(result);
   } catch (error) {
     fail(res, error, 'extras');
+  }
+});
+
+// ── N7: free trial ───────────────────────────────────────────────────────────
+// POST /api/billing/trial/start { business_name, website } — no card.
+router.post('/trial/start', requirePermission('billing.manage'), async (req, res) => {
+  try {
+    const result = await billing.trial.start({
+      businessName: req.body?.business_name,
+      website: req.body?.website,
+      userId: req.user.id,
+      ip: req.ip || null,
+    });
+    res.status(201).json({
+      trial: result.trial,
+      subscription: billing.subscriptions.publicSubscription(result.subscription),
+      message: `Your ${billing.trial.TRIAL.days}-day free trial has started.`,
+    });
+  } catch (error) {
+    fail(res, error, 'trial start');
+  }
+});
+
+// ── N7: invoices ─────────────────────────────────────────────────────────────
+// GET /api/billing/invoices
+router.get('/invoices', requirePermission('billing.view'), async (req, res) => {
+  try {
+    res.json({ invoices: await billing.invoices.list(req.query.limit) });
+  } catch (error) {
+    fail(res, error, 'invoices');
+  }
+});
+
+// GET /api/billing/invoices/:id/pdf — the tenant's own invoice as a PDF file.
+router.get('/invoices/:id/pdf', requirePermission('billing.view'), async (req, res) => {
+  try {
+    const invoice = await billing.invoices.byId(req.params.id);
+    if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
+    const file = billing.invoices.toPdf(invoice);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${invoice.invoice_number}.pdf"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.send(file);
+  } catch (error) {
+    return fail(res, error, 'invoice pdf');
   }
 });
 

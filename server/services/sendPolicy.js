@@ -20,6 +20,7 @@ const { currentTenantId, runAsSystem } = require('./tenantContext');
 const consent = require('./consent');
 const numberHealth = require('./numberHealth');
 const erasure = require('./erasure');
+const trial = require('./billing/trial');
 
 const KINDS = Object.freeze(['marketing', 'utility', 'service']);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -94,6 +95,9 @@ async function assertCanSend({ lead, kind, messageType = 'text', phoneNumberId =
   if (tenantId && !(await tenantCanSend(tenantId))) {
     throw new SendBlocked({ status: 403, code: 'SEND_BLOCKED', message: 'This workspace cannot send messages', retryable: true, retryAt: new Date(now.getTime() + 15 * 60 * 1000) });
   }
+  // N7 free trial: replies only, to people who wrote first; nothing after it ends.
+  const trialBlock = tenantId ? await trial.sendBlock({ kind: resolvedKind, messageType, now }) : null;
+  if (trialBlock) throw new SendBlocked({ status: trialBlock.status, code: trialBlock.code, message: trialBlock.message });
   if (!lead?.phone || consent.digitsOf(lead.phone).length < 10) {
     throw new SendBlocked({ status: 400, code: 'INVALID_PHONE', message: 'The contact has no valid WhatsApp number' });
   }

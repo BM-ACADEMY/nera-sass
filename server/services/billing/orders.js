@@ -23,6 +23,9 @@ const subscriptions = require('./subscriptions');
 const wallet = require('./wallet');
 const alerts = require('./alerts');
 const razorpay = require('./razorpay');
+const gst = require('./gst');
+const invoices = require('./invoices');
+const trial = require('./trial');
 
 class BillingError extends Error {
   constructor(status, message, code) {
@@ -40,6 +43,12 @@ const publicOrder = (order) => order && ({
   id: order.id,
   purpose: order.purpose,
   plan_code: order.plan_code,
+  period_months: order.period_months ?? null,
+  // N7: price, GST and total kept apart; amount_paise is the total charged.
+  price_paise: order.price_paise ?? order.amount_paise,
+  gst_rate_percent: Number(order.gst_rate_percent || 0),
+  gst_paise: Number(order.gst_paise || 0),
+  total_paise: order.total_paise ?? order.amount_paise,
   amount_paise: order.amount_paise,
   amount_inr: order.amount_paise / 100,
   currency: order.currency,
@@ -50,25 +59,35 @@ const publicOrder = (order) => order && ({
 });
 
 /**
- * createOrder({ purpose, planCode?, amountInr?, userId }) in the tenant context.
- * Returns what Razorpay Checkout needs: order id, amount, currency, key id.
+ * createOrder({ purpose, planCode?, periodMonths?, amountInr?, userId }) in the
+ * tenant context. A plan order takes the table price for the period (1, 3 or
+ * 6 months), adds GST on top and charges the total; the three figures are
+ * stored apart on the order. Returns what Razorpay Checkout needs.
  */
-async function createOrder({ purpose, planCode = null, amountInr = null, userId = null }) {
+async function createOrder({ purpose, planCode = null, periodMonths = 1, amountInr = null, userId = null }) {
   const tenantId = requireTenantId();
   if (!PURPOSES.includes(purpose)) throw new BillingError(400, 'Unknown purchase type');
 
   let amountPaise;
   let plan = null;
+  let months = null;
+  let tax = { price_paise: null, gst_rate_percent: 0, gst_paise: 0, total_paise: null };
   if (purpose === 'subscription') {
     plan = await plansService.planByCode(planCode);
     if (!plan || !plan.is_active) throw new BillingError(400, 'Please choose one of the available plans');
-    amountPaise = plan.price_paise;
+    months = Number(periodMonths ?? 1);
+    const period = plan.periods.find((p) => p.months === months);
+    if (!period) throw new BillingError(400, `The ${plan.name} plan is sold for ${plan.periods.map((p) => p.months).join(', ')} month periods`);
+    tax = gst.split(period.price_paise);
+    amountPaise = tax.total_paise;
   } else {
     const inr = Number(amountInr);
     if (!Number.isFinite(inr) || inr < topupMinInr() || inr > topupMaxInr() || Math.round(inr * 100) !== inr * 100) {
       throw new BillingError(400, `Top-up amount must be between ₹${topupMinInr()} and ₹${topupMaxInr().toLocaleString('en-IN')}`);
     }
     amountPaise = Math.round(inr * 100);
+    // Wallet money is prepaid balance, not a plan price: no GST is added here.
+    tax = { price_paise: amountPaise, gst_rate_percent: 0, gst_paise: 0, total_paise: amountPaise };
   }
   if (!Number.isInteger(amountPaise) || amountPaise < 100) throw new BillingError(400, 'Amount must be at least ₹1');
 
@@ -77,12 +96,17 @@ async function createOrder({ purpose, planCode = null, amountInr = null, userId 
     amountPaise,
     currency: 'INR',
     receipt,
-    notes: { tenant_id: String(tenantId), purpose, plan_code: plan?.code || '' },
+    notes: { tenant_id: String(tenantId), purpose, plan_code: plan?.code || '', period_months: months ? String(months) : '' },
   });
   const order = await BillingOrders.create({
     purpose,
     plan_id: plan?.id ?? null,
     plan_code: plan?.code ?? null,
+    period_months: months,
+    price_paise: tax.price_paise,
+    gst_rate_percent: tax.gst_rate_percent,
+    gst_paise: tax.gst_paise,
+    total_paise: tax.total_paise,
     amount_paise: amountPaise,
     currency: 'INR',
     razorpay_order_id: created.id,
@@ -92,7 +116,8 @@ async function createOrder({ purpose, planCode = null, amountInr = null, userId 
     created_at: new Date(),
     updated_at: new Date(),
   });
-  return { order: publicOrder(order.toObject()), checkout: { key_id: razorpay.keyId(), order_id: created.id, amount: amountPaise, currency: 'INR', name: plan?.name || 'Wallet top-up' } };
+  const label = plan ? `${plan.name} plan, ${months} month${months === 1 ? '' : 's'} (incl. ${tax.gst_rate_percent}% GST)` : 'Wallet top-up';
+  return { order: publicOrder(order.toObject()), checkout: { key_id: razorpay.keyId(), order_id: created.id, amount: amountPaise, currency: 'INR', name: label } };
 }
 
 /**
@@ -111,13 +136,18 @@ async function fulfil(order, { paymentId, source, now = new Date() }) {
     if (fresh.purpose === 'subscription') {
       const plan = await plansService.planById(fresh.plan_id);
       if (!plan) throw new BillingError(409, 'The plan on this order no longer exists');
-      const { subscription, renewal } = await subscriptions.activate({ plan, orderId: fresh.razorpay_order_id, paymentId, now, source });
-      Object.assign(changes, { status: 'fulfilled', fulfilled_at: now, fulfilled_by: source });
-      outcome = { subscription: subscriptions.publicSubscription(subscription, now), renewal };
+      const months = Number(fresh.period_months || 1);
+      const priceInr = fresh.price_paise != null ? fresh.price_paise / 100 : null;
+      const before = await Subscriptions.findOne({}, { _id: 0, is_trial: 1 }).lean();
+      const { subscription, renewal } = await subscriptions.activate({ plan, months, priceInr, orderId: fresh.razorpay_order_id, paymentId, now, source });
+      if (before?.is_trial) await trial.markConverted(now);
+      const { invoice } = await invoices.issue({ order: fresh, paymentId, plan, now });
+      Object.assign(changes, { status: 'fulfilled', fulfilled_at: now, fulfilled_by: source, invoice_id: invoice.id });
+      outcome = { subscription: subscriptions.publicSubscription(subscription, now), renewal, invoice: invoices.publicInvoice(invoice), upgraded_from_trial: Boolean(before?.is_trial) };
       await audit.record(audit.EVENTS.SUBSCRIPTION_ACTIVATED, {
         tenantId: fresh.tenant_id, targetType: 'subscription', targetId: subscription.id,
         actor: { actor_type: 'system', actor_user_id: null },
-        meta: { plan_code: plan.code, price_inr: plan.price_inr, order_id: fresh.razorpay_order_id, payment_id: paymentId, source, renewal },
+        meta: { plan_code: plan.code, period_months: months, price_paise: fresh.price_paise, gst_paise: fresh.gst_paise, total_paise: fresh.total_paise ?? fresh.amount_paise, order_id: fresh.razorpay_order_id, payment_id: paymentId, source, renewal, invoice_number: invoice.invoice_number, from_trial: Boolean(before?.is_trial) },
       });
     } else if (fresh.purpose === 'wallet_topup') {
       if (source !== 'webhook') {
@@ -135,8 +165,9 @@ async function fulfil(order, { paymentId, source, now = new Date() }) {
         description: 'Wallet top-up',
         meta: { order_id: fresh.razorpay_order_id },
       });
-      Object.assign(changes, { status: 'fulfilled', fulfilled_at: now, fulfilled_by: source });
-      outcome = { credited: !credited.duplicate, balance_paise: credited.balance_paise };
+      const { invoice } = await invoices.issue({ order: fresh, paymentId, now });
+      Object.assign(changes, { status: 'fulfilled', fulfilled_at: now, fulfilled_by: source, invoice_id: invoice.id });
+      outcome = { credited: !credited.duplicate, balance_paise: credited.balance_paise, invoice: invoices.publicInvoice(invoice) };
       await audit.record(audit.EVENTS.PAYMENT_VERIFIED, {
         tenantId: fresh.tenant_id, targetType: 'wallet_ledger', targetId: credited.row?.id,
         actor: { actor_type: 'system', actor_user_id: null },
@@ -209,6 +240,7 @@ async function buyExtra({ kind, quantity = 1, userId = null, now = new Date() })
   if (!Number.isInteger(count) || count < 1 || count > 50) throw new BillingError(400, 'quantity must be between 1 and 50');
   const live = await subscriptions.active(null, now);
   if (!live?.plan) throw new BillingError(409, 'Choose a plan before adding extras', 'NO_ACTIVE_PLAN');
+  if (live.plan.is_trial) throw new BillingError(403, trial.MESSAGES.feature(trial.FEATURES.extras), 'TRIAL_FEATURE_BLOCKED');
   const unitInr = kind === 'seat' ? live.plan.extra_seat_price_inr : live.plan.extra_number_price_inr;
   const amountPaise = plansService.toPaise(unitInr) * count;
   if (amountPaise <= 0) throw new BillingError(409, `Extra ${kind}s are not sold on the ${live.plan.name} plan`);
@@ -238,14 +270,21 @@ async function buyExtra({ kind, quantity = 1, userId = null, now = new Date() })
  * its owner told. Nothing is deleted. Runs in the system context.
  */
 async function expireLapsed(now = new Date()) {
-  const lapsed = await runAsSystem(() => Subscriptions.find({ status: 'active', current_period_end: { $lte: now } }, { _id: 0, id: 1, tenant_id: 1, plan_name: 1 }).lean(), 'billing:expire');
+  const lapsed = await runAsSystem(() => Subscriptions.find({ status: 'active', current_period_end: { $lte: now } }, { _id: 0, id: 1, tenant_id: 1, plan_name: 1, is_trial: 1 }).lean(), 'billing:expire');
+  let trials = 0;
   for (const sub of lapsed) {
     await runAsTenant(sub.tenant_id, async () => {
       await Subscriptions.updateOne({ id: sub.id, status: 'active' }, { $set: { status: 'expired', updated_at: now } });
+      if (sub.is_trial) {
+        // Day 7: the trial stops; the owner gets the end-of-trial email with the upgrade link.
+        trials += 1;
+        await trial.markExpired(now);
+        return;
+      }
       await alerts.raise({ key: `plan_expired:${sub.id}:${now.toISOString().slice(0, 10)}`, kind: 'plan_expired', message: `Your ${sub.plan_name} plan has ended. Renew it in Settings > Billing to keep AI replies on.`, meta: {} });
     });
   }
-  return { expired: lapsed.length };
+  return { expired: lapsed.length, trials };
 }
 
 /** Orders of the current tenant, newest first. */

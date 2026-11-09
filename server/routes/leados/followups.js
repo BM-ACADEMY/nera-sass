@@ -33,6 +33,8 @@ const {
 } = ctx;
 const { requireBrandSender, sendError } = require('../../services/tenantSender');
 const erasure = require('../../services/erasure');
+// N7: data exports are not part of the free trial.
+const noTrialExport = require('../../services/billing/trial').guard('exports');
 // ═══════════════════════════════════════════════════════════════════
 // FOLLOWUP ENGINE APIs (WF02)
 // ═══════════════════════════════════════════════════════════════════
@@ -311,7 +313,7 @@ app.post('/api/workflows/log', auth, async (req, res) => {
   }
 });
 
-app.post('/api/leads/exports', auth, async (req, res) => {
+app.post('/api/leads/exports', auth, noTrialExport, async (req, res) => {
   try {
     await leadExportReady;
     const { mode = 'all', source, from, to } = req.body || {};

@@ -8,8 +8,14 @@ module.exports = defineModel('subscriptions', {
   plan_id: { type: Number },
   plan_code: { type: String },
   plan_name: { type: String },
-  // Snapshot of the price paid for the current period, in rupees.
+  // Snapshot of the price paid for the current period, in rupees (before GST).
   price_inr: { type: Number },
+  // N7: 1, 3 or 6 months paid at once. The AI allowance still resets every
+  // month inside the paid period (services/billing/subscriptions.js cycleStart).
+  period_months: { type: Number, default: 1 },
+  // N7: a 7-day free trial (plan_code 'trial', plan_id null). Limits come from
+  // services/billing/trial.js, the record from billing_trials.
+  is_trial: { type: Boolean, default: false },
   currency: { type: String, default: 'INR' },
   // active (paid, inside the period) | expired (period ended) | cancelled
   status: { type: String, default: 'active' },

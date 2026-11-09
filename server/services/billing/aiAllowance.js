@@ -26,6 +26,9 @@ const REASONS = Object.freeze({
   noPlan: 'AI replies are paused: this workspace has no active plan. Choose a plan in Settings > Billing.',
   legacyQuota: 'AI reply limit reached for this month: please reply yourself',
   walletEmpty: 'AI replies are paused: the plan allowance is used and the wallet is empty. Top up the wallet in Settings > Billing.',
+  // N7: the free trial has 50 replies in all and no wallet; an ended trial gets none.
+  trialUsed: 'AI replies are paused: the free trial\'s 50 AI replies are used up. Upgrade to a plan in Settings > Billing.',
+  trialEnded: 'AI replies are paused: the free trial has ended. Upgrade to a plan in Settings > Billing.',
 });
 
 const startOfMonth = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -44,6 +47,11 @@ async function aiRepliesSince(from) {
 async function check(tenant, now = new Date()) {
   const live = await subscriptions.active(null, now);
   if (!live?.plan) {
+    // An ended trial is not "no plan": it stops, whatever the legacy quota says.
+    const lapsed = await subscriptions.current();
+    if (lapsed?.is_trial) {
+      return { allowed: false, reason: REASONS.trialEnded, code: 'TRIAL_ENDED', source: 'trial', left: 0, used: null, allowance: 0, charge_paise: 0, period_start: lapsed.current_period_start, period_end: lapsed.current_period_end, plan: null, subscription: lapsed };
+    }
     const legacy = Number(tenant?.ai_reply_quota_month);
     if (Number.isFinite(legacy) && legacy > 0) {
       const used = await aiRepliesSince(startOfMonth(now));
@@ -55,13 +63,18 @@ async function check(tenant, now = new Date()) {
   }
 
   const { plan, subscription } = live;
-  const periodStart = new Date(subscription.current_period_start);
+  // The allowance is per month: on a 3 or 6 month plan it resets on each
+  // monthly anniversary of the period start (N7). A trial counts its 50
+  // replies over the whole trial.
+  const cycle = subscriptions.cycleStart(subscription, now);
+  const periodStart = cycle.start;
   const allowance = Number(plan.ai_replies_month);
   const used = await aiRepliesSince(periodStart);
-  const base = { source: 'plan', used, allowance, period_start: periodStart, plan, subscription };
+  const base = { source: plan.is_trial ? 'trial' : 'plan', used, allowance, period_start: periodStart, period_end: cycle.end, plan, subscription };
   if (allowance === -1) return { ...base, allowed: true, reason: null, left: null, charge_paise: 0 };
   const left = Math.max(allowance - used, 0);
   if (left > 0) return { ...base, allowed: true, reason: null, left, charge_paise: 0 };
+  if (plan.is_trial) return { ...base, allowed: false, reason: REASONS.trialUsed, code: 'TRIAL_AI_USED', left: 0, charge_paise: 0 };
 
   const price = Number(plan.ai_overage_price_paise || 0);
   if (price <= 0) return { ...base, allowed: true, reason: null, left: 0, charge_paise: 0 };
@@ -87,7 +100,15 @@ async function notifyBlocked(gate) {
       message: 'AI replies are paused because this workspace has no active plan. Choose a plan to turn them back on.',
       meta: {},
     });
+  } else if (gate.code === 'TRIAL_AI_USED') {
+    await alerts.raise({
+      key: `ai_trial_used:${new Date(gate.period_start).toISOString()}`,
+      kind: 'ai_blocked',
+      message: `The free trial's ${gate.allowance} AI replies are used up. Upgrade to a plan to keep the AI replying to customers.`,
+      meta: { allowance: gate.allowance, used: gate.used },
+    });
   }
+  // TRIAL_ENDED: the end-of-trial notice already went out (trial.markExpired).
 }
 
 /**
@@ -96,7 +117,7 @@ async function notifyBlocked(gate) {
  * a retry never charges twice. Never throws.
  */
 async function settle(gate, { referenceType = 'message', referenceId, now = new Date() } = {}) {
-  if (!gate || gate.source !== 'plan') return { charged_paise: 0 };
+  if (!gate || !['plan', 'trial'].includes(gate.source)) return { charged_paise: 0 };
   const result = { charged_paise: 0 };
   try {
     if (gate.charge_paise > 0 && referenceId != null) {
@@ -114,12 +135,15 @@ async function settle(gate, { referenceType = 'message', referenceId, now = new 
       // Plan replies left after this one.
       const leftAfter = Math.max(gate.allowance - (gate.used + 1), 0);
       if (leftAfter <= Math.ceil(gate.allowance * WARN_FRACTION)) {
+        const trialNote = gate.plan.is_trial
+          ? (leftAfter === 0 ? `Your free trial's ${gate.allowance} AI replies are used up. Upgrade to a plan to keep the AI replying.` : `${leftAfter} of your free trial's ${gate.allowance} AI replies are left. Upgrade to a plan for a monthly allowance.`)
+          : null;
         await alerts.raise({
           key: `ai_allowance_low:${gate.period_start.toISOString()}`,
           kind: 'ai_allowance_low',
-          message: leftAfter === 0
+          message: trialNote || (leftAfter === 0
             ? `Your ${gate.plan.name} plan's ${gate.allowance} AI replies for this period are used up. Further replies are paid from the wallet at ${wallet.formatInr(gate.plan.ai_overage_price_paise)} each.`
-            : `${leftAfter} of your ${gate.allowance} AI replies are left this period (under 20 percent). Replies beyond that are paid from the wallet at ${wallet.formatInr(gate.plan.ai_overage_price_paise)} each.`,
+            : `${leftAfter} of your ${gate.allowance} AI replies are left this period (under 20 percent). Replies beyond that are paid from the wallet at ${wallet.formatInr(gate.plan.ai_overage_price_paise)} each.`),
           meta: { left: leftAfter, allowance: gate.allowance, period_start: gate.period_start },
         });
       }

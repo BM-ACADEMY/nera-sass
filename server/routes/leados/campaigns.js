@@ -22,6 +22,8 @@ const {
   validateCampaignParameterMappings,
   validateCampaignTemplate,
 } = ctx;
+// N7: campaigns (bulk marketing sends) are not part of the free trial.
+const noTrial = require('../../services/billing/trial').guard('campaigns');
 // ══════════════════════════════════════════════════════════
 // CAMPAIGNS
 // ══════════════════════════════════════════════════════════
@@ -53,7 +55,7 @@ app.get('/api/campaigns', auth, async (req, res) => {
     res.status(500).json({ error: 'Server error' });
   }
 });
-app.post('/api/campaigns', auth, async (req, res) => {
+app.post('/api/campaigns', auth, noTrial, async (req, res) => {
   try {
     const { name, client_id, template_id, target_status, scheduled_at, send_immediately, template_parameters = {} } = req.body;
 
@@ -138,7 +140,7 @@ app.post('/api/campaigns/execute', internalAuth, async (req, res) => {
 });
 
 // POST /api/campaigns/:id/retry - Retry a failed/stuck campaign
-app.post('/api/campaigns/:id/retry', auth, async (req, res) => {
+app.post('/api/campaigns/:id/retry', auth, noTrial, async (req, res) => {
   try {
     const { id } = req.params;
 

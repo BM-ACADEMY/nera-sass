@@ -160,8 +160,11 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.strictEqual(patched.body.plan.price_inr, 899);
     const order = await request(app).post('/api/billing/orders').set(bearer(owner)).send({ purpose: 'subscription', plan_code: 'desk', amount_inr: 1 });
     assert.strictEqual(order.status, 201);
-    assert.strictEqual(order.body.checkout.amount, 89900, 'amount comes from the table, never from the browser');
-    assert.strictEqual(gatewayCalls[0].amountPaise, 89900);
+    // N7: 18 percent GST is added on top of the table price (899 + 161.82).
+    assert.strictEqual(order.body.checkout.amount, 106082, 'amount comes from the table (plus GST), never from the browser');
+    assert.strictEqual(gatewayCalls[0].amountPaise, 106082);
+    assert.strictEqual(order.body.order.price_paise, 89900);
+    assert.strictEqual(order.body.order.gst_paise, 16182);
     assert.ok(await sys(() => AuditEvents.exists({ event: 'PLAN_UPDATED' })));
     // Seeding again never overwrites an edited price.
     await billing.plans.ensureDefaultPlans();
@@ -347,8 +350,9 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     const { owner } = await workspace(1);
     const created = await request(app).post('/api/billing/orders').set(bearer(owner)).send({ purpose: 'subscription', plan_code: 'desk' });
     const orderId = created.body.checkout.order_id;
-    await signedWebhook(webhookBody(orderId, 'pay_s1', 79900));
-    await signedWebhook(webhookBody(orderId, 'pay_s1', 79900));
+    // 799 plus 18 percent GST (N7) is what Razorpay captures.
+    await signedWebhook(webhookBody(orderId, 'pay_s1', 94282));
+    await signedWebhook(webhookBody(orderId, 'pay_s1', 94282));
     const sub = await runAsTenant(1, () => Subscriptions.findOne({}).lean());
     assert.strictEqual(sub.plan_code, 'desk');
     assert.strictEqual(sub.status, 'active');

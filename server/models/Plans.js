@@ -13,6 +13,10 @@ module.exports = defineModel('plans', {
   description: { type: String, default: '' },
   // Rupees a month, as sold. Razorpay orders are created in paise from this.
   price_inr: { type: Number },
+  // N7: prepaid prices in rupees per billing period, keyed by months
+  // ('1', '3', '6'). The 1-month price mirrors price_inr. 18 percent GST is
+  // added on top of every figure here when an order is created.
+  period_prices_inr: { type: Mixed, default: () => ({}) },
   currency: { type: String, default: 'INR' },
   billing_cycle: { type: String, default: 'monthly' },
   // AI replies included each billing period; -1 means no limit.
