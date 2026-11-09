@@ -98,22 +98,23 @@ test('Task 2: customer Settings APIs', async (t) => {
   }
 
   // ── Permissions and isolation ────────────────────────────
-  await t.test('W1. /api/tenant reports each role\'s permission flags; full access and no plan for everyone', async () => {
+  await t.test('W1. /api/tenant reports each role\'s permission flags; full access, one seat and no plan yet', async () => {
     const { users } = await workspace(10);
     const expected = {
-      owner: { manage_team: true, manage_settings: true, manage_whatsapp: true },
-      admin: { manage_team: true, manage_settings: true, manage_whatsapp: true },
-      manager: { manage_team: false, manage_settings: false, manage_whatsapp: false },
-      agent: { manage_team: false, manage_settings: false, manage_whatsapp: false },
+      owner: { manage_team: true, manage_settings: true, manage_whatsapp: true, manage_billing: true },
+      admin: { manage_team: true, manage_settings: true, manage_whatsapp: true, manage_billing: true },
+      manager: { manage_team: false, manage_settings: false, manage_whatsapp: false, manage_billing: false },
+      agent: { manage_team: false, manage_settings: false, manage_whatsapp: false, manage_billing: false },
     };
     for (const [role, flags] of Object.entries(expected)) {
       const res = await request(app).get('/api/tenant').set(bearer(users[role]));
       assert.strictEqual(res.status, 200, role);
       assert.deepStrictEqual(res.body.permissions, flags, role);
       assert.strictEqual(res.body.tenant.id, 10);
-      assert.strictEqual(res.body.subscription, undefined, `${role}: no plan`);
+      assert.strictEqual(res.body.subscription, null, `${role}: no plan bought yet`);
       assert.strictEqual(res.body.lifecycle.access, 'full', role);
-      assert.strictEqual(res.body.usage.max_users, -1, role);
+      // Without a plan a workspace keeps its single login (N3: seats come from the plan).
+      assert.strictEqual(res.body.usage.max_users, 1, role);
     }
   });
 

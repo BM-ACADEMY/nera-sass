@@ -21,6 +21,7 @@ const sendPolicy = require('../../services/sendPolicy');
 const numberHealth = require('../../services/numberHealth');
 const aiLatency = require('../../services/aiLatency');
 const brainEngine = require('../../services/brainEngine');
+const aiAllowance = require('../../services/billing/aiAllowance');
 const { BrainDocs } = ctx;
 // ── INTERNAL (called by n8n) ──────────────────────────────
 
@@ -135,11 +136,22 @@ const sendRoute = (name, handler) => async (req, res) => {
 
 // POST /api/internal/send-reply   { lead_id, message }
 // n8n's AI reply (inside the 24-hour customer window).
-app.post('/api/internal/send-reply', internalAuth, sendRoute('send-reply', (req) => {
+app.post('/api/internal/send-reply', internalAuth, sendRoute('send-reply', async (req) => {
   const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
   if (!message || message.length > 4096) throw new SendError(400, 'message must be 1 to 4096 characters');
-  return sendToLead(req, req.body?.lead_id, message, () => ({ type: 'text', text: { body: message } }))
-    .then((result) => { aiLatency.replied(req.body?.lead_id); return result; });
+  const leadId = Number(req.body?.lead_id);
+  if (!Number.isInteger(leadId) || leadId <= 0) throw new SendError(400, 'lead_id is required');
+  if (!(await Leads.exists({ id: leadId }))) throw new SendError(404, 'Lead not found');
+  // Same plan allowance and wallet as the AI Brain: no money, no AI reply.
+  const gate = await aiAllowance.check(req.tenant);
+  if (!gate.allowed) {
+    await aiAllowance.notifyBlocked(gate);
+    throw new SendError(402, gate.reason, gate.code || 'AI_ALLOWANCE_USED');
+  }
+  const result = await sendToLead(req, req.body?.lead_id, message, () => ({ type: 'text', text: { body: message } }));
+  aiLatency.replied(req.body?.lead_id);
+  await aiAllowance.settle(gate, { referenceType: 'message', referenceId: result.message_id });
+  return result;
 }));
 
 // POST /api/internal/ai/reply   { lead_id, message_id }

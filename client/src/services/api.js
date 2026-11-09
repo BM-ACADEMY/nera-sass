@@ -222,6 +222,36 @@ class LeadOSAPI {
     });
   }
 
+  // ─── BILLING (plan, wallet, Razorpay; tenant from the session) ───
+  async getBillingPlans() {
+    return this.request('/api/billing/plans');
+  }
+
+  async getBillingSummary() {
+    return this.request('/api/billing/summary');
+  }
+
+  async getWalletLedger(limit = 50) {
+    return this.request(`/api/billing/wallet/ledger?limit=${encodeURIComponent(limit)}`);
+  }
+
+  // { purpose: 'subscription', plan_code } or { purpose: 'wallet_topup', amount_inr }
+  async createBillingOrder(order) {
+    return this.request('/api/billing/orders', { method: 'POST', body: JSON.stringify(order) });
+  }
+
+  async verifyBillingPayment(result) {
+    return this.request('/api/billing/orders/verify', { method: 'POST', body: JSON.stringify(result) });
+  }
+
+  async buyBillingExtra(kind, quantity = 1) {
+    return this.request('/api/billing/extras', { method: 'POST', body: JSON.stringify({ kind, quantity }) });
+  }
+
+  async cancelSubscription() {
+    return this.request('/api/billing/subscription/cancel', { method: 'POST' });
+  }
+
   // ─── LEADS ──────────────────────────────
   async getLeads(filters = {}) {
     const params = new URLSearchParams({

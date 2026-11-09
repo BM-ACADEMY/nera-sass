@@ -12,12 +12,13 @@ const FLAGS = {
 };
 const keys = (role) => settingsTabs({ role, permissions: FLAGS[role] }).map((t) => t.key);
 
-test('same tabs for every role; no Team tab, no Billing tab (no plans)', () => {
-  assert.deepStrictEqual(keys('owner'), ['workspace', 'brand', 'whatsapp', 'account']);
-  assert.deepStrictEqual(keys('admin'), ['workspace', 'brand', 'whatsapp', 'account']);
-  assert.deepStrictEqual(keys('manager'), ['workspace', 'brand', 'whatsapp', 'account']);
-  assert.deepStrictEqual(keys('agent'), ['workspace', 'brand', 'whatsapp', 'account']);
-  assert.deepStrictEqual(settingsTabs({}).map((t) => t.key), ['workspace', 'brand', 'whatsapp', 'account']);
+test('same tabs for every role, Billing included; no Team tab', () => {
+  const expected = ['workspace', 'brand', 'whatsapp', 'billing', 'account'];
+  assert.deepStrictEqual(keys('owner'), expected);
+  assert.deepStrictEqual(keys('admin'), expected);
+  assert.deepStrictEqual(keys('manager'), expected);
+  assert.deepStrictEqual(keys('agent'), expected);
+  assert.deepStrictEqual(settingsTabs({}).map((t) => t.key), expected);
 });
 
 test('editing follows the server permission flags', () => {

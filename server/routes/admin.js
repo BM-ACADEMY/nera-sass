@@ -22,6 +22,7 @@ const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
 const createMetaInventoryRouter = require('./adminMetaInventory');
 const { logScope } = require('../services/workflowLog');
 const n8nApi = require('../services/n8nApi');
+const billing = require('../services/billing');
 
 function fail(res, error) {
   if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details, code: error.code });
@@ -73,7 +74,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   const router = express.Router();
 
   router.get('/me', (req, res) => res.json({ user: req.user, permissions: Object.fromEntries(
-    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.tenants.create', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view', 'platform.meta', 'platform.meta.admin', 'platform.inbox']
+    ['platform.tenants.view', 'platform.tenants.manage', 'platform.tenants.export', 'platform.tenants.delete', 'platform.tenants.create', 'platform.users.manage', 'platform.staff.manage', 'platform.audit.view', 'platform.meta', 'platform.meta.admin', 'platform.inbox', 'platform.billing.view', 'platform.billing.manage']
       .map((p) => [p, can(req.identity, p)]),
   ) }));
 
@@ -698,6 +699,96 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
           uptimeSeconds: Math.round(process.uptime()),
         },
       });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // ── Billing: price list and per-workspace plan / wallet ───────────────
+  router.get('/billing/plans', permit('platform.billing.view'), async (req, res) => {
+    try {
+      return res.json({ plans: await billing.plans.listPlans({ includeInactive: true }) });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // Prices and allowances change here, in the plans table, never in code.
+  router.patch('/billing/plans/:planId', permit('platform.billing.manage'), async (req, res) => {
+    try {
+      const before = await billing.plans.planById(req.params.planId);
+      if (!before) return res.status(404).json({ error: 'Plan not found' });
+      const plan = await billing.plans.updatePlan(req.params.planId, req.body || {});
+      await audit.record(audit.EVENTS.PLAN_UPDATED, { req, targetType: 'plan', targetId: plan.id, meta: { code: plan.code, before: { price_inr: before.price_inr, ai_replies_month: before.ai_replies_month }, after: { price_inr: plan.price_inr, ai_replies_month: plan.ai_replies_month }, changes: Object.keys(req.body || {}) } });
+      return res.json({ plan });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  router.get('/tenants/:id/billing', permit('platform.billing.view'), async (req, res) => {
+    try {
+      const tenant = await loadTenant(tenantIdParam(req));
+      if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
+      const data = await runAsTenant(tenant.id, async () => {
+        const [sub, balance, ledger, orders, alerts, gate] = await Promise.all([
+          billing.subscriptions.current(),
+          billing.wallet.balancePaise(),
+          billing.wallet.ledger({ limit: 50 }),
+          billing.orders.listOrders(20),
+          billing.alerts.recent(20),
+          billing.aiAllowance.check(tenant),
+        ]);
+        return {
+          subscription: billing.subscriptions.publicSubscription(sub),
+          wallet: { balance_paise: balance, balance_inr: balance / 100 },
+          ledger: ledger.map((row) => ({ id: row.id, direction: row.direction, amount_paise: row.amount_paise, reason: row.reason, description: row.description, reference_type: row.reference_type, created_by: row.created_by, created_at: row.created_at })),
+          orders,
+          alerts,
+          ai: { allowed: gate.allowed, reason: gate.reason, allowance: gate.allowance, used: gate.used, left: gate.left, source: gate.source },
+        };
+      });
+      return res.json({ tenant_id: tenant.id, ...data });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // Manual wallet correction (refund, goodwill, chargeback). A new ledger row,
+  // never an edit; the reason is required and the change is audited.
+  router.post('/tenants/:id/billing/wallet/adjust', permit('platform.billing.manage'), async (req, res) => {
+    try {
+      const tenant = await loadTenant(tenantIdParam(req));
+      if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
+      const direction = req.body?.direction === 'debit' ? 'debit' : 'credit';
+      const amountPaise = Math.round(Number(req.body?.amount_inr) * 100);
+      const note = String(req.body?.note || '').trim();
+      if (!Number.isInteger(amountPaise) || amountPaise <= 0 || amountPaise > 100000000) return res.status(400).json({ error: 'amount_inr must be a positive amount' });
+      if (note.length < 3 || note.length > 300) return res.status(400).json({ error: 'A note of 3 to 300 characters is required' });
+      const reference = `staff:${req.user.id}:${Date.now()}`;
+      const result = await runAsTenant(tenant.id, () => billing.wallet[direction]({
+        amountPaise, reason: req.body?.reason === 'refund' ? 'refund' : 'adjustment', referenceType: 'staff_adjustment', referenceId: reference,
+        description: note, createdBy: req.user.id, meta: { staff_role: req.identity.staffRole },
+      }));
+      await audit.record(audit.EVENTS.WALLET_ADJUSTED, { tenantId: tenant.id, req, targetType: 'wallet_ledger', targetId: result.row?.id, meta: { direction, amount_paise: amountPaise, note } });
+      return res.json({ balance_paise: result.balance_paise, entry_id: result.row?.id });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // Puts a workspace on a plan without a payment (trial, offline invoice).
+  router.post('/tenants/:id/billing/grant', permit('platform.billing.manage'), async (req, res) => {
+    try {
+      const tenant = await loadTenant(tenantIdParam(req));
+      if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
+      const plan = await billing.plans.planByCode(req.body?.plan_code);
+      if (!plan) return res.status(400).json({ error: 'Unknown plan' });
+      const note = String(req.body?.note || '').trim();
+      if (note.length < 3 || note.length > 300) return res.status(400).json({ error: 'A note of 3 to 300 characters is required' });
+      const { subscription, renewal } = await runAsTenant(tenant.id, () => billing.subscriptions.activate({ plan, source: `staff:${req.user.id}` }));
+      await audit.record(audit.EVENTS.SUBSCRIPTION_GRANTED, { tenantId: tenant.id, req, targetType: 'subscription', targetId: subscription.id, meta: { plan_code: plan.code, note, renewal } });
+      return res.json({ subscription: billing.subscriptions.publicSubscription(subscription) });
     } catch (error) {
       return fail(res, error);
     }

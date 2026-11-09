@@ -591,6 +591,24 @@ const salesosRoutes = require('./routes/salesos');
 app.use('/api/auth', require('./routes/authRoutes'));
 // Customer workspace administration: /api/tenant, /api/team/*.
 app.use('/api', require('./routes/team'));
+// Plans, subscription and wallet of the signed-in workspace (customer login).
+app.use('/api/billing', require('./routes/billing'));
+// Razorpay webhook for plan payments and wallet top-ups. Signed with
+// RAZORPAY_WEBHOOK_SECRET (503 until it is set); the tenant comes from the
+// order the server created, never from the payload. Wallet credits happen only
+// here, once per payment id. The older /webhook/razorpay also forwards to it.
+app.post('/webhook/razorpay/billing', async (req, res) => {
+  try {
+    const result = await require('./services/billing/orders').handleWebhook({
+      rawBody: req.rawBody, signature: req.headers['x-razorpay-signature'], event: req.body,
+    });
+    if (!result.handled) console.log(`[Razorpay billing webhook] ${result.reason}`);
+    return res.status(result.status || 200).json({ received: true });
+  } catch (error) {
+    console.error('[Razorpay billing webhook]', error.message);
+    return res.status(500).json({ received: false });
+  }
+});
 // Platform admin panel API: platform staff only.
 // The SalesOS maintenance routes POST /api/admin/{cleanup,retry,refresh-embeddings}
 // share this prefix. They pass through to SalesOS, which requires the internal
@@ -1265,6 +1283,14 @@ if (jobsEnabled()) scheduleJob('* * * * *', async () => {
   }
 });
 
+// Billing: paid periods that ended are marked expired and the owner is told
+// (the live check in services/billing/aiAllowance.js already stops the AI).
+if (jobsEnabled()) scheduleJob('45 0 * * *', () => {
+  require('./services/billing/orders').expireLapsed()
+    .then((result) => { if (result.expired) console.log(`[Billing] ${result.expired} subscription(s) expired`); })
+    .catch((error) => console.error('[Billing] Expiry sweep failed:', error.message));
+});
+
 // Tenant lifecycle (plan U6): stores each workspace's state daily and archives
 // workspaces that reach day 90. Access rules are also applied live per request.
 if (jobsEnabled()) scheduleJob('30 0 * * *', () => {
@@ -1553,6 +1579,11 @@ function start() {
   const attempt = (n = 1) => connectMongo().then(() => httpServer.listen(PORT, () => {
     console.log(`Nera LeadOS API running on port ${PORT} (Socket.io enabled)`);
     if (DISABLED_MODULES.size) console.log(`[Startup] Disabled modules: ${[...DISABLED_MODULES].join(', ')}`);
+    // The price list lives in the plans collection; an empty catalogue gets
+    // the three launch plans once (edited prices are never overwritten).
+    require('./services/billing/plans').ensureDefaultPlans()
+      .then(({ seeded }) => { if (seeded) console.log(`[Billing] Seeded ${seeded} default plans`); })
+      .catch((error) => console.error('[Billing] Could not seed plans:', error.message));
     startBackgroundJobs();
   })).catch((error) => {
     console.error(`[Startup] MongoDB connection failed (attempt ${n}): ${error.message}. The API is not listening yet; retrying in ${RETRY_MS / 1000}s. Check the network and that this machine's IP is allowed by the database firewall.`);

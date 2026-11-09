@@ -51,16 +51,19 @@ async function emailTaken(email) {
  * { tenantId | null (staff), email, name, role | staffRole, invitedBy: { id, name }, req }
  * Returns { invitation, delivery } — the raw token is never returned.
  */
-// Each workspace has exactly one login (its owner). A workspace that already
-// has an account, or a pending invitation for someone else, takes no more.
+// Seats: a workspace without a plan has exactly one login (its owner); with
+// a plan it has the plan's seats plus any extra seats bought from the wallet
+// (services/billing/limits.js). Active users and pending invitations for
+// other people both take a seat.
 async function assertSingleLogin(tenantId, email) {
   const [users, pending] = await runAsTenant(tenantId, () => Promise.all([
     Users.countDocuments({}),
     Invitations.countDocuments({ email: { $ne: email }, accepted_at: null, revoked_at: null, expires_at: { $gt: new Date() } }),
   ]));
-  if (users > 0 || pending > 0) {
-    throw new InvitationError(409, 'This workspace already has its login. Each workspace has one login.');
-  }
+  const limit = await require('./billing/limits').seatLimit(tenantId);
+  if (users + pending < limit) return;
+  if (limit <= 1) throw new InvitationError(409, 'This workspace already has its login. Each workspace has one login.');
+  throw new InvitationError(409, `This workspace has used all ${limit} of its seats. Buy an extra seat in Settings > Billing to invite more people.`);
 }
 
 async function createInvitation({ tenantId = null, email, name = null, role = null, staffRole = null, password = undefined, invitedBy = {}, req = null, skipSeatCheck = false }) {

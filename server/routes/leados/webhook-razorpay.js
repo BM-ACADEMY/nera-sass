@@ -4,6 +4,7 @@
  * arrive through `ctx`.
  */
 const { postToN8n } = require('../../services/n8n');
+const billingOrders = require('../../services/billing/orders');
 module.exports = function registerWebhookRazorpayRoutes(app, ctx) {
 const {
   Clients,
@@ -16,6 +17,15 @@ const {
 app.post('/webhook/razorpay', async (req, res) => {
   res.sendStatus(200);
   try {
+    // Plan payments and wallet top-ups (orders created by /api/billing). The
+    // billing handler checks the webhook signature itself and credits a
+    // payment id once; anything else falls through to the lead payments below.
+    try {
+      const billing = await billingOrders.handleWebhook({ rawBody: req.rawBody, signature: req.headers['x-razorpay-signature'], event: req.body });
+      if (billing.handled) return;
+    } catch (billingErr) {
+      console.error('[Razorpay webhook] Billing handler error:', billingErr.message);
+    }
     if (process.env.RAZORPAY_WEBHOOK_SECRET) {
       const signature = req.headers['x-razorpay-signature'];
       const expected = crypto.createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET).update(req.rawBody).digest('hex');

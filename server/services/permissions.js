@@ -27,6 +27,9 @@ const TENANT_PERMISSIONS = {
   'ai_brain.manage': ['owner', 'admin', 'manager'],
   'leads.export': ['owner', 'admin', 'manager'],
   'leads.delete': ['owner', 'admin', 'manager'],
+  // Plans, wallet and payments (Settings > Billing).
+  'billing.view': ['owner', 'admin', 'manager'],
+  'billing.manage': ['owner', 'admin'],
 };
 
 const STAFF_PERMISSIONS = {
@@ -47,6 +50,10 @@ const STAFF_PERMISSIONS = {
   'platform.reports': ['founder', 'ops'],
   'platform.audit.view': ['founder', 'ops'],
   'platform.modules': ['founder', 'ops'],
+  // Price list and per-workspace billing: viewing for all staff, changing
+  // prices and adjusting wallets for the Admin (Owner) only.
+  'platform.billing.view': ['founder', 'ops'],
+  'platform.billing.manage': ['founder'],
 };
 
 // Customer roles that must set up two-step verification before their first
