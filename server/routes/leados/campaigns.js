@@ -57,6 +57,11 @@ app.post('/api/campaigns', auth, async (req, res) => {
   try {
     const { name, client_id, template_id, target_status, scheduled_at, send_immediately, template_parameters = {} } = req.body;
 
+    // A workspace still in onboarding cannot start campaigns until it goes live (N5).
+    if (req.tenant?.campaigns_enabled === false) {
+      return res.status(403).json({ error: 'Campaigns start when you go live. Finish the setup on your Home screen first.', code: 'NOT_LIVE' });
+    }
+
     if (!name || !client_id || !template_id || !target_status) {
       return res.status(400).json({ error: 'Campaign name, brand, template, and target audience are required.' });
     }

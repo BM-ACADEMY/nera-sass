@@ -114,6 +114,9 @@ async function provisionTenant(input, { req = null, actorUserId = null, actorNam
       name: businessName,
       status: 'active',
       lifecycle_state: 'active',
+      // A new workspace starts in onboarding: no campaigns and no AI replies until it goes live (N5).
+      campaigns_enabled: false,
+      ai_enabled: false,
       ...pick(input.settings, TENANT_SETTING_FIELDS),
       created_by: actorUserId,
       created_at: now,

@@ -20,6 +20,12 @@ module.exports = defineModel('tenants', {
   timezone: { type: String, default: 'Asia/Kolkata' },
   // AI Brain replies allowed per calendar month; empty means no limit yet.
   ai_reply_quota_month: { type: Number, default: null },
+  // Guided onboarding (N5). `campaigns_enabled === false` keeps marketing off
+  // until the workspace goes live; workspaces that predate onboarding have no
+  // value and keep working. `ai_enabled` is the older AI on/off switch.
+  campaigns_enabled: { type: Boolean },
+  ai_enabled: { type: Boolean },
+  went_live_at: { type: Date },
   suspended_at: { type: Date },
   suspended_reason: { type: String },
   suspended_by: { type: Number },
