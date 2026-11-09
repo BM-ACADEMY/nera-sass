@@ -6,6 +6,7 @@
 const { runAsSystem } = require('../../services/tenantContext');
 const { requirePermission, can } = require('../../services/permissions');
 const { createTemplateApi, replyError, upload, TemplateApiError } = require('../../services/metaTemplateApi');
+const alerts = require('../../services/alerts');
 
 module.exports = function registerWaTemplateRoutes(app, ctx) {
   const { Clients, auth, META_GRAPH_VERSION } = ctx;
@@ -37,6 +38,7 @@ module.exports = function registerWaTemplateRoutes(app, ctx) {
       if (req.query.refresh === '1') {
         const c = await context();
         await sys(() => api.refresh(c));
+        await alerts.evaluateTemplates().catch((e) => console.error('[wa-templates] Notice check failed:', e.message));
       }
       return res.json({
         configured: true,
@@ -52,7 +54,9 @@ module.exports = function registerWaTemplateRoutes(app, ctx) {
   app.post('/api/wa-templates/check-pending', auth, async (req, res) => {
     try {
       const c = await context();
-      return res.json(await sys(() => api.checkPending(c)));
+      const result = await sys(() => api.checkPending(c));
+      await alerts.evaluateTemplates().catch((e) => console.error('[wa-templates] Notice check failed:', e.message));
+      return res.json(result);
     } catch (error) {
       return reply(res, error);
     }
@@ -82,6 +86,8 @@ module.exports = function registerWaTemplateRoutes(app, ctx) {
     try {
       const c = await context();
       const { template } = await sys(() => api.update(c, req.params.templateId, req.body));
+      // Back in review: the rejection notice is closed.
+      await alerts.templateResubmitted(req.params.templateId).catch((e) => console.error('[wa-templates] Notice close failed:', e.message));
       return res.json({ template });
     } catch (error) {
       return reply(res, error);

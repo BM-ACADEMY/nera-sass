@@ -232,8 +232,20 @@ function billingAlertEmail({ to, name, workspaceName, kind, message }) {
   return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: 'Open Billing' }) });
 }
 
+/**
+ * A customer notice (plan N4) by email: template rejected, wallet low, number
+ * quality, unfinished setup, failed payment. `path` is a page of the customer
+ * panel. Callers pass plain sentences only; no raw provider errors.
+ */
+function customerAlertEmail({ to, ownerName, workspaceName, title, lines, path: pagePath = '/' }) {
+  const url = `${appUrl()}${String(pagePath).startsWith('/') ? pagePath : `/${pagePath}`}`;
+  const body = [`Hi ${ownerName || 'there'},`, ...(workspaceName ? [`This is about the ${workspaceName} workspace.`] : []), ...lines];
+  return send({ to, subject: title, text: `${body.join('\n\n')}\n\n${url}\n`, html: layout(title, body, { url, label: 'Open your panel' }) });
+}
+
 module.exports = {
   send,
+  customerAlertEmail,
   qualityAlertEmail,
   billingAlertEmail,
   signInCodeEmail,

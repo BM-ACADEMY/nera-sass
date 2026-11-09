@@ -1,4 +1,4 @@
-const { defineModel } = require('../db/mongo');
+const { defineModel, Mixed } = require('../db/mongo');
 
 // One row per customer business (Full Scope decision 2: one brand = one tenant).
 // Platform-level collection: never tenant-scoped; only platform staff and the
@@ -20,6 +20,9 @@ module.exports = defineModel('tenants', {
   timezone: { type: String, default: 'Asia/Kolkata' },
   // AI Brain replies allowed per calendar month; empty means no limit yet.
   ai_reply_quota_month: { type: Number, default: null },
+  // WhatsApp copies of customer notices (plan N4). Set only at signup:
+  // { opted_in, number, opted_in_at, source, text, opted_out_at }.
+  alerts_whatsapp: { type: Mixed, default: null },
   suspended_at: { type: Date },
   suspended_reason: { type: String },
   suspended_by: { type: Number },

@@ -508,6 +508,7 @@ const { checkNewDriveVideos, publishPost } = require("./controllers/contentContr
 // (consent, STOP, quality pause, 24-hour window) checked before every send.
 // ═══════════════════════════════════════════════════════════════════
 const sendQueue = require('./services/whatsappSendQueue');
+const campaignAudience = require('./services/campaignAudience');
 const numberHealth = require('./services/numberHealth');
 const {
   getTemplateVariableNumbers, validateCampaignTemplate, resolveCampaignParameter, validateCampaignParameterMappings,
@@ -1062,35 +1063,12 @@ async function executeCampaign(campaign_id) {
 
     console.log(`[executeCampaign] Campaign claimed, finding leads...`);
 
-    // Build leads query
-    let leadsQuery = {};
-    const queryParams = [];
-    const leadFields = { _id: 0, id: 1, phone: 1, name: 1, email: 1, status: 1, source: 1, interest: 1, score: 1 };
-    let leads;
-
-    if (campaign.target_status && campaign.target_status.startsWith('csv_')) {
-      // A custom upload is an exact audience. Existing leads may belong to a
-      // different CRM brand, but the selected campaign brand supplies the
-      // WhatsApp credentials used for this send.
-      queryParams.push(campaign.target_status);
-      const recipients = await CampaignImportRecipients.find({ batch_id: campaign.target_status }, NO_ID).lean();
-      leadsQuery = { batch_id: campaign.target_status };
-      const recipientLeads = new Map((await Leads.find({ id: { $in: recipients.map((r) => r.lead_id) } }, leadFields).lean()).map((l) => [l.id, l]));
-      leads = recipients
-        .filter((r) => recipientLeads.has(r.lead_id) && String(recipientLeads.get(r.lead_id).phone ?? '').trim() !== '')
-        .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0) || a.lead_id - b.lead_id)
-        .map((r) => ({ ...recipientLeads.get(r.lead_id), template_parameters: r.template_parameters }));
-    } else {
-      // Regular target status (new, warm, cold, etc.) or all leads
-      leadsQuery = { client_id: campaign.client_id };
-      queryParams.push(campaign.client_id);
-
-      if (campaign.target_status && campaign.target_status !== 'all') {
-        leadsQuery.status = campaign.target_status;
-        queryParams.push(campaign.target_status);
-      }
-      leads = await Leads.find(leadsQuery, leadFields).lean();
-    }
+    // The audience is defined in one place (services/campaignAudience.js) so the
+    // preview shows exactly who is queued here. Opt-in, STOP and the marketing
+    // pause are still enforced per message by the send queue.
+    const queryParams = [campaign.target_status, campaign.target_tag_id ?? null];
+    const leadsQuery = { client_id: campaign.client_id, target_status: campaign.target_status, target_tag_id: campaign.target_tag_id ?? null };
+    const leads = await campaignAudience.resolveAudience(campaign);
 
     const excelMappings = ['header', 'body'].flatMap((section) =>
       Object.entries(campaign.template_parameters?.[section] || {})
@@ -1236,6 +1214,22 @@ async function leadFunnel(filter) {
 
 // ── CRON JOBS ─────────────────────────────────────────────
 // Re-enabled internal campaign execution cron and added logging for WF05 Dashboard
+// Customer notices (plan N4): every 15 minutes, check each active workspace for a
+// rejected template, a low wallet, a number quality drop and unfinished setup,
+// close notices whose problem is gone, and retry emails that did not go out.
+let alertSweepRunning = false;
+if (jobsEnabled()) scheduleJob('*/15 * * * *', async () => {
+  if (alertSweepRunning) return;
+  alertSweepRunning = true;
+  try {
+    await require('./services/alerts').sweepAll();
+  } catch (err) {
+    console.error('[alerts] Sweep failed:', err.message);
+  } finally {
+    alertSweepRunning = false;
+  }
+});
+
 let scheduledCampaignCronRunning = false;
 if (jobsEnabled()) scheduleJob('* * * * *', async () => {
   if (scheduledCampaignCronRunning) return;
@@ -1519,6 +1513,7 @@ const leadosRouteContext = {
   'users',
   'internal',
   'send-safety',
+  'notices',
 ].forEach((name) => require(`./routes/leados/${name}`)(app, leadosRouteContext));
 
 // ── ERRORS ────────────────────────────────────────────────

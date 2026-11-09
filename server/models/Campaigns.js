@@ -6,6 +6,8 @@ module.exports = defineModel('campaigns', {
   client_id: { type: Number },
   template_id: { type: Number },
   target_status: { type: String },
+  // Audience by tag (lead_tags.tag_id), optionally narrowed by target_status.
+  target_tag_id: { type: Number, default: null },
   scheduled_at: { type: Date },
   launched_at: { type: Date },
   status: { type: String, default: "scheduled" },

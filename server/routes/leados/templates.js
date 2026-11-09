@@ -3,6 +3,12 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const alerts = require('../../services/alerts');
+const { explainRejection, cleanReasonCode } = require('../../services/templateRejection');
+
+// Rejection reason as the customer sees it: Meta's code in plain words, never raw text.
+const withRejection = (t) => (t.status === 'rejected' ? { ...t, rejection: explainRejection(t.rejection_reason) } : t);
+
 module.exports = function registerTemplatesRoutes(app, ctx) {
 const {
   Clients,
@@ -23,7 +29,7 @@ app.get('/api/templates', auth, async (req, res) => {
     await templateParameterDefinitionsReady;
     const templateRows = await Templates.find({}, NO_ID).sort({ created_at: -1 }).lean();
     const templateClients = new Map((await Clients.find({ id: { $in: templateRows.map((t) => t.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c.name]));
-    res.json({ templates: templateRows.map((t) => ({ ...t, brand_name: templateClients.get(t.client_id) ?? null })) });
+    res.json({ templates: templateRows.map((t) => withRejection({ ...t, brand_name: templateClients.get(t.client_id) ?? null })) });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -61,7 +67,7 @@ app.post('/api/templates/sync-all', auth, async (req, res) => {
     
     // Fetch templates from Meta API (limit 100)
     const metaRes = await axios.get(
-      `https://graph.facebook.com/v18.0/${waBusinessId}/message_templates?limit=100`,
+      `https://graph.facebook.com/v18.0/${waBusinessId}/message_templates?limit=100&fields=id,name,language,status,category,components,rejected_reason`,
       { headers: { Authorization: `Bearer ${waToken}` } }
     );
 
@@ -91,6 +97,7 @@ app.post('/api/templates/sync-all', auth, async (req, res) => {
         const approvedAt = (status === 'approved' && !localTpl.approved_at) ? new Date() : localTpl.approved_at;
         await Templates.updateOne({ id: localTpl.id }, { $set: {
           status, meta_template_id: metaId, approved_at: approvedAt ?? null, category: t.category, header_format: headerFormat,
+          rejection_reason: status === 'rejected' ? (cleanReasonCode(t.rejected_reason) || 'UNSPECIFIED') : null,
           header: headerText, body: bodyText, footer: footerText, buttons: JSON.parse(buttonsVal), updated_at: new Date(),
         } });
         updated++;
@@ -99,6 +106,7 @@ app.post('/api/templates/sync-all', auth, async (req, res) => {
         await Templates.create({
           name: t.name, category: t.category, language: t.language, header_format: headerFormat, header: headerText, body: bodyText,
           footer: footerText, buttons: JSON.parse(buttonsVal), client_id: client_id || null, status, meta_template_id: metaId,
+          rejection_reason: status === 'rejected' ? (cleanReasonCode(t.rejected_reason) || 'UNSPECIFIED') : null,
           approved_at: approvedAt, created_at: new Date(),
         });
         imported++;
@@ -278,7 +286,7 @@ app.get('/api/templates/:id/sync', auth, async (req, res) => {
     let metaTpl = null;
     if (tpl.meta_template_id) {
       const metaRes = await axios.get(`${base}/${tpl.meta_template_id}`, {
-        params: { fields: 'id,name,status,language,category,components' },
+        params: { fields: 'id,name,status,language,category,components,rejected_reason' },
         headers: { Authorization: `Bearer ${waToken}` },
         timeout: 20000,
       });
@@ -304,6 +312,7 @@ app.get('/api/templates/:id/sync', auth, async (req, res) => {
         { id: tpl.id },
         [{ $set: {
           status, meta_template_id: metaTpl.id,
+          rejection_reason: status === 'rejected' ? (cleanReasonCode(metaTpl.rejected_reason) || 'UNSPECIFIED') : null,
           approved_at: status === 'approved' ? { $ifNull: ['$approved_at', '$$NOW'] } : '$approved_at',
           category: metaTpl.category ?? null, header_format: headerComp?.format || 'NONE',
           header: headerComp?.text || headerComp?.example?.header_handle?.[0] || null,
@@ -311,7 +320,13 @@ app.get('/api/templates/:id/sync', auth, async (req, res) => {
         } }],
         { new: true, projection: NO_ID }
       ).lean();
-      return res.json({ template: syncedTemplate });
+      try {
+        if (status === 'rejected') await alerts.templateRejected({ id: metaTpl.id || `local-${tpl.id}`, name: tpl.name, status: 'REJECTED', reason: metaTpl.rejected_reason });
+        else await alerts.templateResubmitted(metaTpl.id || `local-${tpl.id}`);
+      } catch (noticeError) {
+        console.error('[Templates Sync] Notice failed:', noticeError.message);
+      }
+      return res.json({ template: syncedTemplate ? withRejection(syncedTemplate) : syncedTemplate });
     }
 
     return res.status(404).json({
@@ -387,6 +402,8 @@ app.put('/api/templates/:id', auth, async (req, res) => {
       status: current.status !== 'draft' && current.status != null ? 'pending' : current.status,
       updated_at: new Date(),
     };
+    // Editing a rejected template sends it back to Meta for review: the old reason no longer applies.
+    if (current.status === 'rejected') { changes.rejection_reason = null; changes.resubmitted_at = new Date(); }
     if (name != null) changes.name = name;
     if (category != null) changes.category = category;
     if (language != null) changes.language = language;
@@ -399,14 +416,18 @@ app.put('/api/templates/:id', auth, async (req, res) => {
     if (['leados', 'alliance', 'shared'].includes(template_scope)) changes.template_scope = template_scope;
     const updatedTemplate = await Templates.findOneAndUpdate({ id }, { $set: changes }, { new: true, projection: NO_ID }).lean();
 
-    res.json({ template: updatedTemplate || undefined });
+    if (current.status === 'rejected') {
+      await alerts.templateResubmitted(current.meta_template_id || `local-${current.id}`).catch((e) => console.error('[Templates] Notice close failed:', e.message));
+    }
+    res.json({ template: updatedTemplate ? withRejection(updatedTemplate) : undefined });
   } catch (err) {
     console.error('Template update error:', err.response?.data || err.message);
+    // The customer sees a plain sentence; Meta's own text stays in the server log.
     const metaErr = err.response?.data?.error;
-    const errMsg = metaErr
-      ? `Meta API Error (${metaErr.code}): ${metaErr.message}`
-      : err.message || 'Failed to update template';
-    res.status(500).json({ error: errMsg, meta_error: metaErr || null });
+    res.status(metaErr ? 502 : 500).json({
+      error: metaErr ? 'Meta did not accept the change. Check the template text and try again.' : 'Unable to update the template. Please try again.',
+      code: metaErr ? 'META_ERROR' : 'TEMPLATE_UPDATE_FAILED',
+    });
   }
 });
 
