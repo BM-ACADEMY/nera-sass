@@ -15,7 +15,7 @@
  */
 const { Messages, Conversations, Templates, MetaWhatsappTemplates } = require('../models');
 const { phoneTailRegex } = require('../db/mongo');
-const { tenantCanSend } = require('./lifecycle');
+const { tenantCanSend, tenantLifecycle } = require('./lifecycle');
 const { currentTenantId, runAsSystem } = require('./tenantContext');
 const consent = require('./consent');
 const numberHealth = require('./numberHealth');
@@ -87,8 +87,9 @@ async function windowOpen(lead, now = new Date()) {
  *   kind           marketing | utility | service
  *   messageType    text | image | audio | video | document | template | reaction
  *   phoneNumberId  the sender number (for the marketing pause)
+ *   onboardingTest true only for the owner's setup test to their own phone (N5)
  */
-async function assertCanSend({ lead, kind, messageType = 'text', phoneNumberId = null, now = new Date() }) {
+async function assertCanSend({ lead, kind, messageType = 'text', phoneNumberId = null, now = new Date(), onboardingTest = false }) {
   const resolvedKind = normaliseKind(kind);
   const tenantId = currentTenantId();
   if (tenantId && !(await tenantCanSend(tenantId))) {
@@ -101,6 +102,16 @@ async function assertCanSend({ lead, kind, messageType = 'text', phoneNumberId =
   // consent: it does not read or change opt-in / opt-out.
   if (tenantId && await erasure.isErased(lead.phone)) {
     throw new SendBlocked({ status: 409, code: 'CONTACT_ERASED', message: erasure.ERASED_MESSAGE });
+  }
+  // Campaigns and marketing nudges start when the workspace goes live (N5).
+  // Only the owner's own onboarding test message to their own phone is exempt;
+  // every other check below still applies to it. Workspaces that predate
+  // onboarding have no flag and are unaffected.
+  if (resolvedKind === 'marketing' && tenantId && !onboardingTest) {
+    const { tenant } = await tenantLifecycle(tenantId);
+    if (tenant?.campaigns_enabled === false) {
+      throw new SendBlocked({ status: 403, code: 'NOT_LIVE', message: 'Marketing messages start when you go live. Finish the setup on your Home screen first.', retryable: true, retryAt: new Date(now.getTime() + 15 * 60 * 1000) });
+    }
   }
   if (resolvedKind === 'marketing') {
     const allowed = await consent.marketingAllowed({ lead });

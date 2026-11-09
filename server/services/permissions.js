@@ -45,6 +45,8 @@ const STAFF_PERMISSIONS = {
   'platform.staff.manage': ['founder'],
   // Meta WhatsApp inventory: view, sync and link/unlink reconciliation.
   'platform.meta': ['founder', 'ops'],
+  // Entering a customer's WhatsApp Business account details (onboarding, staff-assisted).
+  'platform.whatsapp.connect': ['founder', 'ops'],
   // Inventory phone registration and cache clearing.
   'platform.meta.admin': ['founder'],
   // The platform's own WhatsApp inbox (admin panel WhatsApp Chat).
