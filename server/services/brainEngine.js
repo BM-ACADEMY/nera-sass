@@ -8,6 +8,12 @@ const openRouter = require('./openrouter');
 const ai = require('./aiAutomation');
 const prompts = require('./brainPrompt');
 const booking = require('./brainBooking');
+const appointments = require('./appointments');
+const appointmentFlow = require('./appointmentFlow');
+const appointmentRules = require('./appointmentRules');
+const { say } = require('./appointmentText');
+const { systemLanguage, detectLanguage } = require('./replyLanguage');
+const { costOf } = require('./aiCost');
 const { AiReplyLogs, BrainDocs, BrainProfiles, Clients, Conversations, Leads, Messages } = require('../models');
 const aiAllowance = require('./billing/aiAllowance');
 
@@ -16,9 +22,10 @@ const BRAIN_MODEL = process.env.AI_BRAIN_MODEL || 'openai/gpt-4o-mini';
 const HISTORY_LIMIT = 10;
 const WINDOW_MS = 24 * 3600 * 1000;
 const AFTER_HOURS_REPEAT_MS = 8 * 3600 * 1000;
-const HOLDING_REPLY = 'I will check this with the team and get back to you.';
-const OPT_OUT_REPLY = 'You will not get further messages from us here.';
 const OPT_OUT_MESSAGE = /^\s*(stop|unsubscribe|opt[\s-]?out)[\s.!]*$/i;
+const ANSWERED_FROM = ['business_info', 'greeting', 'booking', 'handoff', 'general_knowledge'];
+// Phone numbers: 10 or more digits, spaces and dashes allowed (dates and prices are shorter).
+const PHONE = /(?:\+?\d[\s-]?){10,}/g;
 const PRICE = /(?:₹|\brs\.?|\binr|\$)\s*(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:rupees|lakhs?|crores?|\/-)/gi;
 
 /** Whether this workspace answers through the AI Brain instead of the older flow. */
@@ -48,6 +55,8 @@ function parseOutput(raw) {
     lead_updates: parsed.lead_updates && typeof parsed.lead_updates === 'object' && !Array.isArray(parsed.lead_updates) ? parsed.lead_updates : {},
     opt_out: parsed.opt_out === true,
     meeting: booking.cleanMeeting(parsed.meeting),
+    appointment: appointmentFlow.cleanProposal(parsed.appointment),
+    answered_from: ANSWERED_FROM.includes(parsed.answered_from) ? parsed.answered_from : null,
   };
 }
 
@@ -66,29 +75,54 @@ function breaksPriceRule(reply, brain, source) {
   return prices.some((price) => !known.has(price));
 }
 
-async function draft({ brain, docs, lead, history, message, businessOpen, left, bookingContext = null, now }) {
-  const prompt = prompts.assemblePrompt({ brain, docs, lead, history, message, businessOpen, quotaLeft: left, booking: bookingContext, now });
+const digitsOf = (value) => String(value || '').replace(/\D/g, '');
+
+/** True when the reply gives a phone number that is not in the business's own information. */
+function inventsPhoneNumber(reply, source) {
+  const known = digitsOf(source);
+  return (String(reply || '').match(PHONE) || []).map(digitsOf).some((digits) => digits.length >= 10 && !known.includes(digits));
+}
+
+async function draft({ brain, docs, lead, history, message, businessOpen, left, bookingContext = null, appointmentContext = null, firstContact = false, now }) {
+  const prompt = prompts.assemblePrompt({ brain, docs, lead, history, message, businessOpen, quotaLeft: left, booking: bookingContext, appointments: appointmentContext, firstContact, now });
+  const lang = systemLanguage(message);
+  const holding = say('holding', lang);
   const started = Date.now();
   const response = await openRouter.models.generateContent({
     model: BRAIN_MODEL,
     contents: prompt.user,
     config: { system: prompt.system, temperature: 0.2, maxOutputTokens: 600, responseMimeType: 'application/json' },
   });
-  const output = parseOutput(response.text);
+  const usage = response.usage || {};
+  let output;
+  try {
+    output = parseOutput(response.text);
+  } catch (err) {
+    // The provider already charged for this call: keep its usage for the log.
+    err.usage = usage;
+    err.latency = Date.now() - started;
+    throw err;
+  }
   const source = `${prompt.user.split('<runtime_context>')[0]}`;
   const same = (value) => String(value || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
   if (!output.opt_out && same(output.reply) === same(message)) {
-    Object.assign(output, { reply: HOLDING_REPLY, handoff: true, handoff_reason: 'The AI could not answer this message' });
+    Object.assign(output, { reply: holding, handoff: true, handoff_reason: 'The AI could not answer this message' });
   }
   if (breaksPriceRule(output.reply, brain, source)) {
-    Object.assign(output, { reply: HOLDING_REPLY, handoff: true, handoff_reason: 'AI tried to state a price it does not have' });
+    Object.assign(output, { reply: holding, handoff: true, handoff_reason: 'AI tried to state a price it does not have' });
   }
-  if (output.handoff && !output.reply) output.reply = HOLDING_REPLY;
+  // Facts come only from the business's own saved information.
+  if (!output.opt_out && output.answered_from === 'general_knowledge') {
+    Object.assign(output, { reply: holding, handoff: true, handoff_reason: 'The answer is not in the business information: a person should answer' });
+  } else if (!output.opt_out && inventsPhoneNumber(output.reply, source)) {
+    Object.assign(output, { reply: holding, handoff: true, handoff_reason: 'AI tried to give a phone number it does not have' });
+  }
+  if (output.handoff && !output.reply) output.reply = holding;
   // Closed: the business's own message replaces the answer, except for a
   // handoff or opt-out, which still get their reply.
   const afterHours = !businessOpen && !output.handoff && !output.opt_out && Boolean(brain.profile?.after_hours_message);
   if (afterHours) output.reply = brain.profile.after_hours_message;
-  return { output, afterHours, prompt, latency: Date.now() - started, usage: response.usage || {} };
+  return { output, afterHours, prompt, latency: Date.now() - started, usage, lang };
 }
 
 // Answers saved to lead fields: name and interest when the AI found them,
@@ -138,16 +172,18 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
   }
   const finish = (changes) => AiReplyLogs.updateOne({ id: log.id }, { $set: changes });
 
-  const finishWithoutSend = async (reason, mode = 'notify') => {
+  const language = detectLanguage(message.content);
+  const finishWithoutSend = async (reason, mode = 'notify', extra = {}) => {
     await ai.handover(io, { leadId: lead.id, reason, mode });
-    await finish({ status: 'no_send', handoff: true, handoff_reason: reason });
+    await finish({ status: 'no_send', handoff: true, handoff_reason: reason, language: language.code, ...extra });
     return { sent: false, reason };
   };
 
   if (OPT_OUT_MESSAGE.test(message.content || '')) {
-    const sentId = await send(OPT_OUT_REPLY);
+    const sentId = await send(say('optOut', systemLanguage(message.content)));
     await markOptedOut(lead.id, now);
-    await finish({ status: 'sent', sent_message_id: sentId, opt_out: true });
+    // No model call, so no tokens and no cost.
+    await finish({ status: 'sent', sent_message_id: sentId, opt_out: true, language: language.code, model: null, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost_usd: 0, cost_basis: 'none' });
     return { sent: true, opt_out: true };
   }
 
@@ -170,20 +206,55 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
     { _id: 0, direction: 1, content: 1 },
   ).sort({ id: -1 }).limit(HISTORY_LIMIT).lean()).reverse();
   const businessOpen = prompts.isOpenNow(brain.profile, now);
-  const bookingContext = await booking.context(lead);
+  // Clinics and schools book appointments in our own calendar; everyone else
+  // keeps the Google Meet flow.
+  const appointmentMode = brain.profile?.booking_mode === 'appointments';
+  const appointmentSettings = appointmentMode ? appointmentRules.settingsFromProfile(brain.profile) : null;
+  const bookingContext = appointmentMode ? null : await booking.context(lead);
+  let appointmentContext = null;
+  if (appointmentMode) {
+    const next = await appointments.nextFor(lead.id, now);
+    appointmentContext = {
+      settings: appointmentSettings,
+      draft: appointmentFlow.freshDraft(lead.booking_draft, now),
+      upcoming: next ? `${next.service} on ${new Date(next.start_at).toLocaleString('en-IN', { timeZone: appointmentSettings.timeZone, dateStyle: 'medium', timeStyle: 'short' })}` : null,
+    };
+  }
+  const firstContact = !history.some((m) => m.direction === 'outbound');
 
   let result;
   try {
-    result = await draft({ brain, docs, lead, history, message: message.content, businessOpen, left, bookingContext, now });
+    result = await draft({ brain, docs, lead, history, message: message.content, businessOpen, left, bookingContext, appointmentContext, firstContact, now });
   } catch (err) {
     console.error(`[AI Brain] Could not draft a reply for lead ${lead.id}:`, err.message);
-    return finishWithoutSend('The AI could not answer: please reply yourself');
+    return finishWithoutSend('The AI could not answer: please reply yourself', 'notify', err.usage ? { model: BRAIN_MODEL, ...costOf(err.usage), latency_ms: err.latency ?? null } : {});
   }
-  const { output, prompt, latency, usage } = result;
+  const { output, prompt, latency, usage, lang } = result;
   let { afterHours } = result;
+  let bookedAppointment = null;
+  let draftToSave;
+
+  const safetyHandoff = /^safety\b/i.test(output.handoff_reason || '');
+  // The model only proposes an appointment; the booking flow checks the
+  // calendar, asks for what is missing and writes the reply from the real outcome.
+  if (appointmentMode && output.appointment && !output.opt_out && !safetyHandoff) {
+    let outcome;
+    try {
+      outcome = await appointmentFlow.advance({ lead, proposal: output.appointment, lang, settings: appointmentSettings, store: appointments.store, now });
+    } catch (err) {
+      console.error(`[AI Brain booking] Appointment step failed for lead ${lead.id}:`, err.message);
+      outcome = { reply: say('bookingError', lang), draft: null, handoffReason: 'Appointment booking failed: please contact the customer' };
+    }
+    output.reply = outcome.reply;
+    output.answered_from = 'booking';
+    afterHours = false;
+    bookedAppointment = outcome.booked || null;
+    draftToSave = outcome.draft;
+    if (outcome.handoffReason && !output.handoff) Object.assign(output, { handoff: true, handoff_reason: outcome.handoffReason, handoff_mode: 'notify' });
+  }
 
   // The model only proposes a meeting; the real Calendar outcome writes the reply.
-  if (output.meeting && !output.opt_out && !/^safety\b/i.test(output.handoff_reason || '')) {
+  if (!appointmentMode && output.meeting && !output.opt_out && !safetyHandoff) {
     const outcome = await booking.apply({ lead, meeting: output.meeting, booking: bookingContext, brandName: brain.profile?.business_name || tenant?.name });
     if (outcome?.reply) {
       output.reply = outcome.reply;
@@ -199,8 +270,12 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
     handoff_reason: output.handoff_reason,
     opt_out: output.opt_out,
     meeting: output.meeting,
-    prompt_tokens: usage.prompt_tokens ?? null,
-    completion_tokens: usage.completion_tokens ?? null,
+    appointment: output.appointment,
+    appointment_id: bookedAppointment?.id ?? null,
+    answered_from: output.answered_from,
+    language: detectLanguage(message.content).code,
+    model: BRAIN_MODEL,
+    ...costOf(usage),
     latency_ms: latency,
   };
 
@@ -225,6 +300,9 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
 
   const changes = leadChanges(output.lead_updates);
   if (Object.keys(changes).length) await Leads.updateOne({ id: lead.id }, { $set: { ...changes, updated_at: new Date() } });
+  // Saved only once the customer has seen the question, so a "yes" always answers what was shown.
+  if (draftToSave === null) await Leads.updateOne({ id: lead.id }, { $unset: { booking_draft: '' } });
+  else if (draftToSave) await Leads.updateOne({ id: lead.id }, { $set: { booking_draft: draftToSave } });
   if (output.opt_out) await markOptedOut(lead.id, now);
   if (output.handoff) {
     const reason = output.handoff_reason || 'The AI asked for a person';
@@ -258,4 +336,4 @@ async function sandbox({ brain, clientId, message, history = [], now = new Date(
   return { ...output, retrieved: docs.map((d) => d.title || d.doc_type), latency_ms: latency };
 }
 
-module.exports = { brainActive, respond, sandbox, parseOutput, breaksPriceRule };
+module.exports = { brainActive, respond, sandbox, parseOutput, breaksPriceRule, inventsPhoneNumber };

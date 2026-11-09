@@ -47,6 +47,7 @@ const TENANT_SCOPED = new Map([
   ['brain_docs', {}],
   ['brain_profiles', {}],
   ['ai_reply_logs', {}],
+  ['appointments', {}],
   ['brands', {}],
   ['sales_tasks', {}],
   ['sales_lead_notes', {}],
