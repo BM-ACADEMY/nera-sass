@@ -544,6 +544,27 @@ class LeadOSAPI {
     return this.request('/api/campaigns');
   }
 
+  async getCampaignTags() {
+    return this.request('/api/campaigns/tags');
+  }
+
+  async previewCampaign(payload) {
+    return this.request('/api/campaigns/preview', { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  // ─── NOTICES (customer alerts) ──────────────────────────
+  async getNotices() {
+    return this.request('/api/notices');
+  }
+
+  async markNoticeRead(id) {
+    return this.request(`/api/notices/${id}/read`, { method: 'POST' });
+  }
+
+  async markAllNoticesRead() {
+    return this.request('/api/notices/read-all', { method: 'POST' });
+  }
+
   async createCampaign(campaignData) {
     return this.request('/api/campaigns', {
       method: 'POST',

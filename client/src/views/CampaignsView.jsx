@@ -50,6 +50,10 @@ export const CampaignsView = () => {
   const [clientId, setClientId] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [targetStatus, setTargetStatus] = useState('new');
+  const [tags, setTags] = useState([]);
+  const [tagId, setTagId] = useState('');
+  // Preview before sending: { data, payload } while the owner reviews it.
+  const [previewState, setPreviewState] = useState(null);
   const [sendType, setSendType] = useState('now');
   const [scheduledAt, setScheduledAt] = useState('');
   const [clients, setClients] = useState([]);
@@ -92,6 +96,7 @@ export const CampaignsView = () => {
       const templatesData = await api.getTemplates();
       setClients(clientsData.clients || []);
       setTemplates(templatesData.templates || []);
+      setTags((await api.getCampaignTags().catch(() => ({ tags: [] }))).tags || []);
     } catch (err) {
       console.error('Error fetching metadata:', err.message);
     }
@@ -172,7 +177,11 @@ export const CampaignsView = () => {
     
     setSubmitting(true);
     try {
-      let finalTargetStatus = targetStatus;
+      let finalTargetStatus = targetStatus === 'tag' ? 'all' : targetStatus;
+      if (targetStatus === 'tag' && !tagId) {
+        setSubmitting(false);
+        return toast.error('Choose a tag');
+      }
 
       // 1. Handle Custom CSV Upload
       if (targetStatus === 'custom_csv') {
@@ -201,15 +210,31 @@ export const CampaignsView = () => {
         finalTargetStatus = batchId;
       }
 
-      // 2. Create the Campaign
+      // 2. Preview first: nothing is sent until the owner confirms it.
       const finalScheduledAt = sendType === 'now' ? '' : new Date(scheduledAt).toISOString();
-      const res = await api.createCampaign({
+      const payload = {
         name, client_id: clientId, template_id: templateId,
-        target_status: finalTargetStatus, scheduled_at: finalScheduledAt || null,
-        send_immediately: sendType === 'now', template_parameters: templateParameters
-      });
+        target_status: finalTargetStatus, target_tag_id: targetStatus === 'tag' ? Number(tagId) : null,
+        scheduled_at: finalScheduledAt || null, send_immediately: sendType === 'now', template_parameters: templateParameters
+      };
+      const { preview } = await api.previewCampaign(payload);
+      setPreviewState({ data: preview, payload });
+    } catch (err) {
+      toast.error('Could not prepare the campaign: ' + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
+
+
+  const handleConfirmSend = async () => {
+    if (!previewState?.data?.can_send) return;
+    setSubmitting(true);
+    try {
+      const res = await api.createCampaign({ ...previewState.payload, preview_confirmed: true });
       toast.success('Campaign created! ' + res.campaign.name);
+      setPreviewState(null);
       setTab('list');
       fetchCampaigns();
     } catch (err) {
@@ -218,8 +243,6 @@ export const CampaignsView = () => {
       setSubmitting(false);
     }
   };
-
-
 
   const handleViewReport = async (c) => {
     setReportModal(c);
@@ -360,9 +383,19 @@ export const CampaignsView = () => {
                 <option value="cold">Cold leads</option>
                 <option value="hot">Hot leads</option>
                 <option value="all">All leads</option>
+                <option value="tag">Contacts with a tag</option>
                 <option value="custom_csv">Upload Custom List</option>
               </select>
             </div>
+            {targetStatus === 'tag' && (
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 10, color: C.muted, marginBottom: 5, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Tag</label>
+                <select value={tagId} onChange={(e) => setTagId(e.target.value)} style={{ width: '100%', background: C.surface, border: '1px solid ' + C.border, borderRadius: 7, color: C.text, padding: '9px 11px', fontSize: 12, outline: 'none' }}>
+                  <option value="">Select a tag</option>
+                  {tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name} ({tag.lead_count})</option>)}
+                </select>
+              </div>
+            )}
             {targetStatus === 'custom_csv' && (
               <div style={{ marginBottom: 14 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
@@ -479,7 +512,7 @@ export const CampaignsView = () => {
                 </div>
               )}
             </div>
-            <button type="submit" disabled={submitting} style={{ width: '100%', background: sendType === 'now' ? C.green : C.accent, border: 'none', borderRadius: 9, padding: 13, color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <button type="submit" disabled={submitting} title="You review who gets the message before anything is sent" style={{ width: '100%', background: sendType === 'now' ? C.green : C.accent, border: 'none', borderRadius: 9, padding: 13, color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
               {submitting ? 'Processing...' : sendType === 'now' ? <><Send size={16} /> Launch Immediately</> : <><Clock size={16} /> Schedule Campaign</>}
             </button>
           </div>
@@ -616,6 +649,49 @@ export const CampaignsView = () => {
           </div>
         </div>
       )}
+
+      {previewState && (() => {
+        const p = previewState.data;
+        const left = p.audience?.left_out || {};
+        return (
+          <div role="dialog" aria-label="Campaign preview" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 16 }}>
+            <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 22, width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' }}>
+              <h3 style={{ color: C.text, fontSize: 16, marginBottom: 4 }}>Review before sending</h3>
+              <p style={{ color: C.muted, fontSize: 12, marginBottom: 14 }}>Nothing has been sent yet.</p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+                {[['Will receive it', p.audience?.will_send ?? 0, C.green], ['In this audience', p.audience?.total ?? 0, C.text]].map(([label, value, color]) => (
+                  <div key={label} style={{ background: C.surface, border: '1px solid ' + C.border, borderRadius: 8, padding: 12 }}>
+                    <div style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
+                    <div style={{ fontSize: 11, color: C.muted }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+              {(left.no_consent + left.opted_out + left.invalid_phone) > 0 && (
+                <p style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
+                  Left out: {left.no_consent} have not opted in, {left.opted_out} asked us to stop, {left.invalid_phone} have no valid number.
+                </p>
+              )}
+              {p.template && <p style={{ fontSize: 12, color: C.text, marginBottom: 6 }}>Template <strong>{p.template.name}</strong> · {String(p.template.category || '').toLowerCase()} · {p.template.status}</p>}
+              {p.sample?.map((example, index) => (
+                <div key={index} style={{ background: C.accent + '15', border: '1px solid ' + C.accentDim, borderRadius: 9, padding: 10, marginBottom: 8 }}>
+                  <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>Example to {example.name || 'contact'} ({example.phone})</div>
+                  <div style={{ fontSize: 12, color: C.text, lineHeight: 1.6 }}>{example.message}</div>
+                </div>
+              ))}
+              {p.sending && <p style={{ fontSize: 12, color: C.muted, margin: '10px 0' }}>Your number can send {p.sending.remaining_today} more marketing messages today (daily limit {p.sending.daily_limit}).</p>}
+              <p style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>{p.schedule?.immediate ? 'Sends as soon as you confirm.' : `Scheduled for ${formatCampaignDateTime(p.schedule?.at)}.`}</p>
+              {p.warnings?.map((w) => <p key={w} style={{ fontSize: 12, color: C.accent, marginBottom: 6 }}>{w}</p>)}
+              {p.blockers?.map((b) => <p key={b} style={{ fontSize: 12, color: C.red, marginBottom: 6 }}>{b}</p>)}
+              <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+                <button type="button" onClick={() => setPreviewState(null)} style={{ flex: 1, background: 'transparent', border: '1px solid ' + C.border, borderRadius: 8, padding: 11, color: C.text, cursor: 'pointer' }}>Go back and edit</button>
+                <button type="button" onClick={handleConfirmSend} disabled={!p.can_send || submitting} style={{ flex: 1, background: p.can_send ? C.green : C.border, border: 'none', borderRadius: 8, padding: 11, color: '#fff', fontWeight: 700, cursor: p.can_send ? 'pointer' : 'not-allowed' }}>
+                  {submitting ? 'Sending…' : p.schedule?.immediate ? 'Confirm and send' : 'Confirm and schedule'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {deleteModal && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>

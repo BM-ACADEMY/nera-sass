@@ -187,7 +187,7 @@ const TemplatesPage = ({ itemId, basePath = '/templates' }) => {
                             <div className="text-[12px] text-muted-foreground">{langName(t.language)}</div>
                           </TableCell>
                           <TableCell><Badge variant="outline">{title(t.category)}</Badge></TableCell>
-                          <TableCell><div className="flex flex-col items-start gap-1"><StatusBadge status={t.status} /><ReviewTime template={t} /></div></TableCell>
+                          <TableCell><div className="flex flex-col items-start gap-1"><StatusBadge status={t.status} />{t.rejection && <div className="max-w-[260px] text-[11.5px] text-red-700">{t.rejection.message}</div>}<ReviewTime template={t} /></div></TableCell>
                           <TableCell className="text-[13px] text-muted-foreground">{t.quality ? title(t.quality) : '—'}</TableCell>
                           <TableCell className="text-[13px] text-muted-foreground">{when(t.last_synced_at)}</TableCell>
                           <TableCell>
@@ -214,8 +214,11 @@ const TemplatesPage = ({ itemId, basePath = '/templates' }) => {
             <DialogTitle className="flex flex-wrap items-center gap-2"><span className="truncate">{preview?.name}</span> {preview && <StatusBadge status={preview.status} />} {preview && <ReviewTime template={preview} />}</DialogTitle>
             <DialogDescription>{preview && `${title(preview.category)} · ${langName(preview.language)}`}</DialogDescription>
           </DialogHeader>
-          {preview?.rejected_reason && (
-            <p className="flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-[12.5px] text-red-800"><FiAlertTriangle className="mt-0.5 shrink-0" /> Rejected by Meta: {title(preview.rejected_reason).replace(/_/g, ' ')}</p>
+          {preview?.rejection && (
+            <p className="flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-[12.5px] text-red-800"><FiAlertTriangle className="mt-0.5 shrink-0" /> Rejected by Meta: {preview.rejection?.message || title(preview.rejected_reason).replace(/_/g, ' ')}{preview.rejection?.fix ? ` ${preview.rejection.fix}` : ''}</p>
+          )}
+          {canManage && preview?.rejection && editable(preview) && (
+            <Button onClick={() => { const id = preview.template_id; setPreview(null); navigate(`${basePath}/${id}`); }}><FiEdit2 /> Fix and resubmit</Button>
           )}
           {preview && <TemplatePreview template={toEditorShape(preview)} />}
         </DialogContent>

@@ -3,7 +3,12 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { requirePermission } = require('../../services/permissions');
+const campaignAudience = require('../../services/campaignAudience');
+const campaignStats = require('../../services/campaignStats');
+
 module.exports = function registerCampaignsRoutes(app, ctx) {
+const manage = requirePermission('campaigns.manage');
 const {
   CampaignImportRecipients,
   CampaignLogs,
@@ -28,37 +33,67 @@ const {
 app.get('/api/campaigns', auth, async (req, res) => {
   try {
     const campaignRows = await Campaigns.find({}, NO_ID).sort({ created_at: -1 }).lean();
-    const [campaignClients, campaignTemplates, logCounts] = await Promise.all([
+    const [campaignClients, campaignTemplates, counts, tagList] = await Promise.all([
       Clients.find({ id: { $in: campaignRows.map((c) => c.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean(),
       Templates.find({ id: { $in: campaignRows.map((c) => c.template_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean(),
-      CampaignLogs.aggregate([
-        { $match: { campaign_id: { $in: campaignRows.map((c) => c.id) }, status: { $in: ['sent', 'delivered', 'read', 'replied'] } } },
-        { $group: { _id: { campaign_id: '$campaign_id', status: '$status' }, count: { $sum: 1 } } },
-      ]),
+      campaignStats.countsFor(campaignRows.map((c) => c.id)),
+      campaignAudience.listTags(),
     ]);
     const clientNames = new Map(campaignClients.map((c) => [c.id, c.name]));
     const templateNames = new Map(campaignTemplates.map((t) => [t.id, t.name]));
-    const logCount = (campaignId, status) => logCounts.find((c) => c._id.campaign_id === campaignId && c._id.status === status)?.count || 0;
-    const rows = campaignRows.map((camp) => ({
-      ...camp,
-      brand_name: clientNames.get(camp.client_id) ?? null,
-      template_name: templateNames.get(camp.template_id) ?? null,
-      sent_count: logCount(camp.id, 'sent'),
-      delivered_count: logCount(camp.id, 'delivered'),
-      read_count: logCount(camp.id, 'read'),
-      replied_count: logCount(camp.id, 'replied'),
-    }));
+    const tagNames = new Map(tagList.map((t) => [t.id, t.name]));
+    const rows = campaignRows.map((camp) => {
+      const c = counts.get(camp.id);
+      return {
+        ...camp,
+        brand_name: clientNames.get(camp.client_id) ?? null,
+        template_name: templateNames.get(camp.template_id) ?? null,
+        tag_name: camp.target_tag_id != null ? tagNames.get(camp.target_tag_id) ?? null : null,
+        // Cumulative: "delivered" includes messages that were then read or answered.
+        sent_count: c.sent, delivered_count: c.delivered, read_count: c.read, replied_count: c.replied,
+        failed_count: c.failed, skipped_count: c.skipped,
+      };
+    });
     res.json({ campaigns: rows });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }
 });
-app.post('/api/campaigns', auth, async (req, res) => {
+// Audience tags in use in this workspace, for the campaign builder.
+app.get('/api/campaigns/tags', auth, async (req, res) => {
   try {
-    const { name, client_id, template_id, target_status, scheduled_at, send_immediately, template_parameters = {} } = req.body;
+    res.json({ tags: await campaignAudience.listTags() });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
-    if (!name || !client_id || !template_id || !target_status) {
+// Preview before sending: who gets it, who is left out and why, example messages,
+// the number's limits and the schedule. Nothing is queued or sent.
+app.post('/api/campaigns/preview', auth, manage, async (req, res) => {
+  try {
+    const { name, client_id, template_id, target_status, target_tag_id, scheduled_at, template_parameters = {} } = req.body || {};
+    res.json({ preview: await campaignAudience.previewCampaign({ name, client_id, template_id, target_status: target_status || 'all', target_tag_id, scheduled_at, template_parameters }) });
+  } catch (err) {
+    console.error('Campaign preview error:', err.message);
+    res.status(500).json({ error: 'Unable to build the preview.' });
+  }
+});
+
+app.post('/api/campaigns', auth, manage, async (req, res) => {
+  try {
+    const { name, client_id, template_id, target_status, target_tag_id, scheduled_at, send_immediately, template_parameters = {}, preview_confirmed } = req.body;
+    const hasTag = target_tag_id != null && target_tag_id !== '';
+
+    if (!name || !client_id || !template_id || !(target_status || hasTag)) {
       return res.status(400).json({ error: 'Campaign name, brand, template, and target audience are required.' });
+    }
+    if (preview_confirmed !== true) {
+      return res.status(400).json({ error: 'Review the preview before sending.', code: 'PREVIEW_REQUIRED' });
+    }
+    const preview = await campaignAudience.previewCampaign({ name, client_id, template_id, target_status: target_status || 'all', target_tag_id: hasTag ? target_tag_id : null, scheduled_at, template_parameters });
+    if (!preview.can_send) {
+      return res.status(400).json({ error: preview.blockers[0] || 'This campaign cannot be sent yet.', code: 'CAMPAIGN_NOT_READY', blockers: preview.blockers });
     }
 
     const selectedTemplate = await Templates.findOne(
@@ -91,7 +126,7 @@ app.post('/api/campaigns', auth, async (req, res) => {
     const initialStatus = scheduled_at && new Date(scheduled_at) > new Date() ? 'scheduled' : 'scheduled';
 
     const campaign = (await Campaigns.create({
-      name, client_id, template_id, target_status, scheduled_at: scheduled_at || null, status: initialStatus,
+      name, client_id, template_id, target_status: target_status || 'all', target_tag_id: hasTag ? Number(target_tag_id) : null, scheduled_at: scheduled_at || null, status: initialStatus,
       created_by: req.user.id, created_at: new Date(), template_parameters,
     })).toObject();
 
@@ -112,7 +147,7 @@ app.post('/api/campaigns', auth, async (req, res) => {
   }
 });
 
-app.delete('/api/campaigns/:id', auth, async (req, res) => {
+app.delete('/api/campaigns/:id', auth, manage, async (req, res) => {
   try {
     const { id } = req.params;
     await deleteCascade('campaign_logs', { campaign_id: Number(id) });
@@ -138,7 +173,7 @@ app.post('/api/campaigns/execute', internalAuth, async (req, res) => {
 });
 
 // POST /api/campaigns/:id/retry - Retry a failed/stuck campaign
-app.post('/api/campaigns/:id/retry', auth, async (req, res) => {
+app.post('/api/campaigns/:id/retry', auth, manage, async (req, res) => {
   try {
     const { id } = req.params;
 

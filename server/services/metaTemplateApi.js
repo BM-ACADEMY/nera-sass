@@ -12,6 +12,7 @@ const axios = require('axios');
 const multer = require('multer');
 const { MetaWhatsappTemplates } = require('../models');
 const { buildTemplate, TemplateError } = require('./templateBuilder');
+const { explainRejection } = require('./templateRejection');
 
 const MEDIA_TYPES = {
   IMAGE: { mime: ['image/jpeg', 'image/png'], max: 5 * 1024 * 1024 },
@@ -50,6 +51,11 @@ const present = (t) => ({
   submitted_at_estimated: Boolean(t.submitted_at_estimated),
   reviewed_at: t.reviewed_at || null,
   rejected_reason: t.raw_data?.rejected_reason && t.raw_data.rejected_reason !== 'NONE' ? t.raw_data.rejected_reason : null,
+  // Meta's reason in plain words, so the customer can fix the template and resubmit.
+  rejection: ['REJECTED', 'PAUSED', 'DISABLED'].includes(String(t.status).toUpperCase())
+    ? explainRejection(String(t.status).toUpperCase() === 'REJECTED' ? t.raw_data?.rejected_reason : t.status)
+    : null,
+  can_resubmit: ['REJECTED', 'PAUSED', 'APPROVED'].includes(String(t.status).toUpperCase()),
   quality: t.raw_data?.quality_score?.score || null,
   parameter_format: t.raw_data?.parameter_format || null,
 });

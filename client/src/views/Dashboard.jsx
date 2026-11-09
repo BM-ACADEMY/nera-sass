@@ -16,6 +16,7 @@ import { Badge, ScoreBar } from '../components/ui.jsx';
 import { useLeads, useLead } from '../hooks/useLeads.js';
 import { useAuth } from '../hooks/useAuth.js';
 import { api } from '../services/api.js';
+import NoticesBox from '../components/NoticesBox.jsx';
 
 // --- Sparkline Component for Stats Cards ---
 const MiniSparkline = ({ data, strokeColor }) => {
@@ -163,7 +164,8 @@ export const Dashboard = () => {
 
   return (
     <div className="p-mobile" style={{ padding: 26, overflowY: 'auto', height: '100%', background: C.bg, position: 'relative' }}>
-      
+      <NoticesBox />
+
       {/* Dynamic Keyframes and Custom styles */}
       <style>{`
         @keyframes slideIn {

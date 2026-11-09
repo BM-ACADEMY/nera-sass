@@ -41,6 +41,7 @@ const TENANT_SCOPED = new Map([
   ['campaign_logs', {}],
   ['campaign_rate_stats', {}],
   ['whatsapp_consents', {}],
+  ['customer_alerts', {}],
   ['whatsapp_number_state', {}],
   ['campaign_import_recipients', {}],
   ['payments', {}],

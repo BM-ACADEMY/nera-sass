@@ -36,6 +36,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import { SidebarInset, SidebarProvider, SidebarTrigger, useSidebar } from '@/components/ui/sidebar';
 import { cn } from '@/lib/utils';
+import AttentionList from '../components/AttentionList';
 
 // Each sidebar section has its own URL (/dashboard/<slug>) so the address bar
 // follows the section and a refresh stays on it.
@@ -315,6 +316,8 @@ const Dashboard = () => {
                   <FiPlus /> Provision Workspace
                 </Button>
               </div>
+
+              <AttentionList onOpenWorkspace={(id) => navigate(`/dashboard/${TAB_SLUGS.tenants}/${id}`)} />
 
               <StatsCards users={users} tenantCount={tenants.length} />
             </>

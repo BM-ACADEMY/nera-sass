@@ -155,6 +155,7 @@ async function notifyOwner(state, { kind, detail }) {
     marketing_paused: Boolean(state.marketing_paused), reason: state.marketing_paused_reason || null, daily_cap: state.daily_cap, kind,
   };
   notifyWorkspace('whatsapp_quality_changed', payload);
+  let emailed = false;
   try {
     const { tenant, owner } = await workspaceOwner();
     if (owner?.email) {
@@ -162,10 +163,18 @@ async function notifyOwner(state, { kind, detail }) {
         to: owner.email, ownerName: owner.name, workspaceName: tenant?.name, kind, detail,
         rating: state.quality_rating, event: state.quality_event, paused: Boolean(state.marketing_paused), dailyCap: state.daily_cap,
       });
+      emailed = true;
     }
     await WhatsappNumberState.updateOne({ phone_number_id: state.phone_number_id }, { $set: { owner_notified_at: new Date() } });
   } catch (error) {
     console.error('[numberHealth] Owner alert failed:', error.message);
+  }
+  // The customer's Notices box (and the WhatsApp copy for opted-in numbers).
+  // The email above is the notice's email, so none is sent twice.
+  try {
+    await require('./alerts').evaluateQuality({ emailAlreadySent: emailed });
+  } catch (error) {
+    console.error('[numberHealth] Notice failed:', error.message);
   }
   return payload;
 }

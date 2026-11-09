@@ -59,6 +59,7 @@ module.exports = {
   CampaignImportRecipients: require('./CampaignImportRecipients'),
   CampaignLogs: require('./CampaignLogs'),
   CampaignMessageQueue: require('./CampaignMessageQueue'),
+  CustomerAlerts: require('./CustomerAlerts'),
   WhatsappConsents: require('./WhatsappConsents'),
   WhatsappNumberState: require('./WhatsappNumberState'),
   CampaignRateStats: require('./CampaignRateStats'),

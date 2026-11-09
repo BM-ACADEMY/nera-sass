@@ -13,6 +13,7 @@ const { seatUsage } = require('../services/entitlements');
 const { sanitizeClient } = require('../services/clientSecrets');
 const { escapeRegex } = require('../db/mongo');
 const provisioning = require('../services/provisioning');
+const alerts = require('../services/alerts');
 const invitations = require('../services/invitations');
 const userAdmin = require('../services/userAdmin');
 const tenantData = require('../services/tenantData');
@@ -119,6 +120,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
         owner_password: body.owner_password,
         settings: body.settings || {},
         brand: body.brand || {},
+        alerts_whatsapp: body.alerts_whatsapp || null,
       }, { req, actorUserId: req.user.id, actorName: req.user.name });
       return res.status(201).json(result);
     } catch (error) {
@@ -661,6 +663,17 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       const execution = await n8nApi.getExecution(req.params.id);
       const tenant = Number.isFinite(execution.tenant_id) ? await Tenants.findOne({ id: execution.tenant_id }, { _id: 0, name: 1 }).lean() : null;
       return res.json({ execution: { ...execution, tenant_name: tenant?.name ?? null } });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // ── Needs your attention ──────────────────────────────────
+  // Every open customer notice across workspaces (template rejected, wallet
+  // low, number quality drop, setup unfinished, payment failed), worst first.
+  router.get('/attention', permit('platform.tenants.view'), async (req, res) => {
+    try {
+      return res.json(await alerts.attentionList({ limit: req.query.limit }));
     } catch (error) {
       return fail(res, error);
     }

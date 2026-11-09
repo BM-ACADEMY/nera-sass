@@ -8,6 +8,9 @@ const aiLatency = require('../../services/aiLatency');
 const { reviewTiming } = require('../../services/metaTemplateApi');
 const { MetaWhatsappTemplates } = require('../../models');
 const { notifyStaff } = require('../../services/realtime');
+const alerts = require('../../services/alerts');
+const campaignStats = require('../../services/campaignStats');
+const { cleanReasonCode } = require('../../services/templateRejection');
 module.exports = function registerWebhookWhatsappRoutes(app, ctx) {
 const {
   CampaignLogs,
@@ -204,6 +207,11 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
               );
             }, 'webhook-wa-template-cache');
             if (cacheUpdate.matchedCount) notifyStaff('templates:changed', { template_id: String(message_template_id), status: event });
+            // A template made on the Meta side only (no LeadOS row) still reaches its workspace.
+            if (cacheUpdate.matchedCount) {
+              await alerts.templateStatusChanged({ templateId: message_template_id, name: message_template_name, event, reason })
+                .catch((noticeError) => console.error('[WA Webhook] Template notice failed:', noticeError.message));
+            }
           }
 
           const template = await runAsSystem(() => Templates.findOne(
@@ -225,12 +233,29 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
             await runAsTenant(template.tenant_id, async () => {
               const templateStatusUpdate = { status: newStatus };
               if (newStatus === 'approved') templateStatusUpdate.approved_at = new Date();
+              // Meta's reason code, kept so the customer can fix the template and resubmit (plan N4).
+              if (newStatus === 'rejected') {
+                templateStatusUpdate.rejection_reason = cleanReasonCode(reason) || (event === 'REJECTED' ? 'UNSPECIFIED' : event);
+                templateStatusUpdate.rejected_at = new Date();
+              } else {
+                templateStatusUpdate.rejection_reason = null;
+              }
               const updateResult = await Templates.updateOne(
                 { id: template.id },
                 { $set: templateStatusUpdate }
               );
               if (updateResult.matchedCount) {
                 console.log(`✅ Template "${message_template_name}" updated to ${newStatus} (tenant ${template.tenant_id})`);
+              }
+              try {
+                const noticeId = message_template_id || `local-${template.id}`;
+                if (newStatus === 'rejected') {
+                  await alerts.templateRejected({ id: noticeId, name: message_template_name || template.name, status: event, reason });
+                } else {
+                  await alerts.templateResubmitted(noticeId);
+                }
+              } catch (noticeError) {
+                console.error('[WA Webhook] Template notice failed:', noticeError.message);
               }
             });
           }
@@ -305,6 +330,9 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
               }
               if (newStatus === 'failed' && errorMsg) {
                 await CampaignLogs.updateMany({ wa_message_id: wamid }, { $set: { status: newStatus, error_message: errorMsg } });
+              } else if (campaignStats.RANK[newStatus]) {
+                // delivered / read only ever move a message forward, whatever order Meta's receipts arrive in
+                await campaignStats.advanceByMessageId(wamid, newStatus);
               } else {
                 await CampaignLogs.updateMany({ wa_message_id: wamid }, { $set: { status: newStatus } });
               }
@@ -373,6 +401,11 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
             if (lead) {
               const leadClient = lead.client_id != null ? await Clients.findOne({ id: lead.client_id }, { wa_access_token: 1, phone_number_id: 1 }).lean() : null;
               lead = { ...lead, client_wa_token: leadClient?.wa_access_token ?? null, client_phone_number_id: leadClient?.phone_number_id ?? null };
+            }
+
+            // A reply to a campaign message counts once, for the latest campaign that messaged this contact.
+            if (lead?.id != null) {
+              await campaignStats.recordReply(lead.id).catch((statsError) => console.error('[Webhook] Campaign reply count failed:', statsError.message));
             }
 
             if (!lead) {

@@ -103,6 +103,17 @@ async function provisionTenant(input, { req = null, actorUserId = null, actorNam
     throw new ProvisioningError(409, `An active invitation has already been sent to ${ownerEmail}`);
   }
 
+  // WhatsApp copies of notices: only for a number the customer agreed to at signup.
+  let alertsWhatsapp = null;
+  if (input.alerts_whatsapp && input.alerts_whatsapp.opt_in === true) {
+    const digits = String(input.alerts_whatsapp.number || '').replace(/\D/g, '');
+    if (digits.length < 10 || digits.length > 15) throw new ProvisioningError(400, 'A valid WhatsApp number is required for WhatsApp alerts');
+    alertsWhatsapp = {
+      opted_in: true, number: digits, opted_in_at: new Date(), source: 'signup',
+      text: String(input.alerts_whatsapp.text || 'Send me important account alerts on WhatsApp').slice(0, 300),
+    };
+  }
+
   const now = new Date();
   const created = { tenant: null, client: null, owner: null };
   const useTransaction = await supportsTransactions();
@@ -115,6 +126,7 @@ async function provisionTenant(input, { req = null, actorUserId = null, actorNam
       status: 'active',
       lifecycle_state: 'active',
       ...pick(input.settings, TENANT_SETTING_FIELDS),
+      ...(alertsWhatsapp ? { alerts_whatsapp: alertsWhatsapp } : {}),
       created_by: actorUserId,
       created_at: now,
       updated_at: now,
