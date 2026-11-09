@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Migration 037 — WhatsApp send safety (plan N1).
+ * Migration 038 — WhatsApp send safety (plan N1).
  *
  * MongoDB migration, written as a file only: it is never run by the server.
  * Run it once by hand against the target database:
@@ -41,7 +41,7 @@ async function main() {
   await runAsSystem(async () => {
     // 1. indexes
     if (apply) await Promise.all([WhatsappConsents.createIndexes(), WhatsappNumberState.createIndexes(), CampaignMessageQueue.createIndexes()]);
-    console.log(`[037] indexes ${apply ? 'created' : 'would be created'}`);
+    console.log(`[038] indexes ${apply ? 'created' : 'would be created'}`);
 
     // 2. consent backfill
     const flagged = await Leads.find(
@@ -78,7 +78,7 @@ async function main() {
       else Object.assign(doc, { opt_out_source: 'legacy_backfill', opt_out_at: entry.at, opt_out_text: event.text });
       try { await WhatsappConsents.create(doc); } catch (error) { if (error.code !== 11000) throw error; }
     }
-    console.log(`[037] consent rows: ${created} ${apply ? 'created' : 'to create'}, ${kept} already present`);
+    console.log(`[038] consent rows: ${created} ${apply ? 'created' : 'to create'}, ${kept} already present`);
 
     // 3. queue rows
     const openRows = await CampaignMessageQueue.countDocuments({ status: { $in: ['pending', 'processing'] }, kind: { $exists: false } });
@@ -86,7 +86,7 @@ async function main() {
       await CampaignMessageQueue.updateMany({ kind: { $exists: false } }, { $set: { kind: 'marketing', msg_type: 'template', source: 'campaign' } });
       await CampaignMessageQueue.updateMany({ status: 'pending', next_attempt_at: { $exists: false } }, { $set: { next_attempt_at: now } });
     }
-    console.log(`[037] open queue rows ${apply ? 'updated' : 'to update'}: ${openRows}`);
+    console.log(`[038] open queue rows ${apply ? 'updated' : 'to update'}: ${openRows}`);
 
     // 4. number state
     const brands = await Clients.find({ phone_number_id: { $nin: [null, ''] }, tenant_id: { $ne: null } }, { _id: 0, id: 1, tenant_id: 1, phone_number_id: 1 }).lean();
@@ -103,14 +103,14 @@ async function main() {
         });
       } catch (error) { if (error.code !== 11000) throw error; }
     }
-    console.log(`[037] number state rows ${apply ? 'created' : 'to create'}: ${states} (daily cap ${startCap})`);
+    console.log(`[038] number state rows ${apply ? 'created' : 'to create'}: ${states} (daily cap ${startCap})`);
   }, 'migration-037');
 
   await mongoose.disconnect();
-  console.log(`[037] ${apply ? 'applied' : 'dry run complete'}`);
+  console.log(`[038] ${apply ? 'applied' : 'dry run complete'}`);
 }
 
 main().catch((error) => {
-  console.error('[037] failed:', error.message);
+  console.error('[038] failed:', error.message);
   process.exit(1);
 });

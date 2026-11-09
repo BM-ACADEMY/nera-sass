@@ -5,7 +5,7 @@ plan (monthly, through Razorpay) and keeps a prepaid wallet per workspace that
 pays only for AI replies beyond the plan allowance, extra seats and extra
 WhatsApp numbers.
 
-## Tables (MongoDB collections, migration `037_billing_plans_subscriptions_wallet.js`)
+## Tables (MongoDB collections, migration `038_billing_plans_subscriptions_wallet.js`)
 
 | collection        | scope    | purpose |
 |-------------------|----------|---------|

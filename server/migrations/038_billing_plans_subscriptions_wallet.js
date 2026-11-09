@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Migration 037: plans, subscriptions and the wallet (MongoDB).
+ * Migration 038: plans, subscriptions and the wallet (MongoDB).
  *
  * Creates the billing collections with their indexes and seeds the three
  * launch plans (Desk 799, WhatsApp 1999, Complete 3999 rupees a month) when
@@ -15,7 +15,7 @@
  *   billing_alerts  owner notices (20 percent left, AI paused)
  *
  * Run by hand against the target database, never automatically:
- *   MONGODB_URI=mongodb://... node migrations/037_billing_plans_subscriptions_wallet.js
+ *   MONGODB_URI=mongodb://... node migrations/038_billing_plans_subscriptions_wallet.js
  * The server also seeds the plans on startup when the collection is empty.
  */
 const path = require('path');
@@ -31,16 +31,16 @@ async function run() {
   for (const name of names) {
     await models[name].init(); // creates the collection and its indexes
     await models[name].syncIndexes();
-    console.log(`[037] ${models[name].collection.name}: indexes in place`);
+    console.log(`[038] ${models[name].collection.name}: indexes in place`);
   }
   const { seeded } = await ensureDefaultPlans();
-  console.log(`[037] plans seeded: ${seeded}`);
+  console.log(`[038] plans seeded: ${seeded}`);
   await mongoose.disconnect();
 }
 
 if (require.main === module) {
   run().then(() => process.exit(0)).catch((error) => {
-    console.error('[037] failed:', error.message);
+    console.error('[038] failed:', error.message);
     process.exit(1);
   });
 }

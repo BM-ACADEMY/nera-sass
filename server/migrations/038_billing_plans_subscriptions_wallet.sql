@@ -1,5 +1,5 @@
--- Migration 037 (reference only). The application runs on MongoDB; the live
--- migration is 037_billing_plans_subscriptions_wallet.js. This file documents
+-- Migration 038 (reference only). The application runs on MongoDB; the live
+-- migration is 038_billing_plans_subscriptions_wallet.js. This file documents
 -- the same tables for anyone reading the SQL history.
 
 CREATE TABLE IF NOT EXISTS plans (
