@@ -609,6 +609,8 @@ app.post('/webhook/razorpay/billing', async (req, res) => {
     return res.status(500).json({ received: false });
   }
 });
+// Customer data rights: contact/workspace CSV export, delete on request, reply webhook.
+app.use('/api', require('./routes/dataRights'));
 // Platform admin panel API: platform staff only.
 // The SalesOS maintenance routes POST /api/admin/{cleanup,retry,refresh-embeddings}
 // share this prefix. They pass through to SalesOS, which requires the internal
@@ -1522,6 +1524,7 @@ function startBackgroundJobs() {
     return;
   }
   resumeLeadExports();
+  require('./services/replyWebhook').startWorker();
 
   if (moduleEnabled('alliance')) {
     startAllianceEmailWorker(io).catch((error) => {

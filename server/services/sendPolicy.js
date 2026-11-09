@@ -19,6 +19,7 @@ const { tenantCanSend } = require('./lifecycle');
 const { currentTenantId, runAsSystem } = require('./tenantContext');
 const consent = require('./consent');
 const numberHealth = require('./numberHealth');
+const erasure = require('./erasure');
 
 const KINDS = Object.freeze(['marketing', 'utility', 'service']);
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -95,6 +96,11 @@ async function assertCanSend({ lead, kind, messageType = 'text', phoneNumberId =
   }
   if (!lead?.phone || consent.digitsOf(lead.phone).length < 10) {
     throw new SendBlocked({ status: 400, code: 'INVALID_PHONE', message: 'The contact has no valid WhatsApp number' });
+  }
+  // A contact deleted on request gets nothing, of any kind (N6). Separate from
+  // consent: it does not read or change opt-in / opt-out.
+  if (tenantId && await erasure.isErased(lead.phone)) {
+    throw new SendBlocked({ status: 409, code: 'CONTACT_ERASED', message: erasure.ERASED_MESSAGE });
   }
   if (resolvedKind === 'marketing') {
     const allowed = await consent.marketingAllowed({ lead });

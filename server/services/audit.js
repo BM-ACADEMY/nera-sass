@@ -51,6 +51,11 @@ const EVENTS = Object.freeze({
   PLAN_UPDATED: 'PLAN_UPDATED',
   WALLET_ADJUSTED: 'WALLET_ADJUSTED',
   SUBSCRIPTION_GRANTED: 'SUBSCRIPTION_GRANTED',
+  CONTACT_EXPORTED: 'CONTACT_EXPORTED',
+  WORKSPACE_EXPORTED: 'WORKSPACE_EXPORTED',
+  CONTACT_ERASED: 'CONTACT_ERASED',
+  REPLY_WEBHOOK_UPDATED: 'REPLY_WEBHOOK_UPDATED',
+  REPLY_WEBHOOK_SECRET_ROTATED: 'REPLY_WEBHOOK_SECRET_ROTATED',
 });
 
 function actorFrom(req) {
@@ -65,9 +70,10 @@ function actorFrom(req) {
 
 /**
  * record(event, { tenantId, req, targetType, targetId, meta })
- * Never throws: a failed audit write is logged, the caller continues.
+ * Never throws: a failed audit write is logged, the caller continues, unless
+ * `strict: true` (exports and deletions refuse to proceed without their log).
  */
-async function record(event, { tenantId = null, req = null, actor = null, targetType = null, targetId = null, meta = {} } = {}) {
+async function record(event, { tenantId = null, req = null, actor = null, targetType = null, targetId = null, meta = {}, strict = false } = {}) {
   const who = actor || actorFrom(req);
   try {
     await runAsSystem(() => AuditEvents.create({
@@ -86,6 +92,8 @@ async function record(event, { tenantId = null, req = null, actor = null, target
     notifyStaff('admin:changed', { event, tenant_id: tenantId == null ? null : Number(tenantId), target_type: targetType });
   } catch (error) {
     console.error(`[audit] Failed to record ${event}:`, error.message);
+    // strict: the caller must not go on without the log entry (data exports).
+    if (strict) throw error;
   }
 }
 

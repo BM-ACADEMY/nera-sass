@@ -30,6 +30,8 @@ const TENANT_PERMISSIONS = {
   // Plans, wallet and payments (Settings > Billing).
   'billing.view': ['owner', 'admin', 'manager'],
   'billing.manage': ['owner', 'admin'],
+  // The whole-workspace data export (every contact and message).
+  'workspace.export': ['owner', 'admin'],
 };
 
 const STAFF_PERMISSIONS = {

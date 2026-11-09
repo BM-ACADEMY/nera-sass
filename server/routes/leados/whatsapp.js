@@ -24,6 +24,7 @@ const mediaStore = require('../../services/mediaStore');
 const sendPolicy = require('../../services/sendPolicy');
 const numberHealth = require('../../services/numberHealth');
 const WAKEUP_TEMPLATE = process.env.WA_WAKEUP_TEMPLATE || 'common_welcome_message';
+const erasure = require('../../services/erasure');
 // ══════════════════════════════════════════════════════════
 // WHATSAPP ROUTES
 // ══════════════════════════════════════════════════════════
@@ -43,6 +44,7 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
 
     const sendLead = await Leads.findOne({ id: lead_id }, NO_ID).lean();
     if (!sendLead) return res.status(404).json({ error: 'Lead not found.' });
+    if (await erasure.isErased(sendLead.phone)) return res.status(409).json({ error: erasure.ERASED_MESSAGE, code: 'CONTACT_ERASED' });
     const sendClient = sendLead.client_id != null ? await Clients.findOne({ id: sendLead.client_id }, { phone_number_id: 1, wa_access_token: 1, whatsapp_status: 1 }).lean() : null;
     const lead = {
       ...sendLead,
