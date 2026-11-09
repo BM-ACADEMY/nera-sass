@@ -666,13 +666,7 @@ router.post('/generate-ai-reply', async (req, res) => {
   const fs = require('fs');
   const path = require('path');
 
-  fs.appendFileSync(
-    path.join(__dirname, '../debug_error.log'),
-    `[${new Date().toISOString()}] API Called: clientId=${clientId}, author=${author}, rating=${rating}, text=${text}\n`
-  );
-
   if (!clientId) {
-    fs.appendFileSync(path.join(__dirname, '../debug_error.log'), `[${new Date().toISOString()}] Error: clientId is required\n`);
     return res.status(400).json({ error: 'clientId is required' });
   }
 
@@ -695,8 +689,8 @@ router.post('/generate-ai-reply', async (req, res) => {
 
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
-      fs.appendFileSync(path.join(__dirname, '../debug_error.log'), `[${new Date().toISOString()}] Error: OPENROUTER_API_KEY is not configured on server.\n`);
-      return res.status(500).json({ error: 'OPENROUTER_API_KEY is not configured on server.' });
+      console.error('[Mafiya Reviews] OPENROUTER_API_KEY is not configured on server.');
+      return res.status(500).json({ error: 'AI replies are not available right now.' });
     }
 
     // Fetch and incorporate GMB Brain entries for this client
@@ -775,19 +769,10 @@ Guidelines:
     const reply = response.text?.trim() ||
                   `Thank you ${author} for your review! We appreciate your feedback.`;
 
-    fs.appendFileSync(
-      path.join(__dirname, '../debug_error.log'),
-      `[${new Date().toISOString()}] AI generation success: "${reply}"\n`
-    );
-
     res.json({ reply });
   } catch (error) {
     const errorDetails = error.response?.data || error.message;
     console.error('[Mafiya Reviews] OpenAI/Groq API generation error:', errorDetails);
-    fs.appendFileSync(
-      path.join(__dirname, '../debug_error.log'),
-      `[${new Date().toISOString()}] API Error: ${JSON.stringify(errorDetails)}\n`
-    );
     res.status(500).json({ error: 'Failed to generate reply via AI.' });
   }
 });
@@ -2180,7 +2165,7 @@ Generate a JSON object with exactly these fields:
     try {
       parsed = JSON.parse(rawOutput);
     } catch (e) {
-      console.warn('[Mafiya Posts] AI returned invalid JSON:', rawOutput);
+      console.warn(`[Mafiya Posts] AI returned invalid JSON (${String(rawOutput || '').length} chars)`);
       const capMatch = rawOutput.match(/"caption":\s*"([^"]+)"/);
       const titleMatch = rawOutput.match(/"posterTitle":\s*"([^"]+)"/);
       const subMatch = rawOutput.match(/"posterSubtitle":\s*"([^"]+)"/);

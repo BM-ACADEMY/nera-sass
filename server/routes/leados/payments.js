@@ -27,7 +27,7 @@ app.post('/api/payments/create-link', auth, async (req, res) => {
         currency: 'INR',
         description,
         customer: { name: lead.name, contact: lead.phone },
-        notes: { lead_id: lead_id.toString() },
+        notes: { lead_id: lead_id.toString(), tenant_id: String(req.user.tenant_id) },
         callback_url: `${process.env.PORTAL_URL}/payment-success`,
         callback_method: 'get',
       },

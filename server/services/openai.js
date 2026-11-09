@@ -1,8 +1,7 @@
 // backend/services/openai.js
-const Groq = require('groq-sdk');
 const axios = require('axios');
 const { KnowledgeBase, PromptTemplates, AiAnalysis, Organisations } = require('../models');
-const groq = new Groq({ apiKey: process.env.OPENAI_API_KEY || 'dummy_key' });
+const groq = require('./groqClient');
 
 // WEBSITE SCRAPER
 async function scrapeWebsite(url) {

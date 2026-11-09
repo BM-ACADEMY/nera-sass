@@ -1,4 +1,5 @@
 const express = require('express');
+const sendPolicy = require('../services/sendPolicy');
 const axios = require('axios');
 const openRouter = require('../services/openrouter');
 const { ChatbotKnowledgebase, ChatbotUserprogresses, ChatbotFlowsteps, Leads, Clients, Messages } = require('../models');
@@ -146,7 +147,10 @@ router.post('/chat', async (req, res) => {
         ? { phone: lead.phone, wa_phone_number_id: leadClient.wa_phone_number_id, wa_access_token: leadClient.wa_access_token }
         : null;
       
-      if (leadInfo && leadInfo.wa_phone_number_id && leadInfo.wa_access_token) {
+      const chatPolicy = leadInfo && leadInfo.wa_phone_number_id && leadInfo.wa_access_token
+        ? await sendPolicy.checkSend({ lead, kind: 'service', messageType: 'text', phoneNumberId: leadInfo.wa_phone_number_id })
+        : null;
+      if (chatPolicy?.ok) {
         // Log to messages
         await Messages.create({
           client_id: lead.client_id, lead_id: lead.id, direction: 'outbound', type: 'text',

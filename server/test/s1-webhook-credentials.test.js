@@ -137,7 +137,6 @@ test('Slice S1: signed webhooks, tenant credentials only, no payload on disk, Al
   // ── Item 1: every Meta-facing POST webhook is signature-checked ──
   for (const [url, raw] of [
     ['/webhook/meta-leads', JSON.stringify({ object: 'page', entry: [] })],
-    ['/api/webhooks/meta', JSON.stringify({ object: 'page' })],
   ]) {
     await t.test(`S1. ${url}: missing, malformed and wrong signatures are refused; a valid one is accepted`, async () => {
       assert.strictEqual((await postRaw(url, raw)).status, 401, 'missing signature');

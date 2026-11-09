@@ -25,8 +25,7 @@ async function queryPost(id) {
   const post = await ContentQueue.findOne({ id }, NO_ID).lean();
   return { rows: post ? [post] : [] };
 }
-const Groq = require("groq-sdk");
-const groq = new Groq({ apiKey: process.env.OPENAI_API_KEY || "dummy_key" });
+const groq = require("../services/groqClient");
 const openRouter = require("../services/openrouter");
 const axios = require("axios");
 const fs = require("fs");
@@ -718,7 +717,7 @@ function safeJsonValue(val) {
 // ---------------------------------------------------------------
 async function updateContent(req, res) {
   const { id } = req.params;
-  console.log(`[updateContent] Received update request for ID ${id}. Body:`, JSON.stringify(req.body));
+  console.log(`[updateContent] Received update request for ID ${id} (fields: ${Object.keys(req.body || {}).join(', ')})`);
   const allowed = [
     "caption", "instagram_caption", "facebook_caption", "x_caption", "linkedin_caption",
     "youtube_title", "youtube_description", "thumbnail_title", "scheduled_at",
@@ -822,7 +821,7 @@ async function generateCaptions(req, res) {
         });
 
         transcript = transcriptionResult.text || "";
-        console.log("Transcription successful:", transcript);
+        console.log(`Transcription successful (${String(transcript || '').length} chars)`);
       } catch (transcribeErr) {
         console.error("Transcription failed, falling back to filename context:", transcribeErr.message);
       } finally {

@@ -30,6 +30,14 @@ const {
 } = require('../models');
 const { NO_ID, ieq, escapeRegex, insertIgnore, phoneTailRegex, withLock } = require('../db/mongo');
 const founderNotify = require('../services/founderNotify');
+const sendPolicy = require('../services/sendPolicy');
+
+// Every WhatsApp send in this file asks the send policy first. A refusal is
+// thrown so the caller's existing failure handling (nothing sent) applies.
+async function assertPolicy(options) {
+  const check = await sendPolicy.checkSend(options);
+  if (!check.ok) { const err = new Error(`send blocked: ${check.code}`); err.policyCode = check.code; throw err; }
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -615,10 +623,11 @@ async function sendWhatsAppText(lead_id, content) {
   const phoneNumberId = lead.phone_number_id;
   const waAccessToken = lead.client_wa_token;
   if (!phoneNumberId || !waAccessToken) return { delivered: false, reason: 'whatsapp_not_connected' };
-  let delivered = false, waMessageId = null;
+  let delivered = false, waMessageId = null, blockedReason = null;
   if (lead.phone && phoneNumberId && waAccessToken) {
     try {
       const phoneDigits = lead.phone.replace(/\D/g, '');
+      await assertPolicy({ lead, kind: 'utility', messageType: 'text', phoneNumberId });
       const waRes = await axios.post(
         `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
         { messaging_product: 'whatsapp', to: phoneDigits, type: 'text', text: { body: content } },
@@ -627,6 +636,7 @@ async function sendWhatsAppText(lead_id, content) {
       waMessageId = waRes.data?.messages?.[0]?.id || null;
       delivered = true;
     } catch (waErr) {
+      if (waErr.policyCode) blockedReason = waErr.policyCode;
       console.error('[sendWhatsAppText error]', waErr.response?.data || waErr.message);
     }
   }
@@ -638,7 +648,7 @@ async function sendWhatsAppText(lead_id, content) {
     status: delivered ? 'sent' : 'failed', is_ai: false, sent_at: new Date(),
   });
 
-  return { delivered, wa_msg_id: waMessageId };
+  return { delivered, wa_msg_id: waMessageId, ...(blockedReason ? { reason: blockedReason } : {}) };
 }
 
 // 1. Deduplicate Lead
@@ -1097,8 +1107,8 @@ router.post('/ai/response', internalAuth, async (req, res) => {
       if (requestIsGreeting && latestInbound && !latestIsGreeting) {
         console.warn('[AI] Replaced stale greeting payload with latest inbound message', {
           lead_id: Number(lead_id),
-          stale_message: effectiveMessage,
-          latest_message: latestInbound,
+          stale_chars: effectiveMessage.length,
+          latest_chars: latestInbound.length,
         });
         effectiveMessage = latestInbound;
       }
@@ -1448,7 +1458,7 @@ router.post('/ai/response', internalAuth, async (req, res) => {
          }
       }
     } catch (parseErr) {
-      console.error("Failed to parse Gemini JSON:", parseErr.message, rawAiResponse);
+      console.error("Failed to parse Gemini JSON:", parseErr.message, `(${String(rawAiResponse || '').length} chars)`);
       // A truncated response still has a well-formed "reply" value up to the
       // cut point (only later fields/closing braces are missing) — salvage
       // that instead of showing the lead raw, escaped JSON syntax.
@@ -1581,6 +1591,8 @@ router.post('/communication/send', internalAuth, async (req, res) => {
     // 2. Send real outbound message via Meta WhatsApp Cloud API (`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`)
     let waMessageId = null;
     if (channel === 'whatsapp' && lead && lead.phone && phoneNumberId && waAccessToken && !(await erasure.isErased(lead.phone))) {
+      const policy = await sendPolicy.checkSend({ lead, kind: 'service', messageType: 'text', phoneNumberId });
+      if (!policy.ok) return sendPolicy.respondBlocked(res, policy);
       try {
         const phoneDigits = lead.phone.replace(/\D/g, '');
         const payload = {
@@ -1590,7 +1602,7 @@ router.post('/communication/send', internalAuth, async (req, res) => {
           text: { body: safeContent }
         };
 
-        console.log(`[Send Communication] Sending AI WhatsApp response to ${phoneDigits} via Meta API...`);
+        console.log('[Send Communication] Sending AI WhatsApp response via Meta API...');
         const waRes = await axios.post(
           `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
           payload,
@@ -2098,6 +2110,8 @@ Write one natural follow-up that continues the unfinished topic. Reference the s
     if (lead && lead.phone && phoneNumberId && waAccessToken && !(await erasure.isErased(lead.phone))) {
       try {
         const phoneDigits = lead.phone.replace(/\D/g, '');
+        // Follow-up nudges are marketing: opt-in, STOP and the 24-hour window apply.
+        await assertPolicy({ lead, kind: 'marketing', messageType: 'text', phoneNumberId });
         const waRes = await axios.post(
           `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
           { messaging_product: 'whatsapp', to: phoneDigits, type: 'text', text: { body: ai_reply } },
@@ -2270,6 +2284,7 @@ Naturally reference relevant details already discussed when useful. Do not inven
               },
             };
         }
+        await assertPolicy({ lead, kind: 'utility', messageType: messagePayload.type, phoneNumberId });
         const waRes = await axios.post(
           `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
           messagePayload,

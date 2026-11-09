@@ -4,7 +4,7 @@
   },
   "name": "hi",
   "phone": "dcdd",
-  "password": "$2b$10$whgG37RHptCNCk02S.8qDObB2YkOhZeWPVjkOfYNSMVHU.finbUMa",
+  "password": "[removed]",
   "role": "admin",
   "specialty": "hr",
   "createdAt": {
@@ -16,11 +16,11 @@
   "__v": 4,
   "documents": [],
   "pushSubscription": {
-    "endpoint": "https://fcm.googleapis.com/wp/cFMQyzeqQlM:APA91bGjOA2L5gZowhyd4b_T_9-iva8iB6eCHNrviwYsAvdkvoCzoJ2xyyd3F6YvdtWw-2jkFh6H3FKppg9ck5IJiku2WHLU9FlUd4AN8FGwxAiTb6wFdttZcMlmVFTo7HxNUZr5HEJ6",
+    "endpoint": "[removed]",
     "expirationTime": null,
     "keys": {
-      "p256dh": "BJtdDS7sP5yK71WpyVFXkMk_jjgmiyq_e3wJgFnp07zcyhqxjFGZ6x1FyoluGLzxELMU8nyk_-ES8PO5j2TK-dk",
-      "auth": "dQHqacMZRrOSXh2DlGUL5A"
+      "p256dh": "[removed]",
+      "auth": "[removed]"
     }
   },
   "tags": [],
@@ -39,7 +39,7 @@
   },
   "name": "Sugu",
   "phone": "sugu@gmail.com",
-  "password": "$2b$10$xD1hKHiDVXc7j2u5xX8NY..a4o5nOoZ.XPw25/GQZt.GIdzm3Xrva",
+  "password": "[removed]",
   "role": "user",
   "tags": [
     "BM Academy"
@@ -53,11 +53,11 @@
   },
   "__v": 1,
   "pushSubscription": {
-    "endpoint": "https://fcm.googleapis.com/wp/dbUQY4rlqcg:APA91bFzQu7zR477OUrcOaBXdKR23y2FSRfx3mqlYX422Z4d6urya6Din1xc89STjO_GqF1ZIXznRyvhEUQZRFYhyOoUuYiB7qAAJNl7Rf9tiMyaFsFQ1rMOh6PyA9xo2XWeBkBwrHXg",
+    "endpoint": "[removed]",
     "expirationTime": null,
     "keys": {
-      "p256dh": "BJfdbVGVjkI9qOBV_NnTMZGeaMJzuxiGmhKBg-TawNyh4aEtT7TBGGxTyXWiOrdOJVETxMInYMSdkDZpvMP6o1Q",
-      "auth": "ur_QVCOAUfMU4ToocCfG-w"
+      "p256dh": "[removed]",
+      "auth": "[removed]"
     }
   },
   "email": "cuddalore",
@@ -69,7 +69,7 @@
   },
   "name": "karthika",
   "phone": "karthika@gmail.com",
-  "password": "$2b$10$luU7uZyJT3PSYhZpf1J3me/ecAZwxLVfiChMgWOHkD39AAo.dtNOK",
+  "password": "[removed]",
   "role": "user",
   "tags": [
     "BM Academy"
@@ -83,11 +83,11 @@
   },
   "__v": 1,
   "pushSubscription": {
-    "endpoint": "https://fcm.googleapis.com/wp/dbUQY4rlqcg:APA91bFzQu7zR477OUrcOaBXdKR23y2FSRfx3mqlYX422Z4d6urya6Din1xc89STjO_GqF1ZIXznRyvhEUQZRFYhyOoUuYiB7qAAJNl7Rf9tiMyaFsFQ1rMOh6PyA9xo2XWeBkBwrHXg",
+    "endpoint": "[removed]",
     "expirationTime": null,
     "keys": {
-      "p256dh": "BJfdbVGVjkI9qOBV_NnTMZGeaMJzuxiGmhKBg-TawNyh4aEtT7TBGGxTyXWiOrdOJVETxMInYMSdkDZpvMP6o1Q",
-      "auth": "ur_QVCOAUfMU4ToocCfG-w"
+      "p256dh": "[removed]",
+      "auth": "[removed]"
     }
   },
   "email": "karthika@gmail.com",
@@ -99,7 +99,7 @@
   },
   "name": "Anonymous Lead",
   "phone": "9458945934",
-  "password": "$2b$10$O2j/KjdSFdftXcjThoQSD.fJ8CLvSS3PAXW1rU/u8wEO.UqdOtmJG",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -111,11 +111,11 @@
   },
   "__v": 0,
   "pushSubscription": {
-    "endpoint": "https://fcm.googleapis.com/wp/enh9OOer3jM:APA91bFu13xvEdtH6ukuoiKul8-1W2q6toJA6Jb9VTfRA57za4O1_EmV964nBvpsL5-yVARmrkeVydvlgTCSoHurDzwpBLHmUTxO-1PmAaDcDZ19-NJkUvrq18N3n7vK7ahd_0t4nbFT",
+    "endpoint": "[removed]",
     "expirationTime": null,
     "keys": {
-      "p256dh": "BH7KG8R9NwZ4QBJtksRkeBz8v6UPLVMGR8_KMLg5G2q86kk-vPKRJXZ87bNB3JNkjVp87ZAt51zsg1saPTCd2kY",
-      "auth": "0cjHM9YB9Btn_zeEdEJavw"
+      "p256dh": "[removed]",
+      "auth": "[removed]"
     }
   },
   "leadData": {
@@ -130,7 +130,7 @@
   },
   "name": "Anonymous Lead",
   "phone": "guest_1775110436238_6105062",
-  "password": "$2b$10$ngs5iBJSnFsAXs4R4mdBS.jnSrDeCCQqLYnA36QZS7MNzM78Oeq4q",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -148,7 +148,7 @@
   },
   "name": "Anonymous Lead",
   "phone": "guest_1775114420358_8019287",
-  "password": "$2b$10$frpGCxTFM.8uqwJpYvawP.23UwEh80pTF3YT3tNjaHJhW.2XnMNhG",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -166,7 +166,7 @@
   },
   "name": "Anonymous Lead",
   "phone": "guest_1775114420514_7903793",
-  "password": "$2b$10$UI6..vuzw8KHFIrYKm5qIuzqPgQMjFQNzUzxAH.RrqUV2RfjV1hRq",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -184,7 +184,7 @@
   },
   "name": "admin",
   "phone": "8807226257",
-  "password": "$2b$10$fJr9cVzVYDLODOOxl57ZYuQC/AEJHZAUgwE1dEu.E4lMHUuRaO.vi",
+  "password": "[removed]",
   "role": "admin",
   "tags": [],
   "documents": [],
@@ -196,11 +196,11 @@
   },
   "__v": 1,
   "pushSubscription": {
-    "endpoint": "https://fcm.googleapis.com/wp/fRqLJXYC5RQ:APA91bEnqv0_7iQBxElEoIzjXKNyBP_C1r2C3T19YZ2LfpbYqQdO1tpc0fD5gpmA2k5jUcD92Z7xa52ToQn7kZ1hvbmZLJXZevDdHBkKXCS2lAlIh6TTJzL7UvnFEnbtqMF1EaENXyYn",
+    "endpoint": "[removed]",
     "expirationTime": null,
     "keys": {
-      "p256dh": "BKYIHFsv2JiRnMDZGtRY7MT5P5R8Kg029atKA_mLMJOFlrn_yT1kNSdCPu63am3qjNv8hcQpUpQUTKvN5MJSJxw",
-      "auth": "M0tP6GEHy0zqt6YYi0WuKA"
+      "p256dh": "[removed]",
+      "auth": "[removed]"
     }
   },
   "enquiries": [],
@@ -213,7 +213,7 @@
   },
   "name": "Anonymous Lead",
   "phone": "guest_1775120977067_4076344",
-  "password": "$2b$10$82abs2GqiCGf/.m9Bmc9LexoD0n/u9zCgQluGJKEsxQ1.J0BxfLBK",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -231,7 +231,7 @@
   },
   "name": "Anonymous Lead",
   "phone": "9876543210",
-  "password": "$2b$10$RlrwSblyrxUmlp/KuKke3uMw86nbRoB7kA0erGR6lPoidoA5raXlq",
+  "password": "[removed]",
   "role": "user",
   "tags": [
     "Academy Lead",
@@ -259,7 +259,7 @@
   },
   "name": "Anonymous Lead",
   "phone": "guest_1775476668973_6734221",
-  "password": "$2b$10$wJ77fyfFhcP.GvA2KNZHnOtDZ2VTW7j.YqPIyIPtrO4ouk1BPdJb6",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -277,7 +277,7 @@
   },
   "name": "jeni",
   "phone": "7656756644",
-  "password": "$2b$10$Vjuw7PR1KbpRRQ0O5UoofO.iYd6BeYDM0.HSXmzPEB/DIpD8244gW",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -300,7 +300,7 @@
   },
   "name": "mohan",
   "phone": "9987878667",
-  "password": "$2b$10$.LCourQBbCIn5GEWWCpcuOH9KrSGLBndp.X238pCrGishZ0XDRr6K",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -323,7 +323,7 @@
   },
   "name": "Anonymous Lead",
   "phone": "guest_1775478805435_3777028",
-  "password": "$2b$10$kycm24M3zYI0x49rMn7gS.XMh8jGmxsgTmmA3xaTrja1bCAyo18G2",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -341,7 +341,7 @@
   },
   "name": "manoj",
   "phone": "9485748574",
-  "password": "$2b$10$C/ZFe7UlVpYORLF8/MmBROcTrbX39klnnkf8zowzbS4pzkY0HlEKa",
+  "password": "[removed]",
   "role": "user",
   "tags": [
     "Academy Lead",
@@ -422,7 +422,7 @@
   },
   "name": "Anonymous Lead",
   "phone": "guest_1775478834959_4405163",
-  "password": "$2b$10$9PfBLiVB5dDgCHIh4oi9Ce7OXTKhMOnOgvzi4pKwCQLo.c4VK10FG",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -440,7 +440,7 @@
   },
   "name": "arsath",
   "phone": "8987776665",
-  "password": "$2b$10$RTtPh5rQgRn8kSBK0KiMm.RWf0nehqsfIwwMM2ZeKwqTqskLtsDpG",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -459,7 +459,7 @@
   },
   "name": "hari",
   "phone": "9988887777",
-  "password": "$2b$10$PvtnXICc5Wb.dFXVeMsOh.3QEiyzd8ojzQN.f3c5TPIoc9mCZyIqO",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -482,7 +482,7 @@
   },
   "name": "Anonymous Lead",
   "phone": "1234567890",
-  "password": "$2b$10$19gv0CP5VO2L3YzNqLameuwyu0PEiVAAYeNPPCD/pfoirmoO/1jtS",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -494,11 +494,11 @@
   },
   "__v": 0,
   "pushSubscription": {
-    "endpoint": "https://fcm.googleapis.com/fcm/send/dZhrqZNIPas:APA91bEOU4EaPosjybmct-2jVQHal_JegZLcjcnNa_TWOgycgxAlL97_TdFswD1PyWQ4k2g-MqwMuNATo3uKeSET2oo4yVy6OrW2CWZJcDltJTyK1tgrcbSEiJc9QTUTzWGRRS7a80u-",
+    "endpoint": "[removed]",
     "expirationTime": null,
     "keys": {
-      "p256dh": "BOmsPjb29zHXiqtbIawDZnEIHhd5iXDhQ_4GTdELxajCV_WvfdP-pH8yKXZQ5dkTU0d612bF5dlMZOcEfZd9k_g",
-      "auth": "2dga_c_MG7PArZe0-JIW4Q"
+      "p256dh": "[removed]",
+      "auth": "[removed]"
     }
   }
 },
@@ -508,7 +508,7 @@
   },
   "name": "anbu",
   "phone": "9845475485",
-  "password": "$2b$10$B9alSHQUUJqgg6MoSGpfl.1L/MoWfG.RP5ua6Cifd8EoE5Uq6suWq",
+  "password": "[removed]",
   "role": "user",
   "tags": [
     "Final Submission"
@@ -555,7 +555,7 @@
   },
   "name": "josh",
   "phone": "9874545443",
-  "password": "$2b$10$Ua.xk.HVHMAiSzFkqagz3.TU8KlXYBfoceE2UhpT/KDtEdD7eIgDW",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -601,7 +601,7 @@
   },
   "name": "susgu",
   "phone": "9874584758",
-  "password": "$2b$10$v2K3nSMKa1MkljyJHzwr/Ou7ktn06aYAc/uelnW/ju9cVpkiABNHG",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "documents": [],
@@ -650,7 +650,7 @@
   },
   "name": "charles",
   "phone": "9745856856",
-  "password": "$2b$10$d5OaZywYhg14LFi7h3eRD.WnKjLwTTrV2BLH0pQ1xOc6Rqtd7FtAO",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "leadStatus": "New",
@@ -671,7 +671,7 @@
   },
   "name": "Arshad",
   "phone": "9198586298",
-  "password": "$2b$10$dj7hwN6lzQ9xaTCmHSxcIOFv99QCG8M3Wq0/TbYBYAwY5.7yJxrtC",
+  "password": "[removed]",
   "role": "user",
   "tags": [
     "Final Submission"
@@ -698,7 +698,7 @@
   },
   "name": "Imran",
   "phone": "9052463178",
-  "password": "$2b$10$XA5GRU9AF9NY.XpRvFj0seGfyt19U.12agDt2dHUca/d5cz3XLVpu",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "leadStatus": "New",
@@ -726,7 +726,7 @@
   },
   "name": "Testing",
   "phone": "0000000000",
-  "password": "$2b$10$PdgF5opUvHbQvCokoakuSO0tSH6qo97oD1jWq53v4GrP9YLwWT/8G",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "leadStatus": "New",
@@ -747,7 +747,7 @@
   },
   "name": "TEST",
   "phone": "3563565558",
-  "password": "$2b$10$x0FTzmrEfPymx9vXv7dY..lfUyP3thNlWq2E2w72uOv3nHW820WjS",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "leadStatus": "New",
@@ -768,7 +768,7 @@
   },
   "name": "Anonymous Lead",
   "phone": "guest_1776509540070_6005179",
-  "password": "$2b$10$PByEkMy5XSDZS/cyeNUUYeb/AJM5c1.e78FMW5m6Co6xmhEel37Ia",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "leadStatus": "New",
@@ -788,7 +788,7 @@
   },
   "name": "Priya",
   "phone": "6566654264",
-  "password": "$2b$10$WF5nX5WIQyPAnbk6qT/9oOBfiuY8t9XpeMOW/689baEJ9Bd65wHC2",
+  "password": "[removed]",
   "role": "user",
   "tags": [
     "Final Submission"
@@ -846,7 +846,7 @@
   },
   "name": "Arshad",
   "phone": "8888888888",
-  "password": "$2b$10$O9snJxpHZ2NAiv1H360R1OCHIQ.P/bAmrcABE0b3xByR5zmhnBUdm",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "leadStatus": "New",
@@ -898,7 +898,7 @@
   },
   "name": "Swetha",
   "phone": "8072503693",
-  "password": "$2b$10$CrOhFIOCYCQrq80vLd5mJOaSnc5GieWIEFPlj0dSRJjxq91NRDP7e",
+  "password": "[removed]",
   "role": "user",
   "tags": [
     "Final Submission"
@@ -936,7 +936,7 @@
   },
   "name": "Kamali",
   "phone": "guest_1777120946541_385780",
-  "password": "$2b$10$wbzqp/G/3OubOvrpLstnO.MgapqiZ4fV6097PNzdpZlxFC.5Yz9li",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "leadStatus": "New",
@@ -957,7 +957,7 @@
   },
   "name": "Hi",
   "phone": "guest_1781898020802_8309676",
-  "password": "$2b$10$GlWI5eNHpIlKLDKKzFKrGOl.ChGtNAkVyPx8TFyJJAI.m0Zupw3am",
+  "password": "[removed]",
   "role": "user",
   "tags": [],
   "leadStatus": "New",
