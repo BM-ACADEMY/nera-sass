@@ -733,19 +733,35 @@ app.get('/api/whatsapp-media/:mediaId', async (req, res, next) => {
 });
 
 // POST /api/messages/upload
+// Agent uploads are written to the workspace's own folder (uploads/media/t_<id>/)
+// so a media_url can later be proven to belong to that workspace.
+const tenantUploads = require('./services/tenantUploads');
+const UPLOAD_EXTENSIONS = new Set([...Object.values(tenantUploads.TYPES).flatMap((rule) => rule.exts), '.webm']);
 const mediaStorage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const dir = path.join(__dirname, 'uploads', 'media');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+    try {
+      const dir = tenantUploads.tenantUploadDir(req.user?.tenant_id);
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    } catch (err) {
+      cb(err);
+    }
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname) || '';
-    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, 'file-' + uniqueSuffix + ext);
   }
 });
-const mediaUpload = multer({ storage: mediaStorage });
+const mediaUpload = multer({
+  storage: mediaStorage,
+  limits: { fileSize: 100 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!UPLOAD_EXTENSIONS.has(ext)) return cb(new tenantUploads.TenantUploadError(400, 'MEDIA_TYPE_INVALID', 'This file type cannot be sent on WhatsApp.'));
+    cb(null, true);
+  },
+});
 
 const LEAD_EXPORT_DIR = path.join(__dirname, 'uploads', 'lead-exports');
 const activeLeadExports = new Set();
@@ -1512,6 +1528,9 @@ app.use((err, req, res, next) => {
   if (err?.name === 'TenantContextError') {
     console.warn('[Tenant isolation]', req.method, req.originalUrl, err.message);
     return res.status(403).json({ error: 'Access denied' });
+  }
+  if (err?.name === 'MulterError') {
+    return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'This file is too large.' : 'This file could not be uploaded.' });
   }
   console.error('[Unhandled]', req.method, req.originalUrl, err?.message);
   return res.status(err?.status || 500).json({ error: err?.status && err.status < 500 ? err.message : 'Server error' });

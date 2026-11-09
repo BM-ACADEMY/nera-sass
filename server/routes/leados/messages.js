@@ -19,6 +19,8 @@ const {
   path,
 } = ctx;
 const mediaStore = require('../../services/mediaStore');
+const tenantUploads = require('../../services/tenantUploads');
+const sendPolicy = require('../../services/sendPolicy');
 // ══════════════════════════════════════════════════════════
 // MESSAGES ROUTES (CRM-SIDE)
 // ══════════════════════════════════════════════════════════
@@ -121,7 +123,7 @@ app.put('/api/messages/:id/react', auth, async (req, res) => {
     // Get current message details, lead, and client credentials
     const reactMessage = await Messages.findOne({ id: msgId }, { reactions: 1, wa_msg_id: 1, conversation_id: 1 }).lean();
     const reactConversation = reactMessage ? await Conversations.findOne({ id: reactMessage.conversation_id }, { lead_id: 1 }).lean() : null;
-    const reactLead = reactConversation?.lead_id != null ? await Leads.findOne({ id: reactConversation.lead_id }, { phone: 1, client_id: 1 }).lean() : null;
+    const reactLead = reactConversation?.lead_id != null ? await Leads.findOne({ id: reactConversation.lead_id }, { id: 1, phone: 1, client_id: 1 }).lean() : null;
     if (!reactMessage || !reactLead) return res.status(404).json({ error: 'Message not found' });
     const reactClient = reactLead.client_id != null ? await Clients.findOne({ id: reactLead.client_id }, { phone_number_id: 1, wa_access_token: 1 }).lean() : null;
     const msgData = {
@@ -148,7 +150,10 @@ app.put('/api/messages/:id/react', auth, async (req, res) => {
       const phoneNumberId = msgData.phone_number_id;
       const waAccessToken = msgData.wa_access_token;
 
-      if (phoneNumberId && waAccessToken) {
+      const reactionPolicy = phoneNumberId && waAccessToken
+        ? await sendPolicy.checkSend({ lead: reactLead, kind: 'service', messageType: 'reaction', phoneNumberId })
+        : null;
+      if (reactionPolicy?.ok) {
         try {
           const payload = {
             messaging_product: 'whatsapp',
@@ -224,7 +229,7 @@ app.post('/api/messages/upload', auth, mediaUpload.single('file'), async (req, r
     }
   }
 
-  const fileUrl = `/uploads/media/${uploadedFile.filename}`;
+  const fileUrl = tenantUploads.publicPathFor(req.user.tenant_id, uploadedFile.filename);
   res.json({ success: true, fileUrl, mimeType: uploadedFile.mimetype });
 });
 };

@@ -21,6 +21,8 @@ const {
   SERVER_ROOT,
 } = ctx;
 const mediaStore = require('../../services/mediaStore');
+const tenantUploads = require('../../services/tenantUploads');
+const { currentTenantId } = require('../../services/tenantContext');
 const sendPolicy = require('../../services/sendPolicy');
 const numberHealth = require('../../services/numberHealth');
 const WAKEUP_TEMPLATE = process.env.WA_WAKEUP_TEMPLATE || 'common_welcome_message';
@@ -108,7 +110,7 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
             { headers: { Authorization: `Bearer ${waAccessToken}`, 'Content-Type': 'application/json' } }
           );
           const waMsgId = templateRes.data?.messages?.[0]?.id;
-          console.log(`[Template Wakeup] Sent ${WAKEUP_TEMPLATE} to`, lead.phone, waMsgId);
+          console.log(`[Template Wakeup] Sent ${WAKEUP_TEMPLATE} for lead ${lead_id}`);
 
           // Save template message to DB so it appears in inbox
           const convCheck = await Conversations.findOne({ lead_id }, { id: 1 }).lean();
@@ -140,6 +142,10 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
     // ----------------------------
 
     const type = msg_type && msg_type !== 'text' ? msg_type : 'text';
+    // Same send policy as every other path: workspace allowed to send, valid
+    // number, and (free text / media) the 24-hour window.
+    const sendCheck = await sendPolicy.checkSend({ lead, kind: 'service', messageType: type, phoneNumberId });
+    if (!sendCheck.ok) return sendPolicy.respondBlocked(res, sendCheck);
     const payload = {
       messaging_product: 'whatsapp',
       to: (lead.phone || '').replace(/\D/g, ''),
@@ -152,12 +158,20 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
 
     // A file on the media server must belong to this workspace (throws 403).
     const storedMedia = type !== 'text' ? await mediaStore.resolveOwned(media_url) : null;
+    // Any other local path must be a regular file inside this workspace's own
+    // upload folder (no "..", absolute paths, symlinks, odd types or sizes).
+    // Checked before anything is sent or stored.
+    let localUpload = null;
+    if (type !== 'text' && (!media_url || typeof media_url !== 'string')) return res.status(400).json({ error: 'Attach a file to send.', code: 'MEDIA_REQUIRED' });
+    if (type !== 'text' && !storedMedia && typeof media_url === 'string' && !/^https?:\/\//i.test(media_url)) {
+      localUpload = await tenantUploads.resolveTenantUpload(media_url, currentTenantId(), type);
+    }
 
     let waMediaId = null;
-    if (type !== 'text' && (storedMedia || (media_url && media_url.startsWith('/uploads/')))) {
+    if (type !== 'text' && (storedMedia || localUpload)) {
       try {
-        const fileName = storedMedia ? (storedMedia.filename || storedMedia.id) : path.basename(media_url);
-        const fileBuffer = storedMedia ? await mediaStore.read(storedMedia.ref) : fs.readFileSync(path.join(SERVER_ROOT, media_url));
+        const fileName = storedMedia ? (storedMedia.filename || storedMedia.id) : localUpload.filename;
+        const fileBuffer = storedMedia ? await mediaStore.read(storedMedia.ref) : await tenantUploads.readValidated(localUpload);
         const fd = new FormData();
         fd.append('messaging_product', 'whatsapp');
         const ext = path.extname(fileName).toLowerCase();
@@ -166,10 +180,7 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
         // codecs parameter or the upload is rejected during processing (error 131053).
         if (ext === '.ogg' || /^audio\/ogg/i.test(storedMedia?.mime || '')) mimeType = 'audio/ogg; codecs=opus';
         else if (storedMedia?.mime) mimeType = storedMedia.mime;
-        else if (ext === '.mp4') mimeType = 'video/mp4';
-        else if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
-        else if (ext === '.png') mimeType = 'image/png';
-        else if (ext === '.pdf') mimeType = 'application/pdf';
+        else if (localUpload) mimeType = localUpload.mime;
 
         fd.append('file', new Blob([fileBuffer], { type: mimeType }), fileName);
         const uploadRes = await fetch(`https://graph.facebook.com/v19.0/${phoneNumberId}/media`, {
@@ -181,9 +192,10 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
         if (uploadRes.ok && uploadData.id) {
           waMediaId = uploadData.id;
         } else {
-          console.warn('[WhatsApp Send] Direct media upload failed:', uploadData);
+          console.warn('[WhatsApp Send] Direct media upload failed:', uploadRes.status);
         }
       } catch (e) {
+        if (e instanceof tenantUploads.TenantUploadError) throw e;
         console.warn('[WhatsApp Send] Failed to upload media directly:', e.message);
       }
     }
@@ -196,7 +208,8 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
       } else {
         // Meta fetches the link itself, possibly with retries: give it hours, not minutes.
         const fullMediaUrl = storedMedia ? mediaStore.signedUrl(storedMedia.ref, { ttl: 6 * 3600 })
-          : media_url && media_url.startsWith('http') ? media_url : `${process.env.PUBLIC_API_URL}${media_url}`;
+          : localUpload ? `${process.env.PUBLIC_API_URL || ''}${localUpload.publicPath}`
+          : media_url;
         payload[type] = { link: fullMediaUrl };
         if (type === 'document' && storedMedia?.filename) payload[type].filename = storedMedia.filename;
       }
@@ -235,7 +248,7 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
 
     // Insert message into messages table
     const sentMessage = await Messages.create({
-      conversation_id: conversationId, direction: 'outbound', content: message, msg_type: type, media_url: storedMedia?.ref || media_url || null,
+      conversation_id: conversationId, direction: 'outbound', content: message, msg_type: type, media_url: storedMedia?.ref || localUpload?.publicPath || media_url || null,
       wa_msg_id: waMessageId, status: 'sent', sent_at: new Date(), reply_to_wa_id: reply_to_wa_id || null, is_forwarded: is_forwarded || false,
     });
     const savedRows = [{
@@ -249,8 +262,9 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
 
     res.json({ success: true, message: savedRows[0] });
   } catch (err) {
+    if (err instanceof tenantUploads.TenantUploadError) return res.status(err.status).json({ error: err.message, code: err.code });
     if (err instanceof mediaStore.MediaStoreError && err.status === 403) return res.status(403).json({ error: err.message });
-    console.error('WA send error:', err.message, err.stack);
+    console.error('WA send error:', err.message);
 
     res.status(500).json({ error: 'Failed to send message' });
   }

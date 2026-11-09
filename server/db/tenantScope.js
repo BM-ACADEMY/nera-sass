@@ -44,6 +44,7 @@ const TENANT_SCOPED = new Map([
   ['whatsapp_number_state', {}],
   ['campaign_import_recipients', {}],
   ['payments', {}],
+  ['processed_webhook_events', {}],
   ['brain_docs', {}],
   ['brain_profiles', {}],
   ['ai_reply_logs', {}],

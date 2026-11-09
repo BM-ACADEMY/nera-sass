@@ -20,7 +20,9 @@ async function main() {
 
     // 1. Ensure aakash.bmtechx@gmail.com exists and is admin
     const email = 'aakash.bmtechx@gmail.com';
-    const password = 'LeadOS_Admin@2026';
+    // Never hard-code a password: it comes from the environment, like seed-platform-admin.js.
+    const password = process.env.NERA_ADMIN_INITIAL_PASSWORD || '';
+    if (!password) throw new Error('Set NERA_ADMIN_INITIAL_PASSWORD before running this script.');
     const hash = await bcrypt.hash(password, 12);
     
     let adminId;

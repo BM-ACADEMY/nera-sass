@@ -363,7 +363,7 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
             } else if (msg.type === 'interactive') {
               text = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || '[Interactive Reply]';
             } else {
-              console.log(`[Webhook] Message type: ${msg.type} from ${phone}`);
+              console.log(`[Webhook] Message type: ${msg.type}`);
               text = `[${msg.type}]`;
             }
 
@@ -390,7 +390,7 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
               lead = newLead.toObject();
               lead.client_wa_token = client?.wa_access_token;
               lead.client_phone_number_id = client?.phone_number_id;
-              console.log(`[Webhook] Auto-created lead for phone: ${phone} (tenant ${client.tenant_id})`);
+              console.log(`[Webhook] Auto-created lead (tenant ${client.tenant_id})`);
             } else {
               if (lead.phone !== phone) {
                 await Leads.updateOne({ id: lead.id }, { $set: { phone } });
@@ -442,7 +442,7 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
                     const transcriptionText = transcription?.text;
 
                     if (transcriptionText) {
-                      console.log(`[Audio] Transcription success: ${transcriptionText}`);
+                      console.log(`[Audio] Transcription success (${String(transcriptionText || '').length} chars)`);
                       text = transcriptionText.trim();
                     }
                   }
@@ -496,7 +496,7 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
                   .then((saved) => Messages.updateOne({ id: inbound.id }, { $set: { media_url: saved.ref } }))
                   .catch((err) => console.error(`[Webhook] Media copy failed for msg ${inbound.id}:`, err.message));
               }
-              console.log(`[Webhook] ✅ Saved inbound ${msgType} from ${phone} → lead ${lead.id}, msg_id ${savedRows[0].id} (tenant ${client.tenant_id})`);
+              console.log(`[Webhook] ✅ Saved inbound ${msgType} → lead ${lead.id}, msg_id ${savedRows[0].id} (tenant ${client.tenant_id})`);
 
               // The customer wrote: the AI follow-up schedule starts again from now.
               await aiAutomation.recordInbound(lead.id);

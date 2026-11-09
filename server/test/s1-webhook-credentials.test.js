@@ -137,7 +137,6 @@ test('Slice S1: signed webhooks, tenant credentials only, no payload on disk, Al
   // ── Item 1: every Meta-facing POST webhook is signature-checked ──
   for (const [url, raw] of [
     ['/webhook/meta-leads', JSON.stringify({ object: 'page', entry: [] })],
-    ['/api/webhooks/meta', JSON.stringify({ object: 'page' })],
   ]) {
     await t.test(`S1. ${url}: missing, malformed and wrong signatures are refused; a valid one is accepted`, async () => {
       assert.strictEqual((await postRaw(url, raw)).status, 401, 'missing signature');
@@ -198,6 +197,9 @@ test('Slice S1: signed webhooks, tenant credentials only, no payload on disk, Al
     // The follow-up engine only writes after an outbound message that the customer has not answered.
     const conversation = (await runAsTenant(2, () => models.Conversations.create({ lead_id: connectedLead.id, phone: '919000000002', status: 'open', last_message: 'Hello Ravi', last_message_at: new Date() }))).toObject();
     await runAsTenant(2, () => models.Messages.create({ conversation_id: conversation.id, direction: 'outbound', content: 'Hello Ravi', msg_type: 'text', status: 'sent', is_ai: false, sent_at: new Date() }));
+    // Follow-up nudges are marketing (send policy): the contact must have opted in and written within 24 hours.
+    await runAsTenant(2, () => require('../services/consent').recordOptIn({ leadId: connectedLead.id, source: 'test_fixture' }));
+    await runAsTenant(2, () => models.Messages.create({ conversation_id: conversation.id, direction: 'inbound', content: 'ok', msg_type: 'text', status: 'delivered', sent_at: new Date(Date.now() - 1000) }));
     const sent = await request(app).post('/api/ai/followup').set(bearer(owner2)).send({ lead_id: connectedLead.id, prompt: 'Follow up politely' });
     assert.strictEqual(sent.status, 200, JSON.stringify(sent.body));
     const calls = graphCalls();

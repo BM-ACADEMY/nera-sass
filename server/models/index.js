@@ -79,6 +79,7 @@ module.exports = {
   Departments: require('./Departments'),
   DriveFolderMonitors: require('./DriveFolderMonitors'),
   FailedWebhooks: require('./FailedWebhooks'),
+  ProcessedWebhookEvents: require('./ProcessedWebhookEvents'),
   FollowupRules: require('./FollowupRules'),
   GapHunterScans: require('./GapHunterScans'),
   GmbKeywordHistory: require('./GmbKeywordHistory'),
