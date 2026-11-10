@@ -24,6 +24,7 @@ const models = require('../models');
 const { phoneTailRegex } = require('../db/mongo');
 const { requireTenantId } = require('./tenantContext');
 const mediaStore = require('./mediaStore');
+const tokenCrypto = require('../utils/crypto');
 
 const UPLOADS_DIR = path.resolve(__dirname, '..', 'uploads');
 
@@ -43,24 +44,45 @@ function phoneKey(phone) {
   return digits.length >= 7 ? digits.slice(-10) : null;
 }
 
-function hashKey() {
-  const secret = process.env.TOKEN_ENCRYPTION_KEY || process.env.ENCRYPTION_KEY;
-  if (!secret) throw new Error('TOKEN_ENCRYPTION_KEY is not configured');
+// The phone hash is keyed with TOKEN_ENCRYPTION_KEY. A hash cannot be
+// re-keyed once the number is gone, so after a key rotation a record made
+// under the previous key is still matched through
+// TOKEN_ENCRYPTION_KEY_PREVIOUS. Each record stores the key version that
+// hashed it in phone_hash_key (records from before key versions have none).
+function hashKey(secret) {
   return crypto.createHash('sha256').update(`contact-erasure-v1:${secret}`).digest();
+}
+
+function hashWith(secret, tenantId, key) {
+  return crypto.createHmac('sha256', hashKey(secret)).update(`${Number(tenantId)}:${key}`).digest('hex');
+}
+
+function requireSecret() {
+  const secret = tokenCrypto.currentSecret();
+  if (!secret) throw new Error('TOKEN_ENCRYPTION_KEY is not configured');
+  return secret;
 }
 
 // Keyed per tenant: the same number in two workspaces gives two different hashes.
 function phoneHash(tenantId, phone) {
   const key = phoneKey(phone);
   if (!key) return null;
-  return crypto.createHmac('sha256', hashKey()).update(`${Number(tenantId)}:${key}`).digest('hex');
+  return hashWith(requireSecret(), tenantId, key);
+}
+
+// The hash under every configured key (current first), for lookups.
+function phoneHashes(tenantId, phone) {
+  const key = phoneKey(phone);
+  if (!key) return [];
+  const secrets = [requireSecret(), tokenCrypto.previousSecret()].filter(Boolean);
+  return secrets.map((secret) => hashWith(secret, tenantId, key));
 }
 
 /** True when the current workspace deleted a contact with this number on request. */
 async function isErased(phone) {
-  const hash = phoneHash(requireTenantId(), phone);
-  if (!hash) return false;
-  return Boolean(await models.ContactErasures.exists({ phone_hash: hash }));
+  const hashes = phoneHashes(requireTenantId(), phone);
+  if (!hashes.length) return false;
+  return Boolean(await models.ContactErasures.exists({ phone_hash: { $in: hashes } }));
 }
 
 /** Throws ErasureError(409) when sending to this number must not happen. */
@@ -117,6 +139,7 @@ async function eraseContact(leadId, { userId = null } = {}) {
     record = (await models.ContactErasures.create({
       lead_id: id,
       phone_hash: phoneHash(tenantId, lead.phone),
+      phone_hash_key: tokenCrypto.currentKeyVersion(),
       status: 'in_progress',
       erased_by_user_id: userId,
       requested_at: new Date(),
@@ -158,4 +181,4 @@ async function eraseContact(leadId, { userId = null } = {}) {
   return { already_erased: false, counts };
 }
 
-module.exports = { ErasureError, ERASED_MESSAGE, phoneKey, phoneHash, isErased, assertCanSendTo, eraseContact };
+module.exports = { ErasureError, ERASED_MESSAGE, phoneKey, phoneHash, phoneHashes, isErased, assertCanSendTo, eraseContact };

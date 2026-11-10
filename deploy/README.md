@@ -56,7 +56,8 @@ Also point every OAuth callback at the new domain (`GOOGLE_CALLBACK_URL`, `GOOGL
 `GOOGLE_CALLBACK_LOCALSEOBRIDGE`, `GOOGLE_CALLBACK_GSCINTEL`, `LINKEDIN_REDIRECT_URI`,
 `META_CONTENT_OS_REDIRECT_URI`) and register the same URLs in Google / LinkedIn / Meta consoles.
 
-Keep `TOKEN_ENCRYPTION_KEY` exactly as it is now: stored WhatsApp tokens are encrypted with it.
+Never just replace `TOKEN_ENCRYPTION_KEY`: stored WhatsApp tokens and other secrets are encrypted with it.
+To change it, follow `docs/runbook-rotate-token-encryption-key.md` step by step.
 Keep `JWT_SECRET` too, unless you want everyone logged out.
 
 MongoDB: if Mongo runs on this same VPS use `127.0.0.1` in `MONGODB_URI` and keep port 27017
