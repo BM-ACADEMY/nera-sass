@@ -5,7 +5,7 @@
  *   GET    /api/leads/:id/consent          current consent with its history
  *   POST   /api/leads/:id/consent          record an opt-in { source, text }
  *   POST   /api/leads/:id/opt-out          record an opt-out { reason }
- *   GET    /api/whatsapp/health            number health + send queue counts
+ *   GET    /api/whatsapp/health            number health (incl. last inbound event) + send queue counts
  *   POST   /api/whatsapp/health/resume     owner/admin resumes marketing
  *   POST   /api/whatsapp/health/pause      owner/admin pauses marketing
  *   GET    /api/whatsapp/send-queue        recent queue rows of this workspace
@@ -83,7 +83,7 @@ app.post('/api/leads/:id/opt-out', auth, async (req, res) => {
 });
 
 async function brandNumber() {
-  const brand = await Clients.findOne({}, { _id: 0, id: 1, name: 1, phone_number_id: 1, whatsapp_status: 1 }).lean();
+  const brand = await Clients.findOne({}, { _id: 0, id: 1, name: 1, phone_number_id: 1, whatsapp_status: 1, whatsapp_verified_at: 1, created_at: 1 }).lean();
   return brand?.phone_number_id ? brand : null;
 }
 
@@ -91,7 +91,7 @@ app.get('/api/whatsapp/health', auth, async (req, res) => {
   try {
     const brand = await brandNumber();
     if (!brand) return res.status(409).json({ error: 'WhatsApp is not connected for this workspace. Connect WhatsApp in Settings first.', code: 'WHATSAPP_NOT_CONNECTED' });
-    const [health, queue] = await Promise.all([numberHealth.summary(brand.phone_number_id), sendQueue.stats({})]);
+    const [health, queue] = await Promise.all([numberHealth.summary(brand.phone_number_id, new Date(), { since: brand.whatsapp_verified_at || brand.created_at }), sendQueue.stats({})]);
     res.json({ brand: { id: brand.id, name: brand.name, whatsapp_status: brand.whatsapp_status }, health, queue });
   } catch (err) {
     console.error('[whatsapp/health]', err.message);

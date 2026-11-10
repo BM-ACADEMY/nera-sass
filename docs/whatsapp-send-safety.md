@@ -90,6 +90,27 @@ Meta reports GREEN or UNFLAGGED; an owner or admin can resume by hand
 or flagged, and can pause by hand (`.../pause`); a manual pause is never
 lifted by Meta. `GET /api/whatsapp/health` shows all of it.
 
+## 4b. Inbound watch
+
+Every customer message and every delivery/read/failed receipt the webhook
+gets for a workspace number stamps `last_message_received_at` /
+`last_status_received_at` on its `whatsapp_number_state` row (at most once a
+minute per field). The customer sees the newest of the two as **Last inbound
+event** on the WhatsApp page (`GET /api/whatsapp/overview` → `inbound`) and on
+the Dashboard; `GET /api/whatsapp/health` returns the same fields, and staff
+see it in the admin workspace detail.
+
+A live number (`whatsapp_status: verified`) with no inbound event for
+`WA_SILENT_ALERT_HOURS` (24) is flagged by the 15-minute alert sweep as a
+`number_silent` notice in the platform **Needs your attention** list. A
+number that never got an event is measured from when it was verified, so a
+new number has a full day of grace. The notice is staff-only: it is not
+emailed, not sent on WhatsApp and not in the customer's Notices box, because
+the usual cause (the app's WABA subscription or the webhook) is fixed by the
+Getnera team, and a quiet day is not the customer's fault. The next inbound
+event closes it at once; it also closes when the number stops being live.
+The platform's own number and AllianceOS numbers are not watched.
+
 ## 5. The 24-hour window
 
 `sendPolicy.assertCanSend` refuses free text, media and AI replies with
@@ -114,6 +135,7 @@ rules and counts against the daily cap.
 | `WA_QUEUE_BACKOFF_MS` | 30000 | first retry delay |
 | `WA_UNKNOWN_TEMPLATE_KIND` | marketing | kind of a template with no known category |
 | `WA_WAKEUP_TEMPLATE` | common_welcome_message | template the inbox sends to reopen a closed window |
+| `WA_SILENT_ALERT_HOURS` | 24 | hours without an inbound event before a live number is flagged |
 
 None of them is a secret.
 

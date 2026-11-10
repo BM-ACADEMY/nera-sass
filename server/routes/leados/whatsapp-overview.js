@@ -3,7 +3,8 @@
  * Meta reports it (status, quality, display name, business profile) and its
  * template counts. Read-only; no credential or full Meta ID is returned.
  */
-const { MetaWhatsappPhoneNumbers, MetaWhatsappTemplates } = require('../../models');
+const { MetaWhatsappPhoneNumbers, MetaWhatsappTemplates, WhatsappNumberState } = require('../../models');
+const numberHealth = require('../../services/numberHealth');
 const { can } = require('../../services/permissions');
 const { runAsSystem } = require('../../services/tenantContext');
 
@@ -16,7 +17,7 @@ module.exports = function registerWhatsappOverviewRoutes(app, ctx) {
     try {
       const brand = await Clients.findOne({}, {
         _id: 0, id: 1, name: 1, phone_number_id: 1, wa_business_id: 1, whatsapp_number: 1, whatsapp_status: 1,
-        whatsapp_verified_at: 1, whatsapp_verification_error: 1, wa_token_last4: 1,
+        whatsapp_verified_at: 1, whatsapp_verification_error: 1, wa_token_last4: 1, created_at: 1,
       }).lean();
       const base = { can_manage: can(req.identity, 'whatsapp.manage'), brand_name: brand?.name || null };
       if (!brand?.phone_number_id) return res.json({ ...base, connected: false });
@@ -29,6 +30,11 @@ module.exports = function registerWhatsappOverviewRoutes(app, ctx) {
           : [],
       ]), 'whatsapp-overview');
       const byStatus = Object.fromEntries(counts.map((c) => [c._id, c.n]));
+      // Last message or status receipt Meta sent us for this number. `silent`
+      // only means something once the number is live (verified).
+      const state = await WhatsappNumberState.findOne({ phone_number_id: String(brand.phone_number_id) }, { _id: 0 }).lean();
+      const activity = numberHealth.inboundActivity(state, { since: brand.whatsapp_verified_at || brand.created_at });
+      const inbound = { ...activity, silent: brand.whatsapp_status === 'verified' && activity.silent };
       return res.json({
         ...base,
         connected: true,
@@ -37,6 +43,7 @@ module.exports = function registerWhatsappOverviewRoutes(app, ctx) {
         error: brand.whatsapp_verification_error || null,
         can_send: Boolean(brand.wa_token_last4),
         managed_by_platform: Boolean(phone),
+        inbound,
         number: {
           display_phone_number: phone?.display_phone_number || (brand.whatsapp_number ? `+${String(brand.whatsapp_number).replace(/^\+/, '')}` : null),
           verified_name: phone?.verified_name || null,

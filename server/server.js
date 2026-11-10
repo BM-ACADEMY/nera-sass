@@ -1215,7 +1215,8 @@ async function leadFunnel(filter) {
 // ── CRON JOBS ─────────────────────────────────────────────
 // Re-enabled internal campaign execution cron and added logging for WF05 Dashboard
 // Customer notices (plan N4): every 15 minutes, check each active workspace for a
-// rejected template, a low wallet, a number quality drop and unfinished setup,
+// rejected template, a low wallet, a number quality drop, a live number with no
+// inbound event for 24 hours (staff only) and unfinished setup,
 // close notices whose problem is gone, and retry emails that did not go out.
 let alertSweepRunning = false;
 if (jobsEnabled()) scheduleJob('*/15 * * * *', async () => {

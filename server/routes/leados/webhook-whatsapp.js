@@ -311,6 +311,10 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
 
         // Run all message and status processing in the resolved tenant context
         await runAsTenant(client.tenant_id, async () => {
+          // Inbound watch: Meta is still delivering events for this number.
+          if (value.statuses?.length) await numberHealth.recordInboundEvent(String(phoneNumberId), { kind: 'status', clientId: client.id });
+          if (value.messages?.length) await numberHealth.recordInboundEvent(String(phoneNumberId), { kind: 'message', clientId: client.id });
+
           // Handle delivery/read status receipts
           if (value.statuses) {
             for (const s of value.statuses) {

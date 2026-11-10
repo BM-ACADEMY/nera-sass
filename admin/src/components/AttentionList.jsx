@@ -10,7 +10,8 @@ const SEVERITY_CLASS = { critical: 'border-l-red-500', warning: 'border-l-amber-
  * "Needs your attention": every open customer notice across workspaces
  * (template rejected, wallet low, number quality drop, setup unfinished,
  * payment failed), worst first. The same problems the customer sees in their
- * Notices box.
+ * Notices box, plus staff-only ones such as a live number that has received
+ * no inbound message or status receipt for 24 hours.
  */
 const AttentionList = ({ onOpenWorkspace }) => {
   const [data, setData] = useState(null);
@@ -47,8 +48,10 @@ const AttentionList = ({ onOpenWorkspace }) => {
             <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
               {item.workspace} <Badge variant="muted">{item.label}</Badge>
               {item.email_problem && <Badge variant="warning">Email not delivered</Badge>}
+              {item.staff_only && <Badge variant="outline">Staff only</Badge>}
             </div>
             <div className="text-[12.5px] text-muted-foreground">{item.title}. {item.message}</div>
+            {item.staff_only && item.advice && <div className="text-[12px] text-muted-foreground">{item.advice}</div>}
           </button>
         ))}
       </CardContent>

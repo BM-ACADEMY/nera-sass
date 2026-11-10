@@ -12,6 +12,44 @@ import { cn } from '@/lib/utils';
 const QUALITY = { GREEN: ['success', 'High'], YELLOW: ['warning', 'Medium'], RED: ['danger', 'Low'] };
 const title = (s) => String(s || '').toLowerCase().replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 const when = (v) => (v ? new Date(v).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
+const ago = (v) => {
+  if (!v) return null;
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(v).getTime()) / 60000));
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`;
+};
+const EVENT_KIND = { message: 'customer message', status: 'delivery receipt' };
+
+/** Last message or status receipt Meta sent us for the number. */
+const InboundCard = ({ inbound }) => {
+  if (!inbound) return null;
+  const last = inbound.last_inbound_event_at;
+  return (
+    <Card className={cn('gap-2 px-5 py-5', inbound.silent && 'border-amber-300')}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[15px] font-bold">Last inbound event</div>
+        {inbound.silent
+          ? <Badge variant="warning"><FiAlertTriangle /> Quiet</Badge>
+          : last ? <Badge variant="success"><FiCheckCircle /> Receiving</Badge> : null}
+      </div>
+      <div className="text-xl font-extrabold">{last ? ago(last) : 'None yet'}</div>
+      <div className="text-[12.5px] text-muted-foreground">
+        {last ? `${when(last)} · ${EVENT_KIND[inbound.last_inbound_event_kind] || 'event'}` : 'No customer message or delivery receipt has reached Getnera for this number yet.'}
+      </div>
+      <dl className="grid gap-1.5 text-[12.5px]">
+        <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Last customer message</dt><dd>{when(inbound.last_message_received_at)}</dd></div>
+        <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Last delivery receipt</dt><dd>{when(inbound.last_status_received_at)}</dd></div>
+      </dl>
+      {inbound.silent && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800">
+          Nothing has arrived for {inbound.silent_after_hours} hours or more. If customers have written to you in that time, the Getnera team has been alerted and is checking the connection.
+        </p>
+      )}
+    </Card>
+  );
+};
 
 function connectionBadge(data) {
   const status = String(data.number?.connection_status || '').toUpperCase();
@@ -168,6 +206,8 @@ const WhatsAppNumberPage = () => {
             <Button variant="outline" className="justify-start" onClick={() => navigate('/templates')}><FiFileText /> Manage templates</Button>
             <Button variant="outline" className="justify-start" onClick={() => navigate('/campaigns')}><FiSend /> Run a campaign</Button>
           </Card>
+
+          <InboundCard inbound={data.inbound} />
 
           {/* Technical details */}
           <Card className="gap-3 px-5 py-5">

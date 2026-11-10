@@ -5,7 +5,8 @@
  * runAsTenant(tenantId) for the one tenant being managed.
  */
 const express = require('express');
-const { Tenants, Users, Clients, Invitations, AuditEvents, WorkflowLogs, AiDecisions, Leads, Conversations, Messages, Campaigns, MetaWhatsappPhoneNumbers } = require('../models');
+const { Tenants, Users, Clients, Invitations, AuditEvents, WorkflowLogs, AiDecisions, Leads, Conversations, Messages, Campaigns, MetaWhatsappPhoneNumbers, WhatsappNumberState } = require('../models');
+const numberHealth = require('../services/numberHealth');
 const { runAsSystem, runAsTenant } = require('../services/tenantContext');
 const { can, describeUser } = require('../services/permissions');
 const { computeLifecycle } = require('../services/lifecycle');
@@ -140,12 +141,16 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       ]);
       const brand = await runAsTenant(tenant.id, () => Clients.findOne({}, { _id: 0 }).lean());
       const count = (model) => runAsTenant(tenant.id, () => model.countDocuments({})).catch(() => null);
-      const [leads, conversations, messages, campaigns, metaPhone] = await Promise.all([
+      const [leads, conversations, messages, campaigns, metaPhone, numberState] = await Promise.all([
         count(Leads), count(Conversations), count(Messages), count(Campaigns),
         brand?.phone_number_id
           ? MetaWhatsappPhoneNumbers.findOne({ phone_number_id: brand.phone_number_id }, { _id: 0, raw_data: 0 }).lean()
           : null,
+        brand?.phone_number_id
+          ? runAsTenant(tenant.id, () => WhatsappNumberState.findOne({ phone_number_id: String(brand.phone_number_id) }, { _id: 0 }).lean())
+          : null,
       ]);
+      const activity = brand?.phone_number_id ? numberHealth.inboundActivity(numberState, { since: brand.whatsapp_verified_at || brand.created_at }) : null;
       // Names for everyone who appears in this workspace's history.
       const personIds = [...new Set([
         ...events.map((e) => e.actor_user_id),
@@ -163,6 +168,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
           display_phone_number: metaPhone.display_phone_number, verified_name: metaPhone.verified_name, waba_id: metaPhone.waba_id,
           connection_status: metaPhone.connection_status, quality_rating: metaPhone.quality_rating, profile_picture_url: metaPhone.profile_picture_url || null,
         } : null,
+        inbound: activity ? { ...activity, silent: brand.whatsapp_status === 'verified' && activity.silent } : null,
         usage: { leads, conversations, messages, campaigns },
         users,
         invitations: pending.map(invitations.publicInvitation),

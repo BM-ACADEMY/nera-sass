@@ -16,6 +16,7 @@ module.exports = defineModel('customer_alerts', {
   details: { type: Mixed, default: () => ({}) },
   status: { type: String, default: 'open' }, // open | resolved
   // Email is always sent: sent | failed | no_recipient | pending
+  // (staff_only for notices only platform staff see, e.g. number_silent)
   email_status: { type: String, default: 'pending' },
   email_attempts: { type: Number, default: 0 },
   email_sent_at: { type: Date },

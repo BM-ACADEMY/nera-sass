@@ -15,6 +15,14 @@
  * A quality drop (YELLOW, RED, FLAGGED, DOWNGRADE, account restriction) pauses
  * marketing on the number, halves the cap and tells the workspace owner.
  * Service and utility messages are not paused.
+ *
+ * Inbound watch: every customer message and status receipt the webhook gets
+ * for a number stamps `last_message_received_at` / `last_status_received_at`.
+ * A live number with neither for WA_SILENT_ALERT_HOURS (default 24) is
+ * "silent" and shows up in the platform "Needs your attention" list
+ * (services/alerts.js, type number_silent).
+ *
+ *   WA_SILENT_ALERT_HOURS  hours without an inbound event before a live number is flagged (default 24)
  */
 const { WhatsappNumberState, Users, Tenants } = require('../models');
 const { NO_ID } = require('../db/mongo');
@@ -29,6 +37,10 @@ const envInt = (name, fallback) => {
 const perMinute = () => envInt('WA_SEND_PER_MINUTE', 60);
 const startCap = () => envInt('WA_DAILY_CAP_START', 250);
 const maxCap = () => envInt('WA_DAILY_CAP_MAX', 10000);
+const silenceHours = () => envInt('WA_SILENT_ALERT_HOURS', 24);
+// Inbound timestamps are written at most this often per number and kind, so a
+// busy number does not turn every webhook into a write.
+const INBOUND_WRITE_EVERY_MS = 60 * 1000;
 const MIN_CAP = 50;
 const GROWTH_FACTOR = 2;
 const GROWTH_MIN_USE = 0.5;
@@ -274,8 +286,57 @@ async function pauseMarketing(phoneNumberId, { by = null, reason = 'Paused by th
   return { ok: true, state: updated };
 }
 
+const asDate = (value) => (value ? new Date(value) : null);
+
+/**
+ * The number's last inbound webhook event and whether it has gone silent.
+ *   since  when the number went live (verified); a number that never got an
+ *          event is measured from here, so a fresh number has a full grace period.
+ */
+function inboundActivity(state, { since = null, now = new Date() } = {}) {
+  const message = asDate(state?.last_message_received_at);
+  const status = asDate(state?.last_status_received_at);
+  const last = message && status ? (message >= status ? message : status) : (message || status);
+  const reference = last || asDate(since) || asDate(state?.created_at);
+  const silentMs = reference ? now.getTime() - reference.getTime() : 0;
+  return {
+    last_inbound_event_at: last,
+    last_inbound_event_kind: last ? (last === message ? 'message' : 'status') : null,
+    last_message_received_at: message,
+    last_status_received_at: status,
+    silent: silentMs >= silenceHours() * 3600000,
+    silent_after_hours: silenceHours(),
+  };
+}
+
+/**
+ * The webhook got an event for this number: `kind` is 'message' (a customer
+ * wrote) or 'status' (a delivery/read/failed receipt). Closes the
+ * number_silent notice when the number had gone quiet. Never throws.
+ */
+async function recordInboundEvent(phoneNumberId, { kind = 'message', clientId = null, at = new Date() } = {}) {
+  try {
+    const field = kind === 'status' ? 'last_status_received_at' : 'last_message_received_at';
+    const state = await stateFor(phoneNumberId, { clientId });
+    const before = await WhatsappNumberState.findOneAndUpdate(
+      { phone_number_id: state.phone_number_id, $or: [{ [field]: null }, { [field]: { $lt: new Date(at.getTime() - INBOUND_WRITE_EVERY_MS) } }] },
+      { $max: { [field]: at } },
+      { new: false, projection: NO_ID },
+    ).lean();
+    if (!before) return false;
+    const previous = inboundActivity(before, { now: at });
+    if (previous.silent || !previous.last_inbound_event_at) {
+      await require('./alerts').resolve('number_silent', state.phone_number_id);
+    }
+    return true;
+  } catch (error) {
+    console.error('[numberHealth] Inbound event not recorded:', error.message);
+    return false;
+  }
+}
+
 /** What the workspace sees about its number. */
-async function summary(phoneNumberId, now = new Date()) {
+async function summary(phoneNumberId, now = new Date(), { since = null } = {}) {
   const state = await rollover(phoneNumberId, now);
   const cap = boundedCap(state.daily_cap, state.messaging_limit);
   return {
@@ -298,6 +359,7 @@ async function summary(phoneNumberId, now = new Date()) {
     first_send_at: state.first_send_at || null,
     rate_limit_hits: state.rate_limit_hits || 0,
     last_rate_limited_at: state.last_rate_limited_at || null,
+    ...inboundActivity(state, { since, now }),
   };
 }
 
@@ -323,4 +385,7 @@ module.exports = {
   pauseMarketing,
   notifyOwner,
   summary,
+  silenceHours,
+  inboundActivity,
+  recordInboundEvent,
 };

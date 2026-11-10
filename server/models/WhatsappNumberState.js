@@ -38,6 +38,12 @@ module.exports = defineModel('whatsapp_number_state', {
   marketing_resumed_at: { type: Date },
   marketing_resumed_by: { type: Number },
   owner_notified_at: { type: Date },
+  // Last webhook event Meta sent us for the number (plan N1, inbound watch):
+  // a customer message, and a delivery/read status receipt. A number that is
+  // live but gets neither for a day usually means the webhook subscription
+  // broke. Written at most once a minute per field.
+  last_message_received_at: { type: Date },
+  last_status_received_at: { type: Date },
   rate_limit_hits: { type: Number, default: 0 },
   last_rate_limited_at: { type: Date },
   created_at: { type: Date, default: Date.now },

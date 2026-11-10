@@ -8,6 +8,14 @@
  *   setup_unfinished    a setup step is still open after SETUP_ALERT_AFTER_HOURS
  *   payment_failed      a payment did not go through
  *
+ * One more, for platform staff only (audience 'staff'):
+ *   number_silent       a live WhatsApp number got no inbound message and no
+ *                       status receipt for WA_SILENT_ALERT_HOURS (default 24).
+ *                       Usually a broken webhook subscription, which the
+ *                       Getnera team fixes, so the customer is not emailed and
+ *                       it is not in their Notices box; they see the last
+ *                       event time on their WhatsApp and Dashboard screens.
+ *
  * Each becomes a notice (collection customer_alerts) shown in the customer's
  * Notices box and in the platform "Needs your attention" list. Raising the same
  * problem again while it is open changes nothing (no second email); it closes
@@ -30,6 +38,7 @@ const { currentTenantId, runAsSystem, runAsTenant } = require('./tenantContext')
 const { explainRejection, cleanReasonCode } = require('./templateRejection');
 const alertWhatsapp = require('./alertWhatsapp');
 const notify = require('./notify');
+const numberHealth = require('./numberHealth');
 const billingWallet = require('./billing/wallet');
 const { WARN_FRACTION } = require('./billing/aiAllowance');
 
@@ -39,7 +48,12 @@ const TYPES = Object.freeze({
   number_quality: { severity: 'critical', path: '/settings/whatsapp', label: 'Number quality dropped' },
   setup_unfinished: { severity: 'info', path: '/settings/whatsapp', label: 'Setup unfinished' },
   payment_failed: { severity: 'critical', path: '/settings', label: 'Payment failed' },
+  number_silent: { severity: 'critical', path: '/whatsapp', label: 'No WhatsApp events', audience: 'staff' },
 });
+// Notices only platform staff see ("Needs your attention"): never emailed,
+// never sent on WhatsApp, never in the customer's Notices box.
+const STAFF_ONLY_TYPES = Object.freeze(Object.keys(TYPES).filter((type) => TYPES[type].audience === 'staff'));
+const customerFilter = (filter = {}) => ({ ...filter, type: { $nin: STAFF_ONLY_TYPES } });
 const MAX_EMAIL_ATTEMPTS = 5;
 const SEVERITY_ORDER = { critical: 0, warning: 1, info: 2 };
 const BAD_RATINGS = new Set(['YELLOW', 'MEDIUM', 'RED', 'LOW']);
@@ -110,7 +124,10 @@ async function raise({ type, key = '', title, message, advice = null, details = 
   const dedupeKey = `${type}:${key}`;
   const now = new Date();
   const fields = { title, message, severity: severity || config.severity, action_path: config.path, details: { ...details, ...(advice ? { advice } : {}) } };
-  const emailFields = emailAlreadySent ? { email_status: 'sent', email_attempts: 0, email_sent_at: now } : { email_status: 'pending', email_attempts: 0 };
+  const staffOnly = config.audience === 'staff';
+  const emailFields = staffOnly
+    ? { email_status: 'staff_only', email_attempts: 0 }
+    : emailAlreadySent ? { email_status: 'sent', email_attempts: 0, email_sent_at: now } : { email_status: 'pending', email_attempts: 0 };
 
   const existing = await CustomerAlerts.findOne({ dedupe_key: dedupeKey }, NO_ID).lean();
   if (existing?.status === 'open') {
@@ -122,19 +139,19 @@ async function raise({ type, key = '', title, message, advice = null, details = 
     // Reopen: the problem came back, so the customer is told again.
     alert = await CustomerAlerts.findOneAndUpdate(
       { id: existing.id, status: 'resolved' },
-      { $set: { ...fields, ...emailFields, status: 'open', last_raised_at: now, created_at: now, read_at: null, resolved_at: null }, $unset: { whatsapp_status: '', whatsapp_sent_at: '', ...(emailAlreadySent ? {} : { email_sent_at: '' }) }, $inc: { raised_count: 1 } },
+      { $set: { ...fields, ...emailFields, ...(staffOnly ? { whatsapp_status: 'staff_only' } : {}), status: 'open', last_raised_at: now, created_at: now, read_at: null, resolved_at: null }, $unset: { ...(staffOnly ? {} : { whatsapp_status: '' }), whatsapp_sent_at: '', ...(emailAlreadySent ? {} : { email_sent_at: '' }) }, $inc: { raised_count: 1 } },
       { new: true, projection: NO_ID },
     ).lean();
     if (!alert) return { alert: await CustomerAlerts.findOne({ id: existing.id }, NO_ID).lean(), created: false };
   } else {
     try {
-      alert = (await CustomerAlerts.create({ type, dedupe_key: dedupeKey, ...fields, ...emailFields, status: 'open', created_at: now, last_raised_at: now })).toObject();
+      alert = (await CustomerAlerts.create({ type, dedupe_key: dedupeKey, ...fields, ...emailFields, ...(staffOnly ? { whatsapp_status: 'staff_only' } : {}), status: 'open', created_at: now, last_raised_at: now })).toObject();
     } catch (error) {
       if (error.code !== 11000) throw error;
       return { alert: await CustomerAlerts.findOne({ dedupe_key: dedupeKey }, NO_ID).lean(), created: false };
     }
   }
-  alert = await deliver({ ...alert, tenant_id: tenantId }, { whatsappSummary });
+  if (!staffOnly) alert = await deliver({ ...alert, tenant_id: tenantId }, { whatsappSummary });
   return { alert, created: true };
 }
 
@@ -215,6 +232,49 @@ async function evaluateQuality({ emailAlreadySent = false } = {}) {
     });
   }
   await resolveExcept('number_quality', live);
+  return live.length;
+}
+
+const hoursAgo = (date, now) => Math.max(1, Math.floor((now.getTime() - new Date(date).getTime()) / 3600000));
+
+/**
+ * Staff notice for every live (verified) WhatsApp number of the workspace that
+ * has had no inbound message and no status receipt for WA_SILENT_ALERT_HOURS.
+ * A number that never got an event is measured from when it was verified.
+ * Closes itself when an event arrives (numberHealth.recordInboundEvent) or the
+ * number is no longer live.
+ */
+async function evaluateSilence({ now = new Date() } = {}) {
+  const numbers = await Clients.find(
+    { phone_number_id: { $nin: [null, ''] }, whatsapp_status: 'verified' },
+    { _id: 0, id: 1, name: 1, phone_number_id: 1, whatsapp_number: 1, whatsapp_verified_at: 1, created_at: 1 },
+  ).lean();
+  const live = [];
+  for (const number of numbers) {
+    const id = String(number.phone_number_id);
+    const state = await WhatsappNumberState.findOne({ phone_number_id: id }, NO_ID).lean();
+    const since = number.whatsapp_verified_at || number.created_at;
+    const activity = numberHealth.inboundActivity(state, { since, now });
+    if (!activity.silent) continue;
+    live.push(id);
+    const label = number.whatsapp_number || `number ending ${id.slice(-4)}`;
+    const quietFor = hoursAgo(activity.last_inbound_event_at || since, now);
+    await raise({
+      type: 'number_silent', key: id,
+      title: `No WhatsApp events for ${label} in ${quietFor} hours`,
+      message: activity.last_inbound_event_at
+        ? `Meta has sent no customer message and no delivery receipt for ${label} (${number.name || 'brand'}) since ${new Date(activity.last_inbound_event_at).toISOString().replace('T', ' ').slice(0, 16)} UTC.`
+        : `Meta has sent no customer message and no delivery receipt for ${label} (${number.name || 'brand'}) since it was connected.`,
+      advice: 'Check that our app is still subscribed to the WABA and the webhook is verified, then send a test message to the number.',
+      details: {
+        phone_number_id_last4: id.slice(-4),
+        last_inbound_event_at: activity.last_inbound_event_at,
+        last_inbound_event_kind: activity.last_inbound_event_kind,
+        silent_after_hours: activity.silent_after_hours,
+      },
+    });
+  }
+  await resolveExcept('number_silent', live);
   return live.length;
 }
 
@@ -316,6 +376,7 @@ async function evaluateTenant(tenantId) {
     const checks = {
       templates: () => evaluateTemplates(),
       quality: () => evaluateQuality(),
+      silence: () => evaluateSilence(),
       wallet: () => evaluateWallet(),
       setup: () => evaluateSetup(tenant),
       emails: () => retryEmails(),
@@ -330,7 +391,7 @@ async function evaluateTenant(tenantId) {
 
 /** Sends again the emails that failed or were never sent. */
 async function retryEmails() {
-  const pending = await CustomerAlerts.find({ status: 'open', email_status: { $in: ['failed', 'pending', 'no_recipient'] }, email_attempts: { $lt: MAX_EMAIL_ATTEMPTS } }, NO_ID).limit(20).lean();
+  const pending = await CustomerAlerts.find(customerFilter({ status: 'open', email_status: { $in: ['failed', 'pending', 'no_recipient'] }, email_attempts: { $lt: MAX_EMAIL_ATTEMPTS } }), NO_ID).limit(20).lean();
   for (const alert of pending) await deliver({ ...alert, tenant_id: currentTenantId() });
   return pending.length;
 }
@@ -356,14 +417,14 @@ const present = (alert) => ({
 
 /** The current workspace's notices (open first), as shown in the Notices box. */
 async function listNotices({ includeResolved = false, limit = 50 } = {}) {
-  const filter = includeResolved ? {} : { status: 'open' };
+  const filter = customerFilter(includeResolved ? {} : { status: 'open' });
   const rows = await CustomerAlerts.find(filter, NO_ID).sort({ status: -1, created_at: -1 }).limit(Math.min(Number(limit) || 50, 200)).lean();
-  const unread = await CustomerAlerts.countDocuments({ status: 'open', read_at: null });
+  const unread = await CustomerAlerts.countDocuments(customerFilter({ status: 'open', read_at: null }));
   return { notices: rows.map(present), unread };
 }
 
-const markRead = (id) => CustomerAlerts.updateOne({ id: Number(id), status: 'open', read_at: null }, { $set: { read_at: new Date() } });
-const markAllRead = () => CustomerAlerts.updateMany({ status: 'open', read_at: null }, { $set: { read_at: new Date() } });
+const markRead = (id) => CustomerAlerts.updateOne(customerFilter({ id: Number(id), status: 'open', read_at: null }), { $set: { read_at: new Date() } });
+const markAllRead = () => CustomerAlerts.updateMany(customerFilter({ status: 'open', read_at: null }), { $set: { read_at: new Date() } });
 
 /**
  * The platform "Needs your attention" list: every open notice across
@@ -377,6 +438,7 @@ async function attentionList({ limit = 200 } = {}) {
       .map((row) => ({
         id: row.id, tenant_id: row.tenant_id, workspace: tenants.get(row.tenant_id)?.name || `Workspace ${row.tenant_id}`,
         type: row.type, label: TYPES[row.type]?.label || row.type, severity: row.severity, title: row.title, message: row.message,
+        advice: row.details?.advice || null, staff_only: TYPES[row.type]?.audience === 'staff',
         created_at: row.created_at, email_status: row.email_status, whatsapp_status: row.whatsapp_status || null,
         // An email that never went out is itself a problem staff must see.
         email_problem: ['failed', 'no_recipient'].includes(row.email_status) && Number(row.email_attempts || 0) >= 1,
@@ -389,9 +451,9 @@ async function attentionList({ limit = 200 } = {}) {
 }
 
 module.exports = {
-  TYPES, SETUP_STEPS, MAX_EMAIL_ATTEMPTS,
+  TYPES, STAFF_ONLY_TYPES, SETUP_STEPS, MAX_EMAIL_ATTEMPTS,
   raise, resolve, resolveExcept,
-  evaluateWallet, paymentFailed, evaluateQuality, evaluateSetup, evaluateTemplates, evaluateTenant, sweepAll, pendingSetup,
+  evaluateWallet, paymentFailed, evaluateQuality, evaluateSilence, evaluateSetup, evaluateTemplates, evaluateTenant, sweepAll, pendingSetup,
   templateRejected, templateResubmitted, templateStatusChanged, cleanReasonCode,
   listNotices, markRead, markAllRead, attentionList, present, retryEmails,
 };

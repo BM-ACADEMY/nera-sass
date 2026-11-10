@@ -301,6 +301,11 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
                 <Field label="Meta status">{whatsapp?.connection_status ? <span className="capitalize">{whatsapp.connection_status.toLowerCase()}</span> : null}</Field>
                 <Field label="Quality">{whatsapp?.quality_rating ? <span className="capitalize">{whatsapp.quality_rating.toLowerCase()}</span> : null}</Field>
                 <Field label="Verified">{brand.whatsapp_verified_at ? shortDate(brand.whatsapp_verified_at) : null}</Field>
+                <Field label="Last inbound event">
+                  {data.inbound?.last_inbound_event_at
+                    ? <span className={data.inbound.silent ? 'font-semibold text-amber-700' : undefined}>{new Date(data.inbound.last_inbound_event_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })} ({data.inbound.last_inbound_event_kind === 'status' ? 'receipt' : 'message'})</span>
+                    : data.inbound ? <span className={data.inbound.silent ? 'font-semibold text-amber-700' : 'text-muted-foreground'}>None yet</span> : null}
+                </Field>
                 <Field label="Phone Number ID" mono>{brand.phone_number_id}</Field>
                 <Field label="WABA ID" mono>{brand.wa_business_id || whatsapp?.waba_id || null}</Field>
               </dl>
