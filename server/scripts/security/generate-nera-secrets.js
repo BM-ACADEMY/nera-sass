@@ -9,7 +9,8 @@
  * are issued by their providers (Tasks S3, W1, B4) and are not generated here.
  *
  * TOKEN_ENCRYPTION_KEY is deliberately not generated: rows already encrypted
- * with the old key must be re-encrypted in the same step (Task S8).
+ * with the old key must be re-encrypted in the same procedure
+ * (docs/runbook-rotate-token-encryption-key.md).
  *
  * Usage: node scripts/security/generate-nera-secrets.js --out <path outside the repository>
  */

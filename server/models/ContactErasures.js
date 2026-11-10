@@ -8,6 +8,9 @@ module.exports = defineModel('contact_erasures', {
   id: { type: Number },
   lead_id: { type: Number },
   phone_hash: { type: String, default: null },
+  // Version of the key that made phone_hash (utils/crypto.js). Absent on records
+  // older than key versions: those were hashed with the key in use at the time.
+  phone_hash_key: { type: String, default: null },
   status: { type: String, default: 'in_progress' }, // in_progress | completed
   erased_by_user_id: { type: Number, default: null },
   counts: { type: Mixed, default: () => ({}) },
