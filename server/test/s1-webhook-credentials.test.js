@@ -267,7 +267,7 @@ test('Slice S1: signed webhooks, tenant credentials only, no payload on disk, Al
 
     const raw = await mongoose.connection.collection('clients').findOne({ id: brand.id });
     assert.strictEqual(raw.wa_access_token, undefined, 'no plain-text column');
-    assert.match(raw.wa_access_token_enc, /^[0-9a-f]{24}:[0-9a-f]{32}:[0-9a-f]+$/, 'iv:authTag:ciphertext');
+    assert.match(raw.wa_access_token_enc, /^v2:[0-9a-f]{8}:[0-9a-f]{24}:[0-9a-f]{32}:[0-9a-f]+$/, 'v2:keyId:iv:authTag:ciphertext');
     assert.ok(!raw.wa_access_token_enc.includes(PLAIN));
     assert.strictEqual(raw.wa_token_last4, 'ABCD');
 

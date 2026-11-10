@@ -14,3 +14,6 @@ server/uploads/
 
 # Encrypted media files (customer data): never commit
 mediaserver/storage/
+
+# token key rotation backups (ciphertext, still sensitive)
+server/backups/

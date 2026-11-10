@@ -56,7 +56,14 @@ Also point every OAuth callback at the new domain (`GOOGLE_CALLBACK_URL`, `GOOGL
 `GOOGLE_CALLBACK_LOCALSEOBRIDGE`, `GOOGLE_CALLBACK_GSCINTEL`, `LINKEDIN_REDIRECT_URI`,
 `META_CONTENT_OS_REDIRECT_URI`) and register the same URLs in Google / LinkedIn / Meta consoles.
 
-Keep `TOKEN_ENCRYPTION_KEY` exactly as it is now: stored WhatsApp tokens are encrypted with it.
+Keep `TOKEN_ENCRYPTION_KEY` exactly as it is now unless you are rotating it: stored tokens are encrypted with it.
+
+To rotate it without losing tokens:
+1. Set `TOKEN_ENCRYPTION_KEY=<new>` and `TOKEN_ENCRYPTION_KEY_PREVIOUS=<old>`, then restart. The app now reads old and new values.
+2. `cd server && node scripts/rotate-token-key.js` (dry run, counts only), then `node scripts/rotate-token-key.js --apply`
+   (writes a ciphertext backup to `server/backups/token-rotation/` first, safe to re-run).
+3. When it reports nothing pending or locked, remove `TOKEN_ENCRYPTION_KEY_PREVIOUS`.
+   Contact-erasure records are hashed with the key and cannot be re-hashed, so keep the previous key set as long as you need those blocks honoured.
 Keep `JWT_SECRET` too, unless you want everyone logged out.
 
 MongoDB: if Mongo runs on this same VPS use `127.0.0.1` in `MONGODB_URI` and keep port 27017

@@ -43,24 +43,33 @@ function phoneKey(phone) {
   return digits.length >= 7 ? digits.slice(-10) : null;
 }
 
-function hashKey() {
-  const secret = process.env.TOKEN_ENCRYPTION_KEY || process.env.ENCRYPTION_KEY;
+function hashKey(secret = process.env.TOKEN_ENCRYPTION_KEY || process.env.ENCRYPTION_KEY) {
   if (!secret) throw new Error('TOKEN_ENCRYPTION_KEY is not configured');
   return crypto.createHash('sha256').update(`contact-erasure-v1:${secret}`).digest();
 }
 
 // Keyed per tenant: the same number in two workspaces gives two different hashes.
-function phoneHash(tenantId, phone) {
+function phoneHash(tenantId, phone, secret) {
   const key = phoneKey(phone);
   if (!key) return null;
-  return crypto.createHmac('sha256', hashKey()).update(`${Number(tenantId)}:${key}`).digest('hex');
+  return crypto.createHmac('sha256', hashKey(secret)).update(`${Number(tenantId)}:${key}`).digest('hex');
+}
+
+// Erasure records are keyed by the encryption key, and the phone number is not kept,
+// so they cannot be re-hashed after a key rotation. Matching also checks the previous
+// key, so an erased contact stays blocked while TOKEN_ENCRYPTION_KEY_PREVIOUS is set.
+function phoneHashCandidates(tenantId, phone) {
+  const hashes = [phoneHash(tenantId, phone)];
+  const previous = process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS;
+  if (previous) hashes.push(phoneHash(tenantId, phone, previous));
+  return [...new Set(hashes.filter(Boolean))];
 }
 
 /** True when the current workspace deleted a contact with this number on request. */
 async function isErased(phone) {
-  const hash = phoneHash(requireTenantId(), phone);
-  if (!hash) return false;
-  return Boolean(await models.ContactErasures.exists({ phone_hash: hash }));
+  const hashes = phoneHashCandidates(requireTenantId(), phone);
+  if (hashes.length === 0) return false;
+  return Boolean(await models.ContactErasures.exists({ phone_hash: { $in: hashes } }));
 }
 
 /** Throws ErasureError(409) when sending to this number must not happen. */
