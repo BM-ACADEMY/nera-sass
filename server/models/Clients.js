@@ -1,5 +1,6 @@
 const { defineModel } = require('../db/mongo');
 const { encryptToken, decryptToken } = require('../services/clientSecrets');
+const { encryptedFields } = require('../db/encryptedFields');
 
 const READ_OPS = ['find', 'findOne', 'findOneAndUpdate', 'findOneAndReplace', 'findOneAndDelete'];
 const UPDATE_OPS = ['findOneAndUpdate', 'updateOne', 'updateMany'];
@@ -75,6 +76,8 @@ module.exports = defineModel('clients', {
   google_email: { type: String },
   oauth_status: { type: String, default: "Not Connected" },
   oauth_connected_at: { type: Date },
+  // Google OAuth tokens from the older connect flow: encrypted at rest
+  // (db/encryptedFields.js) and never returned by the API.
   access_token: { type: String },
   refresh_token: { type: String },
   wa_category: { type: String, default: "OTHER" },
@@ -98,5 +101,6 @@ module.exports = defineModel('clients', {
     schema.post(READ_OPS, decryptResults);
     schema.pre(UPDATE_OPS, encryptUpdate);
     schema.pre('save', encryptOnSave);
+    encryptedFields(schema, 'clients', ['access_token', 'refresh_token']);
   },
 });

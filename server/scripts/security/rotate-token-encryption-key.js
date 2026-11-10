@@ -44,6 +44,15 @@ const ENCRYPTED_FIELDS = [
   { collection: 'users', field: 'mfa_secret_enc', what: 'two-step verification secret' },
   { collection: 'users', field: 'mfa_pending_secret_enc', what: 'two-step secret awaiting confirmation' },
   { collection: 'invitations', field: 'password_enc', what: 'preset password on an invitation' },
+  // Encrypted through db/encryptedFields.js. Rows from before that may still be
+  // plain text until scripts/security/encrypt-plaintext-tokens.js has run:
+  // those are counted as "plain text" and left alone here.
+  { collection: 'mafiya_gmb_tokens', field: 'access_token', what: 'Google Business Profile access token', mayBePlain: true },
+  { collection: 'mafiya_gmb_tokens', field: 'refresh_token', what: 'Google Business Profile refresh token', mayBePlain: true },
+  { collection: 'thedal_gsc_tokens', field: 'access_token', what: 'Google Search Console access token', mayBePlain: true },
+  { collection: 'thedal_gsc_tokens', field: 'refresh_token', what: 'Google Search Console refresh token', mayBePlain: true },
+  { collection: 'clients', field: 'access_token', what: 'Google access token on the brand', mayBePlain: true },
+  { collection: 'clients', field: 'refresh_token', what: 'Google refresh token on the brand', mayBePlain: true },
 ];
 
 const DEFAULT_BACKUP_MAX_AGE_HOURS = 24;
@@ -112,14 +121,15 @@ async function rotate({ db, apply = false }) {
   }
 
   const report = { apply, currentKeyVersion: current, previousKeyVersion: previous, fields: [], erasures: null };
-  for (const { collection, field, what } of ENCRYPTED_FIELDS) {
-    const row = { collection, field, what, found: 0, alreadyCurrent: 0, reencrypted: 0, toReencrypt: 0, changedMeanwhile: 0, unreadable: 0 };
+  for (const { collection, field, what, mayBePlain } of ENCRYPTED_FIELDS) {
+    const row = { collection, field, what, found: 0, alreadyCurrent: 0, reencrypted: 0, toReencrypt: 0, changedMeanwhile: 0, unreadable: 0, plainText: 0 };
     report.fields.push(row);
     const coll = db.collection(collection);
     const cursor = coll.find({ [field]: { $type: 'string', $ne: '' } }, { projection: { _id: 1, [field]: 1 } });
     for await (const doc of cursor) {
       const stored = doc[field];
       row.found += 1;
+      if (mayBePlain && !tokenCrypto.looksEncrypted(stored)) { row.plainText += 1; continue; }
       if (tokenCrypto.keyVersionOf(stored) === current) { row.alreadyCurrent += 1; continue; }
       const opened = tokenCrypto.tryDecrypt(stored);
       if (!opened.ok || !opened.value) { row.unreadable += 1; continue; }
@@ -150,6 +160,7 @@ async function rotate({ db, apply = false }) {
   report.totals = {
     found: sum('found'), alreadyCurrent: sum('alreadyCurrent'), reencrypted: sum('reencrypted'),
     toReencrypt: sum('toReencrypt'), changedMeanwhile: sum('changedMeanwhile'), unreadable: sum('unreadable'),
+    plainText: sum('plainText'),
   };
   report.remaining = report.totals.toReencrypt + report.totals.changedMeanwhile + report.totals.unreadable;
   return report;
@@ -163,9 +174,9 @@ function formatReport(report) {
   lines.push(`TOKEN_ENCRYPTION_KEY rotation report (${report.apply ? 'APPLY' : 'DRY RUN: nothing was written'})`);
   lines.push(`Current key version: ${report.currentKeyVersion}   Previous key version: ${report.previousKeyVersion || 'not set'}`);
   lines.push('');
-  const header = ['collection.field', 'found', 'already current', done, 'changed meanwhile', 'unreadable'];
-  const rows = report.fields.map((row) => [`${row.collection}.${row.field}`, row.found, row.alreadyCurrent, row[doneKey], row.changedMeanwhile, row.unreadable]);
-  rows.push(['TOTAL', report.totals.found, report.totals.alreadyCurrent, report.totals[doneKey], report.totals.changedMeanwhile, report.totals.unreadable]);
+  const header = ['collection.field', 'found', 'already current', done, 'changed meanwhile', 'unreadable', 'plain text'];
+  const rows = report.fields.map((row) => [`${row.collection}.${row.field}`, row.found, row.alreadyCurrent, row[doneKey], row.changedMeanwhile, row.unreadable, row.plainText]);
+  rows.push(['TOTAL', report.totals.found, report.totals.alreadyCurrent, report.totals[doneKey], report.totals.changedMeanwhile, report.totals.unreadable, report.totals.plainText]);
   const table = [header, ...rows].map((cells) => cells.map(String));
   const widths = header.map((_, i) => Math.max(...table.map((cells) => cells[i].length)));
   for (const cells of table) lines.push(cells.map((cell, i) => (i === 0 ? cell.padEnd(widths[i]) : cell.padStart(widths[i]))).join('  '));
@@ -178,6 +189,9 @@ function formatReport(report) {
   lines.push('');
   if (report.totals.unreadable) {
     lines.push(`ATTENTION: ${report.totals.unreadable} value(s) could not be read with any configured key and were left untouched.`);
+  }
+  if (report.totals.plainText) {
+    lines.push(`${report.totals.plainText} value(s) are still plain text (not encrypted with any key). Run scripts/security/encrypt-plaintext-tokens.js for those.`);
   }
   if (report.totals.changedMeanwhile) {
     lines.push(`${report.totals.changedMeanwhile} value(s) were changed by the app during the run and were not overwritten. Run the same command again.`);

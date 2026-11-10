@@ -28,6 +28,7 @@ const crypto = require('crypto');
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // GCM standard IV length is 12 bytes
 const VERSION_PATTERN = /^k([0-9a-f]{8})$/;
+const STORED_PATTERN = /^(k[0-9a-f]{8}:)?[0-9a-f]{24}:[0-9a-f]{32}:[0-9a-f]+$/;
 
 function keyVersion(secret) {
   return crypto.createHash('sha256').update(`nera-token-key-version:${secret}`).digest('hex').slice(0, 8);
@@ -78,6 +79,11 @@ function previousKeyVersion() {
 function keyVersionOf(storedValue) {
   const match = VERSION_PATTERN.exec(String(storedValue || '').split(':')[0]);
   return match ? match[1] : null;
+}
+
+/** True when a stored string has the shape this module writes (with or without a key version). */
+function looksEncrypted(storedValue) {
+  return typeof storedValue === 'string' && STORED_PATTERN.test(storedValue);
 }
 
 function decryptWith(key, ivHex, authTagHex, ciphertextHex) {
@@ -157,6 +163,7 @@ module.exports = {
   decrypt,
   tryDecrypt,
   keyVersionOf,
+  looksEncrypted,
   currentKeyVersion,
   previousKeyVersion,
   currentSecret,
