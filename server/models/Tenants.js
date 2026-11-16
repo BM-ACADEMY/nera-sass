@@ -23,6 +23,12 @@ module.exports = defineModel('tenants', {
   // WhatsApp copies of customer notices (plan N4). Set only at signup:
   // { opted_in, number, opted_in_at, source, text, opted_out_at }.
   alerts_whatsapp: { type: Mixed, default: null },
+  // Staff send pause: the workspace still signs in and reads its data, but no
+  // WhatsApp message of any kind is sent until staff resume it.
+  sending_paused: { type: Boolean, default: false },
+  sending_paused_reason: { type: String },
+  sending_paused_at: { type: Date },
+  sending_paused_by: { type: Number },
   suspended_at: { type: Date },
   suspended_reason: { type: String },
   suspended_by: { type: Number },

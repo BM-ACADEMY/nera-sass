@@ -17,6 +17,7 @@ const alerts = require('../services/alerts');
 const invitations = require('../services/invitations');
 const userAdmin = require('../services/userAdmin');
 const tenantData = require('../services/tenantData');
+const appealEvidence = require('../services/appealEvidence');
 const audit = require('../services/audit');
 const authController = require('../controllers/authController');
 const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
@@ -282,6 +283,57 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       if (!tenant) return res.status(409).json({ error: 'Tenant is not suspended' });
       await audit.record(audit.EVENTS.TENANT_REINSTATED, { tenantId: tenant.id, req, targetType: 'tenant', targetId: tenant.id });
       return res.json({ tenant });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // ── Send pause ────────────────────────────────────────────
+  // Stops every WhatsApp message of one workspace (campaigns, AI replies,
+  // manual sends, queued rows) while its people can still sign in and read
+  // their data. Queued rows wait and send after a resume, unless staff cancel
+  // them first.
+  router.post('/tenants/:id/pause-sending', permit('platform.tenants.manage'), async (req, res) => {
+    try {
+      const reason = String(req.body?.reason || '').trim();
+      if (!reason) return res.status(400).json({ error: 'A reason is required' });
+      const tenant = await Tenants.findOneAndUpdate(
+        { id: tenantIdParam(req), status: 'active', sending_paused: { $ne: true } },
+        { $set: { sending_paused: true, sending_paused_reason: reason, sending_paused_at: new Date(), sending_paused_by: req.user.id, updated_at: new Date() } },
+        { new: true, projection: { _id: 0 } },
+      ).lean();
+      if (!tenant) return res.status(409).json({ error: 'Tenant is not active, or sending is already paused' });
+      await audit.record(audit.EVENTS.TENANT_SENDING_PAUSED, { tenantId: tenant.id, req, targetType: 'tenant', targetId: tenant.id, meta: { reason } });
+      return res.json({ tenant });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  router.post('/tenants/:id/resume-sending', permit('platform.tenants.manage'), async (req, res) => {
+    try {
+      const tenant = await Tenants.findOneAndUpdate(
+        { id: tenantIdParam(req), sending_paused: true },
+        { $set: { sending_paused: false, updated_at: new Date() }, $unset: { sending_paused_reason: '', sending_paused_at: '', sending_paused_by: '' } },
+        { new: true, projection: { _id: 0 } },
+      ).lean();
+      if (!tenant) return res.status(409).json({ error: 'Sending is not paused for this tenant' });
+      await audit.record(audit.EVENTS.TENANT_SENDING_RESUMED, { tenantId: tenant.id, req, targetType: 'tenant', targetId: tenant.id, meta: { reason: String(req.body?.reason || '').trim() || null } });
+      return res.json({ tenant });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // Evidence for a Meta appeal: consent, STOP handling, sends, number quality,
+  // staff actions. No message text, names or full phone numbers.
+  router.get('/tenants/:id/appeal-evidence', permit('platform.tenants.export'), async (req, res) => {
+    try {
+      const evidence = await appealEvidence.buildAppealEvidence(tenantIdParam(req), { days: req.query.days, sampleSize: req.query.sample });
+      if (!evidence) return res.status(404).json({ error: 'Tenant not found' });
+      await audit.record(audit.EVENTS.TENANT_APPEAL_EXPORTED, { tenantId: tenantIdParam(req), req, targetType: 'tenant', targetId: tenantIdParam(req), meta: { days: evidence.window.days } });
+      res.setHeader('Content-Disposition', `attachment; filename="tenant-${tenantIdParam(req)}-appeal-evidence.json"`);
+      return res.json(evidence);
     } catch (error) {
       return fail(res, error);
     }
