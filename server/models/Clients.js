@@ -86,6 +86,8 @@ module.exports = defineModel('clients', {
   whatsapp_status: { type: String, default: "not_configured" },
   whatsapp_verified_at: { type: Date },
   whatsapp_verification_error: { type: String },
+  whatsapp_webhook_subscribed: { type: Boolean },
+  whatsapp_webhook_error: { type: String },
   brand_tag: { type: String },
   brand_voice: { type: String },
   industry: { type: String },

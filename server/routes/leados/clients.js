@@ -243,6 +243,8 @@ app.patch('/api/clients/:id', auth, requirePermission('tenant.settings'), async 
       entries.push(['whatsapp_status', hasRequiredCredentials ? 'verification_pending' : 'not_configured']);
       entries.push(['whatsapp_verified_at', null]);
       entries.push(['whatsapp_verification_error', null]);
+      entries.push(['whatsapp_webhook_subscribed', null]);
+      entries.push(['whatsapp_webhook_error', null]);
     }
     const clientChanges = Object.fromEntries(entries.map(([field, value]) => [field, value === '' ? null : value]));
     const updatedClient = await Clients.findOneAndUpdate(

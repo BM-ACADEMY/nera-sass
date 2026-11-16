@@ -16,7 +16,7 @@ module.exports = function registerWhatsappOverviewRoutes(app, ctx) {
     try {
       const brand = await Clients.findOne({}, {
         _id: 0, id: 1, name: 1, phone_number_id: 1, wa_business_id: 1, whatsapp_number: 1, whatsapp_status: 1,
-        whatsapp_verified_at: 1, whatsapp_verification_error: 1, wa_token_last4: 1,
+        whatsapp_verified_at: 1, whatsapp_verification_error: 1, whatsapp_webhook_subscribed: 1, whatsapp_webhook_error: 1, wa_token_last4: 1,
       }).lean();
       const base = { can_manage: can(req.identity, 'whatsapp.manage'), brand_name: brand?.name || null };
       if (!brand?.phone_number_id) return res.json({ ...base, connected: false });
@@ -35,6 +35,9 @@ module.exports = function registerWhatsappOverviewRoutes(app, ctx) {
         status: brand.whatsapp_status || 'verification_pending',
         verified_at: brand.whatsapp_verified_at || null,
         error: brand.whatsapp_verification_error || null,
+        // false means our app is not subscribed to this WABA, so inbound messages never arrive.
+        webhook_subscribed: brand.whatsapp_webhook_subscribed ?? null,
+        webhook_error: brand.whatsapp_webhook_error || null,
         can_send: Boolean(brand.wa_token_last4),
         managed_by_platform: Boolean(phone),
         number: {
