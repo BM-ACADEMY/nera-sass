@@ -319,7 +319,7 @@ test('Delete on request', async (t) => {
       assert.strictEqual(records.length, 1);
       assert.strictEqual(records[0].status, 'completed');
       assert.strictEqual(records[0].erased_by_user_id, a.user.id);
-      assert.doesNotMatch(JSON.stringify(records[0]), /Ravi|9876543210|hello|note/, 'the record holds no personal data');
+      assert.doesNotMatch(JSON.stringify(records[0]), /Ravi|9876543210|hello|note \d/, 'the record holds no personal data (note text, not the "notes" count key)');
     });
     await runAsTenant(2, async () => {
       assert.strictEqual(await Messages.countDocuments({}), 2, "the other workspace's data is untouched");
