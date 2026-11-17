@@ -328,9 +328,11 @@ exports.changePassword = async (req, res) => {
       { new: true, projection: { _id: 0 } },
     ).lean());
     await audit.record(audit.EVENTS.PASSWORD_CHANGED, { tenantId: user.tenant_id ?? null, req, targetType: 'user', targetId: user.id });
-    // Every other session is revoked; this one gets a fresh token. A signed-in
-    // user with MFA enabled has already passed it in this session.
-    return res.json({ success: true, token: issueAccessToken(updated, { mfa: mfa.hasMfa(updated) }) });
+    // Every other session is revoked; this one gets a fresh token. It keeps this
+    // session's two-factor state: a session that passed MFA stays passed, even for
+    // a user with no enrolled method (otherwise the new token is refused with
+    // MFA_REQUIRED and the user is logged out right after changing the password).
+    return res.json({ success: true, token: issueAccessToken(updated, { mfa: mfa.hasMfa(updated) || Boolean(req.sessionMfa) }) });
   } catch (error) {
     return fail(res, error);
   }
