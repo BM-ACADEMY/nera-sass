@@ -289,7 +289,7 @@ test('Delete on request', async (t) => {
     const { runAsTenant, runAsSystem } = ctx();
     await runAsTenant(1, async () => {
       await Messages.create({ conversation_id: a.conversation.id, direction: 'inbound', content: 'photo', msg_type: 'image', media_url: 'media://t_1/202611-' + 'a'.repeat(32) + '/id.jpg' });
-      await MediaFiles.create({ file_id: 'a'.repeat(32), scope: 't_1', filename: 'id.jpg' });
+      await MediaFiles.create({ file_id: '202611-' + 'a'.repeat(32), scope: 't_1', filename: 'id.jpg' }); // ids carry the month prefix, as mediaStore.save stores them
       await CampaignMessageQueue.create({ lead_id: a.lead.id, phone: '919876543210', status: 'pending', template_name: 't' });
       await Payments.create({ lead_id: a.lead.id, amount: 100 });
     });
@@ -319,7 +319,7 @@ test('Delete on request', async (t) => {
       assert.strictEqual(records.length, 1);
       assert.strictEqual(records[0].status, 'completed');
       assert.strictEqual(records[0].erased_by_user_id, a.user.id);
-      assert.doesNotMatch(JSON.stringify(records[0]), /Ravi|9876543210|hello|note/, 'the record holds no personal data');
+      assert.doesNotMatch(JSON.stringify(records[0]), /Ravi|9876543210|hello|note \d/, 'the record holds no personal data (note text, not the "notes" count key)');
     });
     await runAsTenant(2, async () => {
       assert.strictEqual(await Messages.countDocuments({}), 2, "the other workspace's data is untouched");

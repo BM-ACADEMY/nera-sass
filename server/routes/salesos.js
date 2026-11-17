@@ -2656,20 +2656,9 @@ router.post('/communication/send-email', internalAuth, (req, res) => {
   res.json({ ...req.body, success: true, delivered: true, channel: 'email' });
 });
 
-router.post('/communication/send-template', internalAuth, async (req, res) => {
-  try {
-    await salesTrackingReady;
-    if (req.body.lead_id) {
-      const lead = await Leads.findOne({ id: req.body.lead_id }, { _id: 0, sales_status: 1, sales_followup_stopped: 1, sales_followup_at: 1 }).lean();
-      if (!lead || lead.sales_followup_stopped || ['converted', 'closed', 'not_interested'].includes(lead.sales_status)
-        || (lead.sales_followup_at && new Date(lead.sales_followup_at) > new Date())) {
-        return res.json({ ...req.body, success: true, delivered: false, skipped: true, reason: 'sales_status_or_note_stop' });
-      }
-    }
-    // Mock endpoint for sending WhatsApp templates (could integrate Meta API here)
-    res.json({ ...req.body, success: true, delivered: true, channel: 'whatsapp_template' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+// POST /communication/send-template is the real LeadOS route (routes/leados/followups.js).
+// A mock with the same path used to sit here; mounted first, it answered
+// "delivered: true" without sending and skipped the erase and consent checks.
 
 router.post('/leads/internal-note', internalAuth, async (req, res) => {
   const { lead_id, note } = req.body;

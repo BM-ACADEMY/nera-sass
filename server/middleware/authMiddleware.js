@@ -113,7 +113,8 @@ async function resolveIdentity(token, { purpose = 'access' } = {}) {
     lifecycle = await tenantLifecycle(identity.tenantId);
     if (!lifecycle.tenant || lifecycle.state === 'deleted') throw new AuthError(401, 'This workspace no longer exists', 'TENANT_DELETED');
   }
-  return { user, identity, lifecycle };
+  // sessionMfa: this token already passed two-factor in this session (carried into a re-issued token).
+  return { user, identity, lifecycle, sessionMfa: Boolean(payload.mfa) };
 }
 
 function publicUser(user, identity, tenant) {
@@ -133,7 +134,8 @@ function publicUser(user, identity, tenant) {
 }
 
 function attach(req, resolved) {
-  const { user, identity, lifecycle } = resolved;
+  const { user, identity, lifecycle, sessionMfa } = resolved;
+  req.sessionMfa = Boolean(sessionMfa);
   req.identity = identity;
   req.tenant = lifecycle?.tenant || null;
   req.lifecycle = lifecycle;
