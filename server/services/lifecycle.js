@@ -20,7 +20,8 @@ const ACCESS = Object.freeze({
 function computeLifecycle(tenant) {
   if (!tenant || tenant.status === 'deleted' || tenant.deleted_at) return { state: 'deleted', access: ACCESS.deleted };
   if (tenant.status === 'suspended') return { state: 'suspended', access: ACCESS.suspended, manual: true };
-  return { state: 'active', access: ACCESS.active };
+  // Staff send pause: access stays full, only sending stops.
+  return { state: 'active', access: ACCESS.active, sending_paused: Boolean(tenant.sending_paused) };
 }
 
 async function tenantLifecycle(tenantId) {
@@ -31,7 +32,7 @@ async function tenantLifecycle(tenantId) {
 const canLogIn = (lifecycle) => lifecycle.access !== 'none';
 const canWrite = (lifecycle) => lifecycle.access === 'full';
 // Sending WhatsApp messages (campaigns, AI replies, manual sends).
-const canSend = (lifecycle) => lifecycle.access === 'full';
+const canSend = (lifecycle) => lifecycle.access === 'full' && !lifecycle.sending_paused;
 
 async function tenantCanSend(tenantId) {
   return canSend(await tenantLifecycle(tenantId));
