@@ -218,6 +218,8 @@ function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, gr
         whatsapp_status: verified ? 'verified' : 'verification_pending',
         whatsapp_verified_at: verified ? new Date() : null,
         whatsapp_verification_error: null,
+        whatsapp_webhook_subscribed: webhookSubscribed,
+        whatsapp_webhook_error: null,
         updated_at: new Date(),
       } }));
       await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: phone.phone_number_id }, { $set: { client_id: brand.id } });
@@ -296,7 +298,8 @@ function createMetaInventoryRouter({ permit, fail, syncMetaWhatsAppInventory, gr
       if (brand && brand.phone_number_id === phone.phone_number_id) {
         await runAsTenant(brand.tenant_id, () => Clients.updateOne({ id: brand.id }, { $set: {
           phone_number_id: null, wa_business_id: null, whatsapp_number: null, wa_access_token_enc: null, wa_token_last4: null,
-          whatsapp_status: 'not_configured', whatsapp_verified_at: null, whatsapp_verification_error: null, updated_at: new Date(),
+          whatsapp_status: 'not_configured', whatsapp_verified_at: null, whatsapp_verification_error: null,
+          whatsapp_webhook_subscribed: null, whatsapp_webhook_error: null, updated_at: new Date(),
         } }));
       }
       await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: phone.phone_number_id }, { $set: { client_id: null } });

@@ -313,21 +313,43 @@ async function verifyClientWhatsApp(client) {
     }
 
     // 2. Register only assets that Meta has not already connected.
+    const graphBase = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
     if (String(phone.status || '').toUpperCase() !== 'CONNECTED') {
       if (!process.env.WA_REGISTRATION_PIN) {
         throw Object.assign(new Error('WA_REGISTRATION_PIN is required to register this phone number with Cloud API'), { status: 400 });
       }
-      const base = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
       await axios.post(
-        `${base}/${metaConfig.phoneId}/register`,
+        `${graphBase}/${metaConfig.phoneId}/register`,
         { messaging_product: 'whatsapp', pin: process.env.WA_REGISTRATION_PIN },
         { headers: { Authorization: `Bearer ${metaConfig.token}` } }
       );
     }
 
+    // 3. Subscribe our app to the customer's WABA. Without this Meta never
+    // delivers the customer's inbound messages or template status updates to
+    // our webhook, so a verified number would look connected and receive
+    // nothing. Meta subscribes the app that issued the token, and the call can
+    // be repeated safely. A failure does not undo the verification: it is
+    // recorded and shown in the WhatsApp overview so it can be fixed (see
+    // docs/pilot-onboarding.md).
+    let webhookSubscribed = false;
+    let webhookError = null;
+    try {
+      await axios.post(`${graphBase}/${metaConfig.wabaId}/subscribed_apps`, null, {
+        headers: { Authorization: `Bearer ${metaConfig.token}` }, timeout: 15000,
+      });
+      webhookSubscribed = true;
+    } catch (subscribeError) {
+      webhookError = String(subscribeError.response?.data?.error?.message || subscribeError.message || 'Webhook subscription failed').slice(0, 300);
+      console.warn('[WhatsApp webhook subscription]', webhookError);
+    }
+
     const verified = await Clients.findOneAndUpdate(
       { id: client.id },
-      { $set: { whatsapp_status: 'verified', whatsapp_verified_at: new Date(), whatsapp_verification_error: null, updated_at: new Date() } },
+      { $set: {
+        whatsapp_status: 'verified', whatsapp_verified_at: new Date(), whatsapp_verification_error: null,
+        whatsapp_webhook_subscribed: webhookSubscribed, whatsapp_webhook_error: webhookError, updated_at: new Date(),
+      } },
       { new: true, projection: NO_ID }
     ).lean();
     return verified;

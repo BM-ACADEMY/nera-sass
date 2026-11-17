@@ -226,7 +226,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       }
       const brand = await runAsTenant(tenantId, () => Clients.findOneAndUpdate(
         {},
-        { $set: { ...changes, whatsapp_status: 'not_configured', whatsapp_verified_at: null, whatsapp_verification_error: null, updated_at: new Date() } },
+        { $set: { ...changes, whatsapp_status: 'not_configured', whatsapp_verified_at: null, whatsapp_verification_error: null, whatsapp_webhook_subscribed: null, whatsapp_webhook_error: null, updated_at: new Date() } },
         { new: true, projection: { _id: 0 } },
       ).lean());
       if (!brand) return res.status(404).json({ error: 'Brand profile not found' });
