@@ -571,6 +571,42 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.strictEqual((await request(app).post('/api/admin/tenants/1/billing/extend').set(bearer(ws.owner)).send({ days: 5, note: 'nope nope' })).status, 403);
   });
 
+  await t.test('I1. A paid plan gets one numbered GST invoice: CGST+SGST in Puducherry, IGST elsewhere; wallet top-ups get none', async () => {
+    const a = await workspace(1);
+    const paid = await subscribe(a.owner, 'desk');
+    // Fulfilling twice does not issue a second invoice.
+    await signedWebhook(webhookBody(paid.orderId, paid.paymentId, 94282));
+    const list = await request(app).get('/api/billing/invoices').set(bearer(a.owner));
+    assert.strictEqual(list.status, 200);
+    assert.strictEqual(list.body.invoices.length, 1);
+    assert.match(list.body.invoices[0].invoice_number, /^AV\/\d{2}-\d{2}\/0001$/);
+    assert.strictEqual(list.body.invoices[0].total_paise, 94282);
+    const page = await request(app).get(`/api/billing/invoices/${list.body.invoices[0].id}`).set(bearer(a.owner));
+    assert.strictEqual(page.status, 200);
+    assert.match(page.text, /AFRA VENTURES PRIVATE LIMITED/);
+    assert.match(page.text, /34ABGCA7083D1ZS/);
+    assert.match(page.text, /CGST @ 9%/);
+    assert.match(page.text, /SGST @ 9%/);
+    await topUp(a.owner, 1, 500);
+    assert.strictEqual((await request(app).get('/api/billing/invoices').set(bearer(a.owner))).body.invoices.length, 1, 'a top-up is not invoiced');
+
+    // A workspace in another state pays IGST; the other workspace cannot see invoice 1.
+    const b = await workspace(2);
+    const bad = await request(app).put('/api/billing/invoice-details').set(bearer(b.owner)).send({ legal_name: 'Chennai Dental', gstin: 'BAD' });
+    assert.strictEqual(bad.status, 400);
+    const saved = await request(app).put('/api/billing/invoice-details').set(bearer(b.owner)).send({ legal_name: 'Chennai Dental', state_code: '33', address: 'Anna Nagar, Chennai' });
+    assert.strictEqual(saved.status, 200, JSON.stringify(saved.body));
+    await subscribe(b.owner, 'desk');
+    const listB = await request(app).get('/api/billing/invoices').set(bearer(b.owner));
+    assert.strictEqual(listB.body.invoices.length, 1);
+    const pageB = await request(app).get(`/api/billing/invoices/${listB.body.invoices[0].id}`).set(bearer(b.owner));
+    assert.match(pageB.text, /IGST @ 18%/);
+    assert.ok(!/CGST/.test(pageB.text));
+    assert.match(pageB.text, /Chennai Dental/);
+    assert.notStrictEqual(listB.body.invoices[0].invoice_number, list.body.invoices[0].invoice_number);
+    assert.strictEqual((await request(app).get(`/api/billing/invoices/${list.body.invoices[0].id}`).set(bearer(b.owner))).status, 404, 'tenant isolation');
+  });
+
   // ── Expiry, staff tools, isolation ───────────────────────
   await t.test('X1. A lapsed period expires (nothing deleted) and the AI then needs a plan; staff can grant and adjust, audited', async () => {
     const ws = await aiWorkspace(1);

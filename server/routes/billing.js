@@ -107,6 +107,43 @@ router.get('/wallet/ledger', requirePermission('billing.view'), async (req, res)
   }
 });
 
+// GET /api/billing/invoice-details — the legal details printed on invoices.
+router.get('/invoice-details', requirePermission('billing.view'), async (req, res) => {
+  try {
+    res.json(await billing.invoices.billingProfile());
+  } catch (error) {
+    fail(res, error, 'invoice details');
+  }
+});
+
+// PUT /api/billing/invoice-details { legal_name, gstin?, address?, state_code? }
+router.put('/invoice-details', requirePermission('billing.manage'), async (req, res) => {
+  try {
+    res.json({ profile: await billing.invoices.saveBillingProfile(req.body || {}) });
+  } catch (error) {
+    fail(res, error, 'save invoice details');
+  }
+});
+
+// GET /api/billing/invoices
+router.get('/invoices', requirePermission('billing.view'), async (req, res) => {
+  try {
+    res.json({ invoices: await billing.invoices.listInvoices(req.query.limit) });
+  } catch (error) {
+    fail(res, error, 'invoices');
+  }
+});
+
+// GET /api/billing/invoices/:id — printable page (fetch with the login token, open it, Save as PDF).
+router.get('/invoices/:id', requirePermission('billing.view'), async (req, res) => {
+  try {
+    const invoice = await billing.invoices.getInvoice(req.params.id);
+    res.set('Content-Type', 'text/html; charset=utf-8').send(billing.invoices.renderHtml(invoice));
+  } catch (error) {
+    fail(res, error, 'invoice');
+  }
+});
+
 // GET /api/billing/orders
 router.get('/orders', requirePermission('billing.view'), async (req, res) => {
   try {
