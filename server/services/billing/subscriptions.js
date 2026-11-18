@@ -88,7 +88,10 @@ async function activate({ tenantId = null, plan, orderId = null, paymentId = nul
       'meta.last_activation_source': source,
     };
     if (!renewal) Object.assign(set, { extra_seats: 0, extra_numbers: 0 });
-    const sub = await Subscriptions.findOneAndUpdate({}, { $set: set, $setOnInsert: { created_at: now } }, { new: true, upsert: true, projection: { _id: 0 } }).lean();
+    // An upsert skips the model's id hook, so a new row gets its id here. Without it every new
+    // subscription was stored with id null, and the unique id index refused the second workspace.
+    const insertId = existing ? {} : { id: await Subscriptions.nextId() };
+    const sub = await Subscriptions.findOneAndUpdate({}, { $set: set, $setOnInsert: { created_at: now, ...insertId } }, { new: true, upsert: true, projection: { _id: 0 } }).lean();
     return { subscription: sub, renewal };
   });
 }
