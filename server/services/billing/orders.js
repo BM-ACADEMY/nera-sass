@@ -306,7 +306,19 @@ async function buyExtra({ kind, quantity = 1, userId = null, now = new Date() })
     if (error instanceof wallet.WalletError) throw new BillingError(402, `Not enough money in the wallet: ${count} extra ${kind}${count > 1 ? 's' : ''} cost ${wallet.formatInr(amountPaise)}. Top up the wallet first.`, 'INSUFFICIENT_FUNDS');
     throw error;
   }
-  const sub = await subscriptions.addExtras({ kind, quantity: count, now });
+  let sub;
+  try {
+    sub = await subscriptions.addExtras({ kind, quantity: count, now });
+    if (!sub) throw new Error('extras were not added');
+  } catch (error) {
+    // The wallet was already charged; give it back so nobody pays for nothing.
+    await wallet.credit({
+      amountPaise, reason: 'refund', referenceType: 'extra_undo', referenceId: reference,
+      description: `Refund: extra WhatsApp ${kind}${count > 1 ? 's' : ''} could not be added`,
+      createdBy: userId, meta: { kind, quantity: count },
+    });
+    throw new BillingError(500, 'Could not add the extras; your wallet was refunded. Please try again.', 'EXTRAS_FAILED');
+  }
   await audit.record(audit.EVENTS.ENTITLEMENT_CHANGED, {
     tenantId: requireTenantId(), targetType: 'subscription', targetId: sub?.id,
     actor: { actor_type: 'user', actor_user_id: userId },
