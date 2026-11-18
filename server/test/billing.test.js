@@ -607,6 +607,31 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.strictEqual((await request(app).get(`/api/billing/invoices/${list.body.invoices[0].id}`).set(bearer(b.owner))).status, 404, 'tenant isolation');
   });
 
+  await t.test('E2. If adding the extra fails after the wallet was charged, the wallet is refunded', async () => {
+    const ws = await workspace(1);
+    await subscribe(ws.owner, 'desk');
+    await topUp(ws.owner, 1, 2000);
+    const original = billing.subscriptions.addExtras;
+    billing.subscriptions.addExtras = async () => null;
+    try {
+      const res = await request(app).post('/api/billing/extras').set(bearer(ws.owner)).send({ kind: 'seat', quantity: 1 });
+      assert.strictEqual(res.status, 500);
+      assert.strictEqual(res.body.code, 'EXTRAS_FAILED');
+    } finally { billing.subscriptions.addExtras = original; }
+    assert.strictEqual(await balance(1), 200000, 'the wallet got its money back');
+    const rows = await ledgerRows(1);
+    assert.ok(rows.some((r) => r.reason === 'refund' && r.reference_type === 'extra_undo'));
+  });
+
+  await t.test('E3. A billing error in the old /webhook/razorpay address answers 500 so Razorpay retries', async () => {
+    const original = billing.orders.handleWebhook;
+    billing.orders.handleWebhook = async () => { throw new Error('database down'); };
+    try {
+      const res = await signedWebhook(webhookBody('order_x', 'pay_retry', 10000), '/webhook/razorpay');
+      assert.strictEqual(res.status, 500);
+    } finally { billing.orders.handleWebhook = original; }
+  });
+
   // ── Expiry, staff tools, isolation ───────────────────────
   await t.test('X1. A lapsed period expires (nothing deleted) and the AI then needs a plan; staff can grant and adjust, audited', async () => {
     const ws = await aiWorkspace(1);

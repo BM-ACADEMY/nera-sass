@@ -29,6 +29,11 @@ function fail(res, error, where) {
   }
   if (error && error.status === 503) return res.status(503).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
   if (error && error.status === 502) return res.status(502).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+  if (error && error.status === 500 && error.code) {
+    // A known failure with a message written for the customer (e.g. EXTRAS_FAILED: the wallet was refunded).
+    console.error(`[billing] ${where}:`, error.message);
+    return res.status(500).json({ error: error.message, code: error.code });
+  }
   console.error(`[billing] ${where}:`, error?.message || error);
   return res.status(500).json({ error: 'Something went wrong on our side. Please try again.' });
 }
