@@ -10,6 +10,9 @@ const prompts = require('./brainPrompt');
 const booking = require('./brainBooking');
 const appointments = require('./appointments');
 const appointmentFlow = require('./appointmentFlow');
+const orderFlow = require('./orderFlow');
+const shopOrders = require('./shopOrders');
+const orderText = require('./orderText');
 const appointmentRules = require('./appointmentRules');
 const { say } = require('./appointmentText');
 const { systemLanguage, detectLanguage } = require('./replyLanguage');
@@ -56,6 +59,7 @@ function parseOutput(raw) {
     opt_out: parsed.opt_out === true,
     meeting: booking.cleanMeeting(parsed.meeting),
     appointment: appointmentFlow.cleanProposal(parsed.appointment),
+    order: orderFlow.cleanProposal(parsed.order),
     answered_from: ANSWERED_FROM.includes(parsed.answered_from) ? parsed.answered_from : null,
   };
 }
@@ -83,8 +87,8 @@ function inventsPhoneNumber(reply, source) {
   return (String(reply || '').match(PHONE) || []).map(digitsOf).some((digits) => digits.length >= 10 && !known.includes(digits));
 }
 
-async function draft({ brain, docs, lead, history, message, businessOpen, left, bookingContext = null, appointmentContext = null, firstContact = false, now }) {
-  const prompt = prompts.assemblePrompt({ brain, docs, lead, history, message, businessOpen, quotaLeft: left, booking: bookingContext, appointments: appointmentContext, firstContact, now });
+async function draft({ brain, docs, lead, history, message, businessOpen, left, bookingContext = null, appointmentContext = null, orderContext = null, firstContact = false, now }) {
+  const prompt = prompts.assemblePrompt({ brain, docs, lead, history, message, businessOpen, quotaLeft: left, booking: bookingContext, appointments: appointmentContext, orders: orderContext, firstContact, now });
   const lang = systemLanguage(message);
   const holding = say('holding', lang);
   const started = Date.now();
@@ -220,11 +224,15 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
       upcoming: next ? `${next.service} on ${new Date(next.start_at).toLocaleString('en-IN', { timeZone: appointmentSettings.timeZone, dateStyle: 'medium', timeStyle: 'short' })}` : null,
     };
   }
+  // Workspaces that sell through the AI keep a price list; the AI takes orders only when it is on and has products.
+  const orderProducts = brain.profile?.orders_enabled === true ? await shopOrders.listProducts({ activeOnly: true }) : [];
+  const orderMode = orderProducts.length > 0;
+  const orderContext = orderMode ? { products: orderProducts, draft: orderFlow.freshDraft(lead.order_draft, now) } : null;
   const firstContact = !history.some((m) => m.direction === 'outbound');
 
   let result;
   try {
-    result = await draft({ brain, docs, lead, history, message: message.content, businessOpen, left, bookingContext, appointmentContext, firstContact, now });
+    result = await draft({ brain, docs, lead, history, message: message.content, businessOpen, left, bookingContext, appointmentContext, orderContext, firstContact, now });
   } catch (err) {
     console.error(`[AI Brain] Could not draft a reply for lead ${lead.id}:`, err.message);
     return finishWithoutSend('The AI could not answer: please reply yourself', 'notify', err.usage ? { model: BRAIN_MODEL, ...costOf(err.usage), latency_ms: err.latency ?? null } : {});
@@ -233,6 +241,8 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
   let { afterHours } = result;
   let bookedAppointment = null;
   let draftToSave;
+  let orderDraftToSave;
+  let placedOrder = null;
 
   const safetyHandoff = /^safety\b/i.test(output.handoff_reason || '');
   // The model only proposes an appointment; the booking flow checks the
@@ -250,6 +260,24 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
     afterHours = false;
     bookedAppointment = outcome.booked || null;
     draftToSave = outcome.draft;
+    if (outcome.handoffReason && !output.handoff) Object.assign(output, { handoff: true, handoff_reason: outcome.handoffReason, handoff_mode: 'notify' });
+  }
+
+  // The model only proposes an order; the order flow matches products, adds up the
+  // total, asks for confirmation and writes the reply from the real outcome.
+  if (orderMode && output.order && !output.appointment && !output.opt_out && !safetyHandoff) {
+    let outcome;
+    try {
+      outcome = await orderFlow.advance({ lead, proposal: output.order, lang, products: orderProducts, payment: brain.profile?.payment_instructions || '', store: shopOrders.store, now });
+    } catch (err) {
+      console.error(`[AI Brain orders] Order step failed for lead ${lead.id}:`, err.message);
+      outcome = { reply: orderText.say('orderError', lang), draft: null, handoffReason: 'Order could not be placed: please contact the customer' };
+    }
+    output.reply = outcome.reply;
+    output.answered_from = 'booking';
+    afterHours = false;
+    placedOrder = outcome.placed || null;
+    orderDraftToSave = outcome.draft;
     if (outcome.handoffReason && !output.handoff) Object.assign(output, { handoff: true, handoff_reason: outcome.handoffReason, handoff_mode: 'notify' });
   }
 
@@ -272,6 +300,7 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
     meeting: output.meeting,
     appointment: output.appointment,
     appointment_id: bookedAppointment?.id ?? null,
+    order_id: placedOrder?.id ?? null,
     answered_from: output.answered_from,
     language: detectLanguage(message.content).code,
     model: BRAIN_MODEL,
@@ -303,6 +332,8 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
   // Saved only once the customer has seen the question, so a "yes" always answers what was shown.
   if (draftToSave === null) await Leads.updateOne({ id: lead.id }, { $unset: { booking_draft: '' } });
   else if (draftToSave) await Leads.updateOne({ id: lead.id }, { $set: { booking_draft: draftToSave } });
+  if (orderDraftToSave === null) await Leads.updateOne({ id: lead.id }, { $unset: { order_draft: '' } });
+  else if (orderDraftToSave) await Leads.updateOne({ id: lead.id }, { $set: { order_draft: orderDraftToSave } });
   if (output.opt_out) await markOptedOut(lead.id, now);
   if (output.handoff) {
     const reason = output.handoff_reason || 'The AI asked for a person';

@@ -30,11 +30,12 @@ HANDOFF (set handoff true and give a short handoff_reason)
 - The same question was asked 3 times, or the customer was negative twice.
 
 OUTPUT FORMAT (returned to the server, not shown to the customer)
-Return only JSON: {"reply": string, "handoff": boolean, "handoff_reason": string|null, "lead_updates": object, "opt_out": boolean, "meeting": object|null, "appointment": object|null, "answered_from": "business_info"|"greeting"|"booking"|"handoff"|"general_knowledge"}
+Return only JSON: {"reply": string, "handoff": boolean, "handoff_reason": string|null, "lead_updates": object, "opt_out": boolean, "meeting": object|null, "appointment": object|null, "order": object|null, "answered_from": "business_info"|"greeting"|"booking"|"handoff"|"general_knowledge"}
 answered_from says where the answer came from: the business information or documents, a greeting, the booking flow, a handoff holding reply, or (never allowed) anything else.
 lead_updates holds answers the customer gave to the qualifying questions, as short question: answer pairs. Use {} when there are none.
 meeting follows the meeting_booking section. Use null when there is no meeting to book or cancel in this message.
 appointment follows the appointment_booking section when it is present. Use null when the customer is not booking, confirming or cancelling an appointment.
+order follows the order_taking section when it is present. Use null when the customer is not ordering, confirming or cancelling an order.
 
 MEETINGS
 - Follow the meeting_booking section in the runtime context.
@@ -112,6 +113,8 @@ function cleanProfile(input = {}) {
     booking_mode: input.booking_mode === 'appointments' ? 'appointments' : 'meetings',
     appointment_minutes: [15, 30, 45, 60, 90, 120].includes(Number(input.appointment_minutes)) ? Number(input.appointment_minutes) : 30,
     appointment_capacity: Number.isInteger(Number(input.appointment_capacity)) && Number(input.appointment_capacity) >= 1 && Number(input.appointment_capacity) <= 20 ? Number(input.appointment_capacity) : 1,
+    orders_enabled: input.orders_enabled === true,
+    payment_instructions: text(input.payment_instructions, 300),
     reminder_hours: Number.isInteger(Number(input.reminder_hours)) && Number(input.reminder_hours) >= 1 && Number(input.reminder_hours) <= 72 ? Number(input.reminder_hours) : 24,
   };
 }
@@ -277,8 +280,23 @@ function appointmentSection(appointments, now) {
   ].join('\n');
 }
 
+// Order rules for the runtime context (profile orders_enabled with at least one product).
+function orderSection(orders) {
+  if (!orders) return null;
+  const { products, draft } = orders;
+  const shape = 'order = {"items": [{"product": string, "quantity": number}], "name": string or null, "confirm": boolean, "cancel": boolean}';
+  return [
+    'Orders are on. Products and prices (rupees): ' + products.slice(0, 40).map((p) => quoted(p.name) + ' ' + (p.price_paise / 100)).join('; ') + '.',
+    'Order in progress: ' + (draft && (draft.name || (draft.items && draft.items.length)) ? JSON.stringify({ name: draft.name || null, items: (draft.items || []).map((i) => ({ product: i.name, quantity: i.quantity })), waiting_for_confirmation: Boolean(draft.awaiting_confirm) }) : 'none'),
+    'If the customer wants to buy, set order (even with items empty) and put in items the full list the customer wants now, naming each product as the customer said it and the quantity they said. Put the name only if the customer said it. Never guess a product, a quantity or a price, and never state a total yourself.',
+    'Set confirm true only when the customer clearly says yes to a confirmation question the business just asked. To cancel an open order, set cancel true.',
+    'The system matches products, adds up the total, asks for confirmation, places the order and writes the reply. Your reply text is replaced.',
+    shape + '.',
+  ].join('\n');
+}
+
 /** The system and user messages for one reply. */
-function assemblePrompt({ brain, docs, lead, history, message, businessOpen, quotaLeft, booking = null, appointments = null, firstContact = false, now = new Date() }) {
+function assemblePrompt({ brain, docs, lead, history, message, businessOpen, quotaLeft, booking = null, appointments = null, orders = null, firstContact = false, now = new Date() }) {
   const profile = brain.profile || {};
   const layer2 = brain.version_type === 'nera' && brain.system_prompt_override
     ? brain.system_prompt_override
@@ -310,6 +328,11 @@ ${appointments ? `
 <appointment_booking>
 ${appointmentSection(appointments, now)}
 </appointment_booking>
+` : ''}
+${orders ? `
+<order_taking>
+${orderSection(orders)}
+</order_taking>
 ` : ''}
 <conversation>
 ${quoted(conversation) || 'No earlier messages'}

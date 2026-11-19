@@ -52,6 +52,8 @@ module.exports = {
   BookingNotificationLog: require('./BookingNotificationLog'),
   AiReplyLogs: require('./AiReplyLogs'),
   Appointments: require('./Appointments'),
+  Products: require('./Products'),
+  ShopOrders: require('./ShopOrders'),
   BrainDocs: require('./BrainDocs'),
   BrainProfiles: require('./BrainProfiles'),
   BrandSocialAccounts: require('./BrandSocialAccounts'),
