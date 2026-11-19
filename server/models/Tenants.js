@@ -37,6 +37,8 @@ module.exports = defineModel('tenants', {
   deletion_request_reference: { type: String },
   deletion_requested_at: { type: Date },
   deleted_at: { type: Date },
+  // The morning "while you slept" email to the owner (on unless switched off).
+  overnight_summary_enabled: { type: Boolean, default: true },
   created_by: { type: Number },
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },

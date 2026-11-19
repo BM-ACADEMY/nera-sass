@@ -616,6 +616,7 @@ app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api', require('./routes/team'));
 // Plans, subscription and wallet of the signed-in workspace (customer login).
 app.use('/api/billing', require('./routes/billing'));
+app.use('/api/summary', require('./routes/summary'));
 // Razorpay webhook for plan payments and wallet top-ups. Signed with
 // RAZORPAY_WEBHOOK_SECRET (503 until it is set); the tenant comes from the
 // order the server created, never from the payload. Wallet credits happen only
@@ -1324,6 +1325,14 @@ if (jobsEnabled()) scheduleJob('45 0 * * *', () => {
     .then((result) => { if (result.expired) console.log(`[Billing] ${result.expired} subscription(s) expired`); })
     .catch((error) => console.error('[Billing] Expiry sweep failed:', error.message));
 });
+
+// "While you slept": each morning at 08:00 India time the owner of every active
+// workspace whose AI worked overnight gets a short summary by email.
+if (jobsEnabled()) scheduleJob('0 8 * * *', () => {
+  require('./services/overnightSummary').runMorningSummaries()
+    .then((result) => console.log('[OvernightSummary]', JSON.stringify(result)))
+    .catch((error) => console.error('[OvernightSummary] Run failed:', error.message));
+}, { timezone: 'Asia/Kolkata' });
 
 // Tenant lifecycle (plan U6): stores each workspace's state daily and archives
 // workspaces that reach day 90. Access rules are also applied live per request.
