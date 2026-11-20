@@ -232,7 +232,7 @@ const Dashboard = () => {
       case 'workflows': return 'Workflow Automation Engines';
       case 'founder-reports': return 'Founder Reports';
       case 'users': return 'Users & Team';
-      case 'settings': return ({ profile: 'Profile', 'two-step': 'Two-step verification', password: 'Password & sessions', system: 'System' })[itemId] || 'Settings';
+      case 'settings': return ({ profile: 'Profile', 'two-step': 'Two-step verification', password: 'Password & sessions', sessions: 'My sessions', system: 'System' })[itemId] || 'Settings';
       case 'inbox': return 'WhatsApp Chat';
       default: return 'Platform Administration';
     }

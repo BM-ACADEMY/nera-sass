@@ -6,6 +6,8 @@
  *   2. re-reads the user from the database — existence, active flag, token
  *      version (revocation) and role — and, for customer users, the tenant's
  *      status and lifecycle state;
+ *   2b. when the token names a signed-in session (sid), checks that session
+ *      row is still live (My sessions: signing a device out works at once);
  *   3. runs the rest of the request inside that user's tenant context, so the
  *      tenant-scope plugin limits every query to that tenant.
  * The tenant always comes from the database, never from the request.
@@ -57,6 +59,7 @@ const deps = () => ({
   ...require('../services/permissions'),
   ...require('../services/lifecycle'),
   ...require('../models'),
+  sessions: require('../services/sessions'),
 });
 
 class AuthError extends Error {
@@ -67,9 +70,11 @@ class AuthError extends Error {
   }
 }
 
-function issueAccessToken(user, { mfa = false } = {}) {
+// `sid` names the signed-in session (services/sessions.js); the database keeps
+// only its hash.
+function issueAccessToken(user, { mfa = false, sid = null } = {}) {
   return jwt.sign(
-    { id: user.id, tid: user.tenant_id ?? null, tv: Number(user.token_version || 0), mfa: Boolean(mfa), typ: 'access' },
+    { id: user.id, tid: user.tenant_id ?? null, tv: Number(user.token_version || 0), mfa: Boolean(mfa), typ: 'access', ...(sid ? { sid } : {}) },
     jwtSecret(),
     { expiresIn: process.env.JWT_EXPIRES_IN || '7d' },
   );
@@ -85,7 +90,7 @@ function issueMfaToken(user, purpose) {
  * Throws AuthError on any problem.
  */
 async function resolveIdentity(token, { purpose = 'access' } = {}) {
-  const { runAsSystem, describeUser, mfaRequired, tenantLifecycle, Users } = deps();
+  const { runAsSystem, describeUser, mfaRequired, tenantLifecycle, Users, sessions } = deps();
   if (!token) throw new AuthError(401, 'No token');
   let payload;
   try {
@@ -98,6 +103,14 @@ async function resolveIdentity(token, { purpose = 'access' } = {}) {
   if (!user) throw new AuthError(401, 'Session is no longer valid', 'SESSION_INVALID');
   if (user.is_active === false) throw new AuthError(401, 'This account has been deactivated', 'ACCOUNT_DEACTIVATED');
   if (Number(payload.tv || 0) !== Number(user.token_version || 0)) throw new AuthError(401, 'Session has been revoked; please sign in again', 'SESSION_REVOKED');
+  // Signed-in session row (My sessions): a signed-out session is refused at
+  // once. Tokens from before sessions existed carry no sid and rely on
+  // token_version alone until they expire.
+  let session = null;
+  if (purpose === 'access' && payload.sid != null) {
+    session = await sessions.findActive(payload.sid, user.id);
+    if (!session) throw new AuthError(401, 'This session has been signed out; please sign in again', 'SESSION_REVOKED');
+  }
 
   const identity = describeUser(user);
   if (identity.kind === 'none') throw new AuthError(403, 'This account is not assigned to a workspace', 'NO_WORKSPACE');
@@ -114,7 +127,7 @@ async function resolveIdentity(token, { purpose = 'access' } = {}) {
     if (!lifecycle.tenant || lifecycle.state === 'deleted') throw new AuthError(401, 'This workspace no longer exists', 'TENANT_DELETED');
   }
   // sessionMfa: this token already passed two-factor in this session (carried into a re-issued token).
-  return { user, identity, lifecycle, sessionMfa: Boolean(payload.mfa) };
+  return { user, identity, lifecycle, sessionMfa: Boolean(payload.mfa), session, sid: session ? payload.sid : null };
 }
 
 function publicUser(user, identity, tenant) {
@@ -134,8 +147,13 @@ function publicUser(user, identity, tenant) {
 }
 
 function attach(req, resolved) {
-  const { user, identity, lifecycle, sessionMfa } = resolved;
+  const { user, identity, lifecycle, sessionMfa, session, sid } = resolved;
   req.sessionMfa = Boolean(sessionMfa);
+  // The raw session id stays server-side: it is only used to re-issue this
+  // session's token (password change, MFA enrolment) and to mark "This device".
+  req.authSessionId = sid || null;
+  req.authSession = session || null;
+  if (session) deps().sessions.touch(session, deps().sessions.clientInfo(req));
   req.identity = identity;
   req.tenant = lifecycle?.tenant || null;
   req.lifecycle = lifecycle;
@@ -279,6 +297,12 @@ const socketAuth = async (socket, next) => {
     if (blocked) return next(new Error('Workspace suspended'));
     socket.data.user = publicUser(resolved.user, resolved.identity, resolved.lifecycle?.tenant);
     socket.join(resolved.identity.kind === 'tenant' ? `tenant:${resolved.identity.tenantId}` : 'platform');
+    // Signing this session out disconnects the socket (services/sessions.js).
+    if (resolved.session) {
+      socket.join(`session:${resolved.session.id}`);
+      const { sessions } = deps();
+      sessions.touch(resolved.session, sessions.socketClientInfo(socket));
+    }
     return next();
   } catch {
     return next(new Error('Unauthorized'));

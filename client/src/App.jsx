@@ -22,6 +22,7 @@ import CalendarPage from './views/calendar/CalendarPage.jsx';
 import PluginsPage from './views/plugins/PluginsPage.jsx';
 import { ReportsView } from './views/ReportsView.jsx';
 import { SettingsView } from './views/SettingsView.jsx';
+import SessionsPage from './views/account/SessionsPage.jsx';
 import { LoginScreen } from './views/auth/LoginScreen.jsx';
 import { api } from './services/api.js';
 
@@ -83,6 +84,7 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
               <Route path="/brain" element={<BrainPage />} />
               <Route path="/reports" element={<ReportsView />} />
               <Route path="/settings" element={<SettingsView />} />
+              <Route path="/account/sessions" element={<SessionsPage />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </div>

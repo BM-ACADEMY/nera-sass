@@ -15,6 +15,7 @@ const emailOtp = require('../services/emailOtp');
 const notify = require('../services/notify');
 const audit = require('../services/audit');
 const invitations = require('../services/invitations');
+const sessions = require('../services/sessions');
 const { passwordProblem, normalizeEmail } = require('../utils/passwordPolicy');
 const {
   issueAccessToken, issueMfaToken, resolveIdentity, publicUser, AuthError,
@@ -34,11 +35,23 @@ function fail(res, error) {
   return res.status(500).json({ error: 'Internal server error' });
 }
 
-async function sessionPayload(user, { mfaPassed }) {
+// The signed-in session for this request: the caller's own session when it
+// already has one (MFA enrolment from settings, password change), otherwise a
+// new one for this browser (login). Returns the raw sid for the token.
+async function sessionIdFor(user, req) {
+  if (req?.authSessionId) {
+    await sessions.renewSession(req.authSessionId, user);
+    return req.authSessionId;
+  }
+  return sessions.createSession(user, sessions.clientInfo(req));
+}
+
+async function sessionPayload(user, { mfaPassed, req }) {
   const identity = describeUser(user);
   const lifecycle = identity.kind === 'tenant' ? await tenantLifecycle(identity.tenantId) : null;
+  const sid = await sessionIdFor(user, req);
   return {
-    token: issueAccessToken(user, { mfa: mfaPassed }),
+    token: issueAccessToken(user, { mfa: mfaPassed, sid }),
     user: publicUser(user, identity, lifecycle?.tenant),
     workspace: lifecycle ? { state: lifecycle.state, access: lifecycle.access } : null,
   };
@@ -49,7 +62,7 @@ const mfaEnforcedFor = (user) => process.env.MFA_ENFORCED !== 'false' && mfaRequ
 // Decides what happens after a correct password: a full session, an MFA
 // challenge (with the methods the user may pick from), or mandatory enrolment.
 // With email as the only method the code is mailed straight away.
-async function afterPassword(user) {
+async function afterPassword(user, req) {
   const methods = mfa.methodsOf(user);
   if (methods.length) {
     const out = { mfa_required: true, mfa_token: issueMfaToken(user, 'mfa'), methods };
@@ -67,7 +80,7 @@ async function afterPassword(user) {
   if (mfaEnforcedFor(user)) {
     return { mfa_setup_required: true, mfa_token: issueMfaToken(user, 'mfa_setup'), email_hint: emailOtp.maskEmail(user.email) };
   }
-  return sessionPayload(user, { mfaPassed: false });
+  return sessionPayload(user, { mfaPassed: false, req });
 }
 
 // A wrong two-factor code (the session or sign-in step itself is still valid).
@@ -108,7 +121,7 @@ exports.login = async (req, res) => {
       }
     }
     await sys(() => Users.updateOne({ id: user.id }, { $set: { failed_login_count: 0, last_login: new Date() }, $unset: { locked_until: '' } }));
-    return res.json(await afterPassword(user));
+    return res.json(await afterPassword(user, req));
   } catch (error) {
     return fail(res, error);
   }
@@ -135,7 +148,7 @@ exports.verifyMfa = async (req, res) => {
       ok = updated.modifiedCount === 1;
     }
     if (!ok) return res.status(401).json(INVALID_MFA_CODE);
-    return res.json(await sessionPayload(user, { mfaPassed: true }));
+    return res.json(await sessionPayload(user, { mfaPassed: true, req }));
   } catch (error) {
     return fail(res, error);
   }
@@ -189,7 +202,7 @@ exports.confirmMfaSetup = async (req, res) => {
     }));
     await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'totp' } });
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
-    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
+    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true, req })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
   } catch (error) {
     return fail(res, error);
   }
@@ -230,7 +243,7 @@ exports.confirmEmailSetup = async (req, res) => {
     }));
     await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'email' } });
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
-    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
+    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true, req })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
   } catch (error) {
     return fail(res, error);
   }
@@ -332,7 +345,9 @@ exports.changePassword = async (req, res) => {
     // session's two-factor state: a session that passed MFA stays passed, even for
     // a user with no enrolled method (otherwise the new token is refused with
     // MFA_REQUIRED and the user is logged out right after changing the password).
-    return res.json({ success: true, token: issueAccessToken(updated, { mfa: mfa.hasMfa(updated) || Boolean(req.sessionMfa) }) });
+    await sessions.revokeOthers(user.id, req.authSessionId, 'password_changed');
+    const sid = await sessionIdFor(updated, req);
+    return res.json({ success: true, token: issueAccessToken(updated, { mfa: mfa.hasMfa(updated) || Boolean(req.sessionMfa), sid }) });
   } catch (error) {
     return fail(res, error);
   }
@@ -341,6 +356,7 @@ exports.changePassword = async (req, res) => {
 exports.logoutAll = async (req, res) => {
   try {
     await sys(() => Users.updateOne({ id: req.user.id }, { $inc: { token_version: 1 } }));
+    await sessions.revokeOthers(req.user.id, null, 'signed_out_everywhere');
     await audit.record(audit.EVENTS.SESSIONS_REVOKED, { tenantId: req.user.tenant_id, req, targetType: 'user', targetId: req.user.id, meta: { self: true } });
     return res.json({ success: true });
   } catch (error) {
@@ -391,6 +407,7 @@ exports.resetPassword = async (req, res) => {
       },
     ));
     if (result.modifiedCount !== 1) return res.status(410).json({ error: 'This reset link is not valid or has expired' });
+    await sessions.revokeOthers(user.id, null, 'password_reset');
     await audit.record(audit.EVENTS.PASSWORD_RESET, { tenantId: user.tenant_id ?? null, actor: { actor_type: 'user', actor_user_id: user.id }, targetType: 'user', targetId: user.id });
     return res.json({ success: true });
   } catch (error) {
