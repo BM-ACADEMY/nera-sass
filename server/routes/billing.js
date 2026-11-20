@@ -138,7 +138,14 @@ router.get('/invoices', requirePermission('billing.view'), async (req, res) => {
 router.get('/invoices/:id', requirePermission('billing.view'), async (req, res) => {
   try {
     const invoice = await billing.invoices.getInvoice(req.params.id);
-    res.set('Content-Type', 'text/html; charset=utf-8').send(billing.invoices.renderHtml(invoice));
+    res.set({
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+      // The page has its own inline style and no script.
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+    }).send(billing.invoices.renderHtml(invoice));
   } catch (error) {
     fail(res, error, 'invoice');
   }
