@@ -61,8 +61,12 @@ export const useLeads = (filters = {}) => {
   return { leads, total, loading, loadingMore, hasMore, error, refetch: fetchLeads, loadMoreLeads };
 };
 
+// First page of a chat. Older messages load as the user scrolls up.
+export const INBOX_PAGE_SIZE = 50;
+
 export const useLead = (id) => {
   const [lead, setLead] = useState(null);
+  const [workspaceAiEnabled, setWorkspaceAiEnabled] = useState(null);
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -70,7 +74,7 @@ export const useLead = (id) => {
   const [error, setError] = useState(null);
   const fetchRequestIdRef = useRef(0);
 
-  const limit = 100;
+  const limit = INBOX_PAGE_SIZE;
 
   const fetchLead = async () => {
     if (!id) return;
@@ -81,10 +85,15 @@ export const useLead = (id) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.getLead(id);
-      const msgData = await api.getMessages(id, limit, 0);
+      // In parallel, and without the lead's whole thread (?messages=0):
+      // the first page of messages comes from /messages.
+      const [data, msgData] = await Promise.all([
+        api.request(`/api/leads/${encodeURIComponent(id)}?messages=0`),
+        api.getMessages(id, limit, 0),
+      ]);
       if (requestId !== fetchRequestIdRef.current) return;
       setLead(data.lead);
+      setWorkspaceAiEnabled(data.workspace_ai_enabled ?? null);
       setConversations(msgData.messages || []);
       setHasMore((msgData.messages || []).length === limit);
     } catch (err) {
@@ -120,7 +129,7 @@ export const useLead = (id) => {
     fetchLead();
   }, [id]);
 
-  return { lead, conversations, loading, loadingMore, hasMore, error, refetch: fetchLead, loadMoreMessages };
+  return { lead, workspaceAiEnabled, conversations, loading, loadingMore, hasMore, error, refetch: fetchLead, loadMoreMessages };
 };
 
 export const useAllianceInbox = (filters = {}) => {
@@ -179,8 +188,10 @@ export const useAllianceLead = (id) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.request(`/api/alliance-inbox/contacts/${id}`);
-      const messages = await api.request(`/api/alliance-inbox/contacts/${id}/messages?limit=100&offset=0`);
+      const [data, messages] = await Promise.all([
+        api.request(`/api/alliance-inbox/contacts/${id}`),
+        api.request(`/api/alliance-inbox/contacts/${id}/messages?limit=100&offset=0`),
+      ]);
       if (requestId !== fetchRequestIdRef.current) return;
       setLead(data.lead);
       setConversations(messages.messages || []);

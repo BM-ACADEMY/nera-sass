@@ -1,14 +1,21 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Virtuoso } from 'react-virtuoso';
 import { useFloating, autoUpdate, offset, flip, shift, FloatingPortal, useDismiss, useInteractions } from '@floating-ui/react';
-import { MessageCircle, Search, Send, ChevronLeft, ChevronRight, ChevronDown, Wifi, WifiOff, Check, Paperclip, Copy, Edit2, Trash2, X, MoreVertical, Image, Film, Music, FileText, Smile, Mic, Square, CornerUpLeft, CornerUpRight, Pin, Star, CheckSquare, Forward, Download, ZoomIn, ZoomOut, Phone, Video, User, Sparkles, ExternalLink, Plus, Tag } from 'lucide-react';
-import EmojiPicker from 'emoji-picker-react';
+import { MessageCircle, Search, Send, ChevronLeft, ChevronRight, ChevronDown, Check, Clock, Paperclip, Copy, Edit2, Trash2, X, MoreVertical, Image, Film, Music, FileText, Smile, Mic, Square, CornerUpLeft, CornerUpRight, Pin, Star, CheckSquare, Forward, Download, ZoomIn, ZoomOut, Phone, Video, User, Sparkles, ExternalLink, Plus, Tag } from 'lucide-react';
 import { io as socketIO } from 'socket.io-client';
 import { C } from '../constants/theme.js';
 import { useLeads, useLead, useAllianceInbox, useAllianceLead } from '../hooks/useLeads.js';
 import { api, allianceInboxApi } from '../services/api.js';
 import { toast } from 'react-hot-toast';
+
+// The emoji picker is large and only opens on demand: load it then, in its own chunk.
+const EmojiPickerLazy = lazy(() => import('emoji-picker-react'));
+const EmojiPicker = (props) => (
+  <Suspense fallback={<div style={{ width: props.width || 300, height: props.height || 400, background: '#fff', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }} />}>
+    <EmojiPickerLazy {...props} />
+  </Suspense>
+);
 
 // In local dev (localhost), connect via same origin so Vite's WebSocket proxy works.
 // In production, connect directly to the API server.
@@ -45,11 +52,13 @@ const MessageActionsMenu = ({ isOpen, onToggle, onClose, align = 'end', children
   const { getReferenceProps, getFloatingProps } = useInteractions([dismiss]);
 
   return (
-    <div style={{ position: 'absolute', top: 5, right: 5, zIndex: 10 }}>
+    <div className="wa-hover" data-open={isOpen ? 'true' : 'false'} style={{ position: 'absolute', top: 4, right: 4, zIndex: 10 }}>
       <button
         ref={refs.setReference}
+        type="button"
+        aria-label="Message actions"
         {...getReferenceProps({ onClick: (e) => { e.stopPropagation(); onToggle(); } })}
-        style={{ background: 'rgba(11, 20, 26, 0.7)', border: 'none', cursor: 'pointer', padding: 2, borderRadius: 4, display: 'flex' }}
+        style={{ background: 'rgba(255, 255, 255, 0.9)', border: 'none', cursor: 'pointer', padding: 2, borderRadius: 999, display: 'flex', boxShadow: '0 1px 2px rgba(11,20,26,.15)' }}
       >
         <ChevronDown size={14} color="#54656f" />
       </button>
@@ -76,6 +85,28 @@ const formatBytes = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
 const WA_GREEN = '#25D366';
+// Same palette as the admin panel's WhatsApp Chat.
+const CHAT_BG = '#efeae2';
+const BAR_BG = '#f0f2f5';
+const LINE = '#e5e7eb';
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Hover-only message controls are shown with CSS. Keeping the hovered message
+// in React state re-rendered the whole inbox on every mouse move.
+const INBOX_CSS = `
+@keyframes typingBounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-4px); opacity: 1; } }
+.wa-row .wa-hover { visibility: hidden; }
+.wa-row:hover .wa-hover, .wa-row .wa-hover[data-open="true"] { visibility: visible; }
+.wa-list-item:hover { background: #f8fafc; }
+.wa-list-item[data-active="true"], .wa-list-item[data-active="true"]:hover { background: #f0fdf4; }
+`;
+
+// Hours left in Meta's 24-hour customer-service window, or 0 when closed.
+const replyWindowHoursLeft = (lastInboundAt) => {
+  const at = lastInboundAt ? new Date(lastInboundAt).getTime() : NaN;
+  if (Number.isNaN(at)) return 0;
+  return Math.max(0, Math.ceil((at + DAY_MS - Date.now()) / 3600000));
+};
 
 const initialsOf = (name) => String(name || '?').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
 
@@ -194,7 +225,13 @@ const mergeMessages = (current, incoming) => {
 export const InboxWorkspace = ({ mode = 'leados' }) => {
   const alliance = mode === 'alliance';
   const location = useLocation();
+  // The chat list reloads 300 ms after typing stops, not on every key.
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
   const useInboxList = alliance ? useAllianceInbox : useLeads;
   const useInboxLead = alliance ? useAllianceLead : useLead;
   const inboxApi = alliance ? allianceInboxApi : api;
@@ -211,7 +248,7 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   };
   const { leads, loading: loadingLeads, hasMore: hasMoreLeads, loadingMore: loadingMoreLeads, loadMoreLeads, refetch: refetchLeadsList } = useInboxList({ search });
   const [activeLeadId, setActiveLeadId] = useState(location.state?.leadId || null);
-  const { lead: activeLead, conversations, loadingMore, hasMore, loadMoreMessages, refetch: refetchLead, loading: loadingLead } = useInboxLead(activeLeadId);
+  const { lead: activeLead, workspaceAiEnabled = null, conversations, loadingMore, hasMore, loadMoreMessages, refetch: refetchLead, loading: loadingLead } = useInboxLead(activeLeadId);
   const [aiPause, setAiPause] = useState({ paused: false, reason: null });
   const [resumingAi, setResumingAi] = useState(false);
   const [msg, setMsg] = useState('');
@@ -261,12 +298,19 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showTagMenu]);
 
+  // The tag list is only needed for the "Add Tag" menu: load it the first time
+  // that menu opens instead of on every inbox visit.
+  const tagsLoadedRef = useRef(false);
   useEffect(() => {
-    allianceInboxApi.getTags().then(tags => setAvailableTags(tags)).catch(console.error);
-  }, []);
+    if (!showTagMenu || tagsLoadedRef.current) return;
+    tagsLoadedRef.current = true;
+    allianceInboxApi.getTags().then(tags => setAvailableTags(tags)).catch((err) => {
+      tagsLoadedRef.current = false;
+      console.error(err);
+    });
+  }, [showTagMenu]);
   
   const [attachedFile, setAttachedFile] = useState(null);
-  const [hoveredMessage, setHoveredMessage] = useState(null);
   const [activeDropdownId, setActiveDropdownId] = useState(null);
   const [replyingTo, setReplyingTo] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
@@ -403,12 +447,8 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  // Auto-select first lead
-  useEffect(() => {
-    if (leads && leads.length > 0 && !activeLeadId) {
-      setActiveLeadId(leads[0].id);
-    }
-  }, [leads, activeLeadId]);
+  // No chat opens by itself (as in the admin inbox): opening the inbox loads
+  // only the chat list, and a chat's messages load when it is picked.
 
   // Merge paginated server messages with realtime messages. Replacing this array
   // used to discard socket messages whenever an older page finished loading.
@@ -421,14 +461,6 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
     setLocalMessages([]);
   }, [activeLeadId]);
 
-  // Opening a lead conversation also clears its Sales Task unread state for
-  // every connected user through the server's Socket.IO update.
-  useEffect(() => {
-    if (activeLeadId) inboxApi.put(`/sales-tasks/lead/${activeLeadId}/read`, {}).catch(() => {});
-  }, [activeLeadId]);
-
-  // Removed old auto-scroll as Virtuoso handles it natively
-
   // Refs to hold latest values for socket listeners without causing re-connects
   const activeLeadIdRef = useRef(activeLeadId);
   const refetchLeadsListRef = useRef(refetchLeadsList);
@@ -438,15 +470,29 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
     refetchLeadsListRef.current = refetchLeadsList;
   });
 
-  // Separate effect for reading the conversation to prevent infinite loop
+  // Chats read in this visit show no unread badge, without reloading the
+  // whole chat list after every open.
+  const [readLeadIds, setReadLeadIds] = useState(() => new Set());
+  const markRead = (leadId) => {
+    if (leadId === null || leadId === undefined) return;
+    setReadLeadIds((prev) => (prev.has(String(leadId)) ? prev : new Set(prev).add(String(leadId))));
+    // LeadOS: one PUT also clears the lead's Sales Task badge on the server.
+    inboxApi.readConversation(leadId).catch((e) => console.error(e));
+  };
+  const markReadRef = useRef(markRead);
+  useEffect(() => { markReadRef.current = markRead; });
   useEffect(() => {
-    if (activeLeadId) {
-      inboxApi.readConversation(activeLeadId).then(() => {
-        // Refetch leads without adding the function to the dependency array
-        refetchLeadsListRef.current();
-      }).catch(e => console.error(e));
-    }
+    if (activeLeadId) markReadRef.current(activeLeadId);
   }, [activeLeadId]);
+
+  // Live events can arrive in bursts (a reply plus its delivery receipts).
+  // Reload the chat list at most once per burst.
+  const listRefreshTimerRef = useRef(null);
+  const refreshListSoon = () => {
+    clearTimeout(listRefreshTimerRef.current);
+    listRefreshTimerRef.current = setTimeout(() => refetchLeadsListRef.current(), 600);
+  };
+  useEffect(() => () => clearTimeout(listRefreshTimerRef.current), []);
 
   useEffect(() => {
     const current = String(activeLead?.id) === String(activeLeadId) ? activeLead : null;
@@ -504,18 +550,28 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
     // New inbound message received from a customer
     socket.on(socketEvents.incoming, ({ lead_id, message }) => {
       // Refresh sidebar lead list to show new last_contact time
-      refetchLeadsListRef.current();
+      refreshListSoon();
       // If the active conversation is for this lead, append the message
       if (activeLeadIdRef.current !== null && activeLeadIdRef.current !== undefined && String(lead_id) === String(activeLeadIdRef.current)) {
         setLocalMessages((prev) => {
           return mergeMessages(prev, [message]);
+        });
+        // The chat is on screen, so the new message is already read.
+        markReadRef.current(lead_id);
+      } else {
+        // A chat read earlier in this visit has a new unread message again.
+        setReadLeadIds((prev) => {
+          if (!prev.has(String(lead_id))) return prev;
+          const next = new Set(prev);
+          next.delete(String(lead_id));
+          return next;
         });
       }
     });
 
     // Our own outbound message confirmed by server
     socket.on(socketEvents.outgoing, ({ lead_id, message }) => {
-      refetchLeadsListRef.current();
+      refreshListSoon();
       clearTypingIndicator(lead_id);
       if (activeLeadIdRef.current !== null && activeLeadIdRef.current !== undefined && String(lead_id) === String(activeLeadIdRef.current)) {
         setLocalMessages((prev) => {
@@ -866,9 +922,31 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   };
 
   const displayLeads = leads || [];
-  const activeObj = displayLeads.find((l) => l.id === activeLeadId) || activeLead || displayLeads[0];
+  const activeObj = activeLeadId ? (displayLeads.find((l) => l.id === activeLeadId) || activeLead) : null;
 
-  const chatImages = localMessages.filter(m => m.type === 'image' && m.media_url && !deletedForMeIds.includes(m.id));
+  const deletedForMeSet = useMemo(() => new Set(deletedForMeIds), [deletedForMeIds]);
+  const chatImages = useMemo(
+    () => localMessages.filter(m => m.type === 'image' && m.media_url && !deletedForMeSet.has(m.id)),
+    [localMessages, deletedForMeSet]
+  );
+  const attachedPreviewUrl = useMemo(() => (attachedFile ? URL.createObjectURL(attachedFile) : null), [attachedFile]);
+  useEffect(() => () => { if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl); }, [attachedPreviewUrl]);
+
+  // 24-hour reply window: the newest customer message we know of, from the
+  // server (last_inbound_at) or from a live message received since.
+  const activeLeadDetails = activeLead && String(activeLead.id) === String(activeLeadId) ? activeLead : null;
+  const lastInboundAt = useMemo(() => {
+    let latest = activeLeadDetails?.last_inbound_at ? new Date(activeLeadDetails.last_inbound_at).getTime() : null;
+    for (const m of localMessages) {
+      if (m.direction !== 'inbound' && m.from !== 'lead') continue;
+      const at = getMessageTimestamp(m);
+      if (at !== null && (latest === null || at > latest)) latest = at;
+    }
+    return latest;
+  }, [activeLeadDetails, localMessages]);
+  const windowKnown = !alliance && Boolean(activeLeadDetails) && (activeLeadDetails.last_inbound_at !== undefined || lastInboundAt !== null);
+  const windowHoursLeft = replyWindowHoursLeft(lastInboundAt);
+  const workspaceAiOff = !alliance && workspaceAiEnabled === false;
 
   const getMessageText = (m) => m.content || m.message || m.text || '';
 
@@ -959,7 +1037,7 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
     if (!raw) return '';
     return new Date(raw).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
-  const filteredMessages = localMessages.filter(m => !deletedForMeIds.includes(m.id));
+  const filteredMessages = useMemo(() => localMessages.filter(m => !deletedForMeSet.has(m.id)), [localMessages, deletedForMeSet]);
   const messageFirstItemIndex = Math.max(0, 10000 - filteredMessages.length);
 
   const focusSearchResult = (message) => {
@@ -1034,33 +1112,64 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   const isActiveLeadTyping = !!activeLeadTypingStatus;
 
 return (
-    <div style={{ height: '100%', minHeight: 0, display: 'flex', overflow: 'hidden', background: '#fff' }}>
-      <style>{`@keyframes typingBounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-4px); opacity: 1; } }`}</style>
+    <div style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#fff' }}>
+      <style>{INBOX_CSS}</style>
+      {/* ── TOP BAR (as in the admin WhatsApp Chat) ─── */}
+      <header style={{ height: 56, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', borderBottom: '1px solid ' + LINE, background: '#fff' }}>
+        <span style={{ width: 32, height: 32, borderRadius: 8, background: WA_GREEN, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><MessageCircle size={18} color="#fff" /></span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>WhatsApp Chat</div>
+          <div style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{alliance ? 'Alliance inbox' : 'Chat directly with your leads'}</div>
+        </div>
+        <span
+          title={connected ? 'Live updates are on' : 'Live updates are off; reconnecting'}
+          style={{ marginLeft: 4, display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999, padding: '2px 8px', fontSize: 11, fontWeight: 600, border: '1px solid ' + (connected ? '#bbf7d0' : LINE), background: connected ? '#f0fdf4' : '#f1f5f9', color: connected ? '#15803d' : '#64748b' }}
+        >
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: connected ? '#22c55e' : '#94a3b8' }} />
+          {connected ? 'Live' : 'Offline'}
+        </span>
+      </header>
+
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
       {/* ── SIDEBAR ─────────────────────────────────── */}
       <div
         className={showChatOnMobile ? 'hide-mobile' : 'w-full-mobile'}
-        style={{ width: 340, minHeight: 0, borderRight: '1px solid ' + C.border, display: 'flex', flexDirection: 'column', flexShrink: 0, background: '#fff' }}
+        style={{ width: 360, minHeight: 0, borderRight: '1px solid ' + LINE, display: 'flex', flexDirection: 'column', flexShrink: 0, background: '#fff' }}
       >
-        <div style={{ padding: '12px 12px 10px', borderBottom: '1px solid ' + C.border }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-            <h2 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 700, color: C.text, margin: 0 }}>
-              <span style={{ width: 28, height: 28, borderRadius: 8, background: WA_GREEN, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><MessageCircle size={16} color="#fff" /></span>
-              Chats
-            </h2>
-            <div title={connected ? 'Live – Socket.io connected' : 'Polling mode'} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 9, color: connected ? C.green : C.muted }}>
-              {connected ? <Wifi size={11} /> : <WifiOff size={11} />}
-              <span>{connected ? 'Live' : 'Offline'}</span>
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f0f2f5', borderRadius: 8, padding: '0 12px', height: 36 }}>
-            <Search size={15} color="#54656f" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or phone" aria-label="Search chats" style={{ background: 'transparent', border: 'none', color: C.text, fontSize: 14, outline: 'none', width: '100%' }} />
+        <div style={{ padding: 12, borderBottom: '1px solid ' + LINE }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={15} color="#64748b" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search name or number"
+              aria-label="Search chats"
+              style={{ width: '100%', height: 36, boxSizing: 'border-box', paddingLeft: 36, paddingRight: 12, border: '1px solid ' + LINE, borderRadius: 8, background: '#fff', color: '#0f172a', fontSize: 14, outline: 'none' }}
+            />
           </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {loadingLeads && displayLeads.length === 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 12 }}>
+              {[0, 1, 2, 3, 4].map((i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ width: 40, height: 40, borderRadius: 999, background: '#f1f5f9' }} />
+                  <span style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <span style={{ height: 12, width: '45%', borderRadius: 4, background: '#f1f5f9' }} />
+                    <span style={{ height: 10, width: '70%', borderRadius: 4, background: '#f1f5f9' }} />
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : displayLeads.length === 0 ? (
+            <div style={{ padding: '64px 24px', textAlign: 'center', fontSize: 13, color: '#64748b' }}>
+              {search ? 'No chat matches this search.' : 'No chats yet. WhatsApp messages from your leads appear here.'}
+            </div>
+          ) : (
           <Virtuoso
             style={{ flex: 1, minHeight: 0 }}
             data={displayLeads}
+            computeItemKey={(_, l) => l.id}
             endReached={() => {
               if (hasMoreLeads && !loadingMoreLeads) {
                 loadMoreLeads();
@@ -1071,107 +1180,139 @@ return (
             }}
             itemContent={(index, l) => {
               const active = activeLeadId === l.id;
-              const unread = Number(l.unread || 0);
+              const unread = readLeadIds.has(String(l.id)) ? 0 : Number(l.unread || 0);
               return (
                 <button
                   key={l.id}
                   type="button"
+                  className="wa-list-item"
+                  data-active={active ? 'true' : 'false'}
                   onClick={() => { setActiveLeadId(l.id); setShowChatOnMobile(true); }}
-                  style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 12, padding: '12px', border: 'none', borderBottom: '1px solid ' + C.border, background: active ? '#f0fdf4' : 'transparent', cursor: 'pointer', textAlign: 'left' }}
+                  style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 12, padding: 12, border: 'none', borderBottom: '1px solid ' + LINE, background: 'transparent', cursor: 'pointer', textAlign: 'left', transition: 'background-color .15s' }}
                 >
-                  <InitialsAvatar name={l.name} />
+                  <InitialsAvatar name={l.name || l.phone} size={40} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-                      <span style={{ fontSize: 14, fontWeight: unread ? 700 : 600, color: C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name || l.phone}</span>
-                      <span style={{ flexShrink: 0, fontSize: 11, fontWeight: unread ? 600 : 400, color: unread ? '#15803d' : C.muted }}>{listTime(l.last_contact)}</span>
+                      <span style={{ fontSize: 14, fontWeight: unread ? 700 : 600, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name || l.phone}</span>
+                      <span style={{ flexShrink: 0, fontSize: 11, fontWeight: unread ? 600 : 400, color: unread ? '#15803d' : '#64748b' }}>{listTime(l.last_contact)}</span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
-                      <span style={{ fontSize: 12.5, color: C.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                      <span style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
                         {renderLastMessage(l)}
                       </span>
                       {unread > 0 && (
                         <span style={{ flexShrink: 0, minWidth: 20, height: 20, padding: '0 6px', borderRadius: 10, background: WA_GREEN, color: '#fff', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{unread}</span>
                       )}
                     </div>
+                    {l.tags?.length > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4, overflow: 'hidden' }}>
+                        {l.tags.slice(0, 3).map((tag) => (
+                          <span key={tag.id} style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, color: tag.color, background: tag.color + '1f', borderRadius: 999, padding: '1px 6px' }}>{tag.name}</span>
+                        ))}
+                        {l.tags.length > 3 && <span style={{ fontSize: 10, color: '#64748b' }}>+{l.tags.length - 3}</span>}
+                      </div>
+                    )}
                   </div>
                 </button>
               );
             }}
           />
+          )}
         </div>
       </div>
 
       {/* ── CHAT PANEL ──────────────────────────────── */}
       <div className={!showChatOnMobile ? 'hide-mobile' : 'w-full-mobile'} style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ minHeight: 60, padding: '8px 16px', borderBottom: '1px solid ' + C.border, background: '#f0f2f5', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-          <div
-            style={{ display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer' }}
+        {!activeLeadId ? (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 24, textAlign: 'center', background: BAR_BG }}>
+            <span style={{ width: 64, height: 64, borderRadius: 999, background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,.06)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <MessageCircle size={30} color={WA_GREEN} />
+            </span>
+            <div style={{ fontSize: 18, fontWeight: 600, color: '#0f172a' }}>WhatsApp Chat</div>
+            <p style={{ maxWidth: 360, margin: 0, fontSize: 14, color: '#64748b' }}>Pick a chat on the left to read and reply.</p>
+          </div>
+        ) : (<>
+        <div style={{ height: 56, padding: '0 12px', borderBottom: '1px solid ' + LINE, background: '#fff', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <button type="button" className="show-mobile" aria-label="Back to chats" onClick={() => setShowChatOnMobile(false)} style={{ background: 'transparent', border: 'none', color: '#64748b', display: 'none', cursor: 'pointer', padding: 4 }}>
+            <ChevronLeft size={20} />
+          </button>
+          {/* Like WhatsApp: the name opens Contact info */}
+          <button
+            type="button"
+            title="Contact info"
+            style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: 1, cursor: 'pointer', background: 'transparent', border: 'none', padding: '4px 0', textAlign: 'left' }}
             onClick={() => {
-              setShowContactInfoPanel(true);
+              setShowContactInfoPanel((open) => !open);
               setShowMessageSearchPanel(false);
             }}
           >
-            <button className="show-mobile" onClick={(e) => { e.stopPropagation(); setShowChatOnMobile(false); }} style={{ background: 'transparent', border: 'none', color: C.muted, display: 'none' }}>
-              <ChevronLeft size={20} />
-            </button>
-            <InitialsAvatar name={activeObj?.name} size={40} />
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <p style={{ fontSize: 15, fontWeight: 600, color: C.text, margin: 0 }}>{activeObj?.name}</p>
-                {activeObj?.tags && activeObj.tags.length > 0 && (
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    {activeObj.tags.map(tag => (
-                      <span key={tag.id} style={{ fontSize: 10, fontWeight: 600, color: tag.color, background: tag.color + '22', border: '1px solid ' + tag.color + '44', padding: '2px 6px', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <Tag size={10} /> {tag.name}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {!alliance && aiPause.paused ? (
-                <p title={aiPause.reason || undefined} style={{ fontSize: 11, fontWeight: 600, color: '#b45309', margin: 0, marginTop: 4, wordBreak: 'break-word' }}>
+            <InitialsAvatar name={activeObj?.name || activeObj?.phone} size={36} />
+            <span style={{ minWidth: 0, display: 'block' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeObj?.name || activeObj?.phone || (loadingLead ? 'Loading…' : '')}</span>
+                {activeObj?.tags?.slice(0, 2).map(tag => (
+                  <span key={tag.id} style={{ flexShrink: 0, fontSize: 10, fontWeight: 600, color: tag.color, background: tag.color + '1f', padding: '1px 6px', borderRadius: 999, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                    <Tag size={9} /> {tag.name}
+                  </span>
+                ))}
+              </span>
+              {alliance ? (
+                <span style={{ display: 'block', fontSize: 11, color: '#64748b' }}>Click here for contact info</span>
+              ) : workspaceAiOff ? (
+                <span title="Turn the AI on in AI Brain" style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#64748b' }}>AI off for this workspace</span>
+              ) : aiPause.paused ? (
+                <span title={aiPause.reason || undefined} style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#b45309', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   AI paused{aiPause.reason ? ` - ${aiPause.reason}` : ''}
-                </p>
+                </span>
               ) : (
-                <p style={{ fontSize: 12, color: '#15803d', margin: 0, marginTop: 2 }}>AI active</p>
+                <span style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#15803d' }}>AI active</span>
               )}
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
-            {!alliance && aiPause.paused && (
-              <button
-                type="button"
-                onClick={resumeAi}
-                disabled={resumingAi}
-                style={{ background: C.accent, border: 'none', borderRadius: 7, color: '#fff', minHeight: 36, padding: '0 12px', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', cursor: resumingAi ? 'not-allowed' : 'pointer', opacity: resumingAi ? 0.6 : 1 }}
-              >
-                {resumingAi ? 'Resuming…' : 'Resume AI'}
-              </button>
-            )}
-            <button
-              onClick={() => {
-                setShowMessageSearchPanel(!showMessageSearchPanel);
-                setMessageSearchQuery('');
-              }}
-              style={{
-                background: showMessageSearchPanel ? C.accent + '22' : 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '6px',
-                borderRadius: 6,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: showMessageSearchPanel ? C.accent : C.muted,
-                transition: 'all 0.2s'
-              }}
-              onMouseOver={e => { if (!showMessageSearchPanel) e.currentTarget.style.color = C.text; }}
-              onMouseOut={e => { if (!showMessageSearchPanel) e.currentTarget.style.color = C.muted; }}
-              title="Search messages"
+            </span>
+          </button>
+          {windowKnown && (
+            <span
+              className="hide-mobile"
+              title="Meta allows free-form replies for 24 hours after the customer's last message. After that, sending reopens the chat with an approved template."
+              style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 999, padding: '3px 9px', fontSize: 11, fontWeight: 600, background: windowHoursLeft ? '#dcfce7' : '#f1f5f9', color: windowHoursLeft ? '#15803d' : '#64748b' }}
             >
-              <Search size={16} />
+              <Clock size={12} /> {windowHoursLeft ? `Reply window: ${windowHoursLeft}h left` : 'Reply window closed'}
+            </span>
+          )}
+          {!alliance && !workspaceAiOff && aiPause.paused && (
+            <button
+              type="button"
+              onClick={resumeAi}
+              disabled={resumingAi}
+              style={{ flexShrink: 0, background: WA_GREEN, border: 'none', borderRadius: 8, color: '#fff', height: 32, padding: '0 12px', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', cursor: resumingAi ? 'not-allowed' : 'pointer', opacity: resumingAi ? 0.6 : 1 }}
+            >
+              {resumingAi ? 'Resuming…' : 'Resume AI'}
             </button>
-          </div>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setShowMessageSearchPanel(!showMessageSearchPanel);
+              setShowContactInfoPanel(false);
+              setMessageSearchQuery('');
+            }}
+            style={{
+              flexShrink: 0,
+              background: showMessageSearchPanel ? '#dcfce7' : 'transparent',
+              border: '1px solid ' + (showMessageSearchPanel ? '#bbf7d0' : LINE),
+              cursor: 'pointer',
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: showMessageSearchPanel ? '#15803d' : '#475569',
+            }}
+            title="Search messages"
+            aria-label="Search messages"
+          >
+            <Search size={15} />
+          </button>
         </div>
 
         <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden', position: 'relative' }}>
@@ -1180,7 +1321,7 @@ return (
 
             {/* Pinned Messages Bar */}
         {(() => {
-          const pinnedMessages = localMessages.filter(m => m.pinned_until && new Date(m.pinned_until) > new Date() && !deletedForMeIds.includes(m.id));
+          const pinnedMessages = localMessages.filter(m => m.pinned_until && new Date(m.pinned_until) > new Date() && !deletedForMeSet.has(m.id));
           if (pinnedMessages.length === 0) return null;
 
           const currentPin = pinnedMessages[currentPinIndex % pinnedMessages.length];
@@ -1240,24 +1381,19 @@ return (
         })()}
 
         {/* Messages area */}
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: '#efeae2', position: 'relative', overflow: 'hidden' }}>
-          {/* WhatsApp wallpaper overlay */}
-          <div style={{
-            position: 'absolute',
-            inset: 0,
-            backgroundImage: 'url("/chat-bg.png")',
-            backgroundRepeat: 'repeat',
-            backgroundSize: '450px',
-            opacity: 0.06,
-            pointerEvents: 'none',
-            zIndex: 0
-          }} />
-
+        {/* Plain chat colour, no wallpaper image (same as the admin chat) */}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: CHAT_BG, position: 'relative', overflow: 'hidden' }}>
           {loadingLead && localMessages.length === 0 && (
-            <p style={{ textAlign: 'center', color: C.muted, fontSize: 11, marginTop: 60, zIndex: 1 }}>Loading conversation…</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 24 }}>
+              <span style={{ height: 40, width: '45%', borderRadius: 8, background: 'rgba(255,255,255,.7)' }} />
+              <span style={{ height: 56, width: '60%', borderRadius: 8, background: 'rgba(255,255,255,.7)' }} />
+              <span style={{ height: 44, width: '40%', marginLeft: 'auto', borderRadius: 8, background: 'rgba(217,253,211,.8)' }} />
+            </div>
           )}
           {!loadingLead && localMessages.length === 0 && (
-            <p style={{ textAlign: 'center', color: C.muted, fontSize: 11, marginTop: 60, zIndex: 1 }}>No messages yet. Start the conversation!</p>
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 60 }}>
+              <span style={{ background: 'rgba(255,255,255,.9)', borderRadius: 6, padding: '6px 12px', fontSize: 12, color: '#475569', boxShadow: '0 1px 0.5px rgba(11,20,26,.13)' }}>No messages yet. Start the conversation!</span>
+            </div>
           )}
           {filteredMessages.length > 0 && (
             <Virtuoso
@@ -1374,9 +1510,8 @@ return (
               <div
                 id={`msg-${getMessageIdentity(m) || i}`}
                 key={getMessageIdentity(m) || i}
+                className="wa-row"
                 style={{ display: 'flex', justifyContent: isLead ? 'flex-start' : 'flex-end', opacity: isSending ? 0.6 : 1, transition: 'opacity 0.3s' }}
-                onMouseEnter={() => setHoveredMessage(m.id)}
-                onMouseLeave={() => setHoveredMessage(null)}
               >
                 {isSelectMode && (
                   <div style={{ display: 'flex', alignItems: 'center', marginRight: isLead ? 10 : 10, marginLeft: isLead ? 0 : 10, order: isLead ? -1 : 1 }}>
@@ -1409,7 +1544,7 @@ return (
                     }
                   }}
                 >
-                  {(hoveredMessage === m.id || activeDropdownId === m.id) && !m.is_deleted && !isSelectMode && (
+                  {!m.is_deleted && !isSelectMode && (
                     <MessageActionsMenu
                       isOpen={activeDropdownId === m.id}
                       onToggle={() => setActiveDropdownId(activeDropdownId === m.id ? null : m.id)}
@@ -1536,7 +1671,9 @@ return (
                             {m.type === 'image' ? (
                                 <img
                                   src={fullMediaUrl}
-                                  style={{ maxWidth: 280, maxHeight: 280, borderRadius: 6, minHeight: 100, backgroundColor: C.bg, cursor: 'pointer', objectFit: 'cover' }}
+                                  loading="lazy"
+                                  decoding="async"
+                                  style={{ maxWidth: 280, maxHeight: 280, borderRadius: 6, minHeight: 100, backgroundColor: '#f1f5f9', cursor: 'pointer', objectFit: 'cover', display: 'block' }}
                                 alt="attachment"
                                 onClick={() => {
                                   const idx = chatImages.findIndex(img => img.id === m.id);
@@ -1546,8 +1683,8 @@ return (
                                   }
                                 }}
                               />
-                            ) : m.type === 'video' ? <video src={fullMediaUrl} controls style={{ maxWidth: '100%', borderRadius: 6, backgroundColor: C.bg }} />
-                                : m.type === 'audio' ? <audio src={fullMediaUrl} controls style={{ maxWidth: '100%' }} />
+                            ) : m.type === 'video' ? <video src={fullMediaUrl} controls preload="metadata" style={{ maxWidth: '100%', borderRadius: 6, backgroundColor: '#0f172a' }} />
+                                : m.type === 'audio' ? <audio src={fullMediaUrl} controls preload="metadata" style={{ maxWidth: '100%' }} />
                                   : (
                                     <div
                                       onClick={() => window.open(fullMediaUrl, '_blank')}
@@ -1690,8 +1827,11 @@ return (
                 </div>
 
                 {/* Single Emoji Trigger Button (shows on hover) */}
-                {(hoveredMessage === m.id || activeReactBarMsgId === m.id) && activeDropdownId !== m.id && !isSelectMode && !m.is_deleted && !isSending && (
+                {activeDropdownId !== m.id && !isSelectMode && !m.is_deleted && !isSending && (
                   <button
+                    type="button"
+                    className="wa-hover"
+                    data-open={activeReactBarMsgId === m.id ? 'true' : 'false'}
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveReactBarMsgId(activeReactBarMsgId === m.id ? null : m.id);
@@ -1782,7 +1922,7 @@ return (
                           <div style={{ position: 'absolute', bottom: '100%', [isLead ? 'left' : 'right']: 0, zIndex: 100, marginBottom: 8 }}>
                             <EmojiPicker
                               onEmojiClick={(emojiObj) => handleReact(m.id, emojiObj.emoji)}
-                              theme="dark"
+                              theme="light"
                               searchDisabled={false}
                               height={350}
                               width={300}
@@ -1806,7 +1946,7 @@ return (
 
         {/* Action Bar (Select Mode) or Input */}
         {isSelectMode ? (
-          <div style={{ padding: '16px 20px', background: C.card, borderTop: '1px solid ' + C.border, display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 10 }}>
+          <div style={{ padding: '10px 16px', background: BAR_BG, borderTop: '1px solid ' + LINE, display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
               <button onClick={() => { setIsSelectMode(false); setSelectedMessageIds([]); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: C.text, display: 'flex' }}>
                 <X size={24} />
@@ -1858,14 +1998,14 @@ return (
               <div style={{ padding: '20px', background: C.card, borderTop: '1px solid ' + C.border, display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
                 {attachedFile.type.startsWith('image/') ? (
                   <div style={{ position: 'relative', width: '100%', display: 'flex', justifyContent: 'center' }}>
-                    <img src={URL.createObjectURL(attachedFile)} style={{ maxHeight: 220, maxWidth: '100%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', border: '1px solid ' + C.border }} alt="preview" />
+                    <img src={attachedPreviewUrl} style={{ maxHeight: 220, maxWidth: '100%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', border: '1px solid ' + C.border }} alt="preview" />
                   </div>
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', maxWidth: 400, background: C.bg, padding: 12, borderRadius: 8, border: '1px solid ' + C.border }}>
                     {attachedFile.type.startsWith('video/') ? (
                       <div style={{ width: 44, height: 44, borderRadius: 8, background: C.card, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Film size={20} color={C.muted} /></div>
                     ) : attachedFile.type.startsWith('audio/') ? (
-                      <audio src={URL.createObjectURL(attachedFile)} controls style={{ height: 44, outline: 'none', flex: 1 }} />
+                      <audio src={attachedPreviewUrl} controls style={{ height: 44, outline: 'none', flex: 1 }} />
                     ) : (
                       <div style={{ width: 44, height: 44, borderRadius: 8, background: C.card, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FileText size={20} color={C.muted} /></div>
                     )}
@@ -1890,7 +2030,13 @@ return (
                 </div>
               </div>
             )}
-            <form onSubmit={handleSend} style={{ padding: 14, borderTop: '1px solid ' + C.border, display: 'flex', gap: 9, position: 'relative', alignItems: 'flex-end' }}>
+            {windowKnown && !windowHoursLeft && (
+              <div style={{ padding: '8px 14px', borderTop: '1px solid ' + LINE, background: '#fffbeb', color: '#92400e', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Clock size={14} style={{ flexShrink: 0 }} />
+                <span>More than 24 hours since this customer last wrote. Meta allows only an approved template: sending now sends the reopen template first, and you can reply freely once they answer.</span>
+              </div>
+            )}
+            <form onSubmit={handleSend} style={{ padding: '10px 12px', borderTop: '1px solid ' + LINE, background: BAR_BG, display: 'flex', gap: 6, position: 'relative', alignItems: 'flex-end' }}>
               <input type="file" ref={fileInputRef} accept={attachAccept} style={{ display: 'none' }} onChange={handleFileChange} />
 
               <div style={{ position: 'relative' }}>
@@ -1927,7 +2073,7 @@ return (
                       onEmojiClick={(emojiObject) => {
                         setMsg(prev => prev + emojiObject.emoji);
                       }}
-                      theme="dark"
+                      theme="light"
                       searchDisabled
                     />
                   </div>
@@ -2007,7 +2153,7 @@ return (
                 </button>
               ) : (
                 <button type="submit" disabled={sending || isRecording} style={{ background: 'transparent', border: 'none', width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: (sending || isRecording) ? 0.6 : 1 }}>
-                  <Send size={24} color={'#8696a0'} />
+                  <Send size={22} color={WA_GREEN} />
                 </button>
               )}
             </form>
@@ -2344,6 +2490,8 @@ return (
           </div>
         )}
         </div>
+        </>)}
+      </div>
       </div>
 
       {/* Delete Confirmation Modal */}
@@ -2588,6 +2736,8 @@ return (
                   }}
                 >
                   <img
+                    loading="lazy"
+                    decoding="async"
                     src={img.media_url.startsWith('http') ? img.media_url : `${SOCKET_URL}${img.media_url}`}
                     style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                     alt="Thumbnail"
