@@ -10,6 +10,7 @@ const prompts = require('./brainPrompt');
 const booking = require('./brainBooking');
 const appointments = require('./appointments');
 const appointmentFlow = require('./appointmentFlow');
+const followupDate = require('./followupDate');
 const orderFlow = require('./orderFlow');
 const shopOrders = require('./shopOrders');
 const orderText = require('./orderText');
@@ -60,6 +61,7 @@ function parseOutput(raw) {
     meeting: booking.cleanMeeting(parsed.meeting),
     appointment: appointmentFlow.cleanProposal(parsed.appointment),
     order: orderFlow.cleanProposal(parsed.order),
+    follow_up_on: followupDate.cleanProposal(parsed.follow_up_on),
     answered_from: ANSWERED_FROM.includes(parsed.answered_from) ? parsed.answered_from : null,
   };
 }
@@ -335,6 +337,13 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
   if (orderDraftToSave === null) await Leads.updateOne({ id: lead.id }, { $unset: { order_draft: '' } });
   else if (orderDraftToSave) await Leads.updateOne({ id: lead.id }, { $set: { order_draft: orderDraftToSave } });
   if (output.opt_out) await markOptedOut(lead.id, now);
+  // The customer named a day to come back: follow up then (checked and moved
+  // into sending hours by the server), not on the usual day 2.
+  else if (output.follow_up_on && !safetyHandoff) {
+    const tz = appointmentSettings?.timeZone || brain.profile?.timezone || tenant?.timezone || 'Asia/Kolkata';
+    const at = followupDate.resolve(output.follow_up_on, { now, tz });
+    if (at) await ai.setPromisedFollowup(lead.id, at);
+  }
   if (output.handoff) {
     const reason = output.handoff_reason || 'The AI asked for a person';
     await ai.handover(io, { leadId: lead.id, reason, ...(output.handoff_mode && { mode: output.handoff_mode }) });

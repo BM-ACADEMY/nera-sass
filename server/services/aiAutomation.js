@@ -57,9 +57,23 @@ async function aiBlockReason(tenant, lead) {
 
 /** A customer wrote: restart the follow-up schedule from now. */
 async function recordInbound(leadId, at = new Date()) {
+  // A date the customer gave ("I'll contact you on Monday") is kept while it
+  // is still ahead; the normal 2/3/5-day schedule applies otherwise.
+  const lead = await Leads.findOne({ id: leadId }, { _id: 0, ai_followup_promised_for: 1 }).lean();
+  const promised = lead?.ai_followup_promised_for ? new Date(lead.ai_followup_promised_for) : null;
+  const keep = promised && promised.getTime() > at.getTime();
   await Leads.updateOne({ id: leadId }, {
-    $set: { last_inbound_at: at, ai_followup_step: 0, ai_followup_due: new Date(at.getTime() + FOLLOWUP_GAP_DAYS[0] * DAY_MS) },
+    $set: { last_inbound_at: at, ai_followup_step: 0, ai_followup_due: keep ? promised : new Date(at.getTime() + FOLLOWUP_GAP_DAYS[0] * DAY_MS) },
+    ...(keep ? {} : { $unset: { ai_followup_promised_for: '' } }),
   });
+}
+
+/** The customer named a day to come back: follow up then, instead of day 2. */
+async function setPromisedFollowup(leadId, at) {
+  const result = await Leads.updateOne({ id: Number(leadId) }, {
+    $set: { ai_followup_step: 0, ai_followup_due: at, ai_followup_promised_for: at },
+  });
+  return result.matchedCount === 1;
 }
 
 /**
@@ -108,6 +122,7 @@ async function markFollowupSent(leadId, step) {
   const gap = FOLLOWUP_GAP_DAYS[s];
   const result = await Leads.updateOne({ id: Number(leadId) }, {
     $set: { ai_followup_step: s, ai_followup_due: gap ? new Date(Date.now() + gap * DAY_MS) : null, last_followup: new Date() },
+    $unset: { ai_followup_promised_for: '' },
   });
   return result.matchedCount === 1;
 }
@@ -123,6 +138,7 @@ module.exports = {
   optedOut,
   aiBlockReason,
   recordInbound,
+  setPromisedFollowup,
   handover,
   setAiPaused,
   markFollowupSent,
