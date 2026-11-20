@@ -118,13 +118,20 @@ test('Task 2: customer Settings APIs', async (t) => {
     }
   });
 
-  await t.test('W2. Workspace settings: owner/admin can edit (audited); manager/agent 403; a browser tenant_id is ignored', async () => {
+  await t.test('W2. Workspace settings: owner/admin can change the language only (audited); manager/agent 403; a browser tenant_id is ignored', async () => {
     const { users } = await workspace(10);
     await workspace(20);
-    const owner = await request(app).patch('/api/tenant/settings').set(bearer(users.owner)).send({ timezone: 'Asia/Dubai', tenant_id: 20 });
+    const owner = await request(app).patch('/api/tenant/settings').set(bearer(users.owner)).send({ language: 'hi', tenant_id: 20 });
     assert.strictEqual(owner.status, 200, JSON.stringify(owner.body));
-    assert.strictEqual((await rawTenant(10)).timezone, 'Asia/Dubai');
-    assert.strictEqual((await rawTenant(20)).timezone, 'Asia/Kolkata', 'other workspace unchanged');
+    assert.strictEqual((await rawTenant(10)).language, 'hi');
+    assert.notStrictEqual((await rawTenant(20)).language, 'hi', 'other workspace unchanged');
+    // Name, currency, timezone and tax treatment are set by the Getnera team only.
+    for (const body of [{ timezone: 'Asia/Dubai' }, { currency: 'USD' }, { tax_treatment: 'none' }, { name: 'Renamed' }, { language: 'ta', timezone: 'Asia/Dubai' }]) {
+      const refused = await request(app).patch('/api/tenant/settings').set(bearer(users.owner)).send(body);
+      assert.strictEqual(refused.status, 400, JSON.stringify(body));
+      assert.strictEqual(refused.body.code, 'SETTING_MANAGED_BY_PLATFORM');
+    }
+    assert.strictEqual((await rawTenant(10)).timezone, 'Asia/Kolkata');
     assert.strictEqual((await request(app).patch('/api/tenant/settings').set(bearer(users.admin)).send({ language: 'ta' })).status, 200);
     for (const role of ['manager', 'agent']) {
       const res = await request(app).patch('/api/tenant/settings').set(bearer(users[role])).send({ language: 'hi' });

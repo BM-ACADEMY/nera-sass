@@ -6,17 +6,70 @@ export const ROLE_LABELS = { owner: 'Owner', admin: 'Admin', manager: 'Manager',
 
 export const roleLabel = (role) => ROLE_LABELS[role] || '';
 
-// Billing (plan, wallet, payments) is shown to everyone; only Owners and
-// Admins can pay or change the plan (the server's manage_billing flag).
-export function settingsTabs() {
-  const tabs = [
-    { key: 'workspace', label: 'Workspace' },
-    { key: 'brand', label: 'Brand Profile' },
-    { key: 'whatsapp', label: 'WhatsApp' },
-    { key: 'billing', label: 'Billing' },
-    { key: 'account', label: 'Account' },
+// Settings sections, in the admin panel's style: a hub of cards, each opening
+// /settings/<key>. Billing has its own page (/billing, from the profile menu)
+// and WhatsApp lives on the WhatsApp Number page.
+export const SETTINGS_SECTIONS = [
+  { key: 'profile', title: 'Profile & workspace', text: 'Your sign-in details, your workspace and its language.' },
+  { key: 'brand', title: 'Brand profile', text: 'Business name, category and automated replies.' },
+  { key: 'two-step', title: 'Two-step verification', text: 'Ask for a code from your phone when you sign in.' },
+  { key: 'password', title: 'Password & sessions', text: 'Change your password or sign out of every device.' },
+];
+
+export function settingsSections() {
+  return SETTINGS_SECTIONS;
+}
+
+export const findSection = (key) => SETTINGS_SECTIONS.find((s) => s.key === key) || null;
+
+// Languages for automatic WhatsApp follow-ups (tenant.language; a template
+// language code). An unknown stored value is kept as an extra option.
+export const LANGUAGES = [
+  ['en', 'English'], ['ta', 'Tamil'], ['hi', 'Hindi'], ['te', 'Telugu'], ['kn', 'Kannada'], ['ml', 'Malayalam'],
+];
+export function languageOptions(current) {
+  const list = LANGUAGES.map(([value, label]) => ({ value, label }));
+  if (current && !LANGUAGES.some(([value]) => value === current)) list.push({ value: current, label: current });
+  return list;
+}
+
+const LIFECYCLE_LABELS = { active: 'Active', trial: 'Trial', grace: 'Payment overdue', restricted: 'Restricted', suspended: 'Suspended' };
+const TAX_LABELS = { gst: 'GST (India)', none: 'No tax' };
+
+// The read-only workspace facts shown on the Profile page. Customers cannot
+// change these; the Getnera team does from the admin panel.
+export function workspaceInfo(tenantInfo) {
+  const tenant = tenantInfo?.tenant || {};
+  const state = tenantInfo?.lifecycle?.state || tenant.status || '';
+  return [
+    { key: 'name', label: 'Workspace name', value: tenant.name || '' },
+    { key: 'id', label: 'Workspace ID', value: tenant.id != null ? String(tenant.id) : '' },
+    { key: 'status', label: 'Status', value: LIFECYCLE_LABELS[state] || (state ? state[0].toUpperCase() + state.slice(1) : '') },
+    { key: 'currency', label: 'Currency', value: tenant.currency || 'INR' },
+    { key: 'timezone', label: 'Timezone', value: tenant.timezone || 'Asia/Kolkata' },
+    { key: 'tax_treatment', label: 'Tax treatment', value: TAX_LABELS[tenant.tax_treatment] || tenant.tax_treatment || '' },
   ];
-  return tabs;
+}
+
+// WhatsApp business profile: Meta's limits, checked before saving (the server
+// checks again). Returns { ok, changes } or { ok: false, error }.
+export const PROFILE_LIMITS = { about: 139, description: 512, address: 256, email: 128 };
+const PROFILE_LABELS = { about: 'About', description: 'Description', address: 'Address', email: 'Email' };
+export function profileChanges(values, current = {}) {
+  const changes = {};
+  for (const key of Object.keys(PROFILE_LIMITS)) {
+    const value = String(values?.[key] ?? '').trim();
+    if (value.length > PROFILE_LIMITS[key]) {
+      return { ok: false, error: `${PROFILE_LABELS[key]} can be at most ${PROFILE_LIMITS[key]} characters (now ${value.length}).` };
+    }
+    if (value !== String(current?.[key] ?? '').trim()) changes[key] = value;
+  }
+  if (changes.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(changes.email)) {
+    return { ok: false, error: 'Enter a valid email address, for example hello@yourbusiness.com.' };
+  }
+  if (changes.about === '') return { ok: false, error: 'About cannot be empty on WhatsApp. Write a short line about your business.' };
+  if (!Object.keys(changes).length) return { ok: false, error: 'Nothing has changed yet.' };
+  return { ok: true, changes };
 }
 
 export const canEditWorkspace = (permissions) => Boolean(permissions?.manage_settings);
