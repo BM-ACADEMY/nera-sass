@@ -1077,7 +1077,7 @@ async function executeCampaign(campaign_id) {
     console.log(`[executeCampaign] Campaign: ${campaign.name}, target_status: ${campaign.target_status}, client_id: ${campaign.client_id}`);
 
     // Atomically claim the campaign: only proceed if it's still 'scheduled' or 'failed'.
-    const claimRes = await Campaigns.updateOne({ id: campaign_id, status: { $in: ['scheduled', 'failed'] } }, { $set: { status: 'running' } });
+    const claimRes = await Campaigns.updateOne({ id: campaign_id, status: { $in: ['scheduled', 'failed'] } }, { $set: { status: 'running', launched_at: new Date() } });
     if (claimRes.modifiedCount === 0) {
       console.warn(`Campaign ${campaign_id}: skipped, already running/completed (not in 'scheduled' or 'failed' state).`);
       return;
@@ -1252,26 +1252,45 @@ if (jobsEnabled()) scheduleJob('*/15 * * * *', async () => {
   }
 });
 
+// Starts every campaign that is due: a scheduled one whose time has come
+// (scheduled_at is stored in UTC; the page converts from the workspace's time
+// zone), and a "send now" one (created in the last hour) that was never
+// started, for example because the server restarted right after it was created. Returns the ids started.
+const ORPHANED_SEND_NOW_MS = 60 * 1000;
+const ORPHANED_SEND_NOW_MAX_AGE_MS = 60 * 60 * 1000;
+async function runDueCampaigns(now = new Date()) {
+  const rows = await runAsSystem(() => Campaigns.find({
+    status: 'scheduled',
+    $or: [
+      { scheduled_at: { $lte: now } },
+      // Only recent ones: an old stuck campaign is never sent days later.
+      { scheduled_at: null, created_at: { $lte: new Date(now.getTime() - ORPHANED_SEND_NOW_MS), $gte: new Date(now.getTime() - ORPHANED_SEND_NOW_MAX_AGE_MS) } },
+    ],
+  }, { _id: 0, id: 1, tenant_id: 1 }).sort({ scheduled_at: 1, id: 1 }).lean(), 'campaign-cron');
+  const started = [];
+  for (const row of rows) {
+    if (!row.tenant_id) continue;
+    await runAsTenant(row.tenant_id, async () => {
+      if (!(await tenantCanSend(row.tenant_id))) return; // restricted/suspended workspaces do not send
+      console.log(`Cron: Starting scheduled campaign ${row.id} (tenant ${row.tenant_id})`);
+      await executeCampaign(row.id);
+      started.push(row.id);
+      // Log the execution to workflow_logs so it appears in the Admin Dashboard
+      await WorkflowLogs.create({
+        workflow: 'WF05', lead_id: null, status: 'success',
+        message: `Campaign ${row.id} execution automatically triggered by backend engine`,
+      });
+    });
+  }
+  return started;
+}
+
 let scheduledCampaignCronRunning = false;
 if (jobsEnabled()) scheduleJob('* * * * *', async () => {
   if (scheduledCampaignCronRunning) return;
   scheduledCampaignCronRunning = true;
   try {
-    const rows = await runAsSystem(() => Campaigns.find({ status: 'scheduled', scheduled_at: { $lte: new Date() } }, { _id: 0, id: 1, tenant_id: 1 }).lean(), 'campaign-cron');
-
-    for (const row of rows) {
-      if (!row.tenant_id) continue;
-      await runAsTenant(row.tenant_id, async () => {
-        if (!(await tenantCanSend(row.tenant_id))) return; // restricted/suspended workspaces do not send
-        console.log(`Cron: Starting scheduled campaign ${row.id} (tenant ${row.tenant_id})`);
-        await executeCampaign(row.id);
-        // Log the execution to workflow_logs so it appears in the Admin Dashboard
-        await WorkflowLogs.create({
-          workflow: 'WF05', lead_id: null, status: 'success',
-          message: `Campaign ${row.id} execution automatically triggered by backend engine`,
-        });
-      });
-    }
+    await runDueCampaigns();
   } catch (err) {
     console.error('Cron check error:', err);
   } finally {
@@ -1635,5 +1654,5 @@ function start() {
 // require.main check would also stop PM2, which loads this file through a wrapper.
 if (process.env.NERA_NO_AUTOSTART !== 'true') start();
 
-module.exports = { app, httpServer, io, socketServer, start, scheduledMetaInventorySync };
+module.exports = { app, httpServer, io, socketServer, start, scheduledMetaInventorySync, runDueCampaigns };
   

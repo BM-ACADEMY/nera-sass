@@ -6,6 +6,22 @@
 const { requirePermission } = require('../../services/permissions');
 const campaignAudience = require('../../services/campaignAudience');
 const campaignStats = require('../../services/campaignStats');
+const campaignSchedule = require('../../services/campaignSchedule');
+const campaignUpload = require('../../services/campaignUpload');
+const multer = require('multer');
+
+const listUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
+const LIST_UPLOAD_ERROR = 'We could not read this file. Upload a .csv or .xlsx file up to 5 MB.';
+// Accepts one file under "file"; any multer problem becomes a plain message.
+const acceptList = (req, res, next) => listUpload.single('file')(req, res, (err) => {
+  if (!err) return next();
+  return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'This file is larger than 5 MB. Split it into smaller lists.' : LIST_UPLOAD_ERROR, code: 'LIST_INVALID' });
+});
+const parseMappings = (value) => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch { return {}; }
+};
 
 module.exports = function registerCampaignsRoutes(app, ctx) {
 const manage = requirePermission('campaigns.manage');
@@ -54,9 +70,9 @@ app.get('/api/campaigns', auth, async (req, res) => {
         failed_count: c.failed, skipped_count: c.skipped,
       };
     });
-    res.json({ campaigns: rows });
+    res.json({ campaigns: rows, timezone: await campaignSchedule.tenantTimezone() });
   } catch (err) {
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Could not load your campaigns. Please refresh the page.' });
   }
 });
 // Audience tags in use in this workspace, for the campaign builder.
@@ -68,21 +84,97 @@ app.get('/api/campaigns/tags', auth, async (req, res) => {
   }
 });
 
+// Who can be targeted, with counts: statuses that have contacts, all contacts, tags.
+app.get('/api/campaigns/audience-counts', auth, async (req, res) => {
+  try {
+    const clientId = req.query.client_id;
+    if (clientId && !(await Clients.exists({ id: Number(clientId) }))) return res.status(404).json({ error: 'This brand was not found.' });
+    res.json(await campaignAudience.audienceCounts(clientId || null));
+  } catch (err) {
+    console.error('Audience counts error:', err.message);
+    res.status(500).json({ error: 'Could not count your contacts. Please try again.' });
+  }
+});
+
+// The connected number's daily sending limit: "Today: X of Y messages used".
+app.get('/api/campaigns/sending-limit', auth, async (req, res) => {
+  try {
+    const fields = { _id: 0, id: 1, phone_number_id: 1, whatsapp_number: 1 };
+    const brand = req.query.client_id
+      ? await Clients.findOne({ id: Number(req.query.client_id) }, fields).lean()
+      : await Clients.findOne({}, fields).lean();
+    const timezone = await campaignSchedule.tenantTimezone();
+    if (!brand?.phone_number_id) return res.json({ connected: false, timezone });
+    const budget = await campaignAudience.sendingBudget(brand.phone_number_id);
+    res.json({
+      connected: true, timezone, display_phone_number: brand.whatsapp_number || null,
+      messaging_limit: budget.messaging_limit, tier_limit: budget.tier_limit, quality_rating: budget.quality_rating, marketing_paused: budget.marketing_paused,
+      daily_limit: budget.daily_cap, used_today: budget.used_today, remaining_today: budget.remaining_today, resets_at: budget.resets_at,
+    });
+  } catch (err) {
+    console.error('Sending limit error:', err.message);
+    res.status(500).json({ error: 'Could not load your daily sending limit.' });
+  }
+});
+
+// Sample contact list for a template: phone, name, whatsapp_opt_in and the
+// columns the chosen template takes from the sheet.
+app.get('/api/campaigns/audience/sample', auth, manage, async (req, res) => {
+  try {
+    const buffer = campaignUpload.sampleWorkbook(parseMappings(req.query.mappings));
+    res.setHeader('Content-Disposition', 'attachment; filename="campaign_contacts_sample.xlsx"');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
+  } catch (err) {
+    console.error('Sample list error:', err.message);
+    res.status(500).json({ error: 'Could not prepare the sample file. Please try again.' });
+  }
+});
+
+// Checks an uploaded list row by row. With save=true the ready contacts are
+// stored as an upload batch and its id (target_status "csv_...") is returned.
+app.post('/api/campaigns/audience/upload', auth, manage, acceptList, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Choose a .csv or .xlsx file to upload.', code: 'LIST_INVALID' });
+    const brand = req.body.client_id ? await Clients.findOne({ id: Number(req.body.client_id) }, { _id: 0, id: 1 }).lean() : null;
+    if (!brand) return res.status(400).json({ error: 'Choose a brand first.', code: 'LIST_INVALID' });
+    const filename = String(req.file.originalname || 'list').slice(0, 120);
+    const { contacts, summary } = campaignUpload.parseList(req.file.buffer, filename, { mappings: parseMappings(req.body.template_parameters) });
+    if (!contacts.length) {
+      return res.status(400).json({ error: 'No contact in this file can be used. Check the rows listed below and upload it again.', code: 'LIST_EMPTY', summary });
+    }
+    if (String(req.body.save) !== 'true') return res.json({ summary });
+    const saved = await campaignUpload.saveList(contacts, { clientId: brand.id, filename, by: req.user?.id ?? null });
+    res.json({ summary, ...saved });
+  } catch (err) {
+    if (err instanceof campaignUpload.ListError) return res.status(400).json({ error: err.message, code: err.code });
+    console.error('Campaign list upload error:', err.message);
+    res.status(500).json({ error: 'Could not process this list. Please try again.' });
+  }
+});
+
 // Preview before sending: who gets it, who is left out and why, example messages,
 // the number's limits and the schedule. Nothing is queued or sent.
 app.post('/api/campaigns/preview', auth, manage, async (req, res) => {
   try {
     const { name, client_id, template_id, target_status, target_tag_id, scheduled_at, template_parameters = {} } = req.body || {};
-    res.json({ preview: await campaignAudience.previewCampaign({ name, client_id, template_id, target_status: target_status || 'all', target_tag_id, scheduled_at, template_parameters }) });
+    const timezone = await campaignSchedule.tenantTimezone();
+    const schedule = campaignSchedule.parseSchedule(scheduled_at, timezone);
+    const preview = await campaignAudience.previewCampaign({ name, client_id, template_id, target_status: target_status || 'all', target_tag_id, scheduled_at: schedule.at ? schedule.at.toISOString() : null, template_parameters });
+    const problem = schedule.error || campaignSchedule.scheduleProblem(schedule.at);
+    if (problem) { preview.blockers.push(problem); preview.can_send = false; }
+    preview.timezone = timezone;
+    if (preview.schedule?.at) preview.schedule.local = campaignSchedule.formatInZone(new Date(preview.schedule.at), timezone);
+    res.json({ preview });
   } catch (err) {
     console.error('Campaign preview error:', err.message);
-    res.status(500).json({ error: 'Unable to build the preview.' });
+    res.status(500).json({ error: 'Could not prepare the preview. Please try again.' });
   }
 });
 
 app.post('/api/campaigns', auth, manage, async (req, res) => {
   try {
-    const { name, client_id, template_id, target_status, target_tag_id, scheduled_at, send_immediately, template_parameters = {}, preview_confirmed } = req.body;
+    const { name, client_id, template_id, target_status, target_tag_id, scheduled_at, template_parameters = {}, preview_confirmed, send_rest_later } = req.body;
     const hasTag = target_tag_id != null && target_tag_id !== '';
 
     if (!name || !client_id || !template_id || !(target_status || hasTag)) {
@@ -91,9 +183,26 @@ app.post('/api/campaigns', auth, manage, async (req, res) => {
     if (preview_confirmed !== true) {
       return res.status(400).json({ error: 'Review the preview before sending.', code: 'PREVIEW_REQUIRED' });
     }
-    const preview = await campaignAudience.previewCampaign({ name, client_id, template_id, target_status: target_status || 'all', target_tag_id: hasTag ? target_tag_id : null, scheduled_at, template_parameters });
+    const timezone = await campaignSchedule.tenantTimezone();
+    const schedule = campaignSchedule.parseSchedule(scheduled_at, timezone);
+    const scheduleError = schedule.error || campaignSchedule.scheduleProblem(schedule.at);
+    if (scheduleError) return res.status(400).json({ error: scheduleError, code: 'SCHEDULE_INVALID' });
+    const runAt = schedule.at && schedule.at > new Date() ? schedule.at : null;
+    const preview = await campaignAudience.previewCampaign({ name, client_id, template_id, target_status: target_status || 'all', target_tag_id: hasTag ? target_tag_id : null, scheduled_at: runAt ? runAt.toISOString() : null, template_parameters });
     if (!preview.can_send) {
       return res.status(400).json({ error: preview.blockers[0] || 'This campaign cannot be sent yet.', code: 'CAMPAIGN_NOT_READY', blockers: preview.blockers });
+    }
+    // The number's daily limit: a campaign larger than what is left that day
+    // is refused unless the owner agreed to send the rest on the next day(s).
+    if (preview.sending?.over_limit && send_rest_later !== true) {
+      const left = preview.sending.available_on_send_day;
+      return res.status(409).json({
+        code: 'DAILY_LIMIT_EXCEEDED',
+        error: left > 0
+          ? `Your WhatsApp number can send ${left} more messages ${runAt ? 'on that day' : 'today'}, but this campaign goes to ${preview.audience.will_send} contacts. Choose a smaller audience, or agree to send the rest the next day.`
+          : `Your WhatsApp number has used today's limit of ${preview.sending.daily_limit} messages. Schedule the campaign for tomorrow, or agree to start it tomorrow.`,
+        sending: preview.sending,
+      });
     }
 
     const selectedTemplate = await Templates.findOne(
@@ -122,16 +231,16 @@ app.post('/api/campaigns', auth, manage, async (req, res) => {
       return res.status(400).json({ error: 'Excel parameter columns can only be used with an uploaded custom list.' });
     }
 
-    // Determine initial status
-    const initialStatus = scheduled_at && new Date(scheduled_at) > new Date() ? 'scheduled' : 'scheduled';
-
+    // Both kinds wait as "scheduled": a timed one for the scheduler (every
+    // minute); an immediate one is started below, and if this process stops
+    // before it starts, the scheduler picks it up (scheduled_at null, server.js).
     const campaign = (await Campaigns.create({
-      name, client_id, template_id, target_status: target_status || 'all', target_tag_id: hasTag ? Number(target_tag_id) : null, scheduled_at: scheduled_at || null, status: initialStatus,
-      created_by: req.user.id, created_at: new Date(), template_parameters,
+      name: String(name).trim().slice(0, 120), client_id: Number(client_id), template_id: Number(template_id), target_status: target_status || 'all',
+      target_tag_id: hasTag ? Number(target_tag_id) : null, scheduled_at: runAt, status: 'scheduled', timezone,
+      send_rest_later: Boolean(preview.sending?.over_limit), created_by: req.user.id, created_at: new Date(), template_parameters,
     })).toObject();
 
-    // If send_immediately is true or no scheduled_at, trigger execution immediately
-    if (send_immediately || !scheduled_at) {
+    if (!runAt) {
       // Execute with delay to ensure campaign is created first
       setTimeout(() => {
         executeCampaign(campaign.id).catch(err => {
@@ -143,7 +252,85 @@ app.post('/api/campaigns', auth, manage, async (req, res) => {
     res.status(201).json({ campaign });
   } catch (err) {
     console.error('Create campaign error:', err);
-    res.status(500).json({ error: 'Unable to create campaign.' });
+    res.status(500).json({ error: 'Could not create the campaign. Please try again.' });
+  }
+});
+
+// Live progress of one campaign, for the sending screen: queued, sent, failed,
+// skipped and delivery receipts. Polled every few seconds by the page.
+app.get('/api/campaigns/:id/progress', auth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const campaign = await Campaigns.findOne({ id }, { _id: 0, id: 1, name: 1, status: 1, scheduled_at: 1, launched_at: 1, created_at: 1 }).lean();
+    if (!campaign) return res.status(404).json({ error: 'This campaign was not found.' });
+    const [queue, counts, nextRow] = await Promise.all([
+      campaignQueueStats({ campaign_id: id }),
+      campaignStats.countsFor([id]),
+      CampaignMessageQueue.findOne({ campaign_id: id, status: 'pending', next_attempt_at: { $gt: new Date() } }, { _id: 0, next_attempt_at: 1 }).sort({ next_attempt_at: 1 }).lean(),
+    ]);
+    const c = counts.get(id);
+    res.json({
+      progress: {
+        ...campaign,
+        total: queue.total, queued: queue.pending + queue.processing, sent: queue.sent, failed: queue.failed, skipped: queue.skipped + queue.cancelled,
+        delivered: c.delivered, read: c.read, replied: c.replied,
+        waiting_until: nextRow?.next_attempt_at || null,
+        server_time: new Date(),
+        done: ['completed', 'failed', 'cancelled'].includes(campaign.status),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not load the campaign progress.' });
+  }
+});
+
+// Cancel a scheduled campaign before it starts.
+app.post('/api/campaigns/:id/cancel', auth, manage, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const result = await Campaigns.updateOne({ id, status: 'scheduled' }, { $set: { status: 'cancelled', cancelled_at: new Date(), cancelled_by: req.user.id } });
+    if (!result.modifiedCount) {
+      const campaign = await Campaigns.findOne({ id }, { _id: 0, status: 1 }).lean();
+      if (!campaign) return res.status(404).json({ error: 'This campaign was not found.' });
+      return res.status(409).json({ error: campaign.status === 'cancelled' ? 'This campaign is already cancelled.' : 'This campaign has already started, so it cannot be cancelled.', code: 'NOT_SCHEDULED' });
+    }
+    res.json({ success: true, campaign: await Campaigns.findOne({ id }, NO_ID).lean() });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not cancel the campaign. Please try again.' });
+  }
+});
+
+// Rename or move a scheduled campaign (only before it starts).
+app.patch('/api/campaigns/:id', auth, manage, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const campaign = await Campaigns.findOne({ id }, NO_ID).lean();
+    if (!campaign) return res.status(404).json({ error: 'This campaign was not found.' });
+    if (campaign.status !== 'scheduled' || !campaign.scheduled_at) {
+      return res.status(409).json({ error: 'Only a campaign that is scheduled and has not started can be changed.', code: 'NOT_SCHEDULED' });
+    }
+    const set = {};
+    if (req.body?.name != null) {
+      const name = String(req.body.name).trim();
+      if (!name) return res.status(400).json({ error: 'Give the campaign a name.' });
+      set.name = name.slice(0, 120);
+    }
+    if (req.body?.scheduled_at !== undefined) {
+      const timezone = await campaignSchedule.tenantTimezone();
+      const schedule = campaignSchedule.parseSchedule(req.body.scheduled_at, timezone);
+      if (!schedule.at) return res.status(400).json({ error: schedule.error || 'Pick a date and time.', code: 'SCHEDULE_INVALID' });
+      const problem = campaignSchedule.scheduleProblem(schedule.at) || (schedule.at <= new Date() ? 'Pick a time in the future.' : null);
+      if (problem) return res.status(400).json({ error: problem, code: 'SCHEDULE_INVALID' });
+      set.scheduled_at = schedule.at;
+      set.timezone = timezone;
+    }
+    if (!Object.keys(set).length) return res.status(400).json({ error: 'Nothing to change.' });
+    // Only while it is still waiting: the scheduler may have just started it.
+    const result = await Campaigns.updateOne({ id, status: 'scheduled' }, { $set: set });
+    if (!result.matchedCount) return res.status(409).json({ error: 'This campaign has just started, so it cannot be changed.', code: 'NOT_SCHEDULED' });
+    res.json({ campaign: await Campaigns.findOne({ id }, NO_ID).lean() });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not update the campaign. Please try again.' });
   }
 });
 
@@ -152,10 +339,10 @@ app.delete('/api/campaigns/:id', auth, manage, async (req, res) => {
     const { id } = req.params;
     await deleteCascade('campaign_logs', { campaign_id: Number(id) });
     const deleted = await deleteCascade('campaigns', { id: Number(id) });
-    if (deleted.length === 0) return res.status(404).json({ error: 'Campaign not found' });
+    if (deleted.length === 0) return res.status(404).json({ error: 'This campaign was not found.' });
     res.json({ success: true, message: 'Campaign deleted successfully' });
   } catch (err) {
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Could not delete the campaign. Please try again.' });
   }
 });
 
@@ -180,7 +367,14 @@ app.post('/api/campaigns/:id/retry', auth, manage, async (req, res) => {
     // Get campaign details
     const campaign = await Campaigns.findOne({ id }, NO_ID).lean();
     if (!campaign) {
-      return res.status(404).json({ error: 'Campaign not found' });
+      return res.status(404).json({ error: 'This campaign was not found.' });
+    }
+    // A waiting or cancelled campaign is never sent early by a retry.
+    if (campaign.status === 'cancelled' || (campaign.status === 'scheduled' && campaign.scheduled_at && new Date(campaign.scheduled_at) > new Date())) {
+      return res.status(409).json({ error: campaign.status === 'cancelled' ? 'This campaign was cancelled.' : 'This campaign is scheduled and has not started yet.', code: 'NOT_RETRYABLE' });
+    }
+    if (campaign.status === 'completed') {
+      return res.status(409).json({ error: 'This campaign has finished. Create a new campaign to send it again.', code: 'NOT_RETRYABLE' });
     }
 
     // Check if there are already messages in queue for this campaign
@@ -203,11 +397,11 @@ app.post('/api/campaigns/:id/retry', auth, manage, async (req, res) => {
       console.error('Execute campaign error:', execErr);
       // Reset status to failed
       await Campaigns.updateOne({ id }, { $set: { status: 'failed' } });
-      res.status(500).json({ error: 'Failed to execute campaign: ' + execErr.message });
+      res.status(500).json({ error: 'Could not restart the campaign. Please try again in a few minutes.' });
     }
   } catch (err) {
     console.error('Campaign retry error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Could not restart the campaign. Please try again in a few minutes.' });
   }
 });
 
@@ -258,7 +452,7 @@ app.get('/api/campaigns/:id/debug', auth, async (req, res) => {
       sampleLeads: leadsRes.rows.slice(0, 5)
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
