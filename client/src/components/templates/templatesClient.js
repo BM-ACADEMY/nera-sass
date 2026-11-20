@@ -1,4 +1,5 @@
 import { api, API_URL } from '../../services/api.js';
+import { toApiError } from '../../utils/friendlyError.js';
 
 // Axios-shaped wrapper ({ data }) over the customer panel API, so the template
 // editor shared with the admin panel works unchanged. Errors keep the
@@ -16,11 +17,7 @@ async function upload(p, formData) {
     body: formData,
   });
   const data = await response.json().catch(() => ({ error: 'Upload failed' }));
-  if (!response.ok) {
-    const err = new Error(data.error || 'Upload failed');
-    err.response = { data, status: response.status };
-    throw err;
-  }
+  if (!response.ok) throw toApiError({ status: response.status, data });
   return { data };
 }
 
