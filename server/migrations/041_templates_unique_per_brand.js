@@ -4,8 +4,8 @@
  *
  * MongoDB migration, written as a file only: the server never runs it.
  *
- *   MONGODB_URI=... node migrations/040_templates_unique_per_brand.js --dry-run   # report only
- *   MONGODB_URI=... node migrations/040_templates_unique_per_brand.js --apply
+ *   MONGODB_URI=... node migrations/041_templates_unique_per_brand.js --dry-run   # report only
+ *   MONGODB_URI=... node migrations/041_templates_unique_per_brand.js --apply
  *
  * Why: `templates` had a unique index on `name` alone, across every workspace.
  * Meta gives every WhatsApp account templates with the same names (for example
@@ -34,16 +34,16 @@ async function main() {
   const old = indexes.find((index) => index.name === 'name_1');
   if (old) {
     if (apply) await Templates.collection.dropIndex('name_1');
-    console.log(`[040] templates.name_1 ${apply ? 'dropped' : 'would be dropped'}`);
+    console.log(`[041] templates.name_1 ${apply ? 'dropped' : 'would be dropped'}`);
   } else {
-    console.log('[040] templates.name_1 not present');
+    console.log('[041] templates.name_1 not present');
   }
   if (apply) await Templates.createIndexes();
-  console.log(`[040] templates unique (tenant_id, client_id, name, language) ${apply ? 'in place' : 'would be created'}`);
+  console.log(`[041] templates unique (tenant_id, client_id, name, language) ${apply ? 'in place' : 'would be created'}`);
   await mongoose.disconnect();
 }
 
 main().then(() => process.exit(0)).catch((error) => {
-  console.error('[040] failed:', error.message);
+  console.error('[041] failed:', error.message);
   process.exit(1);
 });
