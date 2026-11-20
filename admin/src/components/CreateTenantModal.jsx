@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { toast } from 'sonner';
-import { FiBriefcase, FiMail, FiUser, FiCheckCircle, FiLock, FiEye, FiEyeOff, FiRefreshCw, FiCopy } from 'react-icons/fi';
+import { FiBriefcase, FiMail, FiUser, FiCheckCircle, FiLock, FiEye, FiEyeOff, FiRefreshCw, FiCopy, FiSend } from 'react-icons/fi';
 import axiosClient from '../api/axiosClient';
 import { FormField, IconInput } from './FormField';
 import { Button } from '@/components/ui/button';
@@ -42,7 +42,7 @@ const validate = (v) => {
 // Creates the workspace, brand profile, subscription and the Owner's login.
 // Staff set the Owner's password here and hand it over themselves; no email
 // is sent.
-const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
+const CreateTenantModal = ({ onTenantCreated, onCancel, onSendToClient }) => {
   const [values, setValues] = useState(INITIAL);
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(false);
@@ -114,7 +114,7 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
         </div>
         <div className="mb-1 text-lg font-extrabold">Workspace Provisioned</div>
         <div className="mb-5 text-[13px] text-muted-foreground">
-          The Owner can sign in now with the email and password below. No email was sent; share these details with the Owner yourself.
+          The Owner can sign in now with the email and password below. No email was sent. Share these details with the Owner yourself, or use Send to client to send them a one-time set-password link on WhatsApp (the password is never sent).
         </div>
 
         <div className="mb-5 rounded-xl border border-border bg-muted/50 p-4 text-left">
@@ -140,6 +140,11 @@ const CreateTenantModal = ({ onTenantCreated, onCancel }) => {
           <Button variant="outline" size="lg" onClick={copyCredentials}>
             <FiCopy /> Copy login details
           </Button>
+          {onSendToClient && createdResult.tenant?.id && (
+            <Button variant="outline" size="lg" onClick={() => onSendToClient(createdResult.tenant.id)}>
+              <FiSend /> Send to client
+            </Button>
+          )}
           <Button size="lg" onClick={handleFinishAndClose} className="min-w-24 font-semibold">
             Done
           </Button>
