@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Plus, Upload, Send, Clock, Trash2, Download } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Plus, Upload, Send, Clock, Trash2, Download, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { C } from '../constants/theme.js';
 import { api } from '../services/api.js';
@@ -58,6 +58,9 @@ export const CampaignsView = () => {
   const [scheduledAt, setScheduledAt] = useState('');
   const [clients, setClients] = useState([]);
   const [templates, setTemplates] = useState([]);
+  const [syncingTemplates, setSyncingTemplates] = useState(false);
+  // Brands already synced from Meta on this visit, so the automatic sync runs once per brand.
+  const syncedBrandIds = useRef(new Set());
   const [templateParameters, setTemplateParameters] = useState({ body: {}, header: {} });
   const [submitting, setSubmitting] = useState(false);
 
@@ -90,13 +93,47 @@ export const CampaignsView = () => {
     }
   };
 
+  // A brand can be synced from Meta only when its WhatsApp number is connected.
+  const isBrandConnected = (brand) => Boolean(brand?.wa_token_configured && brand?.wa_business_id);
+
+  // The campaign template list is the local copy of the brand's Meta templates;
+  // POST /api/templates/sync-all refreshes it, then the list is reloaded.
+  const syncTemplatesFromMeta = async (brands, { manual = false } = {}) => {
+    const connected = brands.filter(isBrandConnected);
+    if (!connected.length) {
+      if (manual) toast.error('Connect WhatsApp for this brand in Settings first.');
+      return;
+    }
+    connected.forEach((brand) => syncedBrandIds.current.add(String(brand.id)));
+    setSyncingTemplates(true);
+    try {
+      const results = await Promise.allSettled(connected.map((brand) => api.syncAllTemplates(brand.id)));
+      const templatesData = await api.getTemplates();
+      setTemplates(templatesData.templates || []);
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) {
+        console.error('Template sync failed:', failed.reason?.message);
+        if (manual) toast.error(failed.reason?.message || 'Could not sync templates from Meta.');
+      } else if (manual) {
+        toast.success('Templates synced from Meta');
+      }
+    } catch (err) {
+      console.error('Error reloading templates:', err.message);
+      if (manual) toast.error('Could not load templates.');
+    } finally {
+      setSyncingTemplates(false);
+    }
+  };
+
   const fetchFormMetadata = async () => {
     try {
       const clientsData = await api.getClients();
       const templatesData = await api.getTemplates();
-      setClients(clientsData.clients || []);
+      const brands = clientsData.clients || [];
+      setClients(brands);
       setTemplates(templatesData.templates || []);
       setTags((await api.getCampaignTags().catch(() => ({ tags: [] }))).tags || []);
+      syncTemplatesFromMeta(brands);
     } catch (err) {
       console.error('Error fetching metadata:', err.message);
     }
@@ -106,6 +143,20 @@ export const CampaignsView = () => {
     fetchCampaigns();
     fetchFormMetadata();
   }, []);
+
+  // A newly selected brand is synced once per visit (the Sync button forces it).
+  useEffect(() => {
+    if (!clientId || syncedBrandIds.current.has(String(clientId))) return;
+    const brand = clients.find((c) => String(c.id) === String(clientId));
+    if (brand) syncTemplatesFromMeta([brand]);
+  }, [clientId, clients]);
+
+  const selectedBrand = clients.find((c) => String(c.id) === String(clientId));
+  const handleManualTemplateSync = () => syncTemplatesFromMeta(selectedBrand ? [selectedBrand] : clients, { manual: true });
+  const campaignTemplates = templates
+    .filter((t) => t.status === 'approved' || t.status === 'active')
+    .filter((t) => !t.template_scope || t.template_scope === 'leados' || t.template_scope === 'shared')
+    .filter((t) => !clientId || t.client_id === parseInt(clientId) || t.client_id === null);
 
   // Live tracking: poll logs when campaign is running
   useEffect(() => {
@@ -420,7 +471,12 @@ export const CampaignsView = () => {
           <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 14, padding: 22 }}>
             <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 18 }}>Message & Schedule</h3>
             <div style={{ marginBottom: 14 }}>
-              <label style={{ display: 'block', fontSize: 10, color: C.muted, marginBottom: 5, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Select Approved Template</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+                <label style={{ display: 'block', fontSize: 10, color: C.muted, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Select Approved Template</label>
+                <button type="button" onClick={handleManualTemplateSync} disabled={syncingTemplates} style={{ background: 'transparent', border: 'none', color: C.accent, fontSize: 10, fontWeight: 600, cursor: syncingTemplates ? 'default' : 'pointer', opacity: syncingTemplates ? 0.6 : 1, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <RefreshCw size={12} className={syncingTemplates ? 'animate-spin' : undefined} /> {syncingTemplates ? 'Syncing…' : 'Sync from Meta'}
+                </button>
+              </div>
               <select value={templateId} onChange={(e) => {
                 const nextId = e.target.value;
                 const template = templates.find((item) => String(item.id) === String(nextId));
@@ -428,15 +484,21 @@ export const CampaignsView = () => {
                 setTemplateParameters(createDefaultParameterMappings(template));
               }} style={{ width: '100%', background: C.surface, border: '1px solid ' + C.border, borderRadius: 7, color: C.text, padding: '9px 11px', fontSize: 12, outline: 'none' }}>
                 <option value="">Select Template</option>
-                {templates
-                  .filter((t) => t.status === 'approved' || t.status === 'active')
-                  .filter((t) => !t.template_scope || t.template_scope === 'leados' || t.template_scope === 'shared')
-                  .filter((t) => !clientId || t.client_id === parseInt(clientId) || t.client_id === null)
+                {campaignTemplates
                   .map((t) => {
                     const templateError = getCampaignTemplateError(t);
                     return <option key={t.id} value={t.id} disabled={Boolean(templateError)}>{t.name}{templateError ? ' — needs parameter setup' : ''}</option>;
                   })}
               </select>
+              {!campaignTemplates.length && (
+                <p style={{ color: C.muted, fontSize: 11, marginTop: 6, lineHeight: 1.4 }}>
+                  {syncingTemplates
+                    ? 'Syncing templates from Meta…'
+                    : selectedBrand && !isBrandConnected(selectedBrand)
+                      ? 'WhatsApp is not connected for this brand. Connect it in Settings first.'
+                      : 'No approved templates yet. Click Sync from Meta.'}
+                </p>
+              )}
               {templateId && getCampaignTemplateError(templates.find((template) => String(template.id) === String(templateId))) && (
                 <p style={{ color: C.red, fontSize: 11, marginTop: 6, lineHeight: 1.4 }}>
                   {getCampaignTemplateError(templates.find((template) => String(template.id) === String(templateId)))}
