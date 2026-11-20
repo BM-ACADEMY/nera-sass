@@ -10,55 +10,55 @@ Tick a box when done. Dates are targets.
 ## Before the first free pilot
 
 ### Confirm the launch-critical slices are live on the server
-- Owner: Aakash
-- Due: 2026-11-27
-- Priority: High
+Owner: Aakash
+Due: 2026-11-27
+Priority: High
 The code for these is in the repo (signed webhooks, no global WhatsApp credentials, STOP and consent, subscribing our app to the customer's WhatsApp account). Check each one is deployed and works on the live server, using the checks in docs/pilot-onboarding.md. Also remove the old global WhatsApp variables from the live .env (listed in docs/launch-gap.md section 4).
 
 ### Run one full pilot dry run on a test number
-- Owner: Aakash
-- Due: 2026-11-30
-- Priority: High
+Owner: Aakash
+Due: 2026-11-30
+Priority: High
 Follow docs/pilot-onboarding.md end to end with a second phone: connect, verify, check webhook_subscribed, send a message and see it in the inbox, reply, send STOP and START. Write down anything that did not match the page.
 
 ### Fix the failing staff password change test
-- Owner: Aakash
-- Due: 2026-12-04
-- Priority: Normal
+Owner: Aakash
+Due: 2026-12-04
+Priority: Normal
 test/phase1-security.test.js D1: after a staff user changes their password, the new token is rejected with 401. Found in the 2026-11-08 inventory; check if it is still failing.
 
 ## Next, during the pilot
 
 ### Plans, limits and seats
-- Owner: Aakash
-- Due: 2026-12-18
-- Priority: Normal
+Owner: Aakash
+Due: 2026-12-18
+Priority: Normal
 Models/Plans.js and services/entitlements.js exist. Check seats, numbers, contacts and campaigns are enforced per plan, and replace the one-login-per-workspace rule with a plan seat limit. Not blocking while pilots are free; blocking for paid go-live.
 
 ### Campaign cost preview
-- Owner: Aakash
-- Due: 2027-01-15
-- Priority: Low
+Owner: Aakash
+Due: 2027-01-15
+Priority: Low
 Show recipients times Meta's per-category price for India on the campaign screen, with the plan's remaining campaign allowance. No rate card exists in the code yet.
 
 ### Check the AI reply polish with a sandbox test set
-- Owner: Aakash
-- Due: 2026-12-11
-- Priority: Normal
+Owner: Aakash
+Due: 2026-12-11
+Priority: Normal
 Greeting that mirrors the customer, staying on the same brand and topic, saving the customer's name and phone from the chat. docs/n2-ai-booking.md covers the greeting and booking for clinics and education; confirm what is left and run a sandbox set of real-style chats.
 
 ### Wallet ledger for extras
-- Owner: Aakash
-- Due: 2027-02-15
-- Priority: Low
+Owner: Aakash
+Due: 2027-02-15
+Priority: Low
 models/WalletLedger.js exists. Finish charging for AI replies beyond the plan, extra seats and extra numbers. Needs pricing from Kamar first.
 
 ## Decisions for Kamar
 
 ### Pilot customers and pricing
-- Owner: Kamar
-- Due: 2026-12-04
-- Priority: Normal
+Owner: Kamar
+Due: 2026-12-04
+Priority: Normal
 Which customers get the first free pilots, for how long, and what the paid plans cost (the plan list in the brief: Desk, WhatsApp, Complete).
 
 ## Done (from the repo docs, confirm with the team)
