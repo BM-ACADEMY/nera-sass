@@ -62,7 +62,10 @@ app.post('/webhook/razorpay', async (req, res) => {
       const billing = await billingOrders.handleWebhook({ rawBody: req.rawBody, signature: req.get('x-razorpay-signature'), event: req.body });
       if (billing.handled) return res.status(200).json({ status: 'billing' });
     } catch (billingErr) {
+      // A billing payment we could not process must be retried by Razorpay,
+      // not acknowledged: answering 200 here would lose a paid top-up.
       console.error('[Razorpay webhook] Billing handler error:', billingErr.message);
+      return res.status(500).json({ error: 'billing_handler_failed' });
     }
 
     const event = req.body;

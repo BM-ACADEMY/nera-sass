@@ -64,13 +64,18 @@ function publicSubscription(sub, now = new Date()) {
  * carry over on a renewal; a plan change clears them (they are re-bought
  * against the new plan's prices).
  */
-async function activate({ tenantId = null, plan, orderId = null, paymentId = null, now = new Date(), source = 'payment' }) {
+async function activate({ tenantId = null, plan, orderId = null, paymentId = null, now = new Date(), source = 'payment', keepPeriod = false }) {
   if (!plan) throw new Error('A plan is required to activate a subscription');
   return inTenant(tenantId, async () => {
     const existing = await Subscriptions.findOne({}, { _id: 0 }).lean();
     const renewal = isLive(existing, now) && existing.plan_id === plan.id;
-    const periodStart = renewal ? new Date(existing.current_period_start) : now;
-    const periodEnd = renewal ? addOneMonth(new Date(existing.current_period_end)) : addOneMonth(now);
+    // keepPeriod: an upgrade paid pro rata. The new plan runs to the end of the
+    // period already paid for, and the extras bought for it stay.
+    const upgrade = keepPeriod && isLive(existing, now) && existing.plan_id !== plan.id;
+    const periodStart = renewal || upgrade ? new Date(existing.current_period_start) : now;
+    let periodEnd = addOneMonth(now);
+    if (renewal) periodEnd = addOneMonth(new Date(existing.current_period_end));
+    if (upgrade) periodEnd = new Date(existing.current_period_end);
     const set = {
       plan_id: plan.id,
       plan_code: plan.code,
@@ -87,12 +92,29 @@ async function activate({ tenantId = null, plan, orderId = null, paymentId = nul
       updated_at: now,
       'meta.last_activation_source': source,
     };
-    if (!renewal) Object.assign(set, { extra_seats: 0, extra_numbers: 0 });
+    if (!renewal && !upgrade) Object.assign(set, { extra_seats: 0, extra_numbers: 0 });
     // An upsert skips the model's id hook, so a new row gets its id here. Without it every new
     // subscription was stored with id null, and the unique id index refused the second workspace.
     const insertId = existing ? {} : { id: await Subscriptions.nextId() };
     const sub = await Subscriptions.findOneAndUpdate({}, { $set: set, $setOnInsert: { created_at: now, ...insertId } }, { new: true, upsert: true, projection: { _id: 0 } }).lean();
     return { subscription: sub, renewal };
+  });
+}
+
+/**
+ * Adds whole days to the paid period (how a service problem is made good
+ * instead of refunding money). Works on a live period, or restarts a lapsed one
+ * from now. Staff only; the caller audits it.
+ */
+async function extendDays({ tenantId = null, days, now = new Date() }) {
+  const n = Number(days);
+  if (!Number.isInteger(n) || n < 1 || n > 365) throw new Error('days must be a whole number from 1 to 365');
+  return inTenant(tenantId, async () => {
+    const existing = await Subscriptions.findOne({}, { _id: 0 }).lean();
+    if (!existing) return null;
+    const base = isLive(existing, now) ? new Date(existing.current_period_end) : now;
+    const end = new Date(base.getTime() + n * DAY_MS);
+    return Subscriptions.findOneAndUpdate({}, { $set: { current_period_end: end, status: 'active', updated_at: now } }, { new: true, projection: { _id: 0 } }).lean();
   });
 }
 
@@ -114,4 +136,4 @@ async function addExtras({ tenantId = null, kind, quantity, now = new Date() }) 
   ).lean());
 }
 
-module.exports = { DAY_MS, addOneMonth, isLive, current, active, publicSubscription, activate, cancel, addExtras };
+module.exports = { DAY_MS, addOneMonth, isLive, current, active, publicSubscription, activate, cancel, addExtras, extendDays };

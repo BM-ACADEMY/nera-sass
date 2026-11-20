@@ -53,6 +53,9 @@ function publicPlan(plan) {
     description: plan.description || '',
     price_inr: Number(plan.price_inr),
     price_paise: toPaise(plan.price_inr),
+    gst_paise: withGst(toPaise(plan.price_inr)).gst_paise,
+    total_paise: withGst(toPaise(plan.price_inr)).total_paise,
+    gst_rate_percent: gstRatePercent(),
     currency: plan.currency || 'INR',
     billing_cycle: plan.billing_cycle || 'monthly',
     ai_replies_month: Number(plan.ai_replies_month ?? 0),
@@ -68,6 +71,19 @@ function publicPlan(plan) {
 }
 
 const toPaise = (inr) => Math.round(Number(inr) * 100);
+
+// GST is added on top of the listed plan price (18% unless GST_RATE_PERCENT says otherwise).
+const gstRatePercent = () => {
+  const rate = Number(process.env.GST_RATE_PERCENT ?? 18);
+  return Number.isFinite(rate) && rate >= 0 && rate <= 100 ? rate : 18;
+};
+/** Splits a pre-tax amount into base, GST and the total the customer pays (all paise, whole numbers). */
+function withGst(basePaise) {
+  const base = Math.round(Number(basePaise));
+  const rate = gstRatePercent();
+  const gst = Math.round((base * rate) / 100);
+  return { base_paise: base, gst_paise: gst, total_paise: base + gst, gst_rate_percent: rate };
+}
 
 // Seeds the three default plans when the catalogue is empty. Idempotent:
 // an existing code is never overwritten, so edited prices survive restarts.
@@ -153,4 +169,4 @@ async function updatePlan(id, changes = {}) {
   return publicPlan(plan);
 }
 
-module.exports = { DEFAULT_PLANS, PlanError, publicPlan, toPaise, ensureDefaultPlans, listPlans, planByCode, planById, updatePlan };
+module.exports = { DEFAULT_PLANS, PlanError, publicPlan, toPaise, withGst, gstRatePercent, ensureDefaultPlans, listPlans, planByCode, planById, updatePlan };

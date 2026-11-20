@@ -70,6 +70,7 @@ const TENANT_SCOPED = new Map([
   ['subscriptions', {}],
   ['wallet_ledger', {}],
   ['billing_orders', {}],
+  ['invoices', {}],
   ['billing_alerts', {}],
 ]);
 
