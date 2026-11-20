@@ -171,10 +171,10 @@ test('Task 2: customer Settings APIs', async (t) => {
 
   await t.test('P2. Profile edit with a number but no own token: saved, no Meta call, credential reported missing', async () => {
     const { brand, users } = await workspace(10, { phone_number_id: 'p-1', wa_business_id: 'waba-1', whatsapp_number: '911111111111' });
-    const res = await request(app).patch(`/api/clients/${brand.id}`).set(bearer(users.admin)).send({ wa_website: 'https://example.test' });
+    const res = await request(app).patch(`/api/clients/${brand.id}`).set(bearer(users.admin)).send({ wa_address: '12 Market Road' });
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body.meta_profile_pending_reason, 'WHATSAPP_CREDENTIAL_MISSING');
-    assert.strictEqual((await rawBrand(brand.id)).wa_website, 'https://example.test');
+    assert.strictEqual((await rawBrand(brand.id)).wa_address, '12 Market Road');
     assert.strictEqual(metaCalls.length, 0, 'never falls back to the platform token');
   });
 
