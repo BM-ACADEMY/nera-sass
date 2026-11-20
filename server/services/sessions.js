@@ -256,6 +256,12 @@ async function revokeOne(user, sessionId, reason = 'signed_out') {
   return count === 1;
 }
 
+/** Log out: ends the caller's own session (by its sid). */
+async function revokeCurrent(userId, sid) {
+  if (!sid) return false;
+  return (await revokeWhere({ user_id: Number(userId), session_hash: hashSessionId(sid) }, 'logged_out')) === 1;
+}
+
 /** Signs out every session of the user except `keepSid` (if given). */
 async function revokeOthers(userId, keepSid, reason) {
   const filter = { user_id: Number(userId) };
@@ -277,6 +283,7 @@ module.exports = {
   touch,
   listForUser,
   revokeOne,
+  revokeCurrent,
   revokeOthers,
   setDisconnector,
 };

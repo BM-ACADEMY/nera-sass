@@ -354,6 +354,35 @@ test('My sessions', async (t) => {
     assert.strictEqual((await me(token)).status, 401);
   });
 
+  await t.test('S15. Log out ends this session at once; other devices and other users are unaffected', async () => {
+    await tenant(1);
+    const user = await owner(1);
+    const other = await owner(1);
+    const tokMine = await login(user);
+    const tokPhone = await login(user, { ua: SAFARI_IPHONE });
+    const tokOther = await login(other);
+    const res = await request(app).post('/api/auth/logout').set(as(tokMine));
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.session_ended, true);
+    const row = await rowOf(tokMine);
+    assert.ok(row.revoked_at, 'revoked_at set');
+    assert.strictEqual(row.revoked_reason, 'logged_out');
+    const after = await me(tokMine);
+    assert.strictEqual(after.status, 401, 'token refused on the next request');
+    assert.strictEqual(after.body.code, 'SESSION_REVOKED');
+    assert.ok((await handshake(tokMine)).err, 'socket refused');
+    const listed = await list(tokPhone);
+    assert.strictEqual(listed.body.sessions.length, 1, 'the device left the list');
+    assert.strictEqual(listed.body.sessions[0].current, true);
+    assert.strictEqual((await me(tokOther)).status, 200);
+    assert.strictEqual((await request(app).post('/api/auth/logout').set(as(tokMine))).status, 401, 'second logout refused');
+    // A token from before sessions: nothing to end, still answers success.
+    const legacy = await request(app).post('/api/auth/logout').set(as(makeToken(other)));
+    assert.strictEqual(legacy.status, 200);
+    assert.strictEqual(legacy.body.session_ended, false);
+    assert.strictEqual((await request(app).post('/api/auth/logout')).status, 401, 'needs a token');
+  });
+
   await t.test('S14. Helpers: IP masking and user-agent reading', () => {
     assert.strictEqual(sessions.maskIp('203.0.113.42'), '203.0.113.x');
     assert.strictEqual(sessions.maskIp('::ffff:203.0.113.42'), '203.0.113.x');

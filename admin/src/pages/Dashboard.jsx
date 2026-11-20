@@ -157,6 +157,10 @@ const Dashboard = () => {
 
   const handleLogout = () => {
     disconnectRealtime();
+    // Ends this device's session on the server (My sessions). The token is
+    // passed explicitly because it is removed from storage right after.
+    const token = localStorage.getItem('adminToken');
+    if (token) axiosClient.post('/auth/logout', {}, { headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
     localStorage.removeItem('adminToken');
     navigate('/login');
   };

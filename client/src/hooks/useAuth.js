@@ -59,6 +59,9 @@ export const useAuth = () => {
   };
 
   const logout = () => {
+    // Ends this device's session on the server (My sessions); the request
+    // carries the token before it is cleared below. Best effort.
+    if (api.token) api.post('/auth/logout', {}).catch(() => {});
     setUser(null);
     api.clearToken();
     localStorage.removeItem(USER_KEY);

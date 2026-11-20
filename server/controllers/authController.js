@@ -353,6 +353,18 @@ exports.changePassword = async (req, res) => {
   }
 };
 
+// Log out of this device: the session row is revoked, so this token is refused
+// from the next request on and the device leaves My sessions. A token from
+// before sessions were tracked has no row; it simply expires.
+exports.logout = async (req, res) => {
+  try {
+    const ended = await sessions.revokeCurrent(req.user.id, req.authSessionId);
+    return res.json({ success: true, session_ended: ended });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
 exports.logoutAll = async (req, res) => {
   try {
     await sys(() => Users.updateOne({ id: req.user.id }, { $inc: { token_version: 1 } }));
