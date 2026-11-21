@@ -299,22 +299,9 @@ async function sendTyping({ contactId }) {
   }
 }
 
-// Meta Cloud API media rules: which files go as image / video / audio and the
-// size limit of each. Anything else (gif, webp, heic, zip, xlsx, ...) is sent
-// as a document, which keeps its name and accepts up to 100 MB.
-const MB = 1024 * 1024;
-const MEDIA_KINDS = [
-  { kind: 'image', types: ['image/jpeg', 'image/png'], max: 5 * MB },
-  { kind: 'video', types: ['video/mp4', 'video/3gpp'], max: 16 * MB },
-  { kind: 'audio', types: ['audio/aac', 'audio/amr', 'audio/mpeg', 'audio/mp4', 'audio/ogg'], max: 16 * MB },
-];
-const DOCUMENT_MAX = 100 * MB;
-
-function mediaKind(mimeType, size) {
-  const base = String(mimeType || '').split(';')[0].trim().toLowerCase();
-  const match = MEDIA_KINDS.find((k) => k.types.includes(base) && size <= k.max);
-  return match ? match.kind : 'document';
-}
+// Meta Cloud API media rules (image / video / audio / document and their size
+// limits), shared with the customer inbox.
+const { mediaKind, DOCUMENT_MAX } = require('./waMedia');
 
 const MEDIA_PREVIEW = { image: '📷 Photo', video: '🎥 Video', audio: '🎤 Voice message', document: '📄 Document' };
 

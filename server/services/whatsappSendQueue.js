@@ -214,6 +214,7 @@ async function mirrorToInbox(row, lead, waMessageId, io) {
     const saved = await Messages.create({
       conversation_id: conversation.id, direction: 'outbound', content, msg_type: row.msg_type || 'template',
       template_name: row.template_name || row.payload?.template?.name || null,
+      template_language: row.template_language || row.payload?.template?.language?.code || null,
       wa_msg_id: waMessageId, status: 'sent', is_ai: false, sent_at: new Date(),
     });
     if (io && leadId != null) {

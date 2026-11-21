@@ -7,6 +7,7 @@ module.exports = defineModel('messages', {
   content: { type: String },
   msg_type: { type: String, default: "text" },
   template_name: { type: String },
+  template_language: { type: String },
   wa_msg_id: { type: String },
   status: { type: String, default: "sent" },
   is_ai: { type: Boolean, default: false },
@@ -20,4 +21,4 @@ module.exports = defineModel('messages', {
   pinned_until: { type: Date },
   is_starred: { type: Boolean, default: false },
   reactions: { type: Mixed, default: () => ({}) },
-}, { autoId: true, indexes: [['conversation_id']] });
+}, { autoId: true, indexes: [['conversation_id'], ['conversation_id', 'sent_at']] });

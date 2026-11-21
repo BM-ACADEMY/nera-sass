@@ -21,6 +21,8 @@ const {
   SERVER_ROOT,
 } = ctx;
 const mediaStore = require('../../services/mediaStore');
+const waMedia = require('../../services/waMedia');
+const templateText = require('../../services/templateText');
 const tenantUploads = require('../../services/tenantUploads');
 const { currentTenantId } = require('../../services/tenantContext');
 const sendPolicy = require('../../services/sendPolicy');
@@ -117,15 +119,20 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
           if (convCheck) {
             const convId = convCheck.id;
             const existingTemplateMsg = waMsgId ? await Messages.exists({ wa_msg_id: waMsgId }) : null;
-            const wakeupText = await require('../../services/templateText').renderTemplateText(WAKEUP_TEMPLATE, 'en', null, WAKEUP_TEMPLATE);
+            const wakeup = await templateText.renderTemplate(WAKEUP_TEMPLATE, 'en', null, { clientId: lead.client_id, phoneNumberId });
+            const wakeupText = wakeup?.text || WAKEUP_TEMPLATE;
             if (!existingTemplateMsg) {
               await Messages.create({
                 conversation_id: convId, direction: 'outbound', content: wakeupText, msg_type: 'template',
+                template_name: WAKEUP_TEMPLATE, template_language: 'en',
                 wa_msg_id: waMsgId, status: 'sent', is_ai: false, sent_at: new Date(),
               });
             }
             // Push to inbox in real-time
-            io.emit('outgoing_message', { lead_id: String(lead.id), message: { direction: 'outbound', content: wakeupText, type: 'template', msg_type: 'template', sent_at: new Date() } });
+            io.emit('outgoing_message', { lead_id: String(lead.id), message: {
+              direction: 'outbound', content: wakeupText, type: 'template', msg_type: 'template', template_name: WAKEUP_TEMPLATE,
+              template_buttons: wakeup?.buttons || [], sent_at: new Date(),
+            } });
           }
         } catch (err) {
           console.error('[Template Wakeup Error]', JSON.stringify(err.response?.data) || err.message);
@@ -159,6 +166,11 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
 
     // A file on the media server must belong to this workspace (throws 403).
     const storedMedia = type !== 'text' ? await mediaStore.resolveOwned(media_url) : null;
+    // Meta's own type and size limits (same as the admin inbox): a 9 MB photo
+    // or a .webp goes as a document, never as an image Meta would refuse.
+    if (storedMedia && ['image', 'video', 'audio', 'document'].includes(type) && !waMedia.fitsKind(type, storedMedia.mime, storedMedia.size)) {
+      return res.status(400).json({ error: `This file cannot be sent as ${type === 'audio' ? 'an' : 'a'} ${type} on WhatsApp. Send it as a document instead.`, code: 'MEDIA_TYPE_INVALID' });
+    }
     // Any other local path must be a regular file inside this workspace's own
     // upload folder (no "..", absolute paths, symlinks, odd types or sizes).
     // Checked before anything is sent or stored.

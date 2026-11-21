@@ -21,6 +21,7 @@ const {
 const mediaStore = require('../../services/mediaStore');
 const tenantUploads = require('../../services/tenantUploads');
 const sendPolicy = require('../../services/sendPolicy');
+const waMedia = require('../../services/waMedia');
 // ══════════════════════════════════════════════════════════
 // MESSAGES ROUTES (CRM-SIDE)
 // ══════════════════════════════════════════════════════════
@@ -214,13 +215,25 @@ app.post('/api/messages/upload', auth, mediaUpload.single('file'), async (req, r
     }
   }
 
-  // With the media server on, the file is stored encrypted there and the
-  // local copy is removed; the browser gets a short-lived signed link.
+  // Same rules as the admin inbox: the type comes from the extension (the
+  // browser's claim is not trusted) and Meta's limits decide whether the file
+  // goes as image / video / audio or as a document.
+  const ext = path.extname(uploadedFile.filename).toLowerCase();
+  const mimeType = isWebm ? 'audio/ogg; codecs=opus' : (tenantUploads.MIME[ext] || 'application/octet-stream');
+  let size = req.file.size;
+  try {
+    size = (await fs.promises.stat(uploadedFile.path)).size;
+  } catch { /* keep multer's size */ }
+  const originalName = isWebm ? `${path.parse(req.file.originalname).name}.ogg` : req.file.originalname;
+
+  // With the media server on, the file is stored encrypted there (in this
+  // workspace's own scope) and the local copy is removed; the browser gets a
+  // short-lived signed link.
   if (mediaStore.enabled()) {
-    const originalName = isWebm ? `${path.parse(req.file.originalname).name}.ogg` : req.file.originalname;
+    const kind = waMedia.mediaKind(mimeType, size);
     try {
-      const saved = await mediaStore.save({ filePath: uploadedFile.path, mime: uploadedFile.mimetype, name: originalName, source: 'upload' });
-      return res.json({ success: true, fileUrl: mediaStore.signedUrl(saved.ref), mediaRef: saved.ref, mimeType: uploadedFile.mimetype });
+      const saved = await mediaStore.save({ filePath: uploadedFile.path, mime: mimeType, name: originalName, source: 'upload' });
+      return res.json({ success: true, fileUrl: mediaStore.signedUrl(saved.ref), mediaRef: saved.ref, mimeType, kind, size, fileName: originalName });
     } catch (err) {
       console.error('[Media Upload] Media server failed:', err.message);
       return res.status(err.status === 413 ? 413 : 502).json({ error: err.status === 413 ? 'This file is too large.' : 'Could not store the file. Please try again.' });
@@ -229,7 +242,14 @@ app.post('/api/messages/upload', auth, mediaUpload.single('file'), async (req, r
     }
   }
 
+  // Without the media server the file stays in uploads/media/t_<id>/ and is
+  // checked again by extension and size when it is sent.
+  const kind = ['image', 'video', 'audio', 'document'].find((type) => tenantUploads.TYPES[type].exts.includes(ext) && size <= tenantUploads.TYPES[type].max);
+  if (!kind) {
+    await fs.promises.unlink(uploadedFile.path).catch(() => {});
+    return res.status(413).json({ error: 'This file is too large to send on WhatsApp.', code: 'MEDIA_SIZE_INVALID' });
+  }
   const fileUrl = tenantUploads.publicPathFor(req.user.tenant_id, uploadedFile.filename);
-  res.json({ success: true, fileUrl, mimeType: uploadedFile.mimetype });
+  res.json({ success: true, fileUrl, mimeType, kind, size, fileName: originalName });
 });
 };
