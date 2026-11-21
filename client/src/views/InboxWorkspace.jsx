@@ -34,6 +34,44 @@ const BAR_BG = '#f0f2f5';
 const LINE = '#e5e7eb';
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const MessageActionsMenu = ({ isOpen, onToggle, onClose, align = 'end', children }) => {
+  const { refs, floatingStyles, context } = useFloating({
+    open: isOpen,
+    onOpenChange: (open) => { if (!open) onClose(); },
+    placement: align === 'start' ? 'bottom-start' : 'bottom-end',
+    middleware: [offset(4), flip({ fallbackPlacements: ['top-start', 'top-end'] }), shift({ padding: 8 })],
+    whileElementsMounted: autoUpdate,
+    strategy: 'fixed',
+  });
+  const dismiss = useDismiss(context);
+  const { getReferenceProps, getFloatingProps } = useInteractions([dismiss]);
+
+  return (
+    <div className="wa-hover" data-open={isOpen ? 'true' : 'false'} style={{ position: 'absolute', top: 4, right: 4, zIndex: 10 }}>
+      <button
+        ref={refs.setReference}
+        type="button"
+        aria-label="Message actions"
+        {...getReferenceProps({ onClick: (e) => { e.stopPropagation(); onToggle(); } })}
+        style={{ background: 'rgba(255, 255, 255, 0.9)', border: 'none', cursor: 'pointer', padding: 2, borderRadius: 999, display: 'flex', boxShadow: '0 1px 2px rgba(11,20,26,.15)' }}
+      >
+        <ChevronDown size={14} color="#54656f" />
+      </button>
+      {isOpen && (
+        <FloatingPortal>
+          <div
+            ref={refs.setFloating}
+            style={{ ...floatingStyles, background: C.card, border: '1px solid ' + C.border, borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 1000, minWidth: 160, padding: '5px 0', display: 'flex', flexDirection: 'column' }}
+            {...getFloatingProps()}
+          >
+            {children}
+          </div>
+        </FloatingPortal>
+      )}
+    </div>
+  );
+};
+
 // Hover-only message controls are shown with CSS. Keeping the hovered message
 // in React state re-rendered the whole inbox on every mouse move.
 const INBOX_CSS = `
