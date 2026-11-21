@@ -71,13 +71,12 @@ class AuthError extends Error {
 }
 
 // `sid` names the signed-in session (services/sessions.js); the database keeps
-// only its hash.
-function issueAccessToken(user, { mfa = false, sid = null } = {}) {
-  return jwt.sign(
-    { id: user.id, tid: user.tenant_id ?? null, tv: Number(user.token_version || 0), mfa: Boolean(mfa), typ: 'access', ...(sid ? { sid } : {}) },
-    jwtSecret(),
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' },
-  );
+// only its hash. `expiresAt` (a Date) re-issues a token that ends when the
+// session already ends instead of a full new lifetime.
+function issueAccessToken(user, { mfa = false, sid = null, expiresAt = null } = {}) {
+  const claims = { id: user.id, tid: user.tenant_id ?? null, tv: Number(user.token_version || 0), mfa: Boolean(mfa), typ: 'access', ...(sid ? { sid } : {}) };
+  if (expiresAt) return jwt.sign({ ...claims, exp: Math.floor(new Date(expiresAt).getTime() / 1000) }, jwtSecret());
+  return jwt.sign(claims, jwtSecret(), { expiresIn: process.env.JWT_EXPIRES_IN || '7d' });
 }
 
 // Short-lived token that only allows finishing MFA ('mfa') or enrolling ('mfa_setup').
@@ -127,7 +126,7 @@ async function resolveIdentity(token, { purpose = 'access' } = {}) {
     if (!lifecycle.tenant || lifecycle.state === 'deleted') throw new AuthError(401, 'This workspace no longer exists', 'TENANT_DELETED');
   }
   // sessionMfa: this token already passed two-factor in this session (carried into a re-issued token).
-  return { user, identity, lifecycle, sessionMfa: Boolean(payload.mfa), session, sid: session ? payload.sid : null };
+  return { user, identity, lifecycle, sessionMfa: Boolean(payload.mfa), session, sid: session ? payload.sid : null, tokenExp: payload.exp || null };
 }
 
 function publicUser(user, identity, tenant) {
@@ -147,8 +146,10 @@ function publicUser(user, identity, tenant) {
 }
 
 function attach(req, resolved) {
-  const { user, identity, lifecycle, sessionMfa, session, sid } = resolved;
+  const { user, identity, lifecycle, sessionMfa, session, sid, tokenExp } = resolved;
   req.sessionMfa = Boolean(sessionMfa);
+  // When this login token ends (Date): a re-issued token must not outlive it.
+  req.authTokenExpiresAt = tokenExp ? new Date(tokenExp * 1000) : null;
   // The raw session id stays server-side: it is only used to re-issue this
   // session's token (password change, MFA enrolment) and to mark "This device".
   req.authSessionId = sid || null;

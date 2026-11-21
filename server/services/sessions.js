@@ -150,8 +150,11 @@ function tokenExpiry() {
   return new Date(Date.now() + seconds * 1000);
 }
 
-/** Creates a session row for a fresh login; returns the raw sid (for the token only). */
-async function createSession(user, info = {}) {
+/**
+ * Creates a session row for a fresh login; returns the raw sid (for the token
+ * only). `expiresAt` caps the row's lifetime (default: a full token lifetime).
+ */
+async function createSession(user, info = {}, { expiresAt = null } = {}) {
   const sid = newSessionId();
   const now = new Date();
   await sys(() => UserSessions.create({
@@ -165,7 +168,7 @@ async function createSession(user, info = {}) {
     location: locate(info.ip),
     created_at: now,
     last_seen_at: now,
-    expires_at: tokenExpiry(),
+    expires_at: expiresAt || tokenExpiry(),
     revoked_at: null,
   }));
   return sid;
@@ -177,6 +180,20 @@ async function renewSession(sid, user) {
     { session_hash: hashSessionId(sid), user_id: user.id, revoked_at: null },
     { $set: { token_version: Number(user.token_version || 0), expires_at: tokenExpiry() } },
   ));
+}
+
+/**
+ * Moves an existing session to the user's new token_version WITHOUT extending
+ * it: expires_at stays as it was. Returns the row's expires_at (null when the
+ * row is gone).
+ */
+async function keepSession(sid, user) {
+  const row = await sys(() => UserSessions.findOneAndUpdate(
+    { session_hash: hashSessionId(sid), user_id: user.id, revoked_at: null },
+    { $set: { token_version: Number(user.token_version || 0) } },
+    { new: true, projection: { _id: 0, expires_at: 1 } },
+  ).lean());
+  return row ? row.expires_at || null : null;
 }
 
 /** The live row for a token's sid, or null when it is unknown, revoked or someone else's. */
@@ -279,6 +296,7 @@ module.exports = {
   socketClientInfo,
   createSession,
   renewSession,
+  keepSession,
   findActive,
   touch,
   listForUser,

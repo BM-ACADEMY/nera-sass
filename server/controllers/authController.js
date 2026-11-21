@@ -16,6 +16,7 @@ const notify = require('../services/notify');
 const audit = require('../services/audit');
 const invitations = require('../services/invitations');
 const sessions = require('../services/sessions');
+const { verifySecondStep } = require('../services/stepUp');
 const { passwordProblem, normalizeEmail } = require('../utils/passwordPolicy');
 const {
   issueAccessToken, issueMfaToken, resolveIdentity, publicUser, AuthError,
@@ -136,17 +137,8 @@ exports.verifyMfa = async (req, res) => {
     const { user } = await resolveIdentity(mfaToken, { purpose: 'mfa' });
     const methods = mfa.methodsOf(user);
     if (!methods.length) return res.status(400).json({ error: 'MFA is not enabled for this account' });
-    let ok = false;
-    if (code) {
-      const use = method || (methods.includes('totp') ? 'totp' : 'email');
-      if (!methods.includes(use)) return res.status(400).json({ error: 'This verification method is not turned on for this account' });
-      ok = use === 'totp' ? mfa.verifyTotp(decrypt(user.mfa_secret_enc), code) : await emailOtp.verifyCode(user, code, 'login');
-    }
-    if (!ok && recoveryCode) {
-      const hash = mfa.hashRecoveryCode(recoveryCode);
-      const updated = await sys(() => Users.updateOne({ id: user.id, mfa_recovery_hashes: hash }, { $pull: { mfa_recovery_hashes: hash } }));
-      ok = updated.modifiedCount === 1;
-    }
+    const { ok, methodOff } = await verifySecondStep(user, { method, code, recoveryCode }, 'login');
+    if (methodOff) return res.status(400).json({ error: 'This verification method is not turned on for this account' });
     if (!ok) return res.status(401).json(INVALID_MFA_CODE);
     return res.json(await sessionPayload(user, { mfaPassed: true, req }));
   } catch (error) {

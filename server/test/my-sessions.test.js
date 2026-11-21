@@ -156,7 +156,7 @@ test('My sessions', async (t) => {
     assert.strictEqual(live, 4);
 
     // revoke-others only touches the caller's own sessions.
-    const res = await request(app).post('/api/account/sessions/revoke-others').set(as(tokMate));
+    const res = await request(app).post('/api/account/sessions/revoke-others').set(as(tokMate)).send({ password: PASSWORD });
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.body.revoked, 0);
     for (const token of [tokA, tokB, tokS]) assert.strictEqual((await me(token)).status, 200);
@@ -226,7 +226,7 @@ test('My sessions', async (t) => {
     const legacy = makeToken(user);
     assert.strictEqual((await me(legacy)).status, 200, 'old-style token works before');
 
-    const res = await request(app).post('/api/account/sessions/revoke-others').set(as(tokMine));
+    const res = await request(app).post('/api/account/sessions/revoke-others').set(as(tokMine)).send({ password: PASSWORD });
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.body.revoked, 2);
     assert.ok(res.body.token);
@@ -246,7 +246,7 @@ test('My sessions', async (t) => {
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.body.current_session_tracked, false);
     assert.deepStrictEqual(res.body.sessions, []);
-    const out = await request(app).post('/api/account/sessions/revoke-others').set(as(legacy)).set('User-Agent', CHROME_WIN);
+    const out = await request(app).post('/api/account/sessions/revoke-others').set(as(legacy)).set('User-Agent', CHROME_WIN).send({ password: PASSWORD });
     assert.strictEqual(out.status, 200);
     assert.ok(sidOf(out.body.token), 'now a tracked session');
     const again = await list(out.body.token);
@@ -326,8 +326,26 @@ test('My sessions', async (t) => {
     assert.strictEqual(jwt.decode(ok.body.token).mfa, true);
     assert.ok(sidOf(ok.body.token));
     assert.strictEqual((await list(ok.body.token)).body.sessions.length, 1);
-    const out = await request(app).post('/api/account/sessions/revoke-others').set(as(ok.body.token));
-    assert.strictEqual(out.status, 200);
+    // Password alone is not enough with two-step on: an emailed code is needed too.
+    const listed = await list(ok.body.token);
+    assert.deepStrictEqual(listed.body.mfa_methods, ['email']);
+    const noCode = await request(app).post('/api/account/sessions/revoke-others').set(as(ok.body.token)).send({ password: PASSWORD });
+    assert.strictEqual(noCode.status, 403);
+    assert.strictEqual(noCode.body.code, 'MFA_CODE_REQUIRED');
+    // (the login code was sent moments ago; skip the resend wait)
+    await sys(() => Users.updateOne({ id: s.id }, { $set: { mfa_email_code_sent_at: new Date(Date.now() - 60000) } }));
+    const sent = await request(app).post('/api/account/sessions/revoke-others/code').set(as(ok.body.token));
+    assert.strictEqual(sent.status, 200, JSON.stringify(sent.body));
+    const mail = notify.outbox().at(-1);
+    assert.match(mail.subject, /confirmation code/);
+    const confirmCode = /Code: (\d{6})/.exec(mail.text)[1];
+    const wrong = await request(app).post('/api/account/sessions/revoke-others').set(as(ok.body.token))
+      .send({ password: PASSWORD, method: 'email', code: confirmCode === '000000' ? '111111' : '000000' });
+    assert.strictEqual(wrong.status, 403);
+    assert.strictEqual(wrong.body.code, 'INVALID_MFA_CODE');
+    const out = await request(app).post('/api/account/sessions/revoke-others').set(as(ok.body.token))
+      .send({ password: PASSWORD, method: 'email', code: confirmCode });
+    assert.strictEqual(out.status, 200, JSON.stringify(out.body));
     assert.strictEqual(jwt.decode(out.body.token).mfa, true, 'two-step state kept');
     assert.strictEqual((await me(out.body.token)).status, 200);
     // The MFA step token itself is not a session.
@@ -381,6 +399,90 @@ test('My sessions', async (t) => {
     assert.strictEqual(legacy.status, 200);
     assert.strictEqual(legacy.body.session_ended, false);
     assert.strictEqual((await request(app).post('/api/auth/logout')).status, 401, 'needs a token');
+  });
+
+  await t.test('S16. Sign out all other devices needs the password; wrong or missing is refused and changes nothing', async () => {
+    await tenant(1);
+    const user = await owner(1);
+    const tokMine = await login(user);
+    const tokOther = await login(user, { ua: SAFARI_IPHONE });
+    const revokeOthers = (body) => request(app).post('/api/account/sessions/revoke-others').set(as(tokMine)).send(body);
+
+    const missing = await revokeOthers({});
+    assert.strictEqual(missing.status, 403);
+    assert.strictEqual(missing.body.code, 'PASSWORD_REQUIRED');
+    assert.ok(!missing.body.token);
+    const wrong = await revokeOthers({ password: 'not-the-password' });
+    assert.strictEqual(wrong.status, 403);
+    assert.strictEqual(wrong.body.code, 'PASSWORD_INCORRECT');
+    assert.match(wrong.body.error, /password is not correct/);
+    assert.ok(!wrong.body.token);
+    // Nothing happened: both devices still signed in, no token_version bump.
+    assert.strictEqual((await me(tokMine)).status, 200, 'a wrong password does not sign this device out');
+    assert.strictEqual((await me(tokOther)).status, 200, 'other device untouched');
+    assert.strictEqual((await sys(() => Users.findOne({ id: user.id }).lean())).token_version, 0);
+
+    const ok = await revokeOthers({ password: PASSWORD });
+    assert.strictEqual(ok.status, 200);
+    assert.strictEqual(ok.body.revoked, 1);
+    assert.strictEqual((await me(tokOther)).status, 401, 'other device signed out');
+    assert.strictEqual((await me(ok.body.token)).status, 200);
+  });
+
+  await t.test('S17. Sign out all other devices never extends the session (token and row keep their end time)', async () => {
+    await tenant(1);
+    const user = await owner(1);
+    const tokMine = await login(user);
+    await login(user, { ua: SAFARI_IPHONE });
+    // Pretend this session started 5 days ago: 2 days left.
+    const ends = new Date(Date.now() + 2 * 86400 * 1000);
+    const { iat, exp, ...claims } = jwt.decode(tokMine);
+    assert.ok(iat && exp);
+    const aged = jwt.sign(claims, process.env.JWT_SECRET, { expiresIn: Math.floor((ends.getTime() - Date.now()) / 1000) });
+    await sys(() => UserSessions.updateOne({ session_hash: sessions.hashSessionId(sidOf(tokMine)) }, { $set: { expires_at: ends } }));
+
+    let token = aged;
+    for (let i = 0; i < 2; i += 1) { // repeated calls do not add time either
+      const res = await request(app).post('/api/account/sessions/revoke-others').set(as(token)).send({ password: PASSWORD });
+      assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+      token = res.body.token;
+      assert.strictEqual(sidOf(token), sidOf(tokMine), 'same session');
+      assert.ok(jwt.decode(token).exp <= jwt.decode(aged).exp, 'new token ends no later than the old one');
+      const row = await rowOf(token);
+      assert.strictEqual(row.expires_at.getTime(), ends.getTime(), 'session row keeps its end time');
+      assert.strictEqual((await me(token)).status, 200);
+    }
+    assert.ok(jwt.decode(token).exp < Math.floor(Date.now() / 1000) + 3 * 86400, 'not a fresh 7-day token');
+
+    // A token from before sessions: the new tracked session ends when that token did.
+    const legacy = makeToken(await sys(() => Users.findOne({ id: user.id }).lean())); // 1 day
+    const res = await request(app).post('/api/account/sessions/revoke-others').set(as(legacy)).send({ password: PASSWORD });
+    assert.strictEqual(res.status, 200);
+    assert.ok(jwt.decode(res.body.token).exp <= jwt.decode(legacy).exp);
+    assert.ok((await rowOf(res.body.token)).expires_at.getTime() <= jwt.decode(legacy).exp * 1000);
+  });
+
+  await t.test('S18. With an authenticator app, a valid code (or a recovery code) is needed besides the password', async () => {
+    await tenant(1);
+    const mfa = require('../services/mfa');
+    const { encrypt } = require('../utils/crypto');
+    const secret = mfa.generateSecret();
+    const { codes, hashes } = mfa.generateRecoveryCodes();
+    const user = await owner(1, { mfa_enabled: true, mfa_secret_enc: encrypt(secret), mfa_recovery_hashes: hashes });
+    const tok = makeToken(user, { mfa: true });
+    const post = (body) => request(app).post('/api/account/sessions/revoke-others').set(as(tok)).send(body);
+    assert.strictEqual((await post({ password: PASSWORD })).body.code, 'MFA_CODE_REQUIRED');
+    const bad = await post({ password: PASSWORD, code: mfa.totp(secret) === '123456' ? '654321' : '123456' });
+    assert.strictEqual(bad.status, 403);
+    assert.strictEqual(bad.body.code, 'INVALID_MFA_CODE');
+    const wrongPw = await post({ password: 'nope', code: mfa.totp(secret) });
+    assert.strictEqual(wrongPw.body.code, 'PASSWORD_INCORRECT', 'a right code does not replace the password');
+    const good = await post({ password: PASSWORD, code: mfa.totp(secret) });
+    assert.strictEqual(good.status, 200, JSON.stringify(good.body));
+    const again = await request(app).post('/api/account/sessions/revoke-others').set(as(good.body.token)).send({ password: PASSWORD, recovery_code: codes[0] });
+    assert.strictEqual(again.status, 200, 'recovery code works');
+    const fresh = await sys(() => Users.findOne({ id: user.id }).lean());
+    assert.strictEqual(fresh.mfa_recovery_hashes.length, hashes.length - 1, 'recovery code used up');
   });
 
   await t.test('S14. Helpers: IP masking and user-agent reading', () => {
