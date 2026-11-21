@@ -19,6 +19,7 @@ module.exports = defineModel('ai_reply_logs', {
   meeting: { type: Mixed, default: null }, // the model's booking proposal, for debugging
   appointment: { type: Mixed, default: null }, // the model's appointment proposal, for debugging
   appointment_id: { type: Number, default: null }, // the appointment this reply booked
+  order_id: { type: Number, default: null }, // the order this reply placed
   answered_from: { type: String, default: null }, // business_info | greeting | booking | handoff | general_knowledge
   language: { type: String, default: null }, // en | ta (what the customer wrote in)
   model: { type: String, default: null },

@@ -74,4 +74,5 @@ module.exports = defineModel('leads', {
   last_inbound_at: { type: Date },
   ai_followup_step: { type: Number, default: 0 },
   ai_followup_due: { type: Date },
+  ai_followup_promised_for: { type: Date },
 }, { autoId: true, unique: [['leadgen_id'], ['phone', 'client_id']], indexes: [['brand_id'], ['client_id'], ['ai_followup_due']] });
