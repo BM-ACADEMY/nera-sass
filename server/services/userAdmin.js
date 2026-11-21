@@ -14,6 +14,7 @@ const { Users } = require('../models');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
 const { TENANT_ROLES, STAFF_ROLES, canAssignRole, normalizeTenantRole, describeUser } = require('./permissions');
 const audit = require('./audit');
+const notify = require('./notify');
 
 class UserAdminError extends Error {
   constructor(status, message) {
@@ -135,6 +136,8 @@ async function resetMfa({ userId, actor, req }) {
     $inc: { token_version: 1 },
   }), 'user-admin');
   await audit.record(audit.EVENTS.MFA_RESET, { tenantId: target.tenant_id ?? null, req, targetType: 'user', targetId: target.id, meta: { email: target.email } });
+  await notify.twoStepChangedEmail({ to: target.email, name: target.name, method: 'all', action: 'removed', byStaff: true, staff: describeUser(target)?.kind === 'staff' })
+    .catch((error) => console.error('[user-admin] 2FA reset email not sent:', error.message));
   return { success: true };
 }
 

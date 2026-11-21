@@ -7,6 +7,10 @@
  *      unchanged.
  *  R.  POST /api/admin/users/:id/reset-mfa: ops may reset customer users
  *      only; a staff account needs the founder; nobody resets their own.
+ *  M2. Parallel wrong logins still lock the account (atomic counter).
+ *  M3. Signed-in password prompts (change password, 2FA changes) are counted
+ *      the same way, refused while locked, and /change-password is rate limited.
+ *  Mail: the owner is emailed when a 2FA method is added or removed.
  * In-memory MongoDB; mail goes to the in-memory outbox.
  */
 const test = require('node:test');
@@ -82,6 +86,9 @@ test('2FA changes need re-authentication; reset-mfa respects staff roles', async
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
     assert.strictEqual(ok.body.recovery_codes.length, 10);
     assert.strictEqual((await fresh(user.id)).mfa_enabled, true);
+    const mail = notify.outbox().at(-1);
+    assert.strictEqual(mail.to, user.email);
+    assert.match(mail.subject, /Two-step verification added/, 'the owner is told about the new method');
   });
 
   await t.test('H1. Session enrolment (email) is refused without / with a wrong password; the right one works', async () => {
@@ -178,6 +185,7 @@ test('2FA changes need re-authentication; reset-mfa respects staff roles', async
     const off = await request(app).post('/api/auth/mfa/disable').set(auth(user)).send({ method: 'email', password: PASSWORD, code_method: 'totp', code: mfa.totp(secret) });
     assert.strictEqual(off.status, 200, JSON.stringify(off.body));
     assert.deepStrictEqual(off.body.mfa_methods, ['totp']);
+    assert.match(notify.outbox().at(-1).subject, /Two-step verification removed/);
   });
 
   await t.test('H1. Refusals are 403 and keep the session', async () => {
@@ -222,6 +230,65 @@ test('2FA changes need re-authentication; reset-mfa respects staff roles', async
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
     assert.strictEqual(await mfaOn(customer), false);
     assert.ok(await sys(() => AuditEvents.exists({ event: 'MFA_RESET', target_id: String(customer.id) })), 'audited');
+    assert.ok(notify.outbox().some((m) => m.to === customer.email && /removed/.test(m.subject)), 'the customer is told');
+  });
+
+  // ── Lockout ───────────────────────────────────────────────
+  await t.test('M2. Ten parallel wrong logins lock the account', async () => {
+    const user = await tenantUser();
+    const results = await Promise.all(Array.from({ length: 10 }, () => request(app).post('/api/auth/login').send({ email: user.email, password: 'wrong-password' })));
+    assert.ok(results.every((r) => [401, 423].includes(r.status)), results.map((r) => r.status).join(','));
+    const stored = await fresh(user.id);
+    assert.ok(stored.locked_until && new Date(stored.locked_until) > new Date(), 'locked');
+    const right = await request(app).post('/api/auth/login').send({ email: user.email, password: PASSWORD });
+    assert.strictEqual(right.status, 423, 'even the right password is refused while locked');
+    assert.strictEqual(right.body.code, 'ACCOUNT_LOCKED');
+    assert.strictEqual(await sys(() => AuditEvents.countDocuments({ event: 'LOGIN_FAILED_LOCKOUT', target_id: String(user.id) })), 1, 'one lockout record');
+  });
+
+  await t.test('M3. Change password: wrong attempts count, lock the account, and are refused while locked', async () => {
+    const user = await tenantUser();
+    const change = (current) => request(app).post('/api/auth/change-password').set(auth(user)).send({ current, newPassword: 'Brand-New-Pass-9' });
+    for (let i = 1; i <= 4; i += 1) {
+      const r = await change('wrong');
+      assert.strictEqual(r.status, 400);
+      assert.strictEqual((await fresh(user.id)).failed_login_count, i, 'counted like a login');
+    }
+    const fifth = await change('wrong');
+    assert.strictEqual(fifth.status, 423);
+    const right = await change(PASSWORD);
+    assert.strictEqual(right.status, 423, 'refused while locked');
+    assert.strictEqual((await request(app).post('/api/auth/login').send({ email: user.email, password: PASSWORD })).status, 423, 'login is locked too');
+    assert.strictEqual((await request(app).get('/api/auth/me').set(auth(user))).status, 200, 'the session itself stays');
+  });
+
+  await t.test('M3. A correct password resets the counter; 2FA prompts count too and respect the lock', async () => {
+    const user = await tenantUser();
+    await request(app).post('/api/auth/mfa/setup').set(auth(user)).send({ password: 'wrong' });
+    await request(app).post('/api/auth/mfa/setup').set(auth(user)).send({ password: 'wrong' });
+    assert.strictEqual((await fresh(user.id)).failed_login_count, 2, '2FA password prompts are counted');
+    const ok = await request(app).post('/api/auth/mfa/setup').set(auth(user)).send({ password: PASSWORD });
+    assert.strictEqual(ok.status, 200);
+    assert.strictEqual((await fresh(user.id)).failed_login_count, 0, 'reset on success');
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { locked_until: new Date(Date.now() + 60000) } }));
+    const locked = await request(app).post('/api/auth/mfa/setup').set(auth(user)).send({ password: PASSWORD });
+    assert.strictEqual(locked.status, 423);
+    assert.strictEqual(locked.body.code, 'ACCOUNT_LOCKED');
+  });
+
+  await t.test('M3. /change-password has a per-account rate limit', async () => {
+    const user = await tenantUser();
+    process.env.AUTH_RATE_LIMIT = 'on';
+    try {
+      const statuses = [];
+      for (let i = 0; i < 21; i += 1) {
+        statuses.push((await request(app).post('/api/auth/change-password').set(auth(user)).send({ current: 'wrong', newPassword: 'Brand-New-Pass-9' })).status);
+      }
+      assert.ok(statuses.slice(0, 20).every((s) => s !== 429), statuses.join(','));
+      assert.strictEqual(statuses[20], 429, 'the 21st request in 15 minutes is refused');
+    } finally {
+      process.env.AUTH_RATE_LIMIT = 'off';
+    }
   });
 
   await t.test('R. The founder can reset a staff account, but not their own', async () => {
