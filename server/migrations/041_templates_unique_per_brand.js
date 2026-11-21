@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Migration 040 — LeadOS templates unique per workspace, brand, name and language.
+ * Migration 041 — LeadOS templates unique per workspace, brand, name and language.
  *
  * MongoDB migration, written as a file only: the server never runs it.
  *
