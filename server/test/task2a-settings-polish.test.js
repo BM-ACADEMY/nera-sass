@@ -114,22 +114,21 @@ test('Task 2A: Settings polish', async (t) => {
     assert.strictEqual(raw.wa_website, 'legacy-site.example', 'unchanged legacy value left exactly as it was');
   });
 
-  await t.test('V2. A changed website is normalised or refused; empty clears it', async () => {
-    const { brand, owner } = await workspace();
+  await t.test('V2. Customers cannot change the website (set by the Getnera team; staff route: whatsapp-profile.test.js P2)', async () => {
+    const { brand, owner } = await workspace({ wa_website: 'https://shop.example.in' });
     const auth = bearerToken(makeToken(owner));
-    const patch = (wa_website) => request(app).patch(`/api/clients/${brand.id}`).set(auth).send({ wa_website });
-    assert.strictEqual((await patch('example.org')).status, 200);
-    assert.strictEqual((await rawBrand(brand.id)).wa_website, 'https://example.org');
-    assert.strictEqual((await patch('http://shop.example.in/path')).status, 200);
-    assert.strictEqual((await rawBrand(brand.id)).wa_website, 'http://shop.example.in/path');
-    for (const bad of ['javascript:alert(1)', 'ftp://example.org', 'not a url', 'localhost', 'https://user:pass@example.org']) {
-      const res = await patch(bad);
-      assert.strictEqual(res.status, 400, bad);
-      assert.strictEqual(res.body.code, 'INVALID_WEBSITE', bad);
+    const patch = (body) => request(app).patch(`/api/clients/${brand.id}`).set(auth).send(body);
+    for (const body of [{ wa_website: 'https://other.example' }, { wa_website: '' }, { wa_website: null }, { wa_website_2: 'https://second.example' }, { wa_description: 'x', wa_website: 'example.org' }]) {
+      const res = await patch(body);
+      assert.strictEqual(res.status, 400, JSON.stringify(body));
+      assert.strictEqual(res.body.code, 'WEBSITE_MANAGED_BY_PLATFORM', JSON.stringify(body));
+      assert.match(res.body.error, /Getnera team/);
     }
-    assert.strictEqual((await rawBrand(brand.id)).wa_website, 'http://shop.example.in/path', 'refused values change nothing');
-    assert.strictEqual((await patch('')).status, 200);
-    assert.strictEqual((await rawBrand(brand.id)).wa_website, null);
+    const raw = await rawBrand(brand.id);
+    assert.strictEqual(raw.wa_website, 'https://shop.example.in', 'refused requests change nothing');
+    assert.notStrictEqual(raw.wa_description, 'x');
+    // Resending the current value (whole-form saves) is fine.
+    assert.strictEqual((await patch({ wa_description: 'Updated', wa_website: 'https://shop.example.in' })).status, 200);
     assert.strictEqual(metaCalls.length, 0);
   });
 

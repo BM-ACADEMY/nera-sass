@@ -6,6 +6,7 @@
 const { MetaWhatsappPhoneNumbers, MetaWhatsappTemplates } = require('../../models');
 const { can } = require('../../services/permissions');
 const { runAsSystem } = require('../../services/tenantContext');
+const { inventoryAccessToken } = require('../../services/metaInventoryCredentials');
 
 const maskId = (value) => (value ? `•••• ${String(value).slice(-4)}` : null);
 
@@ -39,7 +40,13 @@ module.exports = function registerWhatsappOverviewRoutes(app, ctx) {
         webhook_subscribed: brand.whatsapp_webhook_subscribed ?? null,
         webhook_error: brand.whatsapp_webhook_error || null,
         can_send: Boolean(brand.wa_token_last4),
+        // Last four characters only, as on the old Settings > WhatsApp tab.
+        credential_last4: brand.wa_token_last4 || null,
         managed_by_platform: Boolean(phone),
+        // Owner/admin can edit About, Description, Address, Email and photo
+        // (PUT /api/whatsapp/profile) when the number is in the platform inventory.
+        profile_editable: Boolean(phone) && Boolean(inventoryAccessToken()) && base.can_manage,
+        photo_editable: Boolean(phone) && Boolean(inventoryAccessToken()) && Boolean(process.env.META_APP_ID) && base.can_manage,
         number: {
           display_phone_number: phone?.display_phone_number || (brand.whatsapp_number ? `+${String(brand.whatsapp_number).replace(/^\+/, '')}` : null),
           verified_name: phone?.verified_name || null,

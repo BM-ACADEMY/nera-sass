@@ -20,6 +20,7 @@ const LABELS = {
   reports: 'Reports',
   clients: 'Clients',
   settings: 'Settings',
+  billing: 'Billing',
   'sales-tasks': 'Sales Tasks',
   calendar: 'Calendar',
   plugins: 'Plugins',
@@ -33,12 +34,13 @@ const SEARCH_PAGES = [
   { path: '/calendar', label: 'Calendar', desc: 'Google Calendar, booking hours and meetings' },
   { path: '/plugins', label: 'Plugins', desc: 'Google Calendar, Google Meet and more' },
   { path: '/inbox', label: 'WhatsApp Chat', desc: 'Chat directly with your leads' },
-  { path: '/whatsapp', label: 'WhatsApp Number', desc: 'Your connected number, status and profile' },
+  { path: '/whatsapp', label: 'WhatsApp Number', desc: 'Your connected number, status and business profile' },
   { path: '/templates', label: 'Templates', desc: 'Your WhatsApp message templates' },
   { path: '/campaigns', label: 'Campaigns', desc: 'Send bulk WhatsApp messages' },
   { path: '/brain', label: 'AI Brain', desc: 'Configure AI assistant behavior' },
   { path: '/reports', label: 'Reports', desc: 'Detailed analytics and performance' },
-  { path: '/settings', label: 'Settings', desc: 'Workspace, brand profile and account' },
+  { path: '/settings', label: 'Settings', desc: 'Profile, workspace, brand profile and security' },
+  { path: '/billing', label: 'Billing', desc: 'Plan, usage, wallet and invoices' },
 ];
 
 export const Header = () => {

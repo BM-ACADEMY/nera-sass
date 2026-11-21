@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { io as socketIO } from 'socket.io-client';
-import { FiGrid, FiUsers, FiCheckSquare, FiSmartphone, FiFileText, FiSend, FiCpu, FiBarChart2, FiSettings, FiCalendar, FiPackage, FiLogOut, FiMoreVertical } from 'react-icons/fi';
+import { FiGrid, FiUsers, FiCheckSquare, FiSmartphone, FiFileText, FiSend, FiCpu, FiBarChart2, FiSettings, FiCalendar, FiPackage, FiLogOut, FiMoreVertical, FiCreditCard } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import getneraLogo from '../../assets/getnera-logo.png';
 import { api } from '../../services/api.js';
@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/sidebar';
 
 // The customer panel menu, in the same sections and look as the admin panel.
-// Settings and sign-out live in the profile menu at the bottom.
+// Settings, Billing and sign-out live in the profile menu at the bottom.
 export const SECTIONS = [
   { label: 'Overview', items: [{ path: '/dashboard', icon: FiGrid, label: 'Dashboard' }] },
   {
@@ -133,7 +133,7 @@ const AppSidebar = ({ onLogout }) => {
           <SidebarMenuItem>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <SidebarMenuButton size="lg" isActive={isActive('/settings')} className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
+                <SidebarMenuButton size="lg" isActive={isActive('/settings') || isActive('/billing')} className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
                   <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700">
                     {user?.name ? user.name.trim()[0].toUpperCase() : 'U'}
                   </span>
@@ -151,6 +151,7 @@ const AppSidebar = ({ onLogout }) => {
                 </div>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => go('/settings')}><FiSettings /> Settings</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => go('/billing')}><FiCreditCard /> Billing</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onSelect={onLogout}><FiLogOut /> Log out</DropdownMenuItem>
               </DropdownMenuContent>

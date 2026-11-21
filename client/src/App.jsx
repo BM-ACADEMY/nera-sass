@@ -22,6 +22,7 @@ import CalendarPage from './views/calendar/CalendarPage.jsx';
 import PluginsPage from './views/plugins/PluginsPage.jsx';
 import { ReportsView } from './views/ReportsView.jsx';
 import { SettingsView } from './views/SettingsView.jsx';
+import BillingPage from './views/billing/BillingPage.jsx';
 import { LoginScreen } from './views/auth/LoginScreen.jsx';
 import { api } from './services/api.js';
 
@@ -68,7 +69,7 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
           <Header />
           <div className="min-h-0 flex-1 overflow-y-auto bg-background">
             <Routes>
-              {/* Only the pages in the sidebar (and Settings in the profile menu).
+              {/* Only the pages in the sidebar (and Settings and Billing in the profile menu).
                   Any other address, typed or old, goes to the dashboard. */}
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<Dashboard />} />
@@ -82,7 +83,8 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
               <Route path="/plugins" element={<PluginsPage />} />
               <Route path="/brain" element={<BrainPage />} />
               <Route path="/reports" element={<ReportsView />} />
-              <Route path="/settings" element={<SettingsView />} />
+              <Route path="/settings/:section?" element={<SettingsView />} />
+              <Route path="/billing" element={<BillingPage />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </div>

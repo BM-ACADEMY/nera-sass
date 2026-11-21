@@ -61,15 +61,21 @@ router.get('/tenant', async (req, res) => {
   }
 });
 
-// Tenant-level settings (Full Scope standing rule 6).
-const SETTING_FIELDS = ['language', 'currency', 'tax_treatment', 'timezone'];
+// Tenant-level settings (Full Scope standing rule 6). Customers change only
+// the language; name, currency, timezone and tax treatment are set by the
+// Getnera team (admin panel) and are read-only here.
+const SETTING_FIELDS = ['language'];
+const PLATFORM_FIELDS = ['name', 'currency', 'tax_treatment', 'timezone', 'status'];
 router.patch('/tenant/settings', requirePermission('tenant.settings'), async (req, res) => {
   try {
+    if (PLATFORM_FIELDS.some((field) => req.body?.[field] !== undefined)) {
+      return res.status(400).json({ error: 'Workspace name, currency, timezone and tax treatment are set by the Getnera team. Contact support to change them.', code: 'SETTING_MANAGED_BY_PLATFORM' });
+    }
     const changes = {};
     for (const field of SETTING_FIELDS) {
       if (req.body?.[field] === undefined) continue;
       const value = String(req.body[field]).trim();
-      if (!value || value.length > 40) return res.status(400).json({ error: `Invalid ${field}` });
+      if (!value || value.length > 40) return res.status(400).json({ error: 'Choose a language from the list.' });
       changes[field] = value;
     }
     if (!Object.keys(changes).length) return res.status(400).json({ error: 'Nothing to update' });

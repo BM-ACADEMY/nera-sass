@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FiMessageSquare, FiFileText, FiSend, FiMapPin, FiMail, FiGlobe, FiInfo, FiCheckCircle, FiAlertTriangle, FiClock, FiRefreshCw, FiShield } from 'react-icons/fi';
+import { FiMessageSquare, FiFileText, FiSend, FiMail, FiCheckCircle, FiAlertTriangle, FiClock, FiRefreshCw, FiShield, FiLink } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import { api } from '../../services/api.js';
+import { connectWhatsApp } from '../settings/settingsPolicy.js';
+import BusinessProfileCard from './BusinessProfileCard.jsx';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -27,24 +29,13 @@ const Stat = ({ label, value, tone }) => (
   </Card>
 );
 
-const InfoRow = ({ icon: Icon, label, value, href }) => (
-  <div className="flex items-start gap-3 py-2.5">
-    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground"><Icon className="size-4" /></span>
-    <div className="min-w-0">
-      <div className="text-[12px] text-muted-foreground">{label}</div>
-      {value
-        ? (href ? <a href={href} target="_blank" rel="noreferrer" className="block truncate text-sm font-medium text-blue-700 hover:underline">{value}</a> : <div className="text-sm font-medium break-words whitespace-pre-wrap">{value}</div>)
-        : <div className="text-sm text-muted-foreground">Not added</div>}
-    </div>
-  </div>
-);
-
 /** Customer panel: the workspace's connected WhatsApp number. */
 const WhatsAppNumberPage = () => {
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [signupConfig, setSignupConfig] = useState(null);
 
   const load = async () => {
     try {
@@ -55,6 +46,12 @@ const WhatsAppNumberPage = () => {
     }
   };
   useEffect(() => { load(); }, []);
+  // Whether secure WhatsApp signup is available (shown to Owners/Admins with no number yet).
+  useEffect(() => {
+    if (data && !data.connected && data.can_manage && !signupConfig) {
+      api.getMetaEmbeddedSignupConfig().then(setSignupConfig).catch(() => setSignupConfig({ enabled: false }));
+    }
+  }, [data, signupConfig]);
 
   if (error && !data) {
     return (
@@ -89,6 +86,18 @@ const WhatsAppNumberPage = () => {
             The Getnera team connects your WhatsApp Business number to this workspace. Once it is connected you can chat with customers, send templates and run campaigns from here.
           </p>
           <Button asChild variant="outline"><a href="mailto:support@getnera.in?subject=Connect%20WhatsApp%20for%20my%20workspace"><FiMail /> Contact Getnera support</a></Button>
+          {(() => {
+            // "Connect WhatsApp" (secure customer-owned signup) for Owners/Admins,
+            // disabled until the server reports signup as available.
+            const connect = connectWhatsApp({ permissions: { manage_whatsapp: data.can_manage }, signupConfig });
+            if (!connect.visible) return null;
+            return (
+              <div className="mt-2 flex flex-col items-center gap-1.5">
+                <Button disabled={!connect.enabled} title={connect.reason || ''}><FiLink /> Connect WhatsApp</Button>
+                {!connect.enabled && signupConfig && <p className="max-w-sm text-xs text-muted-foreground">{connect.reason}</p>}
+              </div>
+            );
+          })()}
         </Card>
       </div>
     );
@@ -142,23 +151,14 @@ const WhatsAppNumberPage = () => {
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         {/* Business profile */}
-        <Card className="gap-1 px-5 py-5">
-          <div className="mb-1 flex items-center justify-between gap-2">
-            <div>
-              <div className="text-[15px] font-bold">WhatsApp business profile</div>
-              <p className="text-[12.5px] text-muted-foreground">What customers see when they open your profile in WhatsApp.</p>
-            </div>
-            {profile?.vertical && <Badge variant="outline">{title(profile.vertical)}</Badge>}
-          </div>
-          <div className="divide-y divide-border">
-            <InfoRow icon={FiInfo} label="About" value={profile?.about} />
-            <InfoRow icon={FiFileText} label="Description" value={profile?.description} />
-            <InfoRow icon={FiMapPin} label="Address" value={profile?.address} />
-            <InfoRow icon={FiMail} label="Email" value={profile?.email} href={profile?.email ? `mailto:${profile.email}` : undefined} />
-            <InfoRow icon={FiGlobe} label="Website" value={profile?.websites?.[0]} href={profile?.websites?.[0]} />
-          </div>
-          <p className="mt-2 text-[12px] text-muted-foreground">To change the profile, update your Brand Profile in Settings or ask the Getnera team.</p>
-        </Card>
+        <BusinessProfileCard
+          key={JSON.stringify(profile || {})}
+          profile={profile}
+          editable={Boolean(data.profile_editable)}
+          photoEditable={Boolean(data.photo_editable)}
+          canManage={Boolean(data.can_manage)}
+          onSaved={load}
+        />
 
         <div className="flex flex-col gap-5">
           {/* Quick actions */}
@@ -181,6 +181,7 @@ const WhatsAppNumberPage = () => {
               {[
                 ['Phone number ID', number.phone_number_id],
                 ['WhatsApp Business Account', number.waba_id],
+                ['Access credential', data.can_send ? `Configured${data.credential_last4 ? ` (ending ${data.credential_last4})` : ''}` : 'Not configured'],
                 ['Verified', when(data.verified_at)],
                 ['Last checked with Meta', when(number.last_synced_at)],
               ].map(([k, v]) => (

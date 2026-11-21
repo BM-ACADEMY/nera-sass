@@ -136,8 +136,15 @@ app.patch('/api/clients/:id', auth, requirePermission('tenant.settings'), async 
     }
     const existing = await Clients.findOne({ id: req.params.id }, NO_ID).lean();
     if (!existing) return res.status(404).json({ error: 'Client not found' });
-    // A changed website must be a real http(s) URL; an unchanged legacy value
-    // is left as it is so it never blocks saving other fields.
+    // The website on the WhatsApp profile is set by the Getnera team (admin
+    // panel). Customers may resend the current value (forms send every
+    // field) but never change it.
+    for (const field of ['wa_website', 'wa_website_2']) {
+      if (req.body[field] !== undefined && String(req.body[field] ?? '').trim() !== String(existing[field] ?? '').trim()) {
+        return res.status(400).json({ error: 'The website is set by the Getnera team. Contact support to change it.', code: 'WEBSITE_MANAGED_BY_PLATFORM' });
+      }
+    }
+    // An unchanged legacy value is left as it is so it never blocks saving other fields.
     if (req.body.wa_website !== undefined && String(req.body.wa_website ?? '') !== String(existing.wa_website ?? '')) {
       const website = normalizeWebsite(req.body.wa_website);
       if (!website.ok) return res.status(400).json({ error: 'Enter a valid website, for example https://example.com', code: 'INVALID_WEBSITE' });

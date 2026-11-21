@@ -1551,6 +1551,7 @@ const leadosRouteContext = {
   'leads-crud',
   'whatsapp',
   'whatsapp-overview',
+  'whatsapp-profile',
   'wa-templates',
   'calendar',
   'webhook-whatsapp',
