@@ -1,104 +1,221 @@
-import { useState, useEffect } from 'react';
-import { Plus, Upload, Send, Clock, Trash2, Download } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import {
+  Plus, Upload, Send, Clock, Trash2, Download, RefreshCw, FileSpreadsheet, CheckCircle2, AlertTriangle, X, Users,
+  Gauge, ShieldCheck, Pencil, Ban, BarChart3, Info,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 import { C } from '../constants/theme.js';
 import { api } from '../services/api.js';
+import { campaignsApi } from '../services/campaignsApi.js';
+import {
+  DEFAULT_TZ, getTemplateVariables, getCampaignTemplateError, createDefaultParameterMappings, SOURCE_LABELS, renderPreview,
+  isMarketing, nowInZone, toZoneInput, formatInZone, formatLocalInput, formatNumber, TIER_TEXT, friendlyError, plainReason, STATUS_META, statusOf,
+} from './campaigns/helpers.js';
 
-const getTemplateVariables = (value) => [...new Set(
-  [...String(value || '').matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((match) => Number(match[1]))
-)].sort((a, b) => a - b);
-
-const getCampaignTemplateError = (template) => {
-  if (!template) return '';
-  const bodyVariables = getTemplateVariables(template.body);
-  const headerVariables = getTemplateVariables(template.header);
-  if (bodyVariables.some((value, index) => value !== index + 1)) {
-    return 'Body variables must be consecutive and start at {{1}}.';
-  }
-  if (headerVariables.some((value, index) => value !== index + 1)) return 'Header variables must be consecutive and start at {{1}}.';
-  return '';
+// ── small presentational pieces ─────────────────────────────
+const TONES = {
+  blue: { fg: C.blue, bg: '#eff6ff', border: '#bfdbfe' },
+  green: { fg: C.green, bg: '#f0fdf4', border: '#bbf7d0' },
+  amber: { fg: '#b45309', bg: '#fffbeb', border: '#fde68a' },
+  red: { fg: '#dc2626', bg: '#fef2f2', border: '#fecaca' },
+  grey: { fg: C.muted, bg: '#f1f5f9', border: C.border },
+  purple: { fg: C.purple, bg: '#f5f3ff', border: '#ddd6fe' },
 };
 
-const createDefaultParameterMappings = (template) => ({
-  body: Object.fromEntries(getTemplateVariables(template?.body).map((number, index) => [
-    String(number), {
-      source: template?.parameter_definitions?.body?.[String(number)]?.default_source || (index === 0 ? 'recipient_name' : 'custom'),
-      value: '', section: 'body', number
-    }
-  ])),
-  header: Object.fromEntries(getTemplateVariables(template?.header).map((number) => [
-    String(number), { source: 'custom', value: '', section: 'header', number }
-  ]))
-});
+const Pill = ({ tone = 'grey', children, style }) => (
+  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: TONES[tone].bg, color: TONES[tone].fg, border: `1px solid ${TONES[tone].border}`, padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', ...style }}>{children}</span>
+);
 
-const formatCampaignDateTime = (value) => {
-  if (!value) return 'Not available';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Not available';
-  return date.toLocaleString([], {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit'
-  });
-};
+const Card = ({ title, subtitle, icon: Icon, children, style, action }) => (
+  <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 20, minWidth: 0, ...style }}>
+    {title && (
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 16 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+          {Icon && <span style={{ width: 30, height: 30, borderRadius: 8, background: C.accentDim, color: C.accent, display: 'grid', placeItems: 'center', flexShrink: 0 }}><Icon size={16} /></span>}
+          <div>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{title}</h3>
+            {subtitle && <p style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{subtitle}</p>}
+          </div>
+        </div>
+        {action}
+      </div>
+    )}
+    {children}
+  </section>
+);
+
+const Field = ({ label, hint, children, action }) => (
+  <div style={{ marginBottom: 16 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+      <label style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>{label}</label>
+      {action}
+    </div>
+    {children}
+    {hint && <p style={{ fontSize: 11, color: C.muted, marginTop: 5, lineHeight: 1.5 }}>{hint}</p>}
+  </div>
+);
+
+const inputStyle = { width: '100%', background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, padding: '9px 11px', fontSize: 13, outline: 'none' };
+const linkButton = { background: 'transparent', border: 'none', color: C.accent, fontSize: 12, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4, padding: 0 };
+const secondaryButton = { background: C.surface, border: `1px solid ${C.border}`, color: C.text, padding: '9px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 };
+const primaryButton = { background: C.accent, border: 'none', color: '#fff', padding: '10px 16px', borderRadius: 8, fontSize: 13, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 };
+
+const Modal = ({ label, children, maxWidth = 560 }) => (
+  <div role="dialog" aria-label={label} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16 }}>
+    <div className="cmp-pop" style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, width: '100%', maxWidth, maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 50px rgba(15,23,42,.18)' }}>
+      {children}
+    </div>
+  </div>
+);
+
+const ModalHeader = ({ title, subtitle, onClose, extra }) => (
+  <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{title}</h3>
+        {extra}
+      </div>
+      {subtitle && <p style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>{subtitle}</p>}
+    </div>
+    {onClose && <button type="button" aria-label="Close" onClick={onClose} style={{ background: 'transparent', border: 'none', color: C.muted, padding: 4 }}><X size={18} /></button>}
+  </div>
+);
+
+const Stat = ({ label, value, tone = 'grey', big }) => (
+  <div style={{ background: TONES[tone].bg, border: `1px solid ${TONES[tone].border}`, borderRadius: 10, padding: big ? '12px 14px' : '10px 12px', minWidth: 0 }}>
+    <div className="cmp-count" key={String(value)} style={{ fontSize: big ? 24 : 18, fontWeight: 800, color: TONES[tone].fg, lineHeight: 1.1 }}>{value}</div>
+    <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>{label}</div>
+  </div>
+);
+
+const Bar = ({ parts, total, height = 10, animated }) => (
+  <div style={{ display: 'flex', width: '100%', height, background: '#e2e8f0', borderRadius: 999, overflow: 'hidden' }} className={animated ? 'cmp-stripes' : undefined}>
+    {parts.map(([value, color], i) => (
+      <div key={i} style={{ width: `${total > 0 ? Math.min(100, (value / total) * 100) : 0}%`, background: color, transition: 'width .6s ease' }} />
+    ))}
+  </div>
+);
+
+const PAGE_CSS = `
+@keyframes cmp-fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes cmp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes cmp-spin { to { transform: rotate(360deg); } }
+@keyframes cmp-stripes { from { background-position: 0 0; } to { background-position: 28px 0; } }
+@keyframes cmp-fly { 0% { transform: translateX(-6px) translateY(3px); opacity: .4; } 50% { transform: translateX(4px) translateY(-3px); opacity: 1; } 100% { transform: translateX(-6px) translateY(3px); opacity: .4; } }
+.cmp-pop { animation: cmp-fade .2s ease-out; position: relative; }
+.cmp-count { animation: cmp-fade .35s ease-out; }
+.cmp-pulse { animation: cmp-pulse 1.4s ease-in-out infinite; }
+.cmp-spin { animation: cmp-spin .9s linear infinite; }
+.cmp-fly { animation: cmp-fly 1.6s ease-in-out infinite; }
+.cmp-stripes > div:first-child { background-image: linear-gradient(45deg, rgba(255,255,255,.25) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.25) 50%, rgba(255,255,255,.25) 75%, transparent 75%, transparent) !important; background-size: 28px 28px; animation: cmp-stripes 1s linear infinite; }
+.cmp-drop:hover { border-color: ${C.accent} !important; background: ${C.accentDim} !important; }
+.cmp-create { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 960px) { .cmp-create { grid-template-columns: 1fr; } }
+`;
+
+const AUDIENCE_TAG = 'tag';
+const AUDIENCE_LIST = 'custom_csv';
 
 export const CampaignsView = () => {
   const [tab, setTab] = useState('list');
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [listError, setListError] = useState('');
+  const [timezone, setTimezone] = useState(DEFAULT_TZ);
 
+  // Form
   const [name, setName] = useState('');
+  const [clients, setClients] = useState([]);
   const [clientId, setClientId] = useState('');
+  const [templates, setTemplates] = useState([]);
   const [templateId, setTemplateId] = useState('');
-  const [targetStatus, setTargetStatus] = useState('new');
-  const [tags, setTags] = useState([]);
+  const [templateParameters, setTemplateParameters] = useState({ body: {}, header: {} });
+  const [syncingTemplates, setSyncingTemplates] = useState(false);
+  const syncedBrandIds = useRef(new Set());
+  const [audience, setAudience] = useState(null); // { total, statuses, tags }
+  const [targetStatus, setTargetStatus] = useState('');
   const [tagId, setTagId] = useState('');
-  // Preview before sending: { data, payload } while the owner reviews it.
-  const [previewState, setPreviewState] = useState(null);
   const [sendType, setSendType] = useState('now');
   const [scheduledAt, setScheduledAt] = useState('');
-  const [clients, setClients] = useState([]);
-  const [templates, setTemplates] = useState([]);
-  const [templateParameters, setTemplateParameters] = useState({ body: {}, header: {} });
+  const [limit, setLimit] = useState(null);
+
+  // Custom list
+  const [listFile, setListFile] = useState(null);
+  const [listCheck, setListCheck] = useState(null); // { summary } | { error, summary? }
+  const [checkingList, setCheckingList] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const savedList = useRef(null); // { key, batchId } so a re-review does not store the list twice
+  const fileInput = useRef(null);
+
+  // Review, sending and reports
   const [submitting, setSubmitting] = useState(false);
-
-  // Custom CSV Upload state
-  const [importFile, setImportFile] = useState(null);
-
-  // Report state
+  const [formError, setFormError] = useState('');
+  const [previewState, setPreviewState] = useState(null);
+  const [sendRestLater, setSendRestLater] = useState(false);
+  const [progressView, setProgressView] = useState(null); // { id, name, progress }
   const [reportModal, setReportModal] = useState(null);
   const [campaignLogs, setCampaignLogs] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [reportFilter, setReportFilter] = useState('all');
-
-  // Delete state
   const [deleteModal, setDeleteModal] = useState(null);
-  const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [editModal, setEditModal] = useState(null); // { campaign, name, scheduledAt, saving, error }
+  const [cancelModal, setCancelModal] = useState(null);
 
-  // Live tracking state
-  const [isLiveTracking, setIsLiveTracking] = useState(false);
+  const selectedBrand = clients.find((c) => String(c.id) === String(clientId));
+  const selectedTemplate = templates.find((t) => String(t.id) === String(templateId));
+  const isBrandConnected = (brand) => Boolean(brand?.wa_token_configured && brand?.wa_business_id);
 
-  const fetchCampaigns = async () => {
-    setLoading(true);
+  // ── data loading ──────────────────────────────────────────
+  const fetchCampaigns = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) setLoading(true);
     try {
       const data = await api.getCampaigns();
       setCampaigns(data.campaigns || []);
+      if (data.timezone) setTimezone(data.timezone);
+      setListError('');
     } catch (err) {
-      console.error('Error fetching campaigns:', err.message);
+      if (!quiet) setListError(friendlyError(err, 'Could not load your campaigns. Please refresh the page.'));
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
+    }
+  }, []);
+
+  // The template list is the local copy of the brand's Meta templates;
+  // POST /api/templates/sync-all refreshes it, then the list is reloaded.
+  const syncTemplatesFromMeta = async (brands, { manual = false } = {}) => {
+    const connected = brands.filter(isBrandConnected);
+    if (!connected.length) {
+      if (manual) toast.error('Connect WhatsApp for this brand in Settings first.');
+      return;
+    }
+    connected.forEach((brand) => syncedBrandIds.current.add(String(brand.id)));
+    setSyncingTemplates(true);
+    try {
+      const results = await Promise.allSettled(connected.map((brand) => api.syncAllTemplates(brand.id)));
+      const templatesData = await api.getTemplates();
+      setTemplates(templatesData.templates || []);
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed && manual) toast.error(friendlyError(failed.reason, 'Could not sync templates from Meta. Please try again in a minute.'));
+      else if (manual) toast.success('Templates synced from Meta');
+    } catch (err) {
+      if (manual) toast.error(friendlyError(err, 'Could not load templates.'));
+    } finally {
+      setSyncingTemplates(false);
     }
   };
 
   const fetchFormMetadata = async () => {
     try {
-      const clientsData = await api.getClients();
-      const templatesData = await api.getTemplates();
-      setClients(clientsData.clients || []);
+      const [clientsData, templatesData] = await Promise.all([api.getClients(), api.getTemplates()]);
+      const brands = clientsData.clients || [];
+      setClients(brands);
       setTemplates(templatesData.templates || []);
-      setTags((await api.getCampaignTags().catch(() => ({ tags: [] }))).tags || []);
+      // Most workspaces have one brand: choose it (a connected one first).
+      setClientId((current) => current || String((brands.find(isBrandConnected) || brands[0])?.id || ''));
+      syncTemplatesFromMeta(brands);
     } catch (err) {
-      console.error('Error fetching metadata:', err.message);
+      setFormError(friendlyError(err, 'Could not load your brands and templates. Please refresh the page.'));
     }
   };
 
@@ -107,379 +224,561 @@ export const CampaignsView = () => {
     fetchFormMetadata();
   }, []);
 
-  // Live tracking: poll logs when campaign is running
+  // A newly selected brand is synced once per visit (the Sync button forces it).
   useEffect(() => {
-    let interval;
+    if (!clientId || syncedBrandIds.current.has(String(clientId))) return;
+    const brand = clients.find((c) => String(c.id) === String(clientId));
+    if (brand) syncTemplatesFromMeta([brand]);
+  }, [clientId, clients]);
 
-    if (isLiveTracking && reportModal && (reportModal.status === 'running' || reportModal.status === 'scheduled')) {
-      // Fetch latest campaign status first
-      const fetchWithStatusUpdate = async () => {
-        try {
-          const data = await api.getCampaigns();
-          const updatedCampaign = data.campaigns?.find(c => c.id === reportModal.id);
+  // Audience counts and the number's daily limit follow the brand.
+  const loadBrandData = useCallback(async () => {
+    if (!clientId) return;
+    const [counts, sending] = await Promise.allSettled([campaignsApi.audienceCounts(clientId), campaignsApi.sendingLimit(clientId)]);
+    if (counts.status === 'fulfilled') setAudience(counts.value);
+    else setAudience({ total: 0, statuses: [], tags: [], error: friendlyError(counts.reason, 'Could not count your contacts.') });
+    if (sending.status === 'fulfilled') {
+      setLimit(sending.value);
+      if (sending.value.timezone) setTimezone(sending.value.timezone);
+    } else setLimit({ error: friendlyError(sending.reason, 'Could not load your daily sending limit.') });
+  }, [clientId]);
+  useEffect(() => { loadBrandData(); }, [loadBrandData]);
 
-          if (updatedCampaign) {
-            // Update the reportModal with latest status
-            setReportModal(prev => ({ ...prev, ...updatedCampaign }));
+  // Keep the audience choice valid: only options that have contacts.
+  useEffect(() => {
+    if (!audience) return;
+    const valid = new Set([...(audience.statuses || []).map((s) => s.value), ...(audience.total > 0 ? ['all'] : []), AUDIENCE_LIST, ...(audience.tags?.length ? [AUDIENCE_TAG] : [])]);
+    if (!targetStatus || !valid.has(targetStatus)) setTargetStatus(audience.statuses?.[0]?.value || (audience.total > 0 ? 'all' : AUDIENCE_LIST));
+  }, [audience]);
 
-            // If completed or failed, stop live tracking
-            if (updatedCampaign.status === 'completed' || updatedCampaign.status === 'failed') {
-              setIsLiveTracking(false);
-              return;
-            }
-          }
+  const campaignTemplates = templates
+    .filter((t) => t.status === 'approved' || t.status === 'active')
+    .filter((t) => !t.template_scope || t.template_scope === 'leados' || t.template_scope === 'shared')
+    .filter((t) => !clientId || Number(t.client_id) === Number(clientId) || t.client_id == null);
 
-          // Fetch logs
-          const res = await api.getCampaignLogs(reportModal.id);
-          setCampaignLogs(res.logs || []);
-        } catch (err) {
-          console.error('Live tracking error:', err.message);
-        }
-      };
+  const usesListValues = ['header', 'body'].some((section) => Object.values(templateParameters[section] || {}).some((m) => m?.source === 'excel_parameter'));
+  const listKey = listFile ? `${listFile.name}:${listFile.size}:${listFile.lastModified}:${clientId}:${JSON.stringify(templateParameters)}` : '';
 
-      // Initial fetch
-      fetchWithStatusUpdate();
-
-      // Poll every 3 seconds
-      interval = setInterval(fetchWithStatusUpdate, 3000);
+  // ── custom list ───────────────────────────────────────────
+  const checkList = async (file, mappings = templateParameters) => {
+    if (!file) return;
+    if (!/\.(csv|xlsx|xls)$/i.test(file.name)) {
+      setListCheck({ error: 'Upload a .csv or .xlsx file.' });
+      return;
     }
-
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [isLiveTracking, reportModal?.id]);
-
-  const handleDownloadTemplate = () => {
-    const link = document.createElement('a');
-    link.href = templateId
-      ? `${api.baseUrl}/api/templates/${encodeURIComponent(templateId)}/campaign-sheet?mappings=${encodeURIComponent(JSON.stringify(templateParameters))}&token=${encodeURIComponent(localStorage.getItem('leados_token') || '')}`
-      : `${api.baseUrl}/api/leads/template`;
-    link.download = templateId ? 'template_campaign_recipients.xlsx' : 'leados_campaign_template.xlsx';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+    if (!clientId) {
+      setListCheck({ error: 'Choose a brand first.' });
+      return;
+    }
+    setCheckingList(true);
+    setListCheck(null);
+    try {
+      const data = await campaignsApi.uploadList({ file, clientId, templateParameters: mappings, save: false });
+      setListCheck({ summary: data.summary });
+    } catch (err) {
+      setListCheck({ error: friendlyError(err, 'Could not read this list. Please try again.'), summary: err.response?.data?.summary });
+    } finally {
+      setCheckingList(false);
+    }
   };
 
-  const handleCreateCampaign = async (e) => {
-    e.preventDefault();
-    if (!name || !clientId || !templateId) return toast.error('Please fill required fields');
-    const selectedTemplate = templates.find((template) => String(template.id) === String(templateId));
+  const pickFile = (file) => {
+    if (!file) return;
+    setListFile(file);
+    savedList.current = null;
+    checkList(file);
+  };
+
+  // Re-check the list when the template's sheet columns change.
+  const mappingKey = JSON.stringify(templateParameters);
+  useEffect(() => {
+    if (listFile && targetStatus === AUDIENCE_LIST) checkList(listFile);
+  }, [mappingKey, clientId]);
+
+  const downloadSample = async () => {
+    try {
+      await campaignsApi.downloadSample(templateParameters);
+    } catch (err) {
+      toast.error(friendlyError(err, 'Could not download the sample file.'));
+    }
+  };
+
+  // ── audience estimate (before the server preview) ─────────
+  const estimate = useMemo(() => {
+    if (!audience) return null;
+    if (targetStatus === AUDIENCE_LIST) return listCheck?.summary?.ready ?? null;
+    if (targetStatus === AUDIENCE_TAG) return audience.tags?.find((t) => String(t.id) === String(tagId))?.lead_count ?? null;
+    if (targetStatus === 'all') return audience.total;
+    return audience.statuses?.find((s) => s.value === targetStatus)?.count ?? null;
+  }, [audience, targetStatus, tagId, listCheck]);
+
+  const limitLeft = limit && !limit.error && limit.connected ? limit.remaining_today : null;
+  const overToday = sendType === 'now' && limitLeft != null && estimate != null && estimate > limitLeft;
+
+  // ── submit: preview, then confirm ─────────────────────────
+  const validateForm = () => {
+    if (!name.trim()) return 'Give the campaign a name.';
+    if (!clientId) return 'Choose a brand.';
+    if (!templateId) return 'Choose an approved template.';
     const templateError = getCampaignTemplateError(selectedTemplate);
-    if (templateError) return toast.error(templateError);
+    if (templateError) return templateError;
     for (const section of ['header', 'body']) {
       for (const number of getTemplateVariables(selectedTemplate?.[section])) {
         const mapping = templateParameters[section]?.[String(number)];
-        if (!mapping || (mapping.source === 'custom' && !mapping.value?.trim())) {
-          return toast.error(`Please configure ${section} parameter {{${number}}}`);
-        }
+        if (!mapping || (mapping.source === 'custom' && !mapping.value?.trim())) return `Fill in the value for {{${number}}} in the ${section === 'header' ? 'header' : 'message'}.`;
+        if (mapping.source === 'excel_parameter' && targetStatus !== AUDIENCE_LIST) return `{{${number}}} takes its value from an uploaded list. Choose "Upload Custom List" or pick another value.`;
       }
     }
-    
+    if (!targetStatus) return 'Choose who should receive it.';
+    if (targetStatus === AUDIENCE_TAG && !tagId) return 'Choose a tag.';
+    if (targetStatus === AUDIENCE_LIST) {
+      if (!listFile) return 'Upload your contact list.';
+      if (checkingList) return 'Your list is still being checked. One moment.';
+      if (!listCheck?.summary?.ready) return listCheck?.error || 'Your list has no contacts that can be used.';
+    }
+    if (sendType === 'later') {
+      if (!scheduledAt) return 'Pick the date and time to send.';
+      if (scheduledAt < nowInZone(timezone)) return 'The scheduled time has already passed. Pick a time in the future.';
+    }
+    return '';
+  };
+
+  const handleReview = async (e) => {
+    e.preventDefault();
+    const problem = validateForm();
+    setFormError(problem);
+    if (problem) return;
     setSubmitting(true);
     try {
-      let finalTargetStatus = targetStatus === 'tag' ? 'all' : targetStatus;
-      if (targetStatus === 'tag' && !tagId) {
-        setSubmitting(false);
-        return toast.error('Choose a tag');
-      }
-
-      // 1. Handle Custom CSV Upload
-      if (targetStatus === 'custom_csv') {
-        if (!importFile) {
-          setSubmitting(false);
-          return toast.error('Please upload an excel file');
+      let finalTarget = targetStatus === AUDIENCE_TAG ? 'all' : targetStatus;
+      if (targetStatus === AUDIENCE_LIST) {
+        if (savedList.current?.key !== listKey) {
+          const saved = await campaignsApi.uploadList({ file: listFile, clientId, templateParameters, save: true });
+          savedList.current = { key: listKey, batchId: saved.batch_id };
         }
-        const batchId = `csv_${Date.now()}`;
-        const formData = new FormData();
-        formData.append('client_id', clientId);
-        formData.append('template_id', templateId);
-        formData.append('file', importFile);
-        formData.append('force_source', batchId);
-        formData.append('template_parameters', JSON.stringify(templateParameters));
-        
-        const importRes = await api.importLeads(formData);
-        if (!importRes.imported) {
-          throw new Error(`No valid contacts found in the Excel file${importRes.failed ? ` (${importRes.failed} invalid row${importRes.failed === 1 ? '' : 's'})` : ''}`);
-        }
-        toast.success(
-          `Audience ready: ${importRes.inserted || 0} new, ${importRes.existing || 0} existing`
-          + (importRes.duplicate_rows ? `, ${importRes.duplicate_rows} duplicate row${importRes.duplicate_rows === 1 ? '' : 's'} skipped` : '')
-          + (importRes.failed ? `, ${importRes.failed} invalid row${importRes.failed === 1 ? '' : 's'} skipped` : '')
-        );
-        
-        finalTargetStatus = batchId;
+        finalTarget = savedList.current.batchId;
       }
-
-      // 2. Preview first: nothing is sent until the owner confirms it.
-      const finalScheduledAt = sendType === 'now' ? '' : new Date(scheduledAt).toISOString();
       const payload = {
-        name, client_id: clientId, template_id: templateId,
-        target_status: finalTargetStatus, target_tag_id: targetStatus === 'tag' ? Number(tagId) : null,
-        scheduled_at: finalScheduledAt || null, send_immediately: sendType === 'now', template_parameters: templateParameters
+        name: name.trim(), client_id: clientId, template_id: templateId,
+        target_status: finalTarget, target_tag_id: targetStatus === AUDIENCE_TAG ? Number(tagId) : null,
+        // A wall-clock time: the server reads it in the workspace's time zone.
+        scheduled_at: sendType === 'later' ? scheduledAt : null,
+        template_parameters: templateParameters,
       };
       const { preview } = await api.previewCampaign(payload);
+      setSendRestLater(false);
       setPreviewState({ data: preview, payload });
     } catch (err) {
-      toast.error('Could not prepare the campaign: ' + err.message);
+      setFormError(friendlyError(err, 'Could not prepare the campaign. Please try again.'));
     } finally {
       setSubmitting(false);
     }
   };
-
-
 
   const handleConfirmSend = async () => {
-    if (!previewState?.data?.can_send) return;
+    const p = previewState?.data;
+    if (!p?.can_send || (p.sending?.over_limit && !sendRestLater)) return;
     setSubmitting(true);
     try {
-      const res = await api.createCampaign({ ...previewState.payload, preview_confirmed: true });
-      toast.success('Campaign created! ' + res.campaign.name);
+      const res = await api.createCampaign({ ...previewState.payload, preview_confirmed: true, send_rest_later: Boolean(p.sending?.over_limit && sendRestLater) });
+      const created = res.campaign;
       setPreviewState(null);
-      setTab('list');
-      fetchCampaigns();
+      resetForm();
+      fetchCampaigns({ quiet: true });
+      loadBrandData();
+      if (created.scheduled_at) {
+        toast.success(`Scheduled for ${formatInZone(created.scheduled_at, timezone, { withZone: true })}`);
+        setTab('list');
+      } else {
+        setProgressView({ id: created.id, name: created.name, expected: p.audience?.will_send || 0, progress: null });
+      }
     } catch (err) {
-      toast.error('Failed to launch campaign: ' + err.message);
+      if (err.code === 'DAILY_LIMIT_EXCEEDED') {
+        setPreviewState((prev) => prev && { ...prev, data: { ...prev.data, sending: { ...prev.data.sending, ...(err.response?.data?.sending || {}), over_limit: true } } });
+      }
+      toast.error(friendlyError(err, 'Could not start the campaign. Please try again.'));
     } finally {
       setSubmitting(false);
     }
   };
 
+  const resetForm = () => {
+    setName('');
+    setTemplateId('');
+    setTemplateParameters({ body: {}, header: {} });
+    setTagId('');
+    setListFile(null);
+    setListCheck(null);
+    savedList.current = null;
+    setSendType('now');
+    setScheduledAt('');
+    setFormError('');
+  };
+
+  // ── live progress after launch ────────────────────────────
+  useEffect(() => {
+    if (!progressView?.id || progressView.progress?.done) return undefined;
+    let stopped = false;
+    let failures = 0;
+    const poll = async () => {
+      try {
+        const { progress } = await campaignsApi.progress(progressView.id);
+        failures = 0;
+        if (!stopped) setProgressView((prev) => (prev && prev.id === progress.id ? { ...prev, progress } : prev));
+        if (progress.done) fetchCampaigns({ quiet: true });
+      } catch {
+        failures += 1;
+        if (failures >= 5 && !stopped) setProgressView((prev) => prev && { ...prev, pollError: 'We lost touch with the server. Sending continues in the background; check the campaign list in a minute.' });
+      }
+    };
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [progressView?.id, progressView?.progress?.done]);
+
+  // Keep the list fresh while something is sending or waiting to start.
+  const hasActive = campaigns.some((c) => ['running'].includes(c.status) || (c.status === 'scheduled' && !c.scheduled_at));
+  useEffect(() => {
+    if (!hasActive || tab !== 'list') return undefined;
+    const timer = setInterval(() => fetchCampaigns({ quiet: true }), 5000);
+    return () => clearInterval(timer);
+  }, [hasActive, tab, fetchCampaigns]);
+
+  // ── reports, cancel, edit, delete ─────────────────────────
   const handleViewReport = async (c) => {
     setReportModal(c);
     setReportFilter('all');
     setLoadingLogs(true);
-
-    // Enable live tracking if campaign is running or scheduled (not yet started)
-    const shouldTrack = c.status === 'running' || c.status === 'scheduled';
-    setIsLiveTracking(shouldTrack);
-
     try {
       const res = await api.getCampaignLogs(c.id);
       setCampaignLogs(res.logs || []);
     } catch (err) {
-      toast.error('Failed to load logs: ' + err.message);
+      setCampaignLogs([]);
+      toast.error(friendlyError(err, 'Could not load the report.'));
     } finally {
       setLoadingLogs(false);
     }
   };
 
+  const handleRetry = async (c) => {
+    try {
+      await api.retryCampaign(c.id);
+      toast.success('Campaign restarted');
+      setProgressView({ id: c.id, name: c.name, expected: 0, progress: null });
+      fetchCampaigns({ quiet: true });
+    } catch (err) {
+      toast.error(friendlyError(err, 'Could not restart the campaign. Please try again in a few minutes.'));
+    }
+  };
+
+  const handleCancel = async () => {
+    const c = cancelModal;
+    try {
+      await campaignsApi.cancel(c.id);
+      toast.success('Campaign cancelled. Nothing was sent.');
+      setCancelModal(null);
+      fetchCampaigns({ quiet: true });
+    } catch (err) {
+      toast.error(friendlyError(err, 'Could not cancel the campaign. Please try again.'));
+      setCancelModal(null);
+      fetchCampaigns({ quiet: true });
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    const edit = editModal;
+    if (!edit.name.trim()) return setEditModal({ ...edit, error: 'Give the campaign a name.' });
+    if (!edit.scheduledAt || edit.scheduledAt < nowInZone(timezone)) return setEditModal({ ...edit, error: 'Pick a time in the future.' });
+    setEditModal({ ...edit, saving: true, error: '' });
+    try {
+      await campaignsApi.update(edit.campaign.id, { name: edit.name.trim(), scheduled_at: edit.scheduledAt });
+      toast.success('Campaign updated');
+      setEditModal(null);
+      fetchCampaigns({ quiet: true });
+    } catch (err) {
+      setEditModal({ ...edit, saving: false, error: friendlyError(err, 'Could not update the campaign. Please try again.') });
+    }
+  };
+
   const handleConfirmDelete = async () => {
-    if (deleteConfirmText !== 'delete-my-campaign') return;
     setDeleting(true);
     try {
       await api.deleteCampaign(deleteModal.id);
-      toast.success('Campaign deleted successfully');
+      toast.success('Campaign deleted');
       setDeleteModal(null);
-      setDeleteConfirmText('');
-      fetchCampaigns();
+      fetchCampaigns({ quiet: true });
     } catch (err) {
-      toast.error('Failed to delete campaign: ' + err.message);
+      toast.error(friendlyError(err, 'Could not delete the campaign. Please try again.'));
     } finally {
       setDeleting(false);
     }
   };
 
-  const displayCampaigns = campaigns || [];
-  const statC = { completed: { tc: C.green, bg: '#0a2018' }, running: { tc: C.accent, bg: '#2d1a0a' }, scheduled: { tc: C.blue, bg: '#0f1e38' } };
+  // ── derived values for the list ───────────────────────────
+  const totalSent = campaigns.reduce((a, c) => a + Number(c.sent_count || 0), 0);
+  const totalDelivered = campaigns.reduce((a, c) => a + Number(c.delivered_count || 0), 0);
+  const totalRead = campaigns.reduce((a, c) => a + Number(c.read_count || 0), 0);
+  const readRate = totalDelivered > 0 ? `${Math.round((totalRead / totalDelivered) * 100)}%` : '—';
+  const upcoming = campaigns.filter((c) => c.status === 'scheduled' && c.scheduled_at).length;
 
-  const totalDelivered = displayCampaigns.reduce((a, b) => a + parseInt(b.delivered_count || b.delivered || 0), 0);
-  const totalRead = displayCampaigns.reduce((a, b) => a + parseInt(b.read_count || b.read || 0), 0);
-  const avgRead = totalDelivered > 0 ? Math.round((totalRead / totalDelivered) * 100) + '%' : '0%';
+  const successLogs = campaignLogs.filter((l) => !['failed', 'skipped'].includes(l.status));
+  const failedLogs = campaignLogs.filter((l) => l.status === 'failed');
+  const skippedLogs = campaignLogs.filter((l) => l.status === 'skipped');
+  const filteredLogs = { success: successLogs, failed: failedLogs, skipped: skippedLogs }[reportFilter] || campaignLogs;
 
-  const successLogs = campaignLogs.filter(l => l.status !== 'failed');
-  const failedLogs = campaignLogs.filter(l => l.status === 'failed');
-  const filteredLogs = reportFilter === 'success' ? successLogs : reportFilter === 'failed' ? failedLogs : campaignLogs;
+  const audienceLabel = (c) => {
+    if (String(c.target_status || '').startsWith('csv_')) return 'Uploaded list';
+    if (c.target_tag_id != null) return c.tag_name ? `Tag: ${c.tag_name}` : 'Tagged contacts';
+    if (!c.target_status || c.target_status === 'all') return 'All contacts';
+    return audience?.statuses?.find((s) => s.value === c.target_status)?.label || `${c.target_status} leads`;
+  };
 
+  // ── render ────────────────────────────────────────────────
   return (
     <div className="p-mobile" style={{ padding: 26, overflowY: 'auto', height: '100%' }}>
-      <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 22 }}>
+      <style>{PAGE_CSS}</style>
+      <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>Bulk Campaigns</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>Send bulk WhatsApp messages using approved templates {loading && '(loading...)'}</p>
+          <h1 style={{ fontSize: 21, fontWeight: 800, color: C.text }}>Bulk Campaigns</h1>
+          <p style={{ color: C.muted, fontSize: 13, marginTop: 2 }}>Send an approved WhatsApp template to many contacts at once, now or later.</p>
         </div>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <button onClick={() => setTab('create')} style={{ background: C.accent, border: 'none', color: '#fff', padding: '8px 16px', borderRadius: 7, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}><Plus size={12} />New Campaign</button>
-        </div>
+        {tab === 'list' && (
+          <button type="button" onClick={() => setTab('create')} style={primaryButton}><Plus size={14} /> New Campaign</button>
+        )}
       </div>
-      <div style={{ display: 'flex', background: C.card, border: '1px solid ' + C.border, borderRadius: 9, overflow: 'hidden', marginBottom: 18, width: 'fit-content' }}>
-        {['list', 'create'].map((t) => (
-          <button key={t} onClick={() => setTab(t)} style={{ padding: '7px 18px', fontSize: 12, fontWeight: 600, border: 'none', background: tab === t ? C.accent : 'transparent', color: tab === t ? '#fff' : C.muted, textTransform: 'capitalize' }}>{t === 'list' ? 'Campaign List' : 'Create Campaign'}</button>
+
+      <div role="tablist" style={{ display: 'flex', background: C.card, border: `1px solid ${C.border}`, borderRadius: 9, overflow: 'hidden', marginBottom: 18, width: 'fit-content' }}>
+        {[['list', 'Campaign List'], ['create', 'Create Campaign']].map(([key, label]) => (
+          <button key={key} role="tab" aria-selected={tab === key} type="button" onClick={() => setTab(key)} style={{ padding: '8px 18px', fontSize: 12, fontWeight: 600, border: 'none', background: tab === key ? C.accent : 'transparent', color: tab === key ? '#fff' : C.muted }}>{label}</button>
         ))}
       </div>
+
       {tab === 'list' ? (
         <>
-          <div className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
-            {[['Total', displayCampaigns.length.toString(), C.accent], ['Running', displayCampaigns.filter(c => c.status === 'running').length.toString(), C.green], ['Total Sent', displayCampaigns.reduce((a, b) => a + parseInt(b.sent_count || b.sent || 0), 0).toString(), C.blue], ['Avg Read', avgRead, C.purple]].map(([l, v, col]) => (
-              <div key={l} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 11, padding: '14px 18px', flex: 1 }}>
-                <p style={{ fontSize: 9, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 5 }}>{l}</p>
-                <p style={{ fontSize: 20, fontWeight: 700, color: col, fontFamily: "'Inter',sans-serif" }}>{v}</p>
+          <div className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 12, marginBottom: 18 }}>
+            {[['Campaigns', formatNumber(campaigns.length), C.accent], ['Scheduled', formatNumber(upcoming), C.blue], ['Messages sent', formatNumber(totalSent), C.green], ['Read rate', readRate, C.purple]].map(([label, value, color]) => (
+              <div key={label} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 11, padding: '14px 18px' }}>
+                <p style={{ fontSize: 11, color: C.muted, marginBottom: 5 }}>{label}</p>
+                <p style={{ fontSize: 20, fontWeight: 700, color }}>{value}</p>
               </div>
             ))}
           </div>
-          <div className="table-responsive" style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 14, overflow: 'hidden' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid ' + C.border }}>
-                  {['Campaign', 'Brand', 'Template', 'Sent', 'Delivered', 'Read', 'Replied', 'Status', 'Date & Time', 'Actions'].map((h) => (
-                    <th key={h} style={{ padding: '11px 14px', fontSize: 9, color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8, textAlign: 'left' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {displayCampaigns.map((c) => {
-                  const s = statC[c.status] || statC.completed;
-                  return (
-                    <tr key={c.id} style={{ borderBottom: '1px solid ' + C.border }}>
-                      <td style={{ padding: '13px 14px', fontSize: 12, fontWeight: 600, color: C.text }}>{c.name}</td>
-                      <td style={{ padding: '13px 14px', fontSize: 11, color: C.muted }}>{c.brand_name || c.brand || 'All Brands'}</td>
-                      <td style={{ padding: '13px 14px', fontSize: 11, color: C.text }}>{c.template_name || 'Template unavailable'}</td>
-                      <td style={{ padding: '13px 14px', fontSize: 12, color: C.text }}>{c.sent_count ?? c.sent ?? 0}</td>
-                      <td style={{ padding: '13px 14px', fontSize: 12, color: C.green }}>{c.delivered_count ?? c.delivered ?? 0}</td>
-                      <td style={{ padding: '13px 14px', fontSize: 12, color: C.blue }}>{c.read_count ?? c.read ?? 0}</td>
-                      <td style={{ padding: '13px 14px', fontSize: 12, color: C.accent }}>{c.replied_count ?? c.replied ?? 0}</td>
-                      <td style={{ padding: '13px 14px' }}><span style={{ background: s.bg, color: s.tc, padding: '3px 9px', borderRadius: 12, fontSize: 11, fontWeight: 600, textTransform: 'capitalize' }}>{c.status}</span></td>
-                      <td style={{ padding: '13px 14px', fontSize: 11, color: C.dim, whiteSpace: 'nowrap' }}>
-                        <div style={{ color: C.text }}>{formatCampaignDateTime(c.scheduled_at || c.created_at || c.date)}</div>
-                        <div style={{ marginTop: 3, fontSize: 9, color: c.scheduled_at ? C.blue : C.green, fontWeight: 700, textTransform: 'uppercase' }}>
-                          {c.scheduled_at ? 'Scheduled' : 'Sent immediately'}
-                        </div>
-                      </td>
-                      <td style={{ padding: '13px 14px' }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <button onClick={() => handleViewReport(c)} style={{ background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 5, color: C.text, padding: '5px 10px', fontSize: 11, cursor: 'pointer', transition: 'all 0.2s' }}>View Report</button>
-                          {(c.status === 'failed' || c.status === 'scheduled') && (
-                            <button onClick={async () => { await api.retryCampaign(c.id); fetchCampaigns(); toast.success('Campaign retry started'); }} style={{ background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.2s', marginRight: 4 }} title="Retry Campaign"><span style={{ fontSize: 14, fontWeight: 600 }}>↻</span></button>
+
+          {listError && <p role="alert" style={{ color: TONES.red.fg, background: TONES.red.bg, border: `1px solid ${TONES.red.border}`, padding: '10px 12px', borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{listError}</p>}
+
+          <div className="table-responsive" style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, overflow: 'hidden' }}>
+            {loading && !campaigns.length ? (
+              <p style={{ padding: 24, color: C.muted, fontSize: 13 }}>Loading campaigns…</p>
+            ) : !campaigns.length ? (
+              <div style={{ padding: 36, textAlign: 'center' }}>
+                <Send size={28} color={C.dim} style={{ margin: '0 auto 10px' }} />
+                <p style={{ color: C.text, fontWeight: 600, fontSize: 14 }}>No campaigns yet</p>
+                <p style={{ color: C.muted, fontSize: 13, margin: '4px 0 14px' }}>Create your first campaign to message your contacts in bulk.</p>
+                <button type="button" onClick={() => setTab('create')} style={primaryButton}><Plus size={14} /> New Campaign</button>
+              </div>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${C.border}`, background: '#f8fafc' }}>
+                    {['Campaign', 'Audience', 'Sent', 'Delivered', 'Read', 'Replied', 'Status', 'When', ''].map((h) => (
+                      <th key={h} style={{ padding: '10px 14px', fontSize: 11, color: C.muted, fontWeight: 600, textAlign: 'left' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {campaigns.map((c) => {
+                    const st = statusOf(c);
+                    const meta = STATUS_META[st] || { label: c.status, tone: 'grey' };
+                    const waiting = c.status === 'scheduled' && c.scheduled_at;
+                    return (
+                      <tr key={c.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <td style={{ padding: '12px 14px' }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{c.name}</div>
+                          <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{c.template_name || 'Template removed'}</div>
+                        </td>
+                        <td style={{ padding: '12px 14px', fontSize: 12, color: C.muted }}>{audienceLabel(c)}</td>
+                        <td style={{ padding: '12px 14px', fontSize: 13, color: C.text }}>{formatNumber(c.sent_count)}</td>
+                        <td style={{ padding: '12px 14px', fontSize: 13, color: C.green }}>{formatNumber(c.delivered_count)}</td>
+                        <td style={{ padding: '12px 14px', fontSize: 13, color: C.blue }}>{formatNumber(c.read_count)}</td>
+                        <td style={{ padding: '12px 14px', fontSize: 13, color: C.purple }}>{formatNumber(c.replied_count)}</td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <Pill tone={meta.tone}>
+                            {st === 'running' && <span className="cmp-pulse" style={{ width: 6, height: 6, borderRadius: 999, background: TONES.amber.fg }} />}
+                            {meta.label}
+                          </Pill>
+                          {Number(c.failed_count) > 0 && <div style={{ fontSize: 11, color: TONES.red.fg, marginTop: 3 }}>{formatNumber(c.failed_count)} failed</div>}
+                        </td>
+                        <td style={{ padding: '12px 14px', fontSize: 12, color: C.text, whiteSpace: 'nowrap' }}>
+                          {waiting ? (
+                            <><div>{formatInZone(c.scheduled_at, timezone)}</div><div style={{ fontSize: 11, color: C.blue, marginTop: 2 }}>Sends automatically</div></>
+                          ) : (
+                            <><div>{formatInZone(c.launched_at || c.scheduled_at || c.created_at, timezone)}</div><div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{c.scheduled_at ? 'Was scheduled' : 'Sent now'}</div></>
                           )}
-                          <button onClick={() => setDeleteModal(c)} style={{ background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.2s' }} onMouseEnter={(e) => e.currentTarget.style.color = C.red} onMouseLeave={(e) => e.currentTarget.style.color = C.muted} title="Delete Campaign"><Trash2 size={16} /></button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        </td>
+                        <td style={{ padding: '12px 14px' }}>
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
+                            {waiting ? (
+                              <>
+                                <button type="button" title="Change name or time" onClick={() => setEditModal({ campaign: c, name: c.name, scheduledAt: toZoneInput(c.scheduled_at, timezone), error: '' })} style={{ ...secondaryButton, padding: '6px 10px' }}><Pencil size={13} /> Edit</button>
+                                <button type="button" title="Cancel this campaign" onClick={() => setCancelModal(c)} style={{ ...secondaryButton, padding: '6px 10px', color: TONES.red.fg }}><Ban size={13} /> Cancel</button>
+                              </>
+                            ) : (
+                              <button type="button" onClick={() => (st === 'running' || st === 'starting' ? setProgressView({ id: c.id, name: c.name, expected: 0, progress: null }) : handleViewReport(c))} style={{ ...secondaryButton, padding: '6px 10px' }}>
+                                <BarChart3 size={13} /> {st === 'running' || st === 'starting' ? 'Watch' : 'Report'}
+                              </button>
+                            )}
+                            {c.status === 'failed' && (
+                              <button type="button" title="Try again" onClick={() => handleRetry(c)} style={{ ...secondaryButton, padding: '6px 10px' }}><RefreshCw size={13} /> Retry</button>
+                            )}
+                            {c.status !== 'running' && (
+                              <button type="button" title="Delete campaign" aria-label="Delete campaign" onClick={() => setDeleteModal(c)} style={{ background: 'transparent', border: 'none', color: C.dim, padding: 6, display: 'flex' }}><Trash2 size={15} /></button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         </>
       ) : (
-        <form onSubmit={handleCreateCampaign} className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
-          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 14, padding: 22 }}>
-            <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 18 }}>Campaign Setup</h3>
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ display: 'block', fontSize: 10, color: C.muted, marginBottom: 5, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Campaign Name</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Academy June Batch" style={{ width: '100%', background: C.surface, border: '1px solid ' + C.border, borderRadius: 7, color: C.text, padding: '9px 11px', fontSize: 12, outline: 'none' }} />
-            </div>
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ display: 'block', fontSize: 10, color: C.muted, marginBottom: 5, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Select Brand</label>
-              <select value={clientId} onChange={(e) => setClientId(e.target.value)} style={{ width: '100%', background: C.surface, border: '1px solid ' + C.border, borderRadius: 7, color: C.text, padding: '9px 11px', fontSize: 12, outline: 'none' }}>
-                <option value="">Select Brand</option>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        <form onSubmit={handleReview} className="cmp-create" noValidate>
+          {/* ── Left: setup ── */}
+          <Card title="Campaign setup" subtitle="Name it and choose who receives it." icon={Users}>
+            <Field label="Campaign name">
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Diwali offer for hot leads" maxLength={120} style={inputStyle} />
+            </Field>
+
+            <Field label="Brand" hint={clients.length === 1 ? 'Your workspace brand is selected.' : undefined}>
+              <select value={clientId} onChange={(e) => { setClientId(e.target.value); setTemplateId(''); setTemplateParameters({ body: {}, header: {} }); }} style={inputStyle}>
+                {!clients.length && <option value="">No brand yet</option>}
+                {clients.length > 1 && !clientId && <option value="">Select a brand</option>}
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.name}{isBrandConnected(c) ? '' : ' (WhatsApp not connected)'}</option>)}
               </select>
-            </div>
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ display: 'block', fontSize: 10, color: C.muted, marginBottom: 5, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Target Audience Status</label>
-              <select value={targetStatus} onChange={(e) => setTargetStatus(e.target.value)} style={{ width: '100%', background: C.surface, border: '1px solid ' + C.border, borderRadius: 7, color: C.text, padding: '9px 11px', fontSize: 12, outline: 'none' }}>
-                <option value="new">New leads</option>
-                <option value="warm">Warm leads</option>
-                <option value="cold">Cold leads</option>
-                <option value="hot">Hot leads</option>
-                <option value="all">All leads</option>
-                <option value="tag">Contacts with a tag</option>
-                <option value="custom_csv">Upload Custom List</option>
+            </Field>
+
+            <Field label="Target audience" hint={audience?.error || (audience && !audience.total ? 'You have no contacts yet. Upload a list to send to new people.' : 'Only groups that have contacts are shown.')}>
+              <select value={targetStatus} onChange={(e) => setTargetStatus(e.target.value)} style={inputStyle} disabled={!audience}>
+                {!audience && <option value="">Counting contacts…</option>}
+                {audience?.statuses?.map((s) => <option key={s.value} value={s.value}>{s.label} ({formatNumber(s.count)})</option>)}
+                {audience?.total > 0 && <option value="all">All contacts ({formatNumber(audience.total)})</option>}
+                {audience?.tags?.length > 0 && <option value={AUDIENCE_TAG}>Contacts with a tag</option>}
+                {audience && <option value={AUDIENCE_LIST}>Upload Custom List</option>}
               </select>
-            </div>
-            {targetStatus === 'tag' && (
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ display: 'block', fontSize: 10, color: C.muted, marginBottom: 5, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Tag</label>
-                <select value={tagId} onChange={(e) => setTagId(e.target.value)} style={{ width: '100%', background: C.surface, border: '1px solid ' + C.border, borderRadius: 7, color: C.text, padding: '9px 11px', fontSize: 12, outline: 'none' }}>
+            </Field>
+
+            {targetStatus === AUDIENCE_TAG && (
+              <Field label="Tag">
+                <select value={tagId} onChange={(e) => setTagId(e.target.value)} style={inputStyle}>
                   <option value="">Select a tag</option>
-                  {tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name} ({tag.lead_count})</option>)}
+                  {audience?.tags?.map((tag) => <option key={tag.id} value={tag.id}>{tag.name} ({formatNumber(tag.lead_count)})</option>)}
                 </select>
-              </div>
+              </Field>
             )}
-            {targetStatus === 'custom_csv' && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
-                  <label style={{ display: 'block', fontSize: 10, color: C.muted, marginBottom: 5, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Upload Target List</label>
-                  <button type="button" onClick={handleDownloadTemplate} style={{ background: 'transparent', border: 'none', color: C.accent, fontSize: 10, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Download size={12} /> {templateId ? 'Download Sheet for Selected Template' : 'Download Basic Template'}
-                  </button>
+
+            {targetStatus === AUDIENCE_LIST && (
+              <Field
+                label="Contact list"
+                action={<button type="button" onClick={downloadSample} style={linkButton}><Download size={13} /> Download sample file</button>}
+                hint={<>Columns: <strong>phone</strong> (with country code, e.g. 919876543210), <strong>name</strong> (optional), <strong>whatsapp_opt_in</strong> (yes for people who agreed to offers){usesListValues ? <>, and one column per value marked “From my uploaded list”</> : null}. CSV or Excel, up to 10,000 rows.</>}
+              >
+                <div
+                  className="cmp-drop"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => fileInput.current?.click()}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.current?.click(); } }}
+                  onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => { e.preventDefault(); setDragOver(false); pickFile(e.dataTransfer.files?.[0]); }}
+                  style={{ border: `1.5px dashed ${dragOver ? C.accent : listCheck?.summary?.ready ? C.green : C.border}`, background: dragOver ? C.accentDim : C.surface, borderRadius: 10, padding: '22px 16px', textAlign: 'center', cursor: 'pointer', transition: 'all .15s' }}
+                >
+                  <input ref={fileInput} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => { pickFile(e.target.files?.[0]); e.target.value = ''; }} style={{ display: 'none' }} />
+                  {listFile ? <FileSpreadsheet size={26} color={C.green} style={{ margin: '0 auto 8px' }} /> : <Upload size={26} color={C.muted} style={{ margin: '0 auto 8px' }} />}
+                  <p style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{listFile ? listFile.name : 'Drag your file here, or click to choose'}</p>
+                  <p style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>{listFile ? 'Click to choose a different file' : '.csv or .xlsx'}</p>
                 </div>
-                <div style={{ position: 'relative', border: `1.5px dashed ${importFile ? C.green : C.border}`, background: C.card, borderRadius: 10, padding: '24px 20px', textAlign: 'center', transition: 'all 0.2s', marginTop: 8 }}>
-                  <input type="file" accept=".xlsx" onChange={(e) => setImportFile(e.target.files[0])} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0, cursor: 'pointer' }} />
-                  <Upload size={24} color={importFile ? C.green : C.muted} style={{ margin: '0 auto 10px' }} />
-                  <p style={{ fontSize: 13, color: importFile ? C.text : C.muted, fontWeight: 600, marginBottom: 4 }}>
-                    {importFile ? importFile.name : 'Click to select .xlsx template'}
-                  </p>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10 }}>
-                  <p style={{ fontSize: 11, color: C.dim }}>Only .xlsx is supported to prevent number corruption</p>
-                </div>
-              </div>
+                {checkingList && <p style={{ fontSize: 12, color: C.muted, marginTop: 8, display: 'flex', alignItems: 'center', gap: 6 }}><RefreshCw size={13} className="cmp-spin" /> Checking every row…</p>}
+                {listCheck && <ListSummary check={listCheck} />}
+              </Field>
             )}
-          </div>
-          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 14, padding: 22 }}>
-            <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 18 }}>Message & Schedule</h3>
-            <div style={{ marginBottom: 14 }}>
-              <label style={{ display: 'block', fontSize: 10, color: C.muted, marginBottom: 5, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Select Approved Template</label>
+          </Card>
+
+          {/* ── Right: message & schedule ── */}
+          <Card
+            title="Message & schedule"
+            subtitle="Pick an approved template and when to send."
+            icon={Send}
+          >
+            <Field
+              label="Approved template"
+              action={(
+                <button type="button" onClick={() => syncTemplatesFromMeta(selectedBrand ? [selectedBrand] : clients, { manual: true })} disabled={syncingTemplates} style={{ ...linkButton, opacity: syncingTemplates ? 0.6 : 1 }}>
+                  <RefreshCw size={13} className={syncingTemplates ? 'cmp-spin' : undefined} /> {syncingTemplates ? 'Syncing…' : 'Sync from Meta'}
+                </button>
+              )}
+            >
               <select value={templateId} onChange={(e) => {
-                const nextId = e.target.value;
-                const template = templates.find((item) => String(item.id) === String(nextId));
-                setTemplateId(nextId);
+                const template = templates.find((item) => String(item.id) === String(e.target.value));
+                setTemplateId(e.target.value);
                 setTemplateParameters(createDefaultParameterMappings(template));
-              }} style={{ width: '100%', background: C.surface, border: '1px solid ' + C.border, borderRadius: 7, color: C.text, padding: '9px 11px', fontSize: 12, outline: 'none' }}>
-                <option value="">Select Template</option>
-                {templates
-                  .filter((t) => t.status === 'approved' || t.status === 'active')
-                  .filter((t) => !t.template_scope || t.template_scope === 'leados' || t.template_scope === 'shared')
-                  .filter((t) => !clientId || t.client_id === parseInt(clientId) || t.client_id === null)
-                  .map((t) => {
-                    const templateError = getCampaignTemplateError(t);
-                    return <option key={t.id} value={t.id} disabled={Boolean(templateError)}>{t.name}{templateError ? ' — needs parameter setup' : ''}</option>;
-                  })}
+              }} style={inputStyle}>
+                <option value="">{campaignTemplates.length ? 'Select a template' : 'No approved templates'}</option>
+                {campaignTemplates.map((t) => {
+                  const problem = getCampaignTemplateError(t);
+                  return <option key={t.id} value={t.id} disabled={Boolean(problem)}>{t.name} · {isMarketing(t) ? 'Marketing' : String(t.category || 'Utility').charAt(0) + String(t.category || 'utility').slice(1).toLowerCase()}{problem ? ' (cannot be used)' : ''}</option>;
+                })}
               </select>
-              {templateId && getCampaignTemplateError(templates.find((template) => String(template.id) === String(templateId))) && (
-                <p style={{ color: C.red, fontSize: 11, marginTop: 6, lineHeight: 1.4 }}>
-                  {getCampaignTemplateError(templates.find((template) => String(template.id) === String(templateId)))}
+              {!campaignTemplates.length && (
+                <p style={{ color: C.muted, fontSize: 12, marginTop: 6 }}>
+                  {syncingTemplates ? 'Syncing templates from Meta…'
+                    : selectedBrand && !isBrandConnected(selectedBrand) ? 'WhatsApp is not connected for this brand. Connect it in Settings first.'
+                      : 'No approved templates yet. Create one in Templates, or click Sync from Meta.'}
                 </p>
               )}
-            </div>
-            {templateId && ['header', 'body'].map((section) => {
-              const selectedTemplate = templates.find((template) => String(template.id) === String(templateId));
+              {selectedTemplate && getCampaignTemplateError(selectedTemplate) && <p style={{ color: TONES.red.fg, fontSize: 12, marginTop: 6 }}>{getCampaignTemplateError(selectedTemplate)}</p>}
+            </Field>
+
+            {selectedTemplate && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                  {isMarketing(selectedTemplate) ? <Pill tone="amber"><ShieldCheck size={12} /> Marketing · opt-in needed</Pill> : <Pill tone="blue">{String(selectedTemplate.category || 'Utility').toLowerCase()}</Pill>}
+                  {selectedTemplate.language && <Pill>{selectedTemplate.language}</Pill>}
+                </div>
+                {isMarketing(selectedTemplate) && (
+                  <p style={{ fontSize: 12, color: TONES.amber.fg, background: TONES.amber.bg, border: `1px solid ${TONES.amber.border}`, padding: '8px 10px', borderRadius: 8, marginBottom: 10, lineHeight: 1.5 }}>
+                    Marketing messages go only to contacts who agreed to receive offers on WhatsApp. Everyone else is skipped automatically, and you are not charged for them.
+                  </p>
+                )}
+                <TemplatePreview template={selectedTemplate} mappings={templateParameters} campaignName={name} brandName={selectedBrand?.name} />
+              </div>
+            )}
+
+            {selectedTemplate && ['header', 'body'].map((section) => {
               const variables = getTemplateVariables(selectedTemplate?.[section]);
               if (!variables.length) return null;
               return (
-                <div key={section} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12, marginBottom: 14 }}>
-                  <p style={{ fontSize: 10, color: C.text, fontWeight: 700, textTransform: 'uppercase', marginBottom: 4 }}>{section} parameters</p>
-                  <p style={{ fontSize: 10, color: C.muted, marginBottom: 10 }}>Map every variable to recipient or campaign data.</p>
+                <div key={section} style={{ background: '#f8fafc', border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, marginBottom: 16 }}>
+                  <p style={{ fontSize: 12, color: C.text, fontWeight: 700 }}>{section === 'header' ? 'Header values' : 'Message values'}</p>
+                  <p style={{ fontSize: 11, color: C.muted, margin: '2px 0 10px' }}>Fill each {'{{n}}'} in the template.</p>
                   {variables.map((number) => {
                     const mapping = templateParameters[section]?.[String(number)] || { source: 'custom', value: '', section, number };
-                    const updateMapping = (next) => setTemplateParameters((current) => ({
-                      ...current,
-                      [section]: { ...current[section], [String(number)]: { ...mapping, ...next } }
-                    }));
+                    const update = (next) => setTemplateParameters((current) => ({ ...current, [section]: { ...current[section], [String(number)]: { ...mapping, ...next } } }));
+                    const label = selectedTemplate?.parameter_definitions?.[section]?.[String(number)]?.label;
                     return (
-                      <div key={number} style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, .9fr) minmax(130px, 1fr) minmax(140px, 1.4fr)', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                        <span style={{ color: C.accent, fontSize: 11, fontWeight: 700 }}>
-                          {`{{${number}}}`}
-                          <small style={{ display: 'block', color: C.muted, fontSize: 9, fontWeight: 500, marginTop: 2 }}>{selectedTemplate?.parameter_definitions?.[section]?.[String(number)]?.label || `Parameter ${number}`}</small>
-                        </span>
-                        <select value={mapping.source} onChange={(e) => updateMapping({ source: e.target.value, value: e.target.value === 'custom' ? mapping.value : '' })} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, padding: '7px 8px', fontSize: 11 }}>
-                          <option value="recipient_name">Recipient name</option>
-                          <option value="recipient_phone">Recipient phone</option>
-                          <option value="recipient_email">Recipient email</option>
-                          <option value="lead_status">Lead status</option>
-                          <option value="lead_source">Lead source</option>
-                          <option value="lead_interest">Lead interest</option>
-                          <option value="lead_score">Lead score</option>
-                          <option value="campaign_name">Campaign name</option>
-                          <option value="brand_name">Brand name</option>
-                          <option value="excel_parameter" disabled={targetStatus !== 'custom_csv'}>Excel: this parameter column</option>
-                          <option value="custom">Custom value</option>
+                      <div key={number} style={{ display: 'grid', gridTemplateColumns: 'minmax(70px, .6fr) minmax(0, 1.2fr) minmax(0, 1.4fr)', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                        <span style={{ color: C.accent, fontSize: 12, fontWeight: 700 }}>{`{{${number}}}`}{label && <small style={{ display: 'block', color: C.muted, fontSize: 10, fontWeight: 500 }}>{label}</small>}</span>
+                        <select aria-label={`Value source for {{${number}}}`} value={mapping.source} onChange={(e) => update({ source: e.target.value, value: e.target.value === 'custom' ? mapping.value : '' })} style={{ ...inputStyle, padding: '7px 8px', fontSize: 12 }}>
+                          {Object.entries(SOURCE_LABELS).map(([value, text]) => (
+                            <option key={value} value={value} disabled={value === 'excel_parameter' && targetStatus !== AUDIENCE_LIST}>{text}{value === 'excel_parameter' && targetStatus !== AUDIENCE_LIST ? ' (needs a list)' : ''}</option>
+                          ))}
                         </select>
                         {mapping.source === 'custom' ? (
-                          <input value={mapping.value || ''} onChange={(e) => updateMapping({ value: e.target.value })} placeholder={`Value for {{${number}}}`} style={{ background: C.card, border: `1px solid ${mapping.value?.trim() ? C.border : C.red}`, borderRadius: 6, color: C.text, padding: '7px 8px', fontSize: 11, outline: 'none' }} />
+                          <input aria-label={`Text for {{${number}}}`} value={mapping.value || ''} onChange={(e) => update({ value: e.target.value })} placeholder="Type the text" style={{ ...inputStyle, padding: '7px 8px', fontSize: 12, borderColor: mapping.value?.trim() ? C.border : '#fca5a5' }} />
                         ) : (
-                          <span style={{ color: C.muted, fontSize: 10 }}>Filled automatically</span>
+                          <span style={{ color: C.muted, fontSize: 11 }}>{mapping.source === 'excel_parameter' ? `Column “${section === 'header' ? 'Header' : 'Body'} {{${number}}}”` : 'Filled for each contact'}</span>
                         )}
                       </div>
                     );
@@ -487,247 +786,405 @@ export const CampaignsView = () => {
                 </div>
               );
             })}
-            <div style={{ background: C.surface, border: '1px solid ' + C.border, borderRadius: 7, padding: 13, marginBottom: 14 }}>
-              <p style={{ fontSize: 9, color: C.muted, marginBottom: 7, letterSpacing: 0.8 }}>PREVIEW</p>
-              <div style={{ background: C.accent + '15', border: '1px solid ' + C.accentDim, borderRadius: 9, padding: 11 }}>
-                <p style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>
-                  {templateId ? (templates.find(t => t.id === parseInt(templateId))?.body || 'No template preview available') : 'Please select a template to see details.'}
-                </p>
+
+            <Field label="When to send" hint={sendType === 'later' ? `Time is in your workspace time zone (${timezone === 'Asia/Kolkata' ? 'India, IST' : timezone}). It sends automatically; you can edit or cancel it until then.` : undefined}>
+              <div style={{ display: 'flex', background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden', maxWidth: 360 }}>
+                {[['now', 'Send now', Send], ['later', 'Schedule later', Clock]].map(([key, label, Icon]) => (
+                  <button key={key} type="button" aria-pressed={sendType === key} onClick={() => { setSendType(key); if (key === 'later' && !scheduledAt) setScheduledAt(nowInZone(timezone, 60)); }} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '9px 12px', fontSize: 12, fontWeight: 600, border: 'none', background: sendType === key ? C.accent : 'transparent', color: sendType === key ? '#fff' : C.muted }}>
+                    <Icon size={14} /> {label}
+                  </button>
+                ))}
               </div>
-            </div>
-            <div style={{ marginBottom: 24 }}>
-              <label style={{ display: 'block', fontSize: 10, color: C.muted, marginBottom: 8, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>Delivery Method</label>
-              <div style={{ width: '100%', maxWidth: 340, display: 'flex', background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
-                <button type="button" onClick={() => setSendType('now')} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '10px 16px', fontSize: 12, fontWeight: 600, border: 'none', background: sendType === 'now' ? C.accent : 'transparent', color: sendType === 'now' ? '#fff' : C.muted, cursor: 'pointer', transition: 'all 0.2s' }}>
-                  <Send size={14} /> Send Now
-                </button>
-                <button type="button" onClick={() => setSendType('later')} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '10px 16px', fontSize: 12, fontWeight: 600, border: 'none', background: sendType === 'later' ? C.accent : 'transparent', color: sendType === 'later' ? '#fff' : C.muted, cursor: 'pointer', transition: 'all 0.2s' }}>
-                  <Clock size={14} /> Schedule Later
-                </button>
-              </div>
-              
               {sendType === 'later' && (
-                <div style={{ marginTop: 12, animation: 'fadeIn 0.2s ease-out' }}>
-                  <input type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} required={sendType === 'later'} style={{ width: '100%', background: C.surface, border: '1px solid ' + C.border, borderRadius: 7, color: C.text, padding: '9px 11px', fontSize: 12, outline: 'none', colorScheme: 'dark' }} />
-                </div>
+                <input type="datetime-local" aria-label="Send date and time" value={scheduledAt} min={nowInZone(timezone)} onChange={(e) => setScheduledAt(e.target.value)} style={{ ...inputStyle, marginTop: 10, maxWidth: 360 }} />
               )}
+            </Field>
+          </Card>
+
+          {/* ── Summary ── */}
+          <Card style={{ gridColumn: '1 / -1' }}>
+            <div className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.3fr) minmax(0, 1fr)', gap: 20, alignItems: 'center' }}>
+              <div style={{ minWidth: 0 }}>
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>Summary</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+                  <SummaryItem label="Audience" value={estimate == null ? '—' : `${formatNumber(estimate)} contact${estimate === 1 ? '' : 's'}`} note={targetStatus === AUDIENCE_LIST ? 'from your list' : (selectedTemplate && isMarketing(selectedTemplate) ? 'opted-in only receive it' : undefined)} />
+                  <SummaryItem label="Template" value={selectedTemplate?.name || '—'} />
+                  <SummaryItem label="Sends" value={sendType === 'now' ? 'Right away' : scheduledAt ? `${formatLocalInput(scheduledAt)}${timezone === 'Asia/Kolkata' ? ' IST' : ''}` : 'Pick a time'} />
+                </div>
+              </div>
+              <LimitCard limit={limit} estimate={estimate} sendNow={sendType === 'now'} />
             </div>
-            <button type="submit" disabled={submitting} title="You review who gets the message before anything is sent" style={{ width: '100%', background: sendType === 'now' ? C.green : C.accent, border: 'none', borderRadius: 9, padding: 13, color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-              {submitting ? 'Processing...' : sendType === 'now' ? <><Send size={16} /> Launch Immediately</> : <><Clock size={16} /> Schedule Campaign</>}
-            </button>
-          </div>
+            {overToday && (
+              <p style={{ marginTop: 14, fontSize: 12, color: TONES.amber.fg, background: TONES.amber.bg, border: `1px solid ${TONES.amber.border}`, padding: '9px 11px', borderRadius: 8, display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>This audience is larger than what your number can still send today ({formatNumber(limitLeft)}). You can send the first {formatNumber(limitLeft)} now and the rest tomorrow, schedule it for another day, or pick a smaller audience.</span>
+              </p>
+            )}
+            {formError && <p role="alert" style={{ marginTop: 14, fontSize: 13, color: TONES.red.fg, background: TONES.red.bg, border: `1px solid ${TONES.red.border}`, padding: '9px 11px', borderRadius: 8 }}>{formError}</p>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
+              <button type="button" onClick={() => { resetForm(); setTab('list'); }} style={secondaryButton}>Cancel</button>
+              <button type="submit" disabled={submitting || checkingList} style={{ ...primaryButton, opacity: submitting || checkingList ? 0.7 : 1, minWidth: 200 }}>
+                {submitting ? <><RefreshCw size={14} className="cmp-spin" /> Preparing…</> : <>{sendType === 'now' ? <Send size={14} /> : <Clock size={14} />} Review before {sendType === 'now' ? 'sending' : 'scheduling'}</>}
+              </button>
+            </div>
+          </Card>
         </form>
       )}
 
-      {reportModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, width: '100%', maxWidth: 680, maxHeight: '80vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <div style={{ padding: '16px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 16, fontWeight: 700, color: C.text }}>Campaign Live Status</h3>
-                {isLiveTracking && (reportModal.status === 'running' || reportModal.status === 'scheduled') && (
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.green + '20', color: C.green, padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600 }}>
-                    <span style={{ width: 6, height: 6, background: C.green, borderRadius: '50%', animation: 'pulse 1.5s infinite' }}></span>
-                    Live
-                  </span>
-                )}
-              </div>
-              <button onClick={() => { setReportModal(null); setIsLiveTracking(false); }} style={{ background: 'transparent', border: 'none', color: C.muted, fontSize: 18, cursor: 'pointer' }}>×</button>
-            </div>
-            <div style={{ padding: 24, overflowY: 'auto', flex: 1 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))', gap: 10, marginBottom: 18 }}>
-                {[
-                  ['Campaign', reportModal.name],
-                  ['Brand', reportModal.brand_name || reportModal.brand || 'All Brands'],
-                  ['Template', reportModal.template_name || 'Template unavailable'],
-                  ['Audience', reportModal.target_status || 'All leads'],
-                  ['Created', formatCampaignDateTime(reportModal.created_at)],
-                  [reportModal.scheduled_at ? 'Scheduled for' : 'Delivery', reportModal.scheduled_at ? formatCampaignDateTime(reportModal.scheduled_at) : `Immediate · ${formatCampaignDateTime(reportModal.created_at)}`]
-                ].map(([label, value]) => (
-                  <div key={label} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 12px', minWidth: 0 }}>
-                    <div style={{ color: C.muted, fontSize: 9, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
-                    <div style={{ color: C.text, fontSize: 11, fontWeight: 600, wordBreak: 'break-word' }}>{value}</div>
-                  </div>
-                ))}
-              </div>
-
-              {!loadingLogs && reportModal.status !== 'scheduled' && reportModal.status !== 'running' && campaignLogs.length > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <span style={{ background: '#0a2018', color: C.green, padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>✓ {successLogs.length} Success</span>
-                    <span style={{ background: '#331111', color: C.red, padding: '4px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>✕ {failedLogs.length} Failed</span>
-                  </div>
-                  <div style={{ display: 'flex', background: C.surface, border: '1px solid ' + C.border, borderRadius: 8, overflow: 'hidden' }}>
-                    {[['all', `All (${campaignLogs.length})`], ['success', `Success (${successLogs.length})`], ['failed', `Failed (${failedLogs.length})`]].map(([key, label]) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => setReportFilter(key)}
-                        style={{ padding: '6px 12px', fontSize: 11, fontWeight: 600, border: 'none', background: reportFilter === key ? C.accent : 'transparent', color: reportFilter === key ? '#fff' : C.muted, cursor: 'pointer', whiteSpace: 'nowrap' }}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {loadingLogs ? (
-                <p style={{ color: C.muted, fontSize: 13 }}>Loading logs...</p>
-              ) : reportModal.status === 'scheduled' && reportModal.scheduled_at ? (
-                <div style={{ padding: 24, textAlign: 'center', background: C.surface, borderRadius: 10, border: `1px dashed ${C.border}` }}>
-                  <Clock size={32} color={C.blue} style={{ margin: '0 auto 12px' }} />
-                  <p style={{ color: C.text, fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Campaign Scheduled</p>
-                  <p style={{ color: C.muted, fontSize: 13 }}>It will automatically start running on <strong style={{ color: C.blue }}>{new Date(reportModal.scheduled_at).toLocaleString()}</strong></p>
-                </div>
-              ) : reportModal.status === 'running' || (reportModal.status === 'scheduled' && !reportModal.scheduled_at) ? (
-                <div style={{ padding: 24, textAlign: 'center', background: C.surface, borderRadius: 10, border: `1px dashed ${C.border}` }}>
-                  <Send size={32} color={C.green} style={{ margin: '0 auto 12px', animation: 'pulse 1.5s infinite' }} />
-                  <p style={{ color: C.text, fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Campaign is Running</p>
-                  <p style={{ color: C.muted, fontSize: 13 }}>Messages are currently being sent out...</p>
-                </div>
-              ) : campaignLogs.length === 0 ? (
-                <p style={{ color: C.muted, fontSize: 13 }}>
-                  {reportModal.status === 'failed'
-                    ? `No eligible recipients found for this campaign. Target: ${reportModal.target_status || 'all'}. Please check the uploaded phone numbers and try again.`
-                    : 'No delivery logs are available yet. The campaign may still be starting.'}
-                </p>
-              ) : filteredLogs.length === 0 ? (
-                <p style={{ color: C.muted, fontSize: 13 }}>No {reportFilter} recipients for this campaign.</p>
-              ) : (
-                <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-                    <thead style={{ background: C.surface }}>
-                      <tr>
-                        <th style={{ width: '22%', padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>Name</th>
-                        <th style={{ width: '20%', padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>Phone</th>
-                        <th style={{ width: '43%', padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>Status / Reason</th>
-                        <th style={{ width: '15%', padding: '10px 14px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>Time</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredLogs.map(log => (
-                        <tr key={log.id} style={{ borderBottom: `1px solid ${C.border}` }}>
-                          <td style={{ padding: '10px 14px', fontSize: 12, color: C.text, wordBreak: 'break-word' }}>{log.name || 'Unknown'}</td>
-                          <td style={{ padding: '10px 14px', fontSize: 12, color: C.dim, wordBreak: 'break-word' }}>+{log.phone}</td>
-                          <td style={{ padding: '10px 14px', fontSize: 12 }}>
-                            <span style={{
-                              color: log.status === 'failed' ? C.red : log.status === 'read' ? C.green : log.status === 'replied' ? C.purple : C.accent,
-                              fontSize: 11, fontWeight: 700, textTransform: 'uppercase'
-                            }}>
-                              {log.status === 'failed' ? '✕ FAILED' : log.status}
-                            </span>
-                            {log.error_message && (
-                              <div style={{ color: C.red, fontSize: 11, marginTop: 4, whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.4 }}>
-                                {log.error_message}
-                              </div>
-                            )}
-                          </td>
-                          <td style={{ padding: '10px 14px', fontSize: 11, color: C.dim }}>
-                            {new Date(log.sent_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-            <div style={{ padding: '16px 24px', borderTop: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', gap: 8 }}>
-                {isLiveTracking && (
-                  <button
-                    onClick={() => setIsLiveTracking(false)}
-                    style={{ background: 'transparent', border: `1px solid ${C.border}`, color: C.muted, padding: '8px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
-                  >
-                    Stop Live
-                  </button>
-                )}
-              </div>
-              <button onClick={() => { setReportModal(null); setIsLiveTracking(false); }} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, padding: '8px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-
+      {/* ── Review before sending ── */}
       {previewState && (() => {
         const p = previewState.data;
         const left = p.audience?.left_out || {};
+        const skipped = (left.no_consent || 0) + (left.opted_out || 0) + (left.invalid_phone || 0);
+        const needsAgreement = p.can_send && p.sending?.over_limit;
+        const canConfirm = p.can_send && (!needsAgreement || sendRestLater) && !submitting;
         return (
-          <div role="dialog" aria-label="Campaign preview" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 16 }}>
-            <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 22, width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto' }}>
-              <h3 style={{ color: C.text, fontSize: 16, marginBottom: 4 }}>Review before sending</h3>
-              <p style={{ color: C.muted, fontSize: 12, marginBottom: 14 }}>Nothing has been sent yet.</p>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-                {[['Will receive it', p.audience?.will_send ?? 0, C.green], ['In this audience', p.audience?.total ?? 0, C.text]].map(([label, value, color]) => (
-                  <div key={label} style={{ background: C.surface, border: '1px solid ' + C.border, borderRadius: 8, padding: 12 }}>
-                    <div style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
-                    <div style={{ fontSize: 11, color: C.muted }}>{label}</div>
-                  </div>
-                ))}
+          <Modal label="Review before sending">
+            <ModalHeader title="Review before sending" subtitle="Nothing has been sent yet." onClose={() => setPreviewState(null)} />
+            <div style={{ padding: 20, overflowY: 'auto' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+                <Stat big label="Will receive it" value={formatNumber(p.audience?.will_send)} tone="green" />
+                <Stat big label="In this audience" value={formatNumber(p.audience?.total)} tone="grey" />
               </div>
-              {(left.no_consent + left.opted_out + left.invalid_phone) > 0 && (
-                <p style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
-                  Left out: {left.no_consent} have not opted in, {left.opted_out} asked us to stop, {left.invalid_phone} have no valid number.
+              {skipped > 0 && (
+                <p style={{ fontSize: 12, color: C.muted, marginBottom: 12, lineHeight: 1.6 }}>
+                  Skipped: {left.no_consent > 0 && <>{formatNumber(left.no_consent)} have not agreed to marketing messages{(left.opted_out || left.invalid_phone) ? ', ' : ''}</>}
+                  {left.opted_out > 0 && <>{formatNumber(left.opted_out)} asked you to stop{left.invalid_phone ? ', ' : ''}</>}
+                  {left.invalid_phone > 0 && <>{formatNumber(left.invalid_phone)} have no valid number</>}.
                 </p>
               )}
-              {p.template && <p style={{ fontSize: 12, color: C.text, marginBottom: 6 }}>Template <strong>{p.template.name}</strong> · {String(p.template.category || '').toLowerCase()} · {p.template.status}</p>}
+              {p.template && (
+                <p style={{ fontSize: 12, color: C.text, marginBottom: 8, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  Template <strong>{p.template.name}</strong> {isMarketing(p.template) ? <Pill tone="amber">Marketing</Pill> : <Pill tone="blue">{String(p.template.category || 'utility').toLowerCase()}</Pill>}
+                </p>
+              )}
               {p.sample?.map((example, index) => (
-                <div key={index} style={{ background: C.accent + '15', border: '1px solid ' + C.accentDim, borderRadius: 9, padding: 10, marginBottom: 8 }}>
-                  <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>Example to {example.name || 'contact'} ({example.phone})</div>
-                  <div style={{ fontSize: 12, color: C.text, lineHeight: 1.6 }}>{example.message}</div>
+                <div key={index} style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>Example to {example.name || 'a contact'} ({example.phone})</div>
+                  <div style={{ fontSize: 13, color: C.text, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{example.message}</div>
                 </div>
               ))}
-              {p.sending && <p style={{ fontSize: 12, color: C.muted, margin: '10px 0' }}>Your number can send {p.sending.remaining_today} more marketing messages today (daily limit {p.sending.daily_limit}).</p>}
-              <p style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>{p.schedule?.immediate ? 'Sends as soon as you confirm.' : `Scheduled for ${formatCampaignDateTime(p.schedule?.at)}.`}</p>
-              {p.warnings?.map((w) => <p key={w} style={{ fontSize: 12, color: C.accent, marginBottom: 6 }}>{w}</p>)}
-              {p.blockers?.map((b) => <p key={b} style={{ fontSize: 12, color: C.red, marginBottom: 6 }}>{b}</p>)}
-              <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-                <button type="button" onClick={() => setPreviewState(null)} style={{ flex: 1, background: 'transparent', border: '1px solid ' + C.border, borderRadius: 8, padding: 11, color: C.text, cursor: 'pointer' }}>Go back and edit</button>
-                <button type="button" onClick={handleConfirmSend} disabled={!p.can_send || submitting} style={{ flex: 1, background: p.can_send ? C.green : C.border, border: 'none', borderRadius: 8, padding: 11, color: '#fff', fontWeight: 700, cursor: p.can_send ? 'pointer' : 'not-allowed' }}>
-                  {submitting ? 'Sending…' : p.schedule?.immediate ? 'Confirm and send' : 'Confirm and schedule'}
-                </button>
-              </div>
+              <p style={{ fontSize: 12, color: C.muted, margin: '10px 0' }}>
+                {p.schedule?.immediate ? 'Starts as soon as you confirm.' : `Sends automatically on ${p.schedule?.local || formatInZone(p.schedule?.at, timezone)} (${(p.timezone || timezone) === 'Asia/Kolkata' ? 'IST' : p.timezone || timezone}).`}
+              </p>
+              {p.sending && (
+                <p style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
+                  Daily limit: {formatNumber(p.sending.used_today)} of {formatNumber(p.sending.daily_limit)} messages used today.
+                </p>
+              )}
+              {p.warnings?.map((w) => <p key={w} style={{ fontSize: 12, color: TONES.amber.fg, marginBottom: 6 }}>{w}</p>)}
+              {p.blockers?.map((b) => <p key={b} role="alert" style={{ fontSize: 13, color: TONES.red.fg, background: TONES.red.bg, border: `1px solid ${TONES.red.border}`, padding: '8px 10px', borderRadius: 8, marginBottom: 6 }}>{b}</p>)}
+              {needsAgreement && (
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13, color: C.text, background: TONES.amber.bg, border: `1px solid ${TONES.amber.border}`, padding: '10px 12px', borderRadius: 8, marginTop: 8, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={sendRestLater} onChange={(e) => setSendRestLater(e.target.checked)} style={{ marginTop: 2 }} />
+                  <span>
+                    Send the first {formatNumber(p.sending.available_on_send_day)} {p.schedule?.immediate ? 'today' : 'on that day'} and the remaining {formatNumber(p.sending.overflow)} automatically {p.sending.days_needed > 2 ? `over the next ${p.sending.days_needed - 1} days` : 'the next day'}.
+                    <span style={{ display: 'block', fontSize: 11, color: C.muted, marginTop: 2 }}>Without this, the campaign cannot start: it is larger than your number's daily limit.</span>
+                  </span>
+                </label>
+              )}
             </div>
-          </div>
+            <div style={{ padding: '14px 20px', borderTop: `1px solid ${C.border}`, display: 'flex', gap: 10 }}>
+              <button type="button" onClick={() => setPreviewState(null)} style={{ ...secondaryButton, flex: 1 }}>Go back and edit</button>
+              <button type="button" onClick={handleConfirmSend} disabled={!canConfirm} style={{ ...primaryButton, flex: 1, background: canConfirm ? C.green : '#cbd5e1', cursor: canConfirm ? 'pointer' : 'not-allowed' }}>
+                {submitting ? 'Starting…' : p.schedule?.immediate ? 'Confirm and send' : 'Confirm and schedule'}
+              </button>
+            </div>
+          </Modal>
         );
       })()}
 
-      {deleteModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}>
-          <div style={{ background: C.card, border: `1px solid ${C.red}`, borderRadius: 14, width: '100%', maxWidth: 400, overflow: 'hidden', animation: 'fadeIn 0.2s ease-out' }}>
-            <div style={{ padding: '16px 24px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#331111' }}>
-              <h3 style={{ fontFamily: "'Inter',sans-serif", fontSize: 16, fontWeight: 700, color: C.red }}>Delete Campaign</h3>
-              <button onClick={() => { setDeleteModal(null); setDeleteConfirmText(''); }} style={{ background: 'transparent', border: 'none', color: C.muted, fontSize: 18, cursor: 'pointer' }}>×</button>
+      {/* ── Live sending progress ── */}
+      {progressView && (
+        <ProgressModal
+          view={progressView}
+          timezone={timezone}
+          onClose={() => { setProgressView(null); setTab('list'); fetchCampaigns({ quiet: true }); }}
+          onReport={() => {
+            const c = campaigns.find((x) => x.id === progressView.id) || { id: progressView.id, name: progressView.name, status: progressView.progress?.status };
+            setProgressView(null);
+            setTab('list');
+            handleViewReport(c);
+          }}
+        />
+      )}
+
+      {/* ── Report ── */}
+      {reportModal && (
+        <Modal label="Campaign report" maxWidth={720}>
+          <ModalHeader title={reportModal.name} subtitle={`${reportModal.template_name || 'Template'} · ${audienceLabel(reportModal)}`} onClose={() => setReportModal(null)} extra={<Pill tone={(STATUS_META[statusOf(reportModal)] || {}).tone || 'grey'}>{(STATUS_META[statusOf(reportModal)] || {}).label || reportModal.status}</Pill>} />
+          <div style={{ padding: 20, overflowY: 'auto', flex: 1 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 10, marginBottom: 16 }}>
+              <Stat label="Sent" value={formatNumber(reportModal.sent_count)} tone="blue" />
+              <Stat label="Delivered" value={formatNumber(reportModal.delivered_count)} tone="green" />
+              <Stat label="Read" value={formatNumber(reportModal.read_count)} tone="purple" />
+              <Stat label="Replied" value={formatNumber(reportModal.replied_count)} tone="purple" />
+              <Stat label="Failed" value={formatNumber(reportModal.failed_count)} tone="red" />
+              <Stat label="Skipped" value={formatNumber(reportModal.skipped_count)} tone="grey" />
             </div>
-            <div style={{ padding: 24 }}>
-              <p style={{ fontSize: 13, color: C.text, marginBottom: 12, lineHeight: 1.5 }}>
-                Are you sure you want to delete the campaign <strong style={{ color: C.red }}>{deleteModal.name}</strong>?
-              </p>
-              <p style={{ fontSize: 12, color: C.muted, marginBottom: 20 }}>
-                This will permanently delete the campaign and all its delivery logs. This action cannot be undone.
-              </p>
-              <div style={{ marginBottom: 20 }}>
-                <label style={{ display: 'block', fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 600, textTransform: 'uppercase' }}>
-                  Type <span style={{ color: C.text }}>delete-my-campaign</span> to confirm
-                </label>
-                <input 
-                  value={deleteConfirmText} 
-                  onChange={(e) => setDeleteConfirmText(e.target.value)} 
-                  placeholder="delete-my-campaign" 
-                  style={{ width: '100%', background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, padding: '10px', fontSize: 13, outline: 'none' }} 
-                />
+            <p style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
+              {reportModal.scheduled_at ? `Scheduled for ${formatInZone(reportModal.scheduled_at, timezone, { withZone: true })}` : `Sent on ${formatInZone(reportModal.launched_at || reportModal.created_at, timezone, { withZone: true })}`}
+            </p>
+            {campaignLogs.length > 0 && (
+              <div style={{ display: 'flex', background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden', width: 'fit-content', marginBottom: 12, flexWrap: 'wrap' }}>
+                {[['all', `All (${campaignLogs.length})`], ['success', `Sent (${successLogs.length})`], ['failed', `Failed (${failedLogs.length})`], ['skipped', `Skipped (${skippedLogs.length})`]].map(([key, label]) => (
+                  <button key={key} type="button" onClick={() => setReportFilter(key)} style={{ padding: '6px 12px', fontSize: 12, fontWeight: 600, border: 'none', background: reportFilter === key ? C.accent : 'transparent', color: reportFilter === key ? '#fff' : C.muted }}>{label}</button>
+                ))}
               </div>
-              <div style={{ display: 'flex', gap: 12 }}>
-                <button onClick={() => { setDeleteModal(null); setDeleteConfirmText(''); }} style={{ flex: 1, background: 'transparent', border: `1px solid ${C.border}`, color: C.text, padding: '10px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
-                <button onClick={handleConfirmDelete} disabled={deleteConfirmText !== 'delete-my-campaign' || deleting} style={{ flex: 1, background: C.red, border: 'none', color: '#fff', padding: '10px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: deleteConfirmText !== 'delete-my-campaign' || deleting ? 'not-allowed' : 'pointer', opacity: deleteConfirmText !== 'delete-my-campaign' || deleting ? 0.5 : 1, transition: 'all 0.2s' }}>
-                  {deleting ? 'Deleting...' : 'Yes, Delete'}
-                </button>
+            )}
+            {loadingLogs ? (
+              <p style={{ color: C.muted, fontSize: 13 }}>Loading…</p>
+            ) : !campaignLogs.length ? (
+              <p style={{ color: C.muted, fontSize: 13 }}>
+                {reportModal.status === 'failed' ? 'This campaign could not start. Check that the template is still approved and that your audience has contacts, then try again.'
+                  : reportModal.status === 'cancelled' ? 'This campaign was cancelled before it started. Nothing was sent.'
+                    : 'No messages have been sent yet.'}
+              </p>
+            ) : !filteredLogs.length ? (
+              <p style={{ color: C.muted, fontSize: 13 }}>Nobody in this group.</p>
+            ) : (
+              <div className="table-responsive" style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead style={{ background: '#f8fafc' }}>
+                    <tr>{['Name', 'Phone', 'Status', 'Time'].map((h) => <th key={h} style={{ padding: '9px 12px', textAlign: 'left', fontSize: 11, color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {filteredLogs.map((log) => {
+                      const tone = log.status === 'failed' ? 'red' : log.status === 'skipped' ? 'grey' : log.status === 'read' || log.status === 'replied' ? 'purple' : log.status === 'delivered' ? 'green' : 'blue';
+                      return (
+                        <tr key={log.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                          <td style={{ padding: '9px 12px', fontSize: 13, color: C.text }}>{log.name || 'Unknown'}</td>
+                          <td style={{ padding: '9px 12px', fontSize: 12, color: C.muted }}>{log.phone ? `+${String(log.phone).replace(/^\+/, '')}` : '—'}</td>
+                          <td style={{ padding: '9px 12px' }}>
+                            <Pill tone={tone} style={{ textTransform: 'capitalize' }}>{log.status}</Pill>
+                            {log.error_message && <div style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>{plainReason(log.error_message)}</div>}
+                          </td>
+                          <td style={{ padding: '9px 12px', fontSize: 12, color: C.muted, whiteSpace: 'nowrap' }}>{log.sent_at ? formatInZone(log.sent_at, timezone) : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-            </div>
+            )}
           </div>
-        </div>
+          <div style={{ padding: '12px 20px', borderTop: `1px solid ${C.border}`, display: 'flex', justifyContent: 'flex-end' }}>
+            <button type="button" onClick={() => setReportModal(null)} style={secondaryButton}>Close</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Edit a scheduled campaign ── */}
+      {editModal && (
+        <Modal label="Edit scheduled campaign" maxWidth={440}>
+          <ModalHeader title="Edit scheduled campaign" subtitle="You can change it until it starts." onClose={() => setEditModal(null)} />
+          <div style={{ padding: 20 }}>
+            <Field label="Campaign name"><input value={editModal.name} onChange={(e) => setEditModal({ ...editModal, name: e.target.value })} style={inputStyle} maxLength={120} /></Field>
+            <Field label="Send on" hint={`Time zone: ${timezone === 'Asia/Kolkata' ? 'India (IST)' : timezone}`}>
+              <input type="datetime-local" value={editModal.scheduledAt} min={nowInZone(timezone)} onChange={(e) => setEditModal({ ...editModal, scheduledAt: e.target.value })} style={inputStyle} />
+            </Field>
+            {editModal.error && <p role="alert" style={{ color: TONES.red.fg, fontSize: 13 }}>{editModal.error}</p>}
+          </div>
+          <div style={{ padding: '12px 20px', borderTop: `1px solid ${C.border}`, display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <button type="button" onClick={() => setEditModal(null)} style={secondaryButton}>Close</button>
+            <button type="button" onClick={handleSaveEdit} disabled={editModal.saving} style={primaryButton}>{editModal.saving ? 'Saving…' : 'Save changes'}</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Cancel a scheduled campaign ── */}
+      {cancelModal && (
+        <Modal label="Cancel campaign" maxWidth={420}>
+          <ModalHeader title="Cancel this campaign?" onClose={() => setCancelModal(null)} />
+          <div style={{ padding: 20, fontSize: 13, color: C.text, lineHeight: 1.6 }}>
+            <strong>{cancelModal.name}</strong> was going to send on {formatInZone(cancelModal.scheduled_at, timezone, { withZone: true })}. If you cancel it, nothing will be sent. You can still see it in the list.
+          </div>
+          <div style={{ padding: '12px 20px', borderTop: `1px solid ${C.border}`, display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <button type="button" onClick={() => setCancelModal(null)} style={secondaryButton}>Keep it</button>
+            <button type="button" onClick={handleCancel} style={{ ...primaryButton, background: TONES.red.fg }}><Ban size={14} /> Cancel campaign</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Delete ── */}
+      {deleteModal && (
+        <Modal label="Delete campaign" maxWidth={420}>
+          <ModalHeader title="Delete this campaign?" onClose={() => setDeleteModal(null)} />
+          <div style={{ padding: 20, fontSize: 13, color: C.text, lineHeight: 1.6 }}>
+            <strong>{deleteModal.name}</strong> and its delivery report will be deleted. Messages already sent stay in your chats. This cannot be undone.
+          </div>
+          <div style={{ padding: '12px 20px', borderTop: `1px solid ${C.border}`, display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <button type="button" onClick={() => setDeleteModal(null)} style={secondaryButton}>Keep it</button>
+            <button type="button" onClick={handleConfirmDelete} disabled={deleting} style={{ ...primaryButton, background: TONES.red.fg, opacity: deleting ? 0.7 : 1 }}><Trash2 size={14} /> {deleting ? 'Deleting…' : 'Delete'}</button>
+          </div>
+        </Modal>
       )}
     </div>
+  );
+};
+
+// ── pieces of the create form ───────────────────────────────
+
+const SummaryItem = ({ label, value, note }) => (
+  <div style={{ background: '#f8fafc', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 12px', minWidth: 0 }}>
+    <div style={{ fontSize: 11, color: C.muted }}>{label}</div>
+    <div style={{ fontSize: 13, color: C.text, fontWeight: 700, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={String(value)}>{value}</div>
+    {note && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{note}</div>}
+  </div>
+);
+
+const LimitCard = ({ limit, estimate, sendNow }) => {
+  if (!limit) return <div style={{ fontSize: 12, color: C.muted }}>Loading your daily limit…</div>;
+  if (limit.error) return <div style={{ fontSize: 12, color: C.muted }}>{limit.error}</div>;
+  if (!limit.connected) return <div style={{ fontSize: 12, color: TONES.amber.fg }}>No WhatsApp number is connected for this brand. Connect it in Settings to send campaigns.</div>;
+  const used = Number(limit.used_today || 0);
+  const cap = Number(limit.daily_limit || 0);
+  const pct = cap > 0 ? used / cap : 0;
+  const tone = pct >= 0.9 ? 'red' : pct >= 0.7 ? 'amber' : 'green';
+  const planned = sendNow && estimate ? Math.min(estimate, Math.max(0, cap - used)) : 0;
+  return (
+    <div style={{ background: '#f8fafc', border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: C.text }}><Gauge size={14} color={TONES[tone].fg} /> Daily sending limit</span>
+        {limit.quality_rating && limit.quality_rating !== 'UNKNOWN' && (
+          <Pill tone={['GREEN', 'HIGH'].includes(limit.quality_rating) ? 'green' : ['YELLOW', 'MEDIUM'].includes(limit.quality_rating) ? 'amber' : 'red'}>Quality: {({ GREEN: 'High', HIGH: 'High', YELLOW: 'Medium', MEDIUM: 'Medium', RED: 'Low', LOW: 'Low' })[limit.quality_rating] || limit.quality_rating}</Pill>
+        )}
+      </div>
+      <p style={{ fontSize: 14, color: C.text, marginBottom: 8 }}>Today: <strong>{formatNumber(used)}</strong> of <strong>{formatNumber(cap)}</strong> messages used</p>
+      <Bar total={cap} parts={[[used, TONES[tone].fg], [planned, '#93c5fd']]} />
+      <p style={{ fontSize: 11, color: C.muted, marginTop: 7, lineHeight: 1.5 }}>
+        {formatNumber(Math.max(0, cap - used))} left today{planned ? `, this campaign uses ${formatNumber(planned)}` : ''}. Resets daily at 5:30 AM IST.
+        {limit.messaging_limit && <> Meta lets this number message {TIER_TEXT[limit.messaging_limit] || limit.messaging_limit}.</>}
+      </p>
+      {limit.marketing_paused && <p style={{ fontSize: 12, color: TONES.red.fg, marginTop: 6 }}>Marketing is paused on this number until Meta rates it healthy again.</p>}
+    </div>
+  );
+};
+
+const ListSummary = ({ check }) => {
+  const s = check.summary;
+  if (check.error && !s) {
+    return <p role="alert" style={{ marginTop: 10, fontSize: 12, color: TONES.red.fg, background: TONES.red.bg, border: `1px solid ${TONES.red.border}`, padding: '9px 11px', borderRadius: 8, display: 'flex', gap: 6 }}><AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} /> {check.error}</p>;
+  }
+  const ok = s.ready > 0;
+  return (
+    <div style={{ marginTop: 10, border: `1px solid ${ok ? '#bbf7d0' : TONES.red.border}`, background: ok ? '#f0fdf4' : TONES.red.bg, borderRadius: 8, padding: '10px 12px' }}>
+      <p style={{ fontSize: 13, color: ok ? TONES.green.fg : TONES.red.fg, fontWeight: 700, display: 'flex', gap: 6, alignItems: 'center' }}>
+        {ok ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}
+        {formatNumber(s.ready)} contact{s.ready === 1 ? '' : 's'} ready{s.skipped_count ? `, ${formatNumber(s.skipped_count)} row${s.skipped_count === 1 ? '' : 's'} skipped` : ''}
+      </p>
+      {check.error && <p style={{ fontSize: 12, color: TONES.red.fg, marginTop: 4 }}>{check.error}</p>}
+      {s.skipped_count > 0 && (
+        <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: C.text, lineHeight: 1.6, maxHeight: 120, overflowY: 'auto' }}>
+          {s.skipped.map((item) => <li key={item.row}>Row {item.row}: {item.reason}</li>)}
+          {s.skipped_count > s.skipped.length && <li style={{ color: C.muted }}>…and {formatNumber(s.skipped_count - s.skipped.length)} more</li>}
+        </ul>
+      )}
+      {s.added_country_code > 0 && <p style={{ fontSize: 11, color: C.muted, marginTop: 6, display: 'flex', gap: 4 }}><Info size={12} style={{ flexShrink: 0, marginTop: 2 }} /> {formatNumber(s.added_country_code)} number{s.added_country_code === 1 ? '' : 's'} had no country code; we added +91 (India).</p>}
+      {ok && !s.has_opt_in_column && <p style={{ fontSize: 11, color: TONES.amber.fg, marginTop: 6 }}>Your file has no whatsapp_opt_in column. For marketing templates, only contacts who already agreed to offers will receive it.</p>}
+      {ok && s.has_opt_in_column && <p style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>{formatNumber(s.opted_in)} marked as agreed to receive offers.</p>}
+    </div>
+  );
+};
+
+const TemplatePreview = ({ template, mappings, campaignName, brandName }) => {
+  const context = { campaignName, brandName };
+  const headerText = String(template.header_format || 'TEXT').toUpperCase() === 'TEXT' ? template.header : '';
+  const buttons = Array.isArray(template.buttons) ? template.buttons.filter((b) => b?.text) : [];
+  return (
+    <div style={{ background: '#efeae2', borderRadius: 12, padding: 14 }}>
+      <div style={{ background: '#fff', borderRadius: '4px 12px 12px 12px', padding: '10px 12px', maxWidth: 360, boxShadow: '0 1px 1px rgba(0,0,0,.08)' }}>
+        {template.header_format && String(template.header_format).toUpperCase() !== 'TEXT' && (
+          <div style={{ background: '#e2e8f0', borderRadius: 8, padding: 16, textAlign: 'center', fontSize: 11, color: C.muted, marginBottom: 8 }}>{String(template.header_format).toLowerCase()} header</div>
+        )}
+        {headerText && <p style={{ fontSize: 13, fontWeight: 700, color: '#111b21', marginBottom: 4 }}>{renderPreview(headerText, 'header', mappings, context)}</p>}
+        <p style={{ fontSize: 13, color: '#111b21', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{renderPreview(template.body, 'body', mappings, context)}</p>
+        {template.footer && <p style={{ fontSize: 11, color: '#667781', marginTop: 6 }}>{template.footer}</p>}
+        {buttons.length > 0 && (
+          <div style={{ borderTop: '1px solid #e9edef', marginTop: 8, paddingTop: 6, display: 'grid', gap: 4 }}>
+            {buttons.map((b, i) => <span key={i} style={{ textAlign: 'center', color: '#0a7cff', fontSize: 13 }}>{b.text}</span>)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ── live sending view ───────────────────────────────────────
+
+const ProgressModal = ({ view, timezone, onClose, onReport }) => {
+  const p = view.progress;
+  const total = p?.total || view.expected || 0;
+  const processed = p ? p.sent + p.failed + p.skipped : 0;
+  const done = Boolean(p?.done);
+  const preparing = !p || (p.total === 0 && !done);
+  const waitingForTomorrow = p && !done && p.queued > 0 && p.waiting_until && new Date(p.waiting_until) - new Date(p.server_time) > 10 * 60 * 1000;
+  const phase = done ? (p.status === 'completed' ? 'done' : 'failed') : preparing ? 'preparing' : waitingForTomorrow ? 'waiting' : 'sending';
+  const steps = [['preparing', 'Queued'], ['sending', 'Sending'], ['done', 'Done']];
+  const stepIndex = phase === 'preparing' ? 0 : phase === 'sending' || phase === 'waiting' ? 1 : 2;
+  return (
+    <Modal label="Sending campaign" maxWidth={520}>
+      <ModalHeader
+        title={done ? (phase === 'done' ? 'Campaign sent' : 'Campaign could not be sent') : 'Sending your campaign'}
+        subtitle={view.name}
+        onClose={onClose}
+        extra={!done && <Pill tone="amber"><span className="cmp-pulse" style={{ width: 6, height: 6, borderRadius: 999, background: TONES.amber.fg }} /> Live</Pill>}
+      />
+      <div style={{ padding: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
+          {steps.map(([key, label], i) => (
+            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, flex: i < steps.length - 1 ? 1 : 'none' }}>
+              <span style={{ width: 24, height: 24, borderRadius: 999, display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700, background: i < stepIndex || (done && i === stepIndex) ? (phase === 'failed' && i === 2 ? TONES.red.fg : C.green) : i === stepIndex ? C.accent : '#e2e8f0', color: i <= stepIndex ? '#fff' : C.muted, transition: 'background .3s' }}>
+                {i < stepIndex || (done && i === stepIndex) ? (phase === 'failed' && i === 2 ? '!' : '✓') : i + 1}
+              </span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: i <= stepIndex ? C.text : C.muted }}>{label}</span>
+              {i < steps.length - 1 && <span style={{ flex: 1, height: 2, background: i < stepIndex ? C.green : '#e2e8f0', transition: 'background .3s' }} />}
+            </div>
+          ))}
+        </div>
+
+        {phase === 'preparing' && (
+          <div style={{ textAlign: 'center', padding: '10px 0 18px' }}>
+            <Send size={30} color={C.accent} className="cmp-fly" style={{ margin: '0 auto 10px' }} />
+            <p style={{ fontSize: 14, color: C.text, fontWeight: 600 }}>Getting your messages ready…</p>
+            <p style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>Checking each contact and lining up the messages.</p>
+          </div>
+        )}
+
+        {phase !== 'preparing' && (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: C.muted, marginBottom: 6 }}>
+              <span>{formatNumber(processed)} of {formatNumber(total)} processed</span>
+              <span>{total ? Math.round((processed / total) * 100) : 0}%</span>
+            </div>
+            <Bar animated={!done} total={total} parts={[[p.sent, C.green], [p.failed, TONES.red.fg], [p.skipped, '#94a3b8']]} height={12} />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 8, marginTop: 14 }}>
+              <Stat label="Waiting" value={formatNumber(p.queued)} tone="blue" />
+              <Stat label="Sent" value={formatNumber(p.sent)} tone="green" />
+              <Stat label="Failed" value={formatNumber(p.failed)} tone="red" />
+              <Stat label="Skipped" value={formatNumber(p.skipped)} tone="grey" />
+            </div>
+            {(p.delivered > 0 || done) && (
+              <p style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>
+                {formatNumber(p.delivered)} delivered · {formatNumber(p.read)} read{p.replied ? ` · ${formatNumber(p.replied)} replied` : ''} so far. These keep updating as people open your message.
+              </p>
+            )}
+            {phase === 'waiting' && (
+              <p style={{ fontSize: 12, color: TONES.amber.fg, background: TONES.amber.bg, border: `1px solid ${TONES.amber.border}`, padding: '9px 11px', borderRadius: 8, marginTop: 12 }}>
+                Today's limit is reached. The remaining {formatNumber(p.queued)} will go out automatically from {formatInZone(p.waiting_until, timezone, { withZone: true })}. You can close this window.
+              </p>
+            )}
+            {done && p.skipped > 0 && <p style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Skipped contacts had not agreed to marketing messages, had asked you to stop, or had an invalid number.</p>}
+            {done && phase === 'failed' && <p style={{ fontSize: 12, color: TONES.red.fg, marginTop: 8 }}>No message could be sent. Open the report to see why, fix it, and use Retry from the list.</p>}
+          </>
+        )}
+        {view.pollError && <p style={{ fontSize: 12, color: TONES.amber.fg, marginTop: 10 }}>{view.pollError}</p>}
+        {!done && <p style={{ fontSize: 11, color: C.dim, marginTop: 12 }}>Sending continues even if you close this window.</p>}
+      </div>
+      <div style={{ padding: '12px 20px', borderTop: `1px solid ${C.border}`, display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+        {done && <button type="button" onClick={onReport} style={secondaryButton}><BarChart3 size={14} /> View report</button>}
+        <button type="button" onClick={onClose} style={done ? primaryButton : secondaryButton}>{done ? 'Done' : 'Close'}</button>
+      </div>
+    </Modal>
   );
 };

@@ -12,7 +12,7 @@
  * (target_tag_id), a lead status, or everyone of the brand ("all").
  * Every query runs inside the caller's tenant context.
  */
-const { Leads, LeadTags, CampaignImportRecipients, WhatsappConsents, AllianceInboxTags, Clients, Templates } = require('../models');
+const { Leads, LeadTags, CampaignImportRecipients, WhatsappConsents, AllianceInboxTags, Clients, Templates, MetaWhatsappPhoneNumbers } = require('../models');
 const { NO_ID } = require('../db/mongo');
 const consent = require('./consent');
 const numberHealth = require('./numberHealth');
@@ -78,6 +78,52 @@ async function classify(leads) {
   return result;
 }
 
+const STATUS_LABELS = Object.freeze({
+  new: 'New leads', hot: 'Hot leads', warm: 'Warm leads', cold: 'Cold leads', contacted: 'Contacted', qualified: 'Qualified',
+  interested: 'Interested', converted: 'Converted', lost: 'Lost', unqualified: 'Unqualified',
+});
+const statusLabel = (status) => STATUS_LABELS[status] || `${String(status).charAt(0).toUpperCase()}${String(status).slice(1).replace(/_/g, ' ')} leads`;
+
+/**
+ * Who can be targeted, with counts, for the campaign builder: lead statuses
+ * that have contacts (zero-count statuses are left out), all contacts, and
+ * tags. Runs inside the caller's tenant.
+ */
+async function audienceCounts(clientId) {
+  const match = clientId != null && clientId !== '' ? { client_id: Number(clientId) } : {};
+  const rows = await Leads.aggregate([{ $match: match }, { $group: { _id: '$status', count: { $sum: 1 } } }]);
+  const statuses = rows
+    .filter((row) => row._id != null && String(row._id).trim() !== '' && row.count > 0)
+    .map((row) => ({ value: String(row._id), label: statusLabel(row._id), count: row.count }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  const total = rows.reduce((sum, row) => sum + row.count, 0);
+  return { total, statuses, tags: (await listTags()).filter((tag) => tag.lead_count > 0) };
+}
+
+const TIER_LABELS = Object.freeze({ TIER_50: 50, TIER_250: 250, TIER_1K: 1000, TIER_10K: 10000, TIER_100K: 100000, TIER_UNLIMITED: null });
+
+/**
+ * What the number may still send: the daily cap (bounded by Meta's messaging
+ * tier) and what is left of it on the send day. Counters are per UTC day (the
+ * cap resets at 05:30 IST). A send on a later day has the whole cap.
+ */
+async function sendingBudget(phoneNumberId, { at = null, now = new Date() } = {}) {
+  const number = await numberHealth.summary(phoneNumberId, now);
+  let tier = number.messaging_limit;
+  if (!tier) {
+    const meta = await MetaWhatsappPhoneNumbers.findOne({ phone_number_id: String(phoneNumberId) }, { _id: 0, raw_data: 1 }).lean().catch(() => null);
+    tier = meta?.raw_data?.messaging_limit_tier || null;
+  }
+  const sameDay = !at || at <= now || numberHealth.utcDay(at) === numberHealth.utcDay(now);
+  return {
+    phone_number_id: number.phone_number_id, quality_rating: number.quality_rating, marketing_paused: number.marketing_paused,
+    messaging_limit: tier, tier_limit: tier && tier in TIER_LABELS ? TIER_LABELS[tier] : null,
+    daily_cap: number.daily_cap, used_today: number.templates_today, remaining_today: number.remaining_today,
+    same_day: sameDay, available: sameDay ? number.remaining_today : number.daily_cap,
+    resets_at: numberHealth.nextUtcMidnight(now).toISOString(),
+  };
+}
+
 /**
  * The preview: nothing is queued or sent. Returns what the owner must check
  * before pressing Send: audience size and who is left out and why, example
@@ -131,27 +177,30 @@ async function previewCampaign(input) {
     }));
   }
 
+  const at = input.scheduled_at ? new Date(input.scheduled_at) : null;
   if (brand?.phone_number_id) {
-    const number = await numberHealth.summary(brand.phone_number_id);
-    const block1 = await numberHealth.marketingBlock(brand.phone_number_id);
+    const budget = await sendingBudget(brand.phone_number_id, { at: at && !Number.isNaN(at.getTime()) ? at : null });
+    const willSend = sorted.eligible.length;
     out.sending = {
-      quality_rating: number.quality_rating, marketing_paused: number.marketing_paused,
-      daily_limit: number.daily_cap, remaining_today: number.remaining_today,
-      days_needed: number.daily_cap > 0 ? Math.max(1, Math.ceil(sorted.eligible.length / number.daily_cap)) : null,
+      quality_rating: budget.quality_rating, marketing_paused: budget.marketing_paused, messaging_limit: budget.messaging_limit,
+      tier_limit: budget.tier_limit, daily_limit: budget.daily_cap, used_today: budget.used_today, remaining_today: budget.remaining_today,
+      available_on_send_day: budget.available, over_limit: willSend > budget.available, overflow: Math.max(0, willSend - budget.available),
+      days_needed: budget.daily_cap > 0 ? Math.max(1, Math.ceil(Math.max(0, willSend - budget.available) / budget.daily_cap) + (budget.available > 0 ? 1 : 0)) : null,
     };
-    if (block1) {
+    if (budget.marketing_paused) {
       block('Marketing is paused on your WhatsApp number. It resumes when Meta rates the number healthy again.');
-    } else if (sorted.eligible.length > number.remaining_today) {
-      warnings.push(`Your number can send ${number.remaining_today} more marketing messages today. The rest go out over the next ${out.sending.days_needed} day(s), automatically.`);
+    } else if (out.sending.over_limit) {
+      warnings.push(budget.available > 0
+        ? `Your number can send ${budget.available} more messages ${budget.same_day ? 'today' : 'that day'}, but ${willSend} contacts will receive this. The first ${budget.available} go out ${budget.same_day ? 'now' : 'then'} and the rest ${out.sending.days_needed > 2 ? `over the next ${out.sending.days_needed - 1} days` : 'the next day'}.`
+        : `Your number has used today's limit of ${budget.daily_cap} messages. This campaign would start tomorrow${out.sending.days_needed > 1 ? ` and take ${out.sending.days_needed} days` : ''}.`);
     }
   } else if (brand) {
     block('No WhatsApp number is connected for this brand.');
   }
 
-  const at = input.scheduled_at ? new Date(input.scheduled_at) : null;
   if (at && Number.isNaN(at.getTime())) block('The schedule is not a valid date.');
   else out.schedule = { immediate: !at || at <= new Date(), at: at && at > new Date() ? at.toISOString() : null };
   return out;
 }
 
-module.exports = { resolveAudience, listTags, classify, previewCampaign, maskPhone };
+module.exports = { resolveAudience, listTags, classify, previewCampaign, maskPhone, audienceCounts, sendingBudget, statusLabel };

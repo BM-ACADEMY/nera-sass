@@ -8,9 +8,17 @@ module.exports = defineModel('campaigns', {
   target_status: { type: String },
   // Audience by tag (lead_tags.tag_id), optionally narrowed by target_status.
   target_tag_id: { type: Number, default: null },
+  // UTC instant; null means "send now". The owner picks it in `timezone`.
   scheduled_at: { type: Date },
+  timezone: { type: String },
   launched_at: { type: Date },
+  // scheduled | running | completed | failed | cancelled
   status: { type: String, default: "scheduled" },
+  cancelled_at: { type: Date },
+  cancelled_by: { type: Number },
+  // The owner agreed that what exceeds the number's daily limit goes out on
+  // the next day(s).
+  send_rest_later: { type: Boolean, default: false },
   created_by: { type: Number },
   created_at: { type: Date, default: Date.now },
   template_parameters: { type: Mixed, default: () => ({}) },

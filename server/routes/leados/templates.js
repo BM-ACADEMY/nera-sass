@@ -72,8 +72,10 @@ app.post('/api/templates/sync-all', auth, async (req, res) => {
     );
 
     const metaTemplates = metaRes.data.data || [];
+    const brandId = client.id;
     let imported = 0;
     let updated = 0;
+    let skipped = 0;
 
     for (const t of metaTemplates) {
       const bodyComp = t.components?.find(c => c.type === 'BODY') || {};
@@ -90,30 +92,43 @@ app.post('/api/templates/sync-all', auth, async (req, res) => {
       const status = (t.status || 'DRAFT').toLowerCase();
       const metaId = String(t.id);
 
-      // Check if template exists locally by name and language
-      const localTpl = await Templates.findOne({ name: t.name, language: t.language }, { id: 1, status: 1, meta_template_id: 1 }).lean();
+      // Match this brand's own row (name + language + brand; queries are already
+      // workspace-scoped), so a brand never takes over another brand's row. A
+      // legacy row with no brand is claimed by the brand that syncs it.
+      const projection = { id: 1, status: 1, meta_template_id: 1, approved_at: 1, client_id: 1 };
+      const localTpl = await Templates.findOne({ name: t.name, language: t.language, client_id: brandId }, projection).lean()
+        || await Templates.findOne({ name: t.name, language: t.language, client_id: null }, projection).lean();
 
-      if (localTpl) {
-        const approvedAt = (status === 'approved' && !localTpl.approved_at) ? new Date() : localTpl.approved_at;
-        await Templates.updateOne({ id: localTpl.id }, { $set: {
-          status, meta_template_id: metaId, approved_at: approvedAt ?? null, category: t.category, header_format: headerFormat,
-          rejection_reason: status === 'rejected' ? (cleanReasonCode(t.rejected_reason) || 'UNSPECIFIED') : null,
-          header: headerText, body: bodyText, footer: footerText, buttons: JSON.parse(buttonsVal), updated_at: new Date(),
-        } });
-        updated++;
-      } else {
-        const approvedAt = status === 'approved' ? new Date() : null;
-        await Templates.create({
-          name: t.name, category: t.category, language: t.language, header_format: headerFormat, header: headerText, body: bodyText,
-          footer: footerText, buttons: JSON.parse(buttonsVal), client_id: client_id || null, status, meta_template_id: metaId,
-          rejection_reason: status === 'rejected' ? (cleanReasonCode(t.rejected_reason) || 'UNSPECIFIED') : null,
-          approved_at: approvedAt, created_at: new Date(),
-        });
-        imported++;
+      try {
+        if (localTpl) {
+          const approvedAt = (status === 'approved' && !localTpl.approved_at) ? new Date() : localTpl.approved_at;
+          await Templates.updateOne({ id: localTpl.id }, { $set: {
+            client_id: brandId,
+            status, meta_template_id: metaId, approved_at: approvedAt ?? null, category: t.category, header_format: headerFormat,
+            rejection_reason: status === 'rejected' ? (cleanReasonCode(t.rejected_reason) || 'UNSPECIFIED') : null,
+            header: headerText, body: bodyText, footer: footerText, buttons: JSON.parse(buttonsVal), updated_at: new Date(),
+          } });
+          updated++;
+        } else {
+          const approvedAt = status === 'approved' ? new Date() : null;
+          await Templates.create({
+            name: t.name, category: t.category, language: t.language, header_format: headerFormat, header: headerText, body: bodyText,
+            footer: footerText, buttons: JSON.parse(buttonsVal), client_id: brandId, status, meta_template_id: metaId,
+            rejection_reason: status === 'rejected' ? (cleanReasonCode(t.rejected_reason) || 'UNSPECIFIED') : null,
+            approved_at: approvedAt, created_at: new Date(),
+          });
+          imported++;
+        }
+      } catch (rowErr) {
+        // A duplicate key (for example the old name-only unique index, before
+        // migration 040 runs) skips that one template instead of failing the sync.
+        if (rowErr?.code !== 11000) throw rowErr;
+        console.warn(`[Templates Sync] Skipped duplicate template "${t.name}" (${t.language})`);
+        skipped++;
       }
     }
 
-    res.json({ success: true, imported, updated, total: metaTemplates.length });
+    res.json({ success: true, imported, updated, skipped, total: metaTemplates.length });
   } catch (err) {
     console.error('[Templates Sync Error]', err.response?.data || err.message);
     res.status(500).json({ error: err.response?.data?.error?.message || err.message || 'Failed to sync templates from Meta' });
