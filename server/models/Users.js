@@ -50,8 +50,10 @@ module.exports = defineModel('users', {
   mfa_wa_code_expires_at: { type: Date },
   mfa_wa_code_sent_at: { type: Date },
   mfa_wa_code_attempts: { type: Number, default: 0 },
-  // Numbers a WhatsApp setup code was sent to (last 24 h, for the per-day cap).
-  mfa_whatsapp_setup_numbers: { type: [{ _id: false, number: String, at: Date }], default: undefined },
+  // Different numbers a WhatsApp setup code was sent to in the current 24-hour
+  // window (for the per-day cap).
+  mfa_whatsapp_setup_window_start: { type: Date },
+  mfa_whatsapp_setup_set: { type: [String], default: undefined },
   // Wrong two-step codes across all channels (codeFailures.js).
   mfa_code_failures: { type: Number, default: 0 },
   mfa_code_window_start: { type: Date },

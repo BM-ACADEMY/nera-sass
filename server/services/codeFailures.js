@@ -37,4 +37,44 @@ async function record(userId) {
   return lock.modifiedCount === 1;
 }
 
-module.exports = { isLocked, record, LOCKED_MESSAGE, maxFailures };
+/**
+ * Counts a code check BEFORE it is made (one conditional $inc below the limit
+ * and not locked), so a parallel burst of guesses cannot all slip in under
+ * the limit. Returns false when no check may be made (locked or full).
+ * Call settle(userId, ok) after the check: a correct code gives the count
+ * back; a wrong one at the limit sets the lock.
+ */
+async function take(userId) {
+  const now = new Date();
+  await sys(() => Users.updateOne(
+    { id: userId, $or: [{ mfa_code_window_start: null }, { mfa_code_window_start: { $lte: new Date(now.getTime() - WINDOW_MS) } }] },
+    { $set: { mfa_code_failures: 0, mfa_code_window_start: now } },
+  ));
+  const taken = await sys(() => Users.findOneAndUpdate(
+    {
+      id: userId,
+      $and: [
+        { $or: [{ mfa_code_failures: null }, { mfa_code_failures: { $lt: maxFailures() } }] },
+        { $or: [{ mfa_code_locked_until: null }, { mfa_code_locked_until: { $lte: now } }] },
+      ],
+    },
+    { $inc: { mfa_code_failures: 1 } },
+    { new: true, projection: { _id: 0, mfa_code_failures: 1 } },
+  ).lean());
+  return Boolean(taken);
+}
+
+async function settle(userId, ok) {
+  if (ok) {
+    await sys(() => Users.updateOne({ id: userId, mfa_code_failures: { $gt: 0 } }, { $inc: { mfa_code_failures: -1 } }));
+    return false;
+  }
+  const now = new Date();
+  const lock = await sys(() => Users.updateOne(
+    { id: userId, mfa_code_failures: { $gte: maxFailures() } },
+    { $set: { mfa_code_locked_until: new Date(now.getTime() + lockMs()), mfa_code_failures: 0, mfa_code_window_start: now } },
+  ));
+  return lock.modifiedCount === 1;
+}
+
+module.exports = { isLocked, record, take, settle, LOCKED_MESSAGE, maxFailures };

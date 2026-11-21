@@ -361,6 +361,79 @@ test('WhatsApp two-step verification', async (t) => {
     }
   });
 
+  await t.test('W15. Forged sign-in tokens do not fill the victim bucket; the sign-in step has its own bucket', async () => {
+    const jwt = require('jsonwebtoken');
+    const victim = await staff({ ...waOn });
+    const forged = jwt.sign({ id: victim.id, typ: 'mfa' }, 'not-the-server-secret');
+    process.env.AUTH_RATE_LIMIT = 'on';
+    try {
+      for (let i = 0; i < 25; i += 1) {
+        await request(app).post('/api/auth/mfa/whatsapp/send').send({ mfa_token: forged });
+      }
+      // The victim's own session bucket is untouched.
+      const own = await request(app).post('/api/auth/change-password').set(auth(victim)).send({ current: 'wrong', newPassword: 'Brand-New-Pass-9' });
+      assert.notStrictEqual(own.status, 429, 'forged tokens were keyed by address, not by the victim');
+
+      // A real sign-in token uses mfa:<id>, not the session bucket user:<id>.
+      const realToken = (await login(victim)).body.mfa_token;
+      for (let i = 0; i < 21; i += 1) {
+        await request(app).post('/api/auth/mfa/whatsapp/send').send({ mfa_token: realToken });
+      }
+      const limited = await request(app).post('/api/auth/mfa/whatsapp/send').send({ mfa_token: realToken });
+      assert.strictEqual(limited.status, 429, 'the sign-in step is limited per account');
+      assert.strictEqual(limited.body.code, undefined, 'the rate limiter answered, not the resend wait');
+      const session = await request(app).post('/api/auth/mfa/recovery-codes').set(auth(victim)).send({ password: PASSWORD });
+      assert.notStrictEqual(session.status, 429, 'the session bucket is separate');
+    } finally {
+      process.env.AUTH_RATE_LIMIT = 'off';
+    }
+  });
+
+  await t.test('W16. Parallel app-code guesses cannot get past the 10-per-hour lock', async () => {
+    const secret = mfa.generateSecret();
+    const user = await staff({ mfa_enabled: true, mfa_secret_enc: encrypt(secret), mfa_recovery_hashes: [mfa.hashRecoveryCode('RECOV-ERY4')] });
+    const res = await login(user);
+    const wrong = mfa.totp(secret) === '000000' ? '111111' : '000000';
+    const results = await Promise.all(Array.from({ length: 25 }, () => request(app).post('/api/auth/mfa/verify').send({ mfa_token: res.body.mfa_token, method: 'totp', code: wrong })));
+    const checked = results.filter((r) => r.status === 401).length;
+    assert.ok(checked <= 10, `at most 10 guesses were checked (got ${checked})`);
+    assert.strictEqual(results.filter((r) => r.status === 429).length, 25 - checked);
+    const right = await request(app).post('/api/auth/mfa/verify').send({ mfa_token: res.body.mfa_token, method: 'totp', code: mfa.totp(secret) });
+    assert.strictEqual(right.status, 429, 'locked');
+    // With both a code and a recovery code, the recovery code is still tried.
+    const both = await request(app).post('/api/auth/mfa/verify').send({ mfa_token: res.body.mfa_token, method: 'totp', code: mfa.totp(secret), recovery_code: 'RECOV-ERY4' });
+    assert.strictEqual(both.status, 200, JSON.stringify(both.body));
+  });
+
+  await t.test('W17. Parallel setups cannot add more than five different numbers', async () => {
+    const user = await staff();
+    const phones = Array.from({ length: 9 }, (_, i) => `91900000010${i}`);
+    const results = await Promise.all(phones.map((phone) => request(app).post('/api/auth/mfa/whatsapp/setup').set(auth(user)).send({ password: PASSWORD, phone })));
+    assert.ok(results.filter((r) => r.body.code === 'WHATSAPP_NUMBER_LIMIT').length >= 4, results.map((r) => r.body.code || r.status).join(','));
+    assert.ok((await fresh(user.id)).mfa_whatsapp_setup_set.length <= 5);
+  });
+
+  await t.test('W18. At most N WhatsApp codes per account and per number in an hour', async () => {
+    process.env.WHATSAPP_OTP_PER_TARGET_HOURLY = '2';
+    try {
+      const user = await staff({ ...waOn });
+      const res = await login(user); // 1
+      await coolDown(user);
+      assert.strictEqual((await request(app).post('/api/auth/mfa/whatsapp/send').send({ mfa_token: res.body.mfa_token })).status, 200); // 2
+      await coolDown(user);
+      const third = await request(app).post('/api/auth/mfa/whatsapp/send').send({ mfa_token: res.body.mfa_token });
+      assert.strictEqual(third.status, 429);
+      assert.strictEqual(third.body.code, 'WHATSAPP_TOO_MANY');
+
+      // Per number: another account with the same number shares the number limit.
+      const other = await staff({ ...waOn });
+      const otherLogin = await login(other);
+      assert.match(otherLogin.body.whatsapp_error || '', /too many/i);
+    } finally {
+      delete process.env.WHATSAPP_OTP_PER_TARGET_HOURLY;
+    }
+  });
+
   await t.test('W8. Rate limit: per-account limit on code requests', async () => {
     const user = await staff({ ...waOn });
     process.env.AUTH_RATE_LIMIT = 'on';

@@ -1,7 +1,6 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const authController = require('../controllers/authController');
-const { requireAuth } = require('../middleware/authMiddleware');
+const { requireAuth, verifyToken } = require('../middleware/authMiddleware');
 const { rateLimit } = require('../utils/rateLimit');
 
 const router = express.Router();
@@ -24,12 +23,22 @@ router.post('/invitations/accept', tokenLimit, authController.acceptInvitation);
 // (after authentication) so one stolen session cannot keep guessing from
 // many addresses.
 // On the sign-in step (mfa_token, no session yet) the key is the account in
-// the token, so the limit holds per account there too. The token is only
-// decoded here; it is verified by the handler, so a forged one never sends.
+// the token, but only when the token verifies with our secret and is a
+// sign-in token; anything else falls back to the address. The sign-in step
+// has its own bucket (mfa:<id>), so nobody can use it to fill the bucket of
+// the account's real sessions (user:<id>).
+const SIGN_IN_TOKEN_TYPES = ['mfa', 'mfa_setup'];
 const accountKey = (req) => {
   if (req.user?.id) return `user:${req.user.id}`;
-  const fromToken = typeof req.body?.mfa_token === 'string' ? jwt.decode(req.body.mfa_token)?.id : null;
-  return fromToken ? `user:${fromToken}` : `ip:${req.ip}`;
+  if (typeof req.body?.mfa_token === 'string') {
+    try {
+      const payload = verifyToken(req.body.mfa_token);
+      if (payload?.id && SIGN_IN_TOKEN_TYPES.includes(payload.typ)) return `mfa:${payload.id}`;
+    } catch {
+      // invalid or expired: keyed by address below
+    }
+  }
+  return `ip:${req.ip}`;
 };
 const reauthLimit = rateLimit({
   windowMs: 15 * 60 * 1000,

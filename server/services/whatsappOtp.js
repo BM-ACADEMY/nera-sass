@@ -69,18 +69,37 @@ function normalizeNumber(value) {
 // Platform-wide cap on WhatsApp code sends per hour (WHATSAPP_OTP_HOURLY_CAP,
 // default 200), per server process. A slot is taken before the code is
 // stored and given back when nothing was sent.
+// Also at most WHATSAPP_OTP_PER_TARGET_HOURLY (6) sends per account and per
+// number in an hour, so a few accounts cannot use up the platform cap.
 let sendTimes = [];
+let targetTimes = new Map(); // 'acct:<id>' | 'num:<digits>' -> [ms]
+const HOUR = 60 * 60 * 1000;
 const hourlyCap = () => Number(process.env.WHATSAPP_OTP_HOURLY_CAP || 200);
-function takeSendSlot() {
+const perTargetCap = () => Number(process.env.WHATSAPP_OTP_PER_TARGET_HOURLY || 6);
+const recentFor = (key, now) => (targetTimes.get(key) || []).filter((t) => t > now - HOUR);
+function takeSendSlot(userId, to) {
   const now = Date.now();
-  sendTimes = sendTimes.filter((t) => t > now - 60 * 60 * 1000);
+  sendTimes = sendTimes.filter((t) => t > now - HOUR);
   if (sendTimes.length >= hourlyCap()) {
     throw new WhatsappOtpError(429, 'WhatsApp codes are busy right now. Use another method or try again later.', 'WHATSAPP_BUSY');
   }
+  const keys = [`acct:${userId}`, `num:${to}`];
+  if (keys.some((k) => recentFor(k, now).length >= perTargetCap())) {
+    throw new WhatsappOtpError(429, 'Too many WhatsApp codes in the last hour. Try again later or use another method.', 'WHATSAPP_TOO_MANY');
+  }
   sendTimes.push(now);
-  return now;
+  for (const k of keys) targetTimes.set(k, [...recentFor(k, now), now]);
+  return { at: now, keys };
 }
-const giveBackSlot = (slot) => { const i = sendTimes.indexOf(slot); if (i >= 0) sendTimes.splice(i, 1); };
+function giveBackSlot(slot) {
+  const i = sendTimes.indexOf(slot.at);
+  if (i >= 0) sendTimes.splice(i, 1);
+  for (const k of slot.keys) {
+    const list = targetTimes.get(k) || [];
+    const j = list.indexOf(slot.at);
+    if (j >= 0) list.splice(j, 1);
+  }
+}
 
 const maskNumber = (number) => {
   const d = String(number || '');
@@ -125,7 +144,7 @@ async function sendCode(user, purpose) {
   if (!available()) throw new WhatsappOtpError(400, 'WhatsApp codes are not available yet', 'WHATSAPP_NOT_AVAILABLE');
   const to = destination(user, purpose);
   if (!to) throw new WhatsappOtpError(400, 'Add your WhatsApp number first', 'WHATSAPP_NUMBER_MISSING');
-  const slot = takeSendSlot();
+  const slot = takeSendSlot(user.id, to);
   try {
     return await store.sendCode(user, purpose, { to });
   } catch (error) {
@@ -142,6 +161,6 @@ async function verifyCode(user, code, purpose) {
 
 module.exports = {
   sendCode, verifyCode, enabled, available, normalizeNumber, maskNumber, authTemplatePayload, allowedCountryCodes, setupNumbersPerDay,
-  resetSendCapForTests: () => { sendTimes = []; },
+  resetSendCapForTests: () => { sendTimes = []; targetTimes = new Map(); },
   templateName, templateLanguage, TEMPLATE_DEFINITION, WhatsappOtpError, clearFields: store.clearFields,
 };

@@ -97,22 +97,37 @@ const INVALID_MFA_CODE = Object.freeze({ error: 'Invalid verification code', cod
 async function secondFactorOk(user, { method, code, recoveryCode }, emailPurpose) {
   const methods = mfa.methodsOf(user);
   let ok = false;
+  let locked = false;
   if (code) {
     const use = method || (methods.includes('totp') ? 'totp' : methods[0]);
     if (!methods.includes(use)) throw new AuthError(400, 'This verification method is not turned on for this account', 'MFA_METHOD_OFF');
-    // One per-account limit on wrong codes across every channel (codeFailures.js).
-    if (await codeFailures.isLocked(user.id)) throw new AuthError(429, codeFailures.LOCKED_MESSAGE, 'MFA_CODE_LOCKED');
+    // One per-account limit on wrong codes across every channel
+    // (codeFailures.js). App codes are counted before the check, so parallel
+    // guesses cannot get past the limit; email and WhatsApp codes are counted
+    // in otpStore.js (and also capped at five tries per code).
     if (use === 'totp') {
-      ok = mfa.verifyTotp(decrypt(user.mfa_secret_enc), code);
-      if (!ok) await codeFailures.record(user.id);
-    } else if (use === 'whatsapp') ok = await whatsappOtp.verifyCode(user, code, emailPurpose);
-    else ok = await emailOtp.verifyCode(user, code, emailPurpose);
+      if (await codeFailures.take(user.id)) {
+        ok = mfa.verifyTotp(decrypt(user.mfa_secret_enc), code);
+        await codeFailures.settle(user.id, ok);
+      } else {
+        locked = true;
+      }
+    } else {
+      try {
+        ok = use === 'whatsapp' ? await whatsappOtp.verifyCode(user, code, emailPurpose) : await emailOtp.verifyCode(user, code, emailPurpose);
+      } catch (error) {
+        if (error.code !== 'MFA_CODE_LOCKED') throw error;
+        locked = true;
+      }
+    }
   }
+  // A recovery code is still tried while code checks are locked.
   if (!ok && recoveryCode) {
     const hash = mfa.hashRecoveryCode(recoveryCode);
     const updated = await sys(() => Users.updateOne({ id: user.id, mfa_recovery_hashes: hash }, { $pull: { mfa_recovery_hashes: hash } }));
     ok = updated.modifiedCount === 1;
   }
+  if (!ok && locked) throw new AuthError(429, codeFailures.LOCKED_MESSAGE, 'MFA_CODE_LOCKED');
   return ok;
 }
 
@@ -382,17 +397,23 @@ exports.startWhatsappSetup = async (req, res) => {
       return res.status(400).json({ error: `Enter your WhatsApp number with the country code. Allowed: +${whatsappOtp.allowedCountryCodes().join(', +')}.`, code: 'WHATSAPP_NUMBER_INVALID' });
     }
     // At most WHATSAPP_SETUP_NUMBERS_PER_DAY (5) different numbers per account
-    // in 24 hours, so setup cannot be used to send codes to many numbers.
-    const since = Date.now() - 24 * 60 * 60 * 1000;
-    const recent = (user.mfa_whatsapp_setup_numbers || []).filter((n) => new Date(n.at).getTime() > since);
-    const distinct = new Set(recent.map((n) => n.number));
-    if (!distinct.has(number) && distinct.size >= whatsappOtp.setupNumbersPerDay()) {
+    // in a 24-hour window, so setup cannot be used to send codes to many
+    // numbers. One atomic update: the number is added only when it is already
+    // in the set or the set is not full.
+    const now = new Date();
+    await sys(() => Users.updateOne(
+      { id: user.id, $or: [{ mfa_whatsapp_setup_window_start: null }, { mfa_whatsapp_setup_window_start: { $lte: new Date(now.getTime() - 24 * 60 * 60 * 1000) } }] },
+      { $set: { mfa_whatsapp_setup_window_start: now, mfa_whatsapp_setup_set: [] } },
+    ));
+    const added = await sys(() => Users.updateOne(
+      { id: user.id, $or: [{ mfa_whatsapp_setup_set: number }, { [`mfa_whatsapp_setup_set.${whatsappOtp.setupNumbersPerDay() - 1}`]: { $exists: false } }] },
+      { $addToSet: { mfa_whatsapp_setup_set: number } },
+    ));
+    if (added.matchedCount !== 1) {
       return res.status(429).json({ error: 'Too many different numbers today. Try again tomorrow or use another method.', code: 'WHATSAPP_NUMBER_LIMIT' });
     }
     if (viaSession) await stepUpForStart(user, req);
-    await sys(() => Users.updateOne({ id: user.id }, {
-      $set: { mfa_whatsapp_pending_number: number, mfa_whatsapp_setup_numbers: [...recent, { number, at: new Date() }].slice(-50) },
-    }));
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_whatsapp_pending_number: number } }));
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
     return res.json(await whatsappOtp.sendCode(fresh, 'setup'));
   } catch (error) {
