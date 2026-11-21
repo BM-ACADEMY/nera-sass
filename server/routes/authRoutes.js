@@ -1,4 +1,5 @@
 const express = require('express');
+const jwt = require('jsonwebtoken');
 const authController = require('../controllers/authController');
 const { requireAuth } = require('../middleware/authMiddleware');
 const { rateLimit } = require('../utils/rateLimit');
@@ -13,7 +14,7 @@ const tokenLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 60 });
 router.post('/login', loginLimit, authController.login);
 router.post('/mfa/verify', loginLimit, authController.verifyMfa);
 router.post('/mfa/email/send', loginLimit, authController.sendMfaEmail);
-router.post('/mfa/whatsapp/send', loginLimit, authController.sendMfaWhatsapp);
+
 router.post('/password/forgot', resetLimit, authController.forgotPassword);
 router.post('/password/reset', resetLimit, authController.resetPassword);
 router.get('/invitations/:token', tokenLimit, authController.previewInvitation);
@@ -22,10 +23,18 @@ router.post('/invitations/accept', tokenLimit, authController.acceptInvitation);
 // Password and code guesses on the re-authenticated endpoints, per account
 // (after authentication) so one stolen session cannot keep guessing from
 // many addresses.
+// On the sign-in step (mfa_token, no session yet) the key is the account in
+// the token, so the limit holds per account there too. The token is only
+// decoded here; it is verified by the handler, so a forged one never sends.
+const accountKey = (req) => {
+  if (req.user?.id) return `user:${req.user.id}`;
+  const fromToken = typeof req.body?.mfa_token === 'string' ? jwt.decode(req.body.mfa_token)?.id : null;
+  return fromToken ? `user:${fromToken}` : `ip:${req.ip}`;
+};
 const reauthLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: Number(process.env.REAUTH_RATE_LIMIT || 20),
-  key: (req) => (req.user?.id ? `user:${req.user.id}` : `ip:${req.ip}`),
+  key: accountKey,
 });
 
 // MFA enrolment: with the mfa_token from login (mandatory enrolment) or a
@@ -36,6 +45,7 @@ router.post('/mfa/setup', loginLimit, sessionOrMfaToken, reauthLimit, authContro
 router.post('/mfa/setup/confirm', loginLimit, sessionOrMfaToken, reauthLimit, authController.confirmMfaSetup);
 router.post('/mfa/email/setup', loginLimit, sessionOrMfaToken, reauthLimit, authController.startEmailSetup);
 router.post('/mfa/email/setup/confirm', loginLimit, sessionOrMfaToken, reauthLimit, authController.confirmEmailSetup);
+router.post('/mfa/whatsapp/send', loginLimit, reauthLimit, authController.sendMfaWhatsapp);
 router.post('/mfa/whatsapp/setup', loginLimit, sessionOrMfaToken, reauthLimit, authController.startWhatsappSetup);
 router.post('/mfa/whatsapp/setup/confirm', loginLimit, sessionOrMfaToken, reauthLimit, authController.confirmWhatsappSetup);
 
@@ -52,5 +62,8 @@ router.post('/mfa/default', requireAuth, authController.setDefaultMfaMethod);
 
 // Users are never created here: customer users join by invitation
 // (/api/team/invitations, /api/admin/users) and set their own password.
+
+// Tests reuse account ids after clearing the database; they start each case with empty counters.
+router.resetLimitsForTests = () => { loginLimit.reset(); reauthLimit.reset(); };
 
 module.exports = router;

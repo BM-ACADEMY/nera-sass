@@ -13,6 +13,7 @@ const { encrypt, decrypt } = require('../utils/crypto');
 const mfa = require('../services/mfa');
 const emailOtp = require('../services/emailOtp');
 const whatsappOtp = require('../services/whatsappOtp');
+const codeFailures = require('../services/codeFailures');
 const notify = require('../services/notify');
 const audit = require('../services/audit');
 const invitations = require('../services/invitations');
@@ -99,8 +100,12 @@ async function secondFactorOk(user, { method, code, recoveryCode }, emailPurpose
   if (code) {
     const use = method || (methods.includes('totp') ? 'totp' : methods[0]);
     if (!methods.includes(use)) throw new AuthError(400, 'This verification method is not turned on for this account', 'MFA_METHOD_OFF');
-    if (use === 'totp') ok = mfa.verifyTotp(decrypt(user.mfa_secret_enc), code);
-    else if (use === 'whatsapp') ok = await whatsappOtp.verifyCode(user, code, emailPurpose);
+    // One per-account limit on wrong codes across every channel (codeFailures.js).
+    if (await codeFailures.isLocked(user.id)) throw new AuthError(429, codeFailures.LOCKED_MESSAGE, 'MFA_CODE_LOCKED');
+    if (use === 'totp') {
+      ok = mfa.verifyTotp(decrypt(user.mfa_secret_enc), code);
+      if (!ok) await codeFailures.record(user.id);
+    } else if (use === 'whatsapp') ok = await whatsappOtp.verifyCode(user, code, emailPurpose);
     else ok = await emailOtp.verifyCode(user, code, emailPurpose);
   }
   if (!ok && recoveryCode) {
@@ -224,7 +229,7 @@ const REAUTH_CHANNELS = {
   whatsapp: { otp: whatsappOtp, off: 'WhatsApp codes are not turned on for this account', ErrorClass: whatsappOtp.WhatsappOtpError },
 };
 exports.sendReauthCode = async (req, res) => {
-  const channel = REAUTH_CHANNELS[req.params.channel];
+  const channel = Object.hasOwn(REAUTH_CHANNELS, req.params.channel) ? REAUTH_CHANNELS[req.params.channel] : null;
   try {
     if (!channel) return res.status(404).json({ error: 'Unknown method' });
     const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
@@ -373,9 +378,21 @@ exports.startWhatsappSetup = async (req, res) => {
     if (user.mfa_whatsapp_enabled) return res.status(400).json({ error: 'WhatsApp codes are already turned on' });
     if (!whatsappOtp.available()) return res.status(400).json({ error: 'WhatsApp codes are not available yet', code: 'WHATSAPP_NOT_AVAILABLE' });
     const number = whatsappOtp.normalizeNumber(req.body?.phone);
-    if (!number) return res.status(400).json({ error: 'Enter your WhatsApp number with the country code, for example +91 98765 43210', code: 'WHATSAPP_NUMBER_INVALID' });
+    if (!number) {
+      return res.status(400).json({ error: `Enter your WhatsApp number with the country code. Allowed: +${whatsappOtp.allowedCountryCodes().join(', +')}.`, code: 'WHATSAPP_NUMBER_INVALID' });
+    }
+    // At most WHATSAPP_SETUP_NUMBERS_PER_DAY (5) different numbers per account
+    // in 24 hours, so setup cannot be used to send codes to many numbers.
+    const since = Date.now() - 24 * 60 * 60 * 1000;
+    const recent = (user.mfa_whatsapp_setup_numbers || []).filter((n) => new Date(n.at).getTime() > since);
+    const distinct = new Set(recent.map((n) => n.number));
+    if (!distinct.has(number) && distinct.size >= whatsappOtp.setupNumbersPerDay()) {
+      return res.status(429).json({ error: 'Too many different numbers today. Try again tomorrow or use another method.', code: 'WHATSAPP_NUMBER_LIMIT' });
+    }
     if (viaSession) await stepUpForStart(user, req);
-    await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_whatsapp_pending_number: number } }));
+    await sys(() => Users.updateOne({ id: user.id }, {
+      $set: { mfa_whatsapp_pending_number: number, mfa_whatsapp_setup_numbers: [...recent, { number, at: new Date() }].slice(-50) },
+    }));
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
     return res.json(await whatsappOtp.sendCode(fresh, 'setup'));
   } catch (error) {
@@ -433,6 +450,13 @@ exports.disableMfaMethod = async (req, res) => {
     const methods = mfa.enrolledMethodsOf(user);
     if (!methods.includes(method)) return res.status(400).json({ error: 'This method is not turned on' });
     const remaining = methods.filter((m) => m !== method);
+    // Methods that still work afterwards (WhatsApp counts only while it is
+    // available). Never leave an account whose only remaining method cannot be
+    // used, and never leave an admin account without a usable method.
+    const remainingUsable = mfa.methodsOf(user).filter((m) => m !== method);
+    if (!remainingUsable.length && remaining.length) {
+      return res.status(400).json({ error: 'WhatsApp codes are not available right now, so keep this method on (or turn on another one first).', code: 'MFA_LAST_METHOD' });
+    }
     if (!remaining.length && mfaEnforcedFor(user)) {
       return res.status(400).json({ error: 'Admin accounts must keep one two-step method. Turn on the other method first.', code: 'MFA_LAST_METHOD' });
     }

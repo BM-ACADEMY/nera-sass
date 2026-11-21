@@ -11,6 +11,7 @@
  * platform number is configured.
  */
 const platformInbox = require('./platformInbox');
+const mfa = require('./mfa');
 const { createOtpStore } = require('./otpStore');
 
 class WhatsappOtpError extends Error {
@@ -45,14 +46,41 @@ const TEMPLATE_DEFINITION = Object.freeze({
 const enabled = () => String(process.env.WHATSAPP_OTP_TEMPLATE_APPROVED || '').toLowerCase() === 'true';
 const available = () => enabled() && Boolean(platformInbox.platformPhoneId() && platformInbox.platformToken());
 
+// mfa.methodsOf offers WhatsApp only while it can really be used.
+mfa.setWhatsappAvailability(available);
+
+// Country codes WhatsApp codes may be sent to (WHATSAPP_OTP_COUNTRY_CODES,
+// comma-separated, default India only), so the method cannot be used to pump
+// paid messages to numbers anywhere.
+const allowedCountryCodes = () => String(process.env.WHATSAPP_OTP_COUNTRY_CODES || '91').split(',').map((c) => c.replace(/\D/g, '')).filter(Boolean);
+const setupNumbersPerDay = () => Number(process.env.WHATSAPP_SETUP_NUMBERS_PER_DAY || 5);
+
 // A WhatsApp number as Meta wants it: digits with the country code. A plain
-// 10-digit Indian mobile number gets 91 in front.
+// 10-digit Indian mobile number gets 91 in front. Null when invalid or the
+// country is not allowed.
 function normalizeNumber(value) {
   let d = String(value || '').replace(/\D/g, '');
   if (d.startsWith('00')) d = d.slice(2);
   if (d.length === 10 && /^[6-9]/.test(d)) d = `91${d}`;
-  return d.length >= 11 && d.length <= 15 ? d : null;
+  if (d.length < 11 || d.length > 15) return null;
+  return allowedCountryCodes().some((c) => d.startsWith(c) && d.length - c.length >= 8) ? d : null;
 }
+
+// Platform-wide cap on WhatsApp code sends per hour (WHATSAPP_OTP_HOURLY_CAP,
+// default 200), per server process. A slot is taken before the code is
+// stored and given back when nothing was sent.
+let sendTimes = [];
+const hourlyCap = () => Number(process.env.WHATSAPP_OTP_HOURLY_CAP || 200);
+function takeSendSlot() {
+  const now = Date.now();
+  sendTimes = sendTimes.filter((t) => t > now - 60 * 60 * 1000);
+  if (sendTimes.length >= hourlyCap()) {
+    throw new WhatsappOtpError(429, 'WhatsApp codes are busy right now. Use another method or try again later.', 'WHATSAPP_BUSY');
+  }
+  sendTimes.push(now);
+  return now;
+}
+const giveBackSlot = (slot) => { const i = sendTimes.indexOf(slot); if (i >= 0) sendTimes.splice(i, 1); };
 
 const maskNumber = (number) => {
   const d = String(number || '');
@@ -97,7 +125,13 @@ async function sendCode(user, purpose) {
   if (!available()) throw new WhatsappOtpError(400, 'WhatsApp codes are not available yet', 'WHATSAPP_NOT_AVAILABLE');
   const to = destination(user, purpose);
   if (!to) throw new WhatsappOtpError(400, 'Add your WhatsApp number first', 'WHATSAPP_NUMBER_MISSING');
-  return store.sendCode(user, purpose, { to });
+  const slot = takeSendSlot();
+  try {
+    return await store.sendCode(user, purpose, { to });
+  } catch (error) {
+    if (error.code === 'OTP_RESEND_WAIT' || error.code === 'MFA_CODE_LOCKED') giveBackSlot(slot);
+    throw error;
+  }
 }
 
 async function verifyCode(user, code, purpose) {
@@ -107,6 +141,7 @@ async function verifyCode(user, code, purpose) {
 }
 
 module.exports = {
-  sendCode, verifyCode, enabled, available, normalizeNumber, maskNumber, authTemplatePayload,
+  sendCode, verifyCode, enabled, available, normalizeNumber, maskNumber, authTemplatePayload, allowedCountryCodes, setupNumbersPerDay,
+  resetSendCapForTests: () => { sendTimes = []; },
   templateName, templateLanguage, TEMPLATE_DEFINITION, WhatsappOtpError, clearFields: store.clearFields,
 };

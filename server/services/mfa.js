@@ -84,14 +84,19 @@ const whatsappOtpEnabled = () => String(process.env.WHATSAPP_OTP_TEMPLATE_APPROV
 
 const METHOD_ORDER = ['totp', 'email', 'whatsapp'];
 
+// whatsappOtp.js registers the full check (flag + platform number configured).
+let whatsappUsable = whatsappOtpEnabled;
+const setWhatsappAvailability = (fn) => { whatsappUsable = fn; };
+
 // Second-step methods a user can use now: 'email' (one-time code by mail),
 // 'totp' (authenticator app; stored as mfa_enabled for older accounts) and
-// 'whatsapp' (one-time code by WhatsApp, only while the template flag is on).
+// 'whatsapp' (one-time code by WhatsApp, only while it is available: template
+// flag on and the platform number configured).
 function methodsOf(user) {
   const methods = [];
   if (user?.mfa_email_enabled) methods.push('email');
   if (user?.mfa_enabled) methods.push('totp');
-  if (user?.mfa_whatsapp_enabled && whatsappOtpEnabled()) methods.push('whatsapp');
+  if (user?.mfa_whatsapp_enabled && whatsappUsable()) methods.push('whatsapp');
   return methods;
 }
 
@@ -119,5 +124,5 @@ function defaultMethodOf(user) {
 
 module.exports = {
   generateSecret, totp, verifyTotp, otpauthUrl, generateRecoveryCodes, hashRecoveryCode, base32Encode, base32Decode,
-  methodsOf, enrolledMethodsOf, hasMfa, defaultMethodOf, whatsappOtpEnabled, METHOD_ORDER,
+  methodsOf, enrolledMethodsOf, hasMfa, defaultMethodOf, whatsappOtpEnabled, setWhatsappAvailability, METHOD_ORDER,
 };
