@@ -148,7 +148,7 @@ test('My sessions', async (t) => {
     }
 
     for (const [label, token, target] of [['same tenant', tokMate, rowA], ['other tenant', tokB, rowA], ['customer to staff', tokA, rowS], ['staff to customer', tokS, rowB]]) {
-      const res = await request(app).delete(`/api/account/sessions/${target.id}`).set(as(token));
+      const res = await request(app).delete(`/api/account/sessions/${target.id}`).set(as(token)).send({ password: PASSWORD });
       assert.strictEqual(res.status, 404, `${label}: answered like a missing session`);
     }
     for (const token of [tokA, tokB, tokS]) assert.strictEqual((await me(token)).status, 200, 'sessions still live');
@@ -175,7 +175,7 @@ test('My sessions', async (t) => {
     const gone = await rowOf(tokGone);
     assert.strictEqual((await handshake(tokGone)).err, undefined, 'socket allowed before');
 
-    const res = await request(app).delete(`/api/account/sessions/${gone.id}`).set(as(tokKeep));
+    const res = await request(app).delete(`/api/account/sessions/${gone.id}`).set(as(tokKeep)).send({ password: PASSWORD });
     assert.strictEqual(res.status, 200);
     const after = await me(tokGone);
     assert.strictEqual(after.status, 401);
@@ -183,7 +183,7 @@ test('My sessions', async (t) => {
     assert.strictEqual((await request(app).get('/api/tenant').set(as(tokGone))).status, 401, 'workspace route refused');
     assert.ok((await handshake(tokGone)).err, 'socket handshake refused');
     assert.strictEqual((await me(tokKeep)).status, 200, 'the other session is unaffected');
-    assert.strictEqual((await request(app).delete(`/api/account/sessions/${gone.id}`).set(as(tokKeep))).status, 404, 'already ended');
+    assert.strictEqual((await request(app).delete(`/api/account/sessions/${gone.id}`).set(as(tokKeep)).send({ password: PASSWORD })).status, 404, 'already ended');
     const listed = await list(tokKeep);
     assert.deepStrictEqual(listed.body.sessions.map((s) => s.id), [(await rowOf(tokKeep)).id]);
   });
@@ -199,7 +199,7 @@ test('My sessions', async (t) => {
     const dropped = [];
     sessions.setDisconnector((ids) => dropped.push(...ids));
     try {
-      await request(app).delete(`/api/account/sessions/${gone.id}`).set(as(tokKeep)).expect(200);
+      await request(app).delete(`/api/account/sessions/${gone.id}`).set(as(tokKeep)).send({ password: PASSWORD }).expect(200);
     } finally {
       // Later tests do not rely on live sockets.
       sessions.setDisconnector(null);
@@ -334,7 +334,9 @@ test('My sessions', async (t) => {
     assert.strictEqual(noCode.body.code, 'MFA_CODE_REQUIRED');
     // (the login code was sent moments ago; skip the resend wait)
     await sys(() => Users.updateOne({ id: s.id }, { $set: { mfa_email_code_sent_at: new Date(Date.now() - 60000) } }));
-    const sent = await request(app).post('/api/account/sessions/revoke-others/code').set(as(ok.body.token));
+    const noPw = await request(app).post('/api/account/sessions/confirm-code').set(as(ok.body.token));
+    assert.strictEqual(noPw.status, 403, 'no code is mailed without the password');
+    const sent = await request(app).post('/api/account/sessions/confirm-code').set(as(ok.body.token)).send({ password: PASSWORD });
     assert.strictEqual(sent.status, 200, JSON.stringify(sent.body));
     const mail = notify.outbox().at(-1);
     assert.match(mail.subject, /confirmation code/);
@@ -342,7 +344,7 @@ test('My sessions', async (t) => {
     const wrong = await request(app).post('/api/account/sessions/revoke-others').set(as(ok.body.token))
       .send({ password: PASSWORD, method: 'email', code: confirmCode === '000000' ? '111111' : '000000' });
     assert.strictEqual(wrong.status, 403);
-    assert.strictEqual(wrong.body.code, 'INVALID_MFA_CODE');
+    assert.strictEqual(wrong.body.code, 'CONFIRM_FAILED');
     const out = await request(app).post('/api/account/sessions/revoke-others').set(as(ok.body.token))
       .send({ password: PASSWORD, method: 'email', code: confirmCode });
     assert.strictEqual(out.status, 200, JSON.stringify(out.body));
@@ -414,8 +416,9 @@ test('My sessions', async (t) => {
     assert.ok(!missing.body.token);
     const wrong = await revokeOthers({ password: 'not-the-password' });
     assert.strictEqual(wrong.status, 403);
-    assert.strictEqual(wrong.body.code, 'PASSWORD_INCORRECT');
+    assert.strictEqual(wrong.body.code, 'CONFIRM_FAILED');
     assert.match(wrong.body.error, /password is not correct/);
+    assert.strictEqual((await sys(() => Users.findOne({ id: user.id }).lean())).failed_login_count, 1, 'counts toward the login lockout');
     assert.ok(!wrong.body.token);
     // Nothing happened: both devices still signed in, no token_version bump.
     assert.strictEqual((await me(tokMine)).status, 200, 'a wrong password does not sign this device out');
@@ -474,15 +477,117 @@ test('My sessions', async (t) => {
     assert.strictEqual((await post({ password: PASSWORD })).body.code, 'MFA_CODE_REQUIRED');
     const bad = await post({ password: PASSWORD, code: mfa.totp(secret) === '123456' ? '654321' : '123456' });
     assert.strictEqual(bad.status, 403);
-    assert.strictEqual(bad.body.code, 'INVALID_MFA_CODE');
+    assert.strictEqual(bad.body.code, 'CONFIRM_FAILED');
     const wrongPw = await post({ password: 'nope', code: mfa.totp(secret) });
-    assert.strictEqual(wrongPw.body.code, 'PASSWORD_INCORRECT', 'a right code does not replace the password');
+    assert.strictEqual(wrongPw.body.code, 'CONFIRM_FAILED', 'a right code does not replace the password');
+    assert.strictEqual(wrongPw.body.error, bad.body.error, 'same answer for a wrong password and a wrong code');
     const good = await post({ password: PASSWORD, code: mfa.totp(secret) });
     assert.strictEqual(good.status, 200, JSON.stringify(good.body));
     const again = await request(app).post('/api/account/sessions/revoke-others').set(as(good.body.token)).send({ password: PASSWORD, recovery_code: codes[0] });
     assert.strictEqual(again.status, 200, 'recovery code works');
     const fresh = await sys(() => Users.findOne({ id: user.id }).lean());
     assert.strictEqual(fresh.mfa_recovery_hashes.length, hashes.length - 1, 'recovery code used up');
+  });
+
+  await t.test('S19. Signing one device out needs the password (and two-step code); a token alone cannot', async () => {
+    await tenant(1);
+    const user = await owner(1);
+    const tokMine = await login(user);
+    const tokPhone = await login(user, { ua: SAFARI_IPHONE });
+    const tokTablet = await login(user);
+    const phone = await rowOf(tokPhone);
+    const tablet = await rowOf(tokTablet);
+    const del = (body) => request(app).delete(`/api/account/sessions/${phone.id}`).set(as(tokMine)).send(body);
+    const missing = await del({});
+    assert.strictEqual(missing.status, 403);
+    assert.strictEqual(missing.body.code, 'PASSWORD_REQUIRED');
+    const wrong = await del({ password: 'nope' });
+    assert.strictEqual(wrong.status, 403);
+    assert.strictEqual(wrong.body.code, 'CONFIRM_FAILED');
+    assert.strictEqual((await me(tokPhone)).status, 200, 'phone still signed in');
+    assert.strictEqual((await del({ password: PASSWORD })).status, 200);
+    assert.strictEqual((await me(tokPhone)).status, 401, 'phone signed out');
+
+    // With two-step on, the code is asked for before the password is looked at.
+    const mfa = require('../services/mfa');
+    const { encrypt } = require('../utils/crypto');
+    const secret = mfa.generateSecret();
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_enabled: true, mfa_secret_enc: encrypt(secret) } }));
+    const delTablet = (body) => request(app).delete(`/api/account/sessions/${tablet.id}`).set(as(tokMine)).send(body);
+    const noCode = await delTablet({ password: 'wrong' });
+    assert.strictEqual(noCode.body.code, 'MFA_CODE_REQUIRED', 'no hint about the password');
+    const noCodeRight = await delTablet({ password: PASSWORD });
+    assert.deepStrictEqual(noCodeRight.body, noCode.body, 'same answer whether or not the password is right');
+    const done = await delTablet({ password: PASSWORD, code: mfa.totp(secret) });
+    assert.strictEqual(done.status, 200, JSON.stringify(done.body));
+  });
+
+  await t.test('S20. Wrong passwords on sign-out count toward the login lockout', async () => {
+    await tenant(1);
+    const user = await owner(1);
+    const tokMine = await login(user);
+    const post = (password) => request(app).post('/api/account/sessions/revoke-others').set(as(tokMine)).send({ password });
+    for (let i = 0; i < 4; i += 1) assert.strictEqual((await post('wrong')).status, 403);
+    const fifth = await post('wrong');
+    assert.strictEqual(fifth.status, 423);
+    assert.strictEqual(fifth.body.code, 'ACCOUNT_LOCKED');
+    assert.strictEqual((await post(PASSWORD)).status, 423, 'locked even with the right password');
+    const loginRes = await request(app).post('/api/auth/login').send({ email: user.email, password: PASSWORD });
+    assert.strictEqual(loginRes.status, 423, 'login is locked too');
+    assert.strictEqual((await me(tokMine)).status, 200, 'this session stays signed in');
+    // A right password resets the count.
+    await sys(() => Users.updateOne({ id: user.id }, { $unset: { locked_until: '' }, $set: { failed_login_count: 3 } }));
+    assert.strictEqual((await post(PASSWORD)).status, 200);
+    assert.strictEqual((await sys(() => Users.findOne({ id: user.id }).lean())).failed_login_count, 0);
+  });
+
+  await t.test('S21. The confirm code needs the password and does not spoil a pending sign-in code', async () => {
+    await tenant(1);
+    const user = await owner(1, { mfa_email_enabled: true });
+    const asMfa = makeToken(user, { mfa: true });
+    await request(app).post('/api/auth/login').send({ email: user.email, password: PASSWORD }).expect(200);
+    const before = await sys(() => Users.findOne({ id: user.id }).lean());
+    assert.strictEqual(before.mfa_email_code_purpose, 'login');
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_email_code_sent_at: new Date(Date.now() - 60000) } }));
+    for (const body of [{}, { password: 'nope' }]) {
+      const res = await request(app).post('/api/account/sessions/confirm-code').set(as(asMfa)).send(body);
+      assert.strictEqual(res.status, 403);
+    }
+    const after = await sys(() => Users.findOne({ id: user.id }).lean());
+    assert.strictEqual(after.mfa_email_code_hash, before.mfa_email_code_hash, 'sign-in code untouched');
+    assert.strictEqual(after.mfa_email_code_purpose, 'login');
+  });
+
+  await t.test('S22. Two-step enrolment while signed in does not extend the session', async () => {
+    await tenant(1);
+    const mfa = require('../services/mfa');
+    const user = await owner(1);
+    const tokMine = await login(user);
+    const ends = new Date(Date.now() + 2 * 86400 * 1000);
+    const { iat, exp, ...claims } = jwt.decode(tokMine);
+    assert.ok(iat && exp);
+    const aged = jwt.sign(claims, process.env.JWT_SECRET, { expiresIn: Math.floor((ends.getTime() - Date.now()) / 1000) });
+    await sys(() => UserSessions.updateOne({ session_hash: sessions.hashSessionId(sidOf(tokMine)) }, { $set: { expires_at: ends } }));
+    const start = await request(app).post('/api/auth/mfa/setup').set(as(aged)).send({});
+    assert.strictEqual(start.status, 200);
+    const confirm = await request(app).post('/api/auth/mfa/setup/confirm').set(as(aged)).send({ code: mfa.totp(start.body.secret) });
+    assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
+    assert.strictEqual(sidOf(confirm.body.token), sidOf(tokMine), 'same session');
+    assert.ok(jwt.decode(confirm.body.token).exp <= jwt.decode(aged).exp, 'token not extended');
+    assert.strictEqual((await rowOf(confirm.body.token)).expires_at.getTime(), ends.getTime(), 'row not extended');
+    assert.strictEqual(jwt.decode(confirm.body.token).mfa, true);
+    assert.strictEqual((await me(confirm.body.token)).status, 200);
+  });
+
+  await t.test('S23. Tenant data export leaves signed-in sessions out', async () => {
+    await tenant(1);
+    const user = await owner(1);
+    await login(user);
+    assert.strictEqual(await sys(() => UserSessions.countDocuments({ tenant_id: 1 })), 1);
+    const data = await require('../services/tenantData').exportTenant(1);
+    assert.ok(data);
+    assert.ok(!data.collections.user_sessions, 'no user_sessions in the export');
+    assert.ok(!JSON.stringify(data).includes('session_hash'));
   });
 
   await t.test('S14. Helpers: IP masking and user-agent reading', () => {

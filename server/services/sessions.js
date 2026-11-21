@@ -196,6 +196,22 @@ async function keepSession(sid, user) {
   return row ? row.expires_at || null : null;
 }
 
+/**
+ * A new token for the signed-in request's own session that ends when it
+ * already ends: the lower of the row's expires_at and the current token's
+ * expiry. A token from before sessions were tracked gets a tracked session
+ * ending when that token does. Returns { sid, expiresAt }.
+ */
+async function continueSession(user, req) {
+  let expiresAt = req.authTokenExpiresAt || null;
+  if (req.authSessionId) {
+    const rowEnd = await keepSession(req.authSessionId, user);
+    if (rowEnd && (!expiresAt || rowEnd < expiresAt)) expiresAt = rowEnd;
+    return { sid: req.authSessionId, expiresAt };
+  }
+  return { sid: await createSession(user, clientInfo(req), { expiresAt }), expiresAt };
+}
+
 /** The live row for a token's sid, or null when it is unknown, revoked or someone else's. */
 async function findActive(sid, userId) {
   if (!sid || typeof sid !== 'string') return null;
@@ -297,6 +313,7 @@ module.exports = {
   createSession,
   renewSession,
   keepSession,
+  continueSession,
   findActive,
   touch,
   listForUser,

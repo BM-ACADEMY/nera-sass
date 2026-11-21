@@ -8,15 +8,16 @@ import {
 } from '@/components/ui/alert-dialog';
 
 /**
- * "Sign out all other devices": asks for the password again, and a two-step
- * code when that is on, before calling the server.
+ * Signing a device out (one, or all others): asks for the password again, and
+ * a two-step code when that is on, before calling the server.
  *
- *   mfaMethods  ['totp'] / ['email'] / both / [] (from GET /account/sessions)
- *   submit(body)  POST revoke-others; resolves on success
- *   sendCode()    POST revoke-others/code; resolves with { sent_to }
- *   messageOf(err) plain-language text for an error
+ *   open          false, or { title, description, actionLabel }
+ *   mfaMethods    ['totp'] / ['email'] / both / [] (from GET /account/sessions)
+ *   submit(body)  the sign-out call with { password, method?, code? }; resolves on success
+ *   sendCode(password)  POST /account/sessions/confirm-code; resolves with { sent_to }
+ *   messageOf(err, fallback)  plain-language text for an error
  */
-export default function RevokeOthersDialog({ open, onClose, mfaMethods = [], submit, sendCode, messageOf }) {
+export default function ConfirmSignOutDialog({ open, onClose, mfaMethods = [], submit, sendCode, messageOf }) {
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [method, setMethod] = useState(null);
@@ -39,10 +40,11 @@ export default function RevokeOthersDialog({ open, onClose, mfaMethods = [], sub
   }, [open, hasTotp, hasEmail]);
 
   const emailCode = async () => {
+    if (!password) return setError('Enter your password first, then ask for a code.');
     setSending(true);
     setError(null);
     try {
-      const res = await sendCode();
+      const res = await sendCode(password);
       setSentTo(res?.sent_to || 'your email');
     } catch (err) {
       setError(messageOf(err, 'The code could not be emailed. Try again in a minute.'));
@@ -68,29 +70,29 @@ export default function RevokeOthersDialog({ open, onClose, mfaMethods = [], sub
   };
 
   return (
-    <AlertDialog open={open} onOpenChange={(next) => !next && !busy && onClose()}>
+    <AlertDialog open={Boolean(open)} onOpenChange={(next) => !next && !busy && onClose()}>
       <AlertDialogContent>
         <form onSubmit={confirm} className="grid gap-4">
           <AlertDialogHeader>
-            <AlertDialogTitle>Sign out all other devices?</AlertDialogTitle>
+            <AlertDialogTitle>{open?.title}</AlertDialogTitle>
             <AlertDialogDescription>
-              Every other browser and device will be signed out right away. You stay signed in here. To confirm it is you, enter your password{needsCode ? ' and a verification code' : ''}.
+              {open?.description} To confirm it is you, enter your password{needsCode ? ' and a verification code' : ''}.
             </AlertDialogDescription>
           </AlertDialogHeader>
 
           <div className="grid gap-2">
-            <Label htmlFor="revoke-others-password">Password</Label>
-            <Input id="revoke-others-password" type="password" autoComplete="current-password" autoFocus
+            <Label htmlFor="sign-out-password">Password</Label>
+            <Input id="sign-out-password" type="password" autoComplete="current-password" autoFocus
               value={password} onChange={(e) => setPassword(e.target.value)} disabled={busy} />
           </div>
 
           {needsCode && (
             <div className="grid gap-2">
-              <Label htmlFor="revoke-others-code">
+              <Label htmlFor="sign-out-code">
                 {method === 'totp' ? 'Code from your authenticator app' : 'Code sent to your email'}
               </Label>
               <div className="flex gap-2">
-                <Input id="revoke-others-code" inputMode="numeric" autoComplete="one-time-code" maxLength={11}
+                <Input id="sign-out-code" inputMode="numeric" autoComplete="one-time-code" maxLength={11}
                   value={code} onChange={(e) => setCode(e.target.value)} disabled={busy} />
                 {method === 'email' && (
                   <Button type="button" variant="outline" onClick={emailCode} disabled={sending || busy}>
@@ -114,7 +116,7 @@ export default function RevokeOthersDialog({ open, onClose, mfaMethods = [], sub
             <AlertDialogCancel type="button" disabled={busy}>Cancel</AlertDialogCancel>
             {/* A plain submit button: AlertDialogAction would close the dialog before the check. */}
             <Button type="submit" variant="destructive" disabled={busy}>
-              {busy ? 'Signing out…' : 'Sign out others'}
+              {busy ? 'Signing out…' : open?.actionLabel || 'Sign out'}
             </Button>
           </AlertDialogFooter>
         </form>

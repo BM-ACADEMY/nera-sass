@@ -16,14 +16,12 @@ const notify = require('../services/notify');
 const audit = require('../services/audit');
 const invitations = require('../services/invitations');
 const sessions = require('../services/sessions');
-const { verifySecondStep } = require('../services/stepUp');
+const { verifySecondStep, recordPasswordFailure } = require('../services/stepUp');
 const { passwordProblem, normalizeEmail } = require('../utils/passwordPolicy');
 const {
   issueAccessToken, issueMfaToken, resolveIdentity, publicUser, AuthError,
 } = require('../middleware/authMiddleware');
 
-const MAX_FAILED_LOGINS = Number(process.env.LOGIN_MAX_FAILURES || 5);
-const LOCK_MINUTES = Number(process.env.LOGIN_LOCK_MINUTES || 15);
 const RESET_TTL_MINUTES = Number(process.env.PASSWORD_RESET_TTL_MINUTES || 60);
 const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 const sys = (fn) => runAsSystem(fn, 'account');
@@ -39,20 +37,25 @@ function fail(res, error) {
 // The signed-in session for this request: the caller's own session when it
 // already has one (MFA enrolment from settings, password change), otherwise a
 // new one for this browser (login). Returns the raw sid for the token.
-async function sessionIdFor(user, req) {
+// keepExpiry: a signed-in request (it has req.user) gets a new token for the
+// same session that ends when the session already ends (two-step enrolment).
+// Otherwise (login, password change) the session gets a full new lifetime.
+async function sessionFor(user, req, { keepExpiry = false } = {}) {
+  if (keepExpiry && req?.user) return sessions.continueSession(user, req);
   if (req?.authSessionId) {
     await sessions.renewSession(req.authSessionId, user);
-    return req.authSessionId;
+    return { sid: req.authSessionId, expiresAt: null };
   }
-  return sessions.createSession(user, sessions.clientInfo(req));
+  return { sid: await sessions.createSession(user, sessions.clientInfo(req)), expiresAt: null };
 }
+const sessionIdFor = async (user, req) => (await sessionFor(user, req)).sid;
 
-async function sessionPayload(user, { mfaPassed, req }) {
+async function sessionPayload(user, { mfaPassed, req, keepExpiry = false }) {
   const identity = describeUser(user);
   const lifecycle = identity.kind === 'tenant' ? await tenantLifecycle(identity.tenantId) : null;
-  const sid = await sessionIdFor(user, req);
+  const { sid, expiresAt } = await sessionFor(user, req, { keepExpiry });
   return {
-    token: issueAccessToken(user, { mfa: mfaPassed, sid }),
+    token: issueAccessToken(user, { mfa: mfaPassed, sid, expiresAt }),
     user: publicUser(user, identity, lifecycle?.tenant),
     workspace: lifecycle ? { state: lifecycle.state, access: lifecycle.access } : null,
   };
@@ -102,14 +105,7 @@ exports.login = async (req, res) => {
       return res.status(423).json({ error: 'Too many failed attempts. Try again later or reset your password.', code: 'ACCOUNT_LOCKED' });
     }
     if (!(await bcrypt.compare(password, user.password_hash))) {
-      const failures = Number(user.failed_login_count || 0) + 1;
-      const lock = failures >= MAX_FAILED_LOGINS;
-      await sys(() => Users.updateOne({ id: user.id }, {
-        $set: lock ? { failed_login_count: 0, locked_until: new Date(Date.now() + LOCK_MINUTES * 60000) } : { failed_login_count: failures },
-      }));
-      if (lock) {
-        await audit.record(audit.EVENTS.LOGIN_FAILED_LOCKOUT, { tenantId: user.tenant_id ?? null, req, targetType: 'user', targetId: user.id, meta: { email: user.email } });
-      }
+      await recordPasswordFailure(user, req);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
@@ -194,7 +190,8 @@ exports.confirmMfaSetup = async (req, res) => {
     }));
     await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'totp' } });
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
-    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true, req })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
+    // Enrolling while signed in does not extend the session.
+    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true, req, keepExpiry: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
   } catch (error) {
     return fail(res, error);
   }
@@ -235,7 +232,7 @@ exports.confirmEmailSetup = async (req, res) => {
     }));
     await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'email' } });
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
-    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true, req })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
+    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true, req, keepExpiry: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
   } catch (error) {
     return fail(res, error);
   }

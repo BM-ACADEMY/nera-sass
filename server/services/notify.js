@@ -167,7 +167,7 @@ function signInCodeEmail({ to, name, code, minutes, purpose }) {
   }[purpose] || `Your ${product} sign-in code`;
   const intro = {
     setup: 'Use this code to turn on two-step verification by email.',
-    confirm: 'Use this code to confirm signing out all your other devices.',
+    confirm: 'Use this code to confirm signing a device out of your account.',
   }[purpose] || 'Use this code to finish signing in.';
   const lines = [
     `Hi ${name || 'there'},`,

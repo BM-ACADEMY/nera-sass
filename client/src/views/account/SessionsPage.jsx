@@ -7,11 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle,
-  AlertDialogDescription, AlertDialogAction, AlertDialogCancel,
-} from '@/components/ui/alert-dialog';
-import RevokeOthersDialog from './RevokeOthersDialog.jsx';
+import ConfirmSignOutDialog from './ConfirmSignOutDialog.jsx';
 
 const ICONS = { desktop: FiMonitor, mobile: FiSmartphone, tablet: FiTablet, unknown: FiHelpCircle };
 
@@ -52,9 +48,8 @@ const SessionsPage = () => {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [confirm, setConfirm] = useState(null); // { kind: 'one', session }
-  const [othersOpen, setOthersOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
+  // { title, description, actionLabel, run(body) } while the password dialog is open
+  const [confirm, setConfirm] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -72,30 +67,31 @@ const SessionsPage = () => {
   const sessions = data?.sessions || [];
   const others = sessions.filter((s) => !s.current);
 
-  const run = async () => {
-    setBusy(true);
-    try {
-      await api.delete(`/account/sessions/${confirm.session.id}`);
-      toast.success(`Signed out ${deviceLabel(confirm.session)}`);
-      setConfirm(null);
-    } catch (err) {
-      toast.error(sessionsError(err, 'Could not sign out. Try again.'));
-      setConfirm(null);
-    } finally {
-      setBusy(false);
+  // Both sign-outs need the password (and two-step code); the server checks
+  // them and errors stay in the dialog.
+  const signOutOne = (session) => setConfirm({
+    title: 'Sign out this device?',
+    description: `${deviceLabel(session)} (${locationLabel(session.location)}) will be signed out right away and must sign in again.`,
+    actionLabel: 'Sign out',
+    run: async (body) => {
+      await api.delete(`/account/sessions/${session.id}`, { body: JSON.stringify(body) });
+      toast.success(`Signed out ${deviceLabel(session)}`);
       load();
-    }
-  };
-
-  // Password (and two-step code) checked by the server; errors stay in the dialog.
-  const signOutOthers = async (body) => {
-    const res = await api.post('/account/sessions/revoke-others', body);
-    // This device keeps working with the new token (same end time as before).
-    if (res?.token) api.setToken(res.token);
-    toast.success(res?.revoked ? `Signed out ${res.revoked} other device${res.revoked === 1 ? '' : 's'}` : 'All other devices are signed out');
-    load();
-  };
-  const othersError = (err, fallback) => (err?.status === 403 || err?.code === 'OTP_RESEND_WAIT' ? err.message : sessionsError(err, fallback));
+    },
+  });
+  const signOutOthers = () => setConfirm({
+    title: 'Sign out all other devices?',
+    description: 'Every other browser and device will be signed out right away. You stay signed in here.',
+    actionLabel: 'Sign out others',
+    run: async (body) => {
+      const res = await api.post('/account/sessions/revoke-others', body);
+      // This device keeps working with the new token (same end time as before).
+      if (res?.token) api.setToken(res.token);
+      toast.success(res?.revoked ? `Signed out ${res.revoked} other device${res.revoked === 1 ? '' : 's'}` : 'All other devices are signed out');
+      load();
+    },
+  });
+  const confirmError = (err, fallback) => ([403, 423].includes(err?.status) || err?.code === 'OTP_RESEND_WAIT' ? err.message : sessionsError(err, fallback));
 
   return (
     <div className="mx-auto max-w-4xl p-4 md:p-6">
@@ -108,7 +104,7 @@ const SessionsPage = () => {
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={load} disabled={loading}><FiRefreshCw className={loading ? 'animate-spin' : ''} /> Refresh</Button>
-          <Button variant="destructive" size="sm" disabled={!data || busy} onClick={() => setOthersOpen(true)}>
+          <Button variant="destructive" size="sm" disabled={!data} onClick={signOutOthers}>
             <FiLogOut /> Sign out all other devices
           </Button>
         </div>
@@ -133,37 +129,20 @@ const SessionsPage = () => {
             <div className="flex-1 space-y-2"><Skeleton className="h-4 w-48" /><Skeleton className="h-3 w-72" /></div>
           </div>
         ))}
-        {data && sessions.map((s) => <SessionRow key={s.id} session={s} onSignOut={(session) => setConfirm({ kind: 'one', session })} />)}
+        {data && sessions.map((s) => <SessionRow key={s.id} session={s} onSignOut={signOutOne} />)}
         {data && !sessions.length && <div className="p-6 text-center text-sm text-muted-foreground">No other signed-in devices.</div>}
       </Card>
       {data && sessions.length > 0 && !others.length && (
         <p className="mt-3 text-center text-xs text-muted-foreground">You are signed in on this device only.</p>
       )}
 
-      <AlertDialog open={Boolean(confirm)} onOpenChange={(open) => !open && !busy && setConfirm(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Sign out this device?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirm && `${deviceLabel(confirm.session)} (${locationLabel(confirm.session.location)}) will be signed out right away and must sign in again.`}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" disabled={busy} onClick={(e) => { e.preventDefault(); run(); }}>
-              {busy ? 'Signing out…' : 'Sign out'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <RevokeOthersDialog
-        open={othersOpen}
-        onClose={() => setOthersOpen(false)}
+      <ConfirmSignOutDialog
+        open={confirm}
+        onClose={() => setConfirm(null)}
         mfaMethods={data?.mfa_methods || []}
-        submit={signOutOthers}
-        sendCode={() => api.post('/account/sessions/revoke-others/code', {})}
-        messageOf={othersError}
+        submit={(body) => confirm.run(body)}
+        sendCode={(password) => api.post('/account/sessions/confirm-code', { password })}
+        messageOf={confirmError}
       />
     </div>
   );

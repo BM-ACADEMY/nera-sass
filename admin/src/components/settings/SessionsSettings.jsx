@@ -3,8 +3,7 @@ import { toast } from 'sonner';
 import { FiMonitor, FiSmartphone, FiTablet, FiHelpCircle, FiMapPin, FiRefreshCw, FiLogOut } from 'react-icons/fi';
 import axiosClient from '../../api/axiosClient';
 import { timeAgo, shortDateTime, locationLabel, deviceLabel, deviceKind, sessionsError } from '../../api/sessionFormat';
-import ConfirmDialog from '../ConfirmDialog';
-import RevokeOthersDialog from './RevokeOthersDialog';
+import ConfirmSignOutDialog from './ConfirmSignOutDialog';
 import { SettingsPageHeader } from './SettingsPageHeader';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -22,8 +21,8 @@ const SessionsSettings = () => {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  // { title, description, actionLabel, run(body) } while the password dialog is open
   const [confirm, setConfirm] = useState(null);
-  const [othersOpen, setOthersOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -40,34 +39,36 @@ const SessionsSettings = () => {
 
   const sessions = data?.sessions || [];
 
+  // Both sign-outs need the password (and two-step code); the server checks
+  // them and errors stay in the dialog.
   const signOutOne = (session) => setConfirm({
     title: 'Sign out this device?',
     description: `${deviceLabel(session)} (${locationLabel(session.location)}) will be signed out right away and must sign in again.`,
     actionLabel: 'Sign out',
-    destructive: true,
-    run: async () => {
-      try {
-        await axiosClient.delete(`/account/sessions/${session.id}`);
-        toast.success(`Signed out ${deviceLabel(session)}`);
-      } catch (err) {
-        toast.error(errorOf(err, 'Could not sign out. Try again.'));
-      }
+    run: async (body) => {
+      await axiosClient.delete(`/account/sessions/${session.id}`, { data: body });
+      toast.success(`Signed out ${deviceLabel(session)}`);
       load();
     },
   });
 
-  // Password (and two-step code) checked by the server; errors stay in the dialog.
-  const signOutOthers = async (body) => {
-    const res = await axiosClient.post('/account/sessions/revoke-others', body);
-    // This device keeps working with the new token (same end time as before).
-    if (res.data?.token) localStorage.setItem('adminToken', res.data.token);
-    const n = res.data?.revoked || 0;
-    toast.success(n ? `Signed out ${n} other device${n === 1 ? '' : 's'}` : 'All other devices are signed out');
-    load();
-  };
-  const othersError = (err, fallback) => {
+  const signOutOthers = () => setConfirm({
+    title: 'Sign out all other devices?',
+    description: 'Every other browser and device will be signed out right away. You stay signed in here.',
+    actionLabel: 'Sign out others',
+    run: async (body) => {
+      const res = await axiosClient.post('/account/sessions/revoke-others', body);
+      // This device keeps working with the new token (same end time as before).
+      if (res.data?.token) localStorage.setItem('adminToken', res.data.token);
+      const n = res.data?.revoked || 0;
+      toast.success(n ? `Signed out ${n} other device${n === 1 ? '' : 's'}` : 'All other devices are signed out');
+      load();
+    },
+  });
+
+  const confirmError = (err, fallback) => {
     const body = err.response?.data;
-    return err.response?.status === 403 || body?.code === 'OTP_RESEND_WAIT' ? body?.error || fallback : errorOf(err, fallback);
+    return [403, 423].includes(err.response?.status) || body?.code === 'OTP_RESEND_WAIT' ? body?.error || fallback : errorOf(err, fallback);
   };
 
   return (
@@ -75,7 +76,7 @@ const SessionsSettings = () => {
       <SettingsPageHeader section="sessions" />
       <div className="mb-4 flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={load} disabled={loading}><FiRefreshCw className={cn(loading && 'animate-spin')} /> Refresh</Button>
-        <Button variant="destructive" size="sm" disabled={!data} onClick={() => setOthersOpen(true)}><FiLogOut /> Sign out all other devices</Button>
+        <Button variant="destructive" size="sm" disabled={!data} onClick={signOutOthers}><FiLogOut /> Sign out all other devices</Button>
       </div>
 
       {error && (
@@ -127,14 +128,13 @@ const SessionsSettings = () => {
         {data && !sessions.length && <div className="p-6 text-center text-sm text-muted-foreground">No other signed-in devices.</div>}
       </Card>
 
-      <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />
-      <RevokeOthersDialog
-        open={othersOpen}
-        onClose={() => setOthersOpen(false)}
+      <ConfirmSignOutDialog
+        open={confirm}
+        onClose={() => setConfirm(null)}
         mfaMethods={data?.mfa_methods || []}
-        submit={signOutOthers}
-        sendCode={async () => (await axiosClient.post('/account/sessions/revoke-others/code')).data}
-        messageOf={othersError}
+        submit={(body) => confirm.run(body)}
+        sendCode={async (password) => (await axiosClient.post('/account/sessions/confirm-code', { password })).data}
+        messageOf={confirmError}
       />
     </div>
   );
