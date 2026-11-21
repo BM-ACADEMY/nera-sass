@@ -15,6 +15,7 @@
 const { Invoices, BillingOrders, Tenants } = require('../../models');
 const { runAsSystem, runAsTenant, requireTenantId } = require('../tenantContext');
 const { withLock } = require('../../db/mongo');
+const { gstinChecksumOk } = require('./gstin');
 
 const env = (name, fallback) => (process.env[name] && String(process.env[name]).trim()) || fallback;
 const SAC = () => env('INVOICE_SAC', '998314');
@@ -56,7 +57,7 @@ function cleanProfile(input = {}) {
   if (legalName.length < 2 || legalName.length > 120) throw new InvoiceError(400, 'Enter the business name for your invoices (2 to 120 characters)');
   if (address.length > 300) throw new InvoiceError(400, 'The address is too long (300 characters at most)');
   if (gstin) {
-    if (!GSTIN_RE.test(gstin)) throw new InvoiceError(400, 'That GSTIN does not look right. It has 15 characters, for example 34ABGCA7083D1ZS.');
+    if (!GSTIN_RE.test(gstin) || !gstinChecksumOk(gstin)) throw new InvoiceError(400, 'That GSTIN does not look right. It has 15 characters, for example 34ABGCA7083D1ZS.');
     stateCode = gstin.slice(0, 2); // a GSTIN fixes the state
   }
   if (stateCode && !STATE_CODES.has(stateCode)) throw new InvoiceError(400, 'State code must be a two-digit GST state code, for example 34 for Puducherry');
@@ -100,7 +101,8 @@ function taxSplit({ gstPaise, buyerStateCode, sellerStateCode }) {
  *      failed or interrupted step uses up no number. The unique (series, seq)
  *      index refuses a duplicate if a lock ever expired mid-way, and the step
  *      runs again. Invoices are never deleted, so a used number never frees up.
- * The invoice date is the moment the number is given, so dates follow numbers.
+ * The invoice date and financial year come from `now` (the moment of issue,
+ * passed in by the caller), so dates follow numbers.
  */
 async function ensureForOrder(order, { now = new Date() } = {}) {
   if (!order || order.purpose !== 'subscription' || order.status !== 'fulfilled') return null;
@@ -108,7 +110,7 @@ async function ensureForOrder(order, { now = new Date() } = {}) {
     const existing = await Invoices.findOne({ billing_order_id: order.id }, { _id: 0 }).lean();
     if (existing?.invoice_number) return existing;
     if (!existing) await claim(order, now);
-    return assignNumber(order.id);
+    return assignNumber(order.id, now);
   }, { ttlMs: 20000, waitMs: 15000 });
 }
 
@@ -152,17 +154,16 @@ async function claim(order, now) {
 }
 
 /** Step 2: gives the claimed row the next number of its series. */
-async function assignNumber(orderId) {
+async function assignNumber(orderId, now) {
+  const issuedAt = now;
+  const fy = financialYear(issuedAt);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const row = await Invoices.findOne({ billing_order_id: orderId }, { _id: 0, invoice_number: 1, seller: 1 }).lean();
     if (!row) throw new InvoiceError(500, `The invoice row of order ${orderId} is missing`);
     if (row.invoice_number) break;
     const prefix = row.seller?.invoice_prefix || seller().invoice_prefix;
-    const fy = financialYear(new Date());
     const series = `${prefix}/${fy}`;
     const done = await withLock(`invoice-series:${series}`, async () => {
-      const issuedAt = new Date();
-      if (financialYear(issuedAt) !== fy) return false; // the year turned while waiting
       const last = await runAsSystem(() => Invoices.findOne({ series, seq: { $type: 'number' } }, { _id: 0, seq: 1 }).sort({ seq: -1 }).lean(), 'billing:invoice');
       const seq = (Number(last?.seq) || 0) + 1;
       try {
@@ -188,6 +189,9 @@ async function assignNumber(orderId) {
  * invoicing left behind. Safe to run twice at once and alongside fulfil().
  */
 async function issueMissing({ now = new Date() } = {}) {
+  // Reads every fulfilled plan order and every numbered invoice on each run.
+  // Fine at today's volume; as orders grow, add a date filter (e.g. fulfilled
+  // in the last few days) so the scan stays small.
   const [paid, numbered] = await runAsSystem(() => Promise.all([
     BillingOrders.find({ purpose: 'subscription', status: 'fulfilled' }, { _id: 0 }).lean(),
     Invoices.find({ invoice_number: { $type: 'string' } }, { _id: 0, billing_order_id: 1 }).lean(),
