@@ -9,6 +9,7 @@ import ProfileSettings from './settings/ProfileSettings';
 import TwoStepSettings from './settings/TwoStepSettings';
 import PasswordSettings from './settings/PasswordSettings';
 import SystemSettings from './settings/SystemSettings';
+import SessionsSettings from './settings/SessionsSettings';
 import { SETTINGS_SECTIONS } from './settings/SettingsPageHeader';
 
 const ROLE_NAMES = { founder: 'Admin (Owner)', ops: 'Staff' };
@@ -30,6 +31,7 @@ const AdminSettingsView = ({ userProfile, section, permissions = {}, onProfileCh
   if (section === 'profile') return <ProfileSettings account={account} userProfile={userProfile} onSaved={() => { loadAccount(); onProfileChanged?.(); }} />;
   if (section === 'two-step') return <TwoStepSettings account={account} onChanged={loadAccount} />;
   if (section === 'password') return <PasswordSettings />;
+  if (section === 'sessions') return <SessionsSettings />;
   if (section === 'system' && canSystem) return <SystemSettings />;
 
   const methods = account?.mfa_methods || userProfile?.mfa_methods || [];
@@ -39,6 +41,7 @@ const AdminSettingsView = ({ userProfile, section, permissions = {}, onProfileCh
       ? <Badge variant="success">On · {methods.map((m) => (m === 'email' ? 'Email' : 'Authenticator')).join(' + ')}</Badge>
       : <Badge variant="danger">Off</Badge>,
     password: null,
+    sessions: null,
     system: null,
   };
 

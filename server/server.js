@@ -114,6 +114,8 @@ app.set('io', io);
 require('./services/realtime').setStaffSender((event, payload) => socketServer.to('platform').emit(event, payload));
 // Customer panel live updates go to the current tenant's room (scoped io.emit).
 require('./services/realtime').setWorkspaceSender((event, payload) => io.emit(event, payload));
+// A signed-out session loses its live socket at once (sockets join session:<id>).
+require('./services/sessions').setDisconnector((ids) => ids.forEach((id) => socketServer.in(`session:${id}`).disconnectSockets(true)));
 
 socketServer.on('connection', (socket) => {
   console.log(`[Socket.io] Client connected: ${socket.id}`);
@@ -612,6 +614,8 @@ const integrationsRoutes = require('./routes/integrationsRoutes');
 const salesosRoutes = require('./routes/salesos');
 
 app.use('/api/auth', require('./routes/authRoutes'));
+// My sessions: signed-in devices of the caller's own account.
+app.use('/api/account/sessions', require('./routes/accountSessions'));
 // Customer workspace administration: /api/tenant, /api/team/*.
 app.use('/api', require('./routes/team'));
 // Plans, subscription and wallet of the signed-in workspace (customer login).

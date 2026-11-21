@@ -9,7 +9,8 @@
  *  - a new code at most every RESEND_SECONDS (a conditional update, so
  *    parallel requests cannot both send);
  *  - a code is only accepted for the purpose it was sent for
- *    (login / setup / reauth);
+ *    (login / setup / reauth / confirm: confirm re-checks a signed-in user
+ *    before signing a device out, My sessions);
  *  - every wrong code also counts toward the per-account lock across all
  *    channels (codeFailures.js).
  * Tries are counted with one conditional $inc, and a match is accepted only by
@@ -23,7 +24,7 @@ const codeFailures = require('./codeFailures');
 const TTL_MINUTES = Number(process.env.EMAIL_OTP_TTL_MINUTES || 10);
 const RESEND_SECONDS = 45;
 const MAX_ATTEMPTS = 5;
-const PURPOSES = ['login', 'setup', 'reauth'];
+const PURPOSES = ['login', 'setup', 'reauth', 'confirm'];
 
 class OtpError extends Error {
   constructor(status, message, code) {

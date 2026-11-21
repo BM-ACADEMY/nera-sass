@@ -63,13 +63,18 @@ async function recordPasswordSuccess(user, extraSet = {}) {
  * copy did not), 'wrong' (counted; lockedNow when this attempt locked the
  * account) or 'ok' (counter reset; `extraSet` is written with the reset, for
  * example last_login).
+ * resetOnSuccess: false leaves the counter as it is on a correct password, for
+ * checks with a second part still to pass (password + code, stepUp.js): the
+ * caller calls recordPasswordSuccess only when every part passed, so wrong
+ * codes after a right password keep counting toward the lock.
  */
-async function checkPassword(user, password, { req, extraSet = {} } = {}) {
+async function checkPassword(user, password, { req, extraSet = {}, resetOnSuccess = true } = {}) {
   if (isLocked(user)) return { result: 'locked' };
   if (typeof password !== 'string' || !password || !(await bcrypt.compare(password, user.password_hash || ''))) {
     const { locked } = await recordPasswordFailure(user, { req });
     return { result: 'wrong', lockedNow: locked };
   }
+  if (!resetOnSuccess) return { result: 'ok' };
   if (!(await recordPasswordSuccess(user, extraSet))) return { result: 'locked' };
   return { result: 'ok' };
 }

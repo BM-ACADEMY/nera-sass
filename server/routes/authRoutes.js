@@ -61,6 +61,7 @@ router.post('/mfa/whatsapp/setup/confirm', loginLimit, sessionOrMfaToken, reauth
 // Signed in (customer users and platform staff)
 router.get('/me', requireAuth, authController.me);
 router.post('/change-password', requireAuth, reauthLimit, authController.changePassword);
+router.post('/logout', requireAuth, authController.logout);
 router.post('/logout-all', requireAuth, authController.logoutAll);
 router.patch('/profile', requireAuth, authController.updateProfile);
 router.post('/mfa/disable', loginLimit, requireAuth, reauthLimit, authController.disableMfaMethod);
