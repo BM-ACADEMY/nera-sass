@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert';
 import {
-  settingsTabs, canEditWorkspace, canEditBrand, connectWhatsApp, maskId, whatsappSummary, roleLabel, profileSaveMessage,
+  settingsSections, findSection, workspaceInfo, languageOptions, profileChanges, canEditWorkspace, canEditBrand, connectWhatsApp, maskId, whatsappSummary, roleLabel, profileSaveMessage,
 } from './settingsPolicy.js';
 
 const FLAGS = {
@@ -10,15 +10,36 @@ const FLAGS = {
   manager: { manage_team: false, manage_settings: false, manage_whatsapp: false },
   agent: { manage_team: false, manage_settings: false, manage_whatsapp: false },
 };
-const keys = (role) => settingsTabs({ role, permissions: FLAGS[role] }).map((t) => t.key);
+test('Settings sections: no WhatsApp or Billing (they have their own pages)', () => {
+  assert.deepStrictEqual(settingsSections().map((s) => s.key), ['profile', 'brand', 'two-step', 'password']);
+  assert.strictEqual(findSection('whatsapp'), null);
+  assert.strictEqual(findSection('billing'), null);
+  assert.strictEqual(findSection('profile').title, 'Profile & workspace');
+});
 
-test('same tabs for every role, Billing included; no Team tab', () => {
-  const expected = ['workspace', 'brand', 'whatsapp', 'billing', 'account'];
-  assert.deepStrictEqual(keys('owner'), expected);
-  assert.deepStrictEqual(keys('admin'), expected);
-  assert.deepStrictEqual(keys('manager'), expected);
-  assert.deepStrictEqual(keys('agent'), expected);
-  assert.deepStrictEqual(settingsTabs({}).map((t) => t.key), expected);
+test('workspace info is shown read-only with friendly labels', () => {
+  const info = workspaceInfo({ tenant: { id: 7, name: 'Dress Shop', currency: 'INR', timezone: 'Asia/Kolkata', tax_treatment: 'gst' }, lifecycle: { state: 'active' } });
+  assert.deepStrictEqual(info.map((row) => [row.key, row.value]), [
+    ['name', 'Dress Shop'], ['id', '7'], ['status', 'Active'], ['currency', 'INR'], ['timezone', 'Asia/Kolkata'], ['tax_treatment', 'GST (India)'],
+  ]);
+  assert.strictEqual(workspaceInfo(null).find((r) => r.key === 'id').value, '');
+});
+
+test('language options keep an unknown stored value', () => {
+  assert.ok(languageOptions('ta').every((o) => o.value !== 'xx'));
+  assert.strictEqual(languageOptions('ta').length, 6);
+  assert.deepStrictEqual(languageOptions('fr').at(-1), { value: 'fr', label: 'fr' });
+});
+
+test('WhatsApp profile: only changed fields, Meta limits and email format', () => {
+  const current = { about: 'Hi', description: 'Old', address: '', email: '' };
+  assert.deepStrictEqual(profileChanges({ ...current, address: ' 12 Road ' }, current), { ok: true, changes: { address: '12 Road' } });
+  assert.match(profileChanges({ ...current, about: 'a'.repeat(140) }, current).error, /139/);
+  assert.match(profileChanges({ ...current, description: 'd'.repeat(513) }, current).error, /512/);
+  assert.match(profileChanges({ ...current, address: 'x'.repeat(257) }, current).error, /256/);
+  assert.match(profileChanges({ ...current, email: 'nope' }, current).error, /valid email/);
+  assert.match(profileChanges({ ...current, about: '' }, current).error, /About cannot be empty/);
+  assert.match(profileChanges(current, current).error, /Nothing has changed/);
 });
 
 test('editing follows the server permission flags', () => {
