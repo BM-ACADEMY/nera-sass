@@ -144,7 +144,11 @@ async function fulfil(order, { paymentId, source, now = new Date() }) {
   return withLock(`billing-order:${order.razorpay_order_id}`, async () => {
     const fresh = await BillingOrders.findOne({ id: order.id }, { _id: 0 }).lean();
     if (!fresh) throw new BillingError(404, 'Order not found');
-    if (fresh.status === 'fulfilled') return { fulfilled: false, duplicate: true, order: fresh };
+    if (fresh.status === 'fulfilled') {
+      // A repeat (webhook after checkout, or a retried webhook) also finishes an invoice an earlier run left undone.
+      await invoices.ensureForOrder(fresh, { now }).catch((error) => console.error('[billing/orders] Invoice not issued:', error.message));
+      return { fulfilled: false, duplicate: true, order: fresh };
+    }
 
     const changes = { razorpay_payment_id: paymentId, updated_at: now };
     let outcome = {};
@@ -188,7 +192,9 @@ async function fulfil(order, { paymentId, source, now = new Date() }) {
     }
     await BillingOrders.updateOne({ id: fresh.id }, { $set: changes });
     if (fresh.purpose === 'subscription') {
-      // The payment is already safe; a failed invoice is retried when the list is opened.
+      // Issued in the same flow as the plan. The payment is already safe, so an
+      // error here does not undo it: invoices.issueMissing (job in server.js)
+      // issues whatever is still missing.
       await invoices.ensureForOrder({ ...fresh, ...changes }, { now }).catch((error) => console.error('[billing/orders] Invoice not issued:', error.message));
     }
     return { fulfilled: true, duplicate: false, order: { ...fresh, ...changes }, ...outcome };
