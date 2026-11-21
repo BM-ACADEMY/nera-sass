@@ -3,7 +3,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
-const { detectOptOut, detectOptIn, confirmationText, normalise } = require('../services/optOutKeywords');
+const { detectOptOut, detectOptIn, consentKeywordChange, confirmationText, normalise } = require('../services/optOutKeywords');
 
 test('Opt-out keyword detection', async (t) => {
   await t.test('K1. English STOP words match whatever the case or punctuation', () => {
@@ -36,7 +36,7 @@ test('Opt-out keyword detection', async (t) => {
   await t.test('K4. Ordinary messages are not opt-outs', () => {
     for (const text of [
       'Hi, I want to know the fees', 'Can you stop by the office tomorrow?', 'Please do not stop the class, we love it and want more sessions next month',
-      'When does the next batch end?', 'I will cancel my other appointment and come', 'Is the bus stop near the centre?', 'வணக்கம், கட்டணம் எவ்வளவு?',
+      'When does the next batch end?', 'I will cancel my other appointment and come', 'Is the bus stop near the centre?', 'bus stop', 'dont stop', 'வணக்கம், கட்டணம் எவ்வளவு?',
       'நாளை வர முடியுமா?', '', '   ', 'ok', 'yes',
     ]) {
       assert.strictEqual(detectOptOut(text).matched, false, `"${text}" must not opt out`);
@@ -50,6 +50,44 @@ test('Opt-out keyword detection', async (t) => {
     assert.strictEqual(detectOptIn('தொடங்கு').language, 'ta');
     assert.strictEqual(detectOptIn('start the class tomorrow').matched, false);
     assert.strictEqual(detectOptIn('stop').matched, false);
+  });
+
+  await t.test('K5b. Everyday "send" words are not opt-in keywords', () => {
+    for (const text of ['அனுப்பு', 'அனுப்புங்கள்', 'anuppunga', 'anupunga', 'send', 'send details']) {
+      assert.strictEqual(detectOptIn(text).matched, false, `"${text}" must not count as opt-in`);
+    }
+  });
+
+  await t.test('K7. A very short message with "stop" opts out', () => {
+    for (const text of ['please stop', 'Stop pls', 'stop it', 'stop calling me', 'STOP NOW', 'pls stop!!', 'stop sms']) {
+      const result = detectOptOut(text);
+      assert.strictEqual(result.matched, true, `"${text}" should opt out`);
+      assert.strictEqual(result.language, 'en');
+    }
+  });
+
+  await t.test('K8. Negated or unrelated short "stop" messages do not opt out', () => {
+    for (const text of ['dont stop', "Don't stop", 'do not stop', 'never stop', 'bus stop', 'stop by', 'stop here', 'stop at the gate', 'cant stop smiling']) {
+      assert.strictEqual(detectOptOut(text).matched, false, `"${text}" must not opt out`);
+    }
+    // Five words or more is a sentence for a person, not an unsubscribe.
+    assert.strictEqual(detectOptOut('can you stop the class early today').matched, false);
+  });
+
+  await t.test('K9. consentKeywordChange: STOP always, START only to re-subscribe an opted-out contact', () => {
+    assert.strictEqual(consentKeywordChange('STOP', { optedOut: false }).kind, 'opt_out');
+    assert.strictEqual(consentKeywordChange('please stop', { optedOut: true }).kind, 'opt_out');
+    const resubscribe = consentKeywordChange('START', { optedOut: true });
+    assert.strictEqual(resubscribe.kind, 'opt_in');
+    assert.strictEqual(resubscribe.language, 'en');
+    const tamil = consentKeywordChange('தொடங்கு', { optedOut: true });
+    assert.strictEqual(tamil.kind, 'opt_in');
+    assert.strictEqual(tamil.language, 'ta');
+    const first = consentKeywordChange('START', { optedOut: false });
+    assert.strictEqual(first.kind, null, 'a keyword never creates first-time consent');
+    assert.strictEqual(first.ignoredOptIn, true);
+    assert.strictEqual(consentKeywordChange('hello', { optedOut: true }).kind, null);
+    assert.strictEqual(consentKeywordChange('anuppunga', { optedOut: true }).kind, null);
   });
 
   await t.test('K6. Confirmations follow the language of the keyword', () => {

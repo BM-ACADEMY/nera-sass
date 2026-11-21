@@ -539,8 +539,16 @@ app.post('/webhook/whatsapp', requireMetaSignature, async (req, res) => {
               // the customer's language inside the window they just opened.
               let consentChange = null;
               if (['text', 'button', 'interactive'].includes(msg.type) && text) {
-                const stop = optOutKeywords.detectOptOut(text);
-                const start = stop.matched ? { matched: false } : optOutKeywords.detectOptIn(text);
+                // START only re-subscribes a contact who is opted out; it never creates first-time consent.
+                const stopCheck = optOutKeywords.detectOptOut(text);
+                const optInCandidate = stopCheck.matched ? { matched: false } : optOutKeywords.detectOptIn(text);
+                const currentlyOptedOut = optInCandidate.matched
+                  ? consent.optedOut(lead, await consent.getConsent({ phone: phoneDigits, leadId: lead.id }))
+                  : false;
+                const keywordChange = optOutKeywords.consentKeywordChange(text, { optedOut: currentlyOptedOut });
+                const stop = keywordChange.kind === 'opt_out' ? { matched: true, keyword: keywordChange.keyword, language: keywordChange.language } : { matched: false };
+                const start = keywordChange.kind === 'opt_in' ? { matched: true, keyword: keywordChange.keyword, language: keywordChange.language } : { matched: false };
+                if (keywordChange.ignoredOptIn) console.log(`[Webhook] Opt-in keyword "${keywordChange.keyword}" from lead ${lead.id} ignored: the contact is not opted out`);
                 if (stop.matched) {
                   const result = await consent.recordOptOut({ leadId: lead.id, phone: phoneDigits, source: 'inbound_keyword', text });
                   consentChange = { kind: 'opt_out', language: stop.language, keyword: stop.keyword, cancelled: result.cancelled_queued };

@@ -24,6 +24,7 @@ const wallet = require('./wallet');
 const alerts = require('./alerts');
 const customerAlerts = require('../alerts');
 const razorpay = require('./razorpay');
+const invoices = require('./invoices');
 
 class BillingError extends Error {
   constructor(status, message, code) {
@@ -43,12 +44,33 @@ const publicOrder = (order) => order && ({
   plan_code: order.plan_code,
   amount_paise: order.amount_paise,
   amount_inr: order.amount_paise / 100,
+  base_paise: order.base_paise ?? order.amount_paise,
+  gst_paise: order.gst_paise || 0,
+  gst_rate_percent: order.gst_rate_percent || 0,
+  upgrade: Boolean(order.meta?.upgrade),
   currency: order.currency,
   razorpay_order_id: order.razorpay_order_id,
   status: order.status,
   created_at: order.created_at,
   fulfilled_at: order.fulfilled_at,
 });
+
+/**
+ * What an upgrade costs before GST: the new plan's price minus the unused part
+ * of what was already paid, by the day. Never below ₹1.
+ */
+function upgradeQuote({ current, next, subscription, now = new Date() }) {
+  const start = new Date(subscription.current_period_start).getTime();
+  const end = new Date(subscription.current_period_end).getTime();
+  const left = Math.max(0, Math.min(end - now.getTime(), end - start));
+  const fraction = end > start ? left / (end - start) : 0;
+  const credit = Math.round(current.price_paise * fraction);
+  return {
+    credit_paise: credit,
+    base_paise: Math.max(100, next.price_paise - credit),
+    days_left: Math.ceil(left / subscriptions.DAY_MS),
+  };
+}
 
 /**
  * createOrder({ purpose, planCode?, amountInr?, userId }) in the tenant context.
@@ -60,10 +82,24 @@ async function createOrder({ purpose, planCode = null, amountInr = null, userId 
 
   let amountPaise;
   let plan = null;
+  let tax = null;
+  let orderMeta = {};
   if (purpose === 'subscription') {
     plan = await plansService.planByCode(planCode);
     if (!plan || !plan.is_active) throw new BillingError(400, 'Please choose one of the available plans');
-    amountPaise = plan.price_paise;
+    let basePaise = plan.price_paise;
+    const live = await subscriptions.active(null, new Date());
+    if (live?.plan && live.plan.id !== plan.id) {
+      if (plan.price_paise < live.plan.price_paise) {
+        throw new BillingError(409, `You are on ${live.plan.name} until ${new Date(live.subscription.current_period_end).toDateString()}. You can move to ${plan.name} when this period ends.`, 'DOWNGRADE_AT_RENEWAL');
+      }
+      // Upgrade: pay the difference for the days left; the period end does not move.
+      const quote = upgradeQuote({ current: live.plan, next: plan, subscription: live.subscription });
+      basePaise = quote.base_paise;
+      orderMeta = { upgrade: true, from_plan_code: live.plan.code, credit_paise: quote.credit_paise, days_left: quote.days_left };
+    }
+    tax = plansService.withGst(basePaise);
+    amountPaise = tax.total_paise;
   } else {
     const inr = Number(amountInr);
     if (!Number.isFinite(inr) || inr < topupMinInr() || inr > topupMaxInr() || Math.round(inr * 100) !== inr * 100) {
@@ -85,15 +121,18 @@ async function createOrder({ purpose, planCode = null, amountInr = null, userId 
     plan_id: plan?.id ?? null,
     plan_code: plan?.code ?? null,
     amount_paise: amountPaise,
+    base_paise: tax ? tax.base_paise : amountPaise,
+    gst_paise: tax ? tax.gst_paise : 0,
+    gst_rate_percent: tax ? tax.gst_rate_percent : 0,
     currency: 'INR',
     razorpay_order_id: created.id,
     status: 'created',
     created_by: userId,
-    meta: { receipt },
+    meta: { receipt, ...orderMeta },
     created_at: new Date(),
     updated_at: new Date(),
   });
-  return { order: publicOrder(order.toObject()), checkout: { key_id: razorpay.keyId(), order_id: created.id, amount: amountPaise, currency: 'INR', name: plan?.name || 'Wallet top-up' } };
+  return { order: publicOrder(order.toObject()), price: tax || undefined, checkout: { key_id: razorpay.keyId(), order_id: created.id, amount: amountPaise, currency: 'INR', name: plan?.name || 'Wallet top-up' } };
 }
 
 /**
@@ -112,13 +151,13 @@ async function fulfil(order, { paymentId, source, now = new Date() }) {
     if (fresh.purpose === 'subscription') {
       const plan = await plansService.planById(fresh.plan_id);
       if (!plan) throw new BillingError(409, 'The plan on this order no longer exists');
-      const { subscription, renewal } = await subscriptions.activate({ plan, orderId: fresh.razorpay_order_id, paymentId, now, source });
+      const { subscription, renewal } = await subscriptions.activate({ plan, orderId: fresh.razorpay_order_id, paymentId, now, source, keepPeriod: Boolean(fresh.meta?.upgrade) });
       Object.assign(changes, { status: 'fulfilled', fulfilled_at: now, fulfilled_by: source });
       outcome = { subscription: subscriptions.publicSubscription(subscription, now), renewal };
       await audit.record(audit.EVENTS.SUBSCRIPTION_ACTIVATED, {
         tenantId: fresh.tenant_id, targetType: 'subscription', targetId: subscription.id,
         actor: { actor_type: 'system', actor_user_id: null },
-        meta: { plan_code: plan.code, price_inr: plan.price_inr, order_id: fresh.razorpay_order_id, payment_id: paymentId, source, renewal },
+        meta: { plan_code: plan.code, price_inr: plan.price_inr, base_paise: fresh.base_paise, gst_paise: fresh.gst_paise, total_paise: fresh.amount_paise, upgrade: Boolean(fresh.meta?.upgrade), order_id: fresh.razorpay_order_id, payment_id: paymentId, source, renewal },
       });
     } else if (fresh.purpose === 'wallet_topup') {
       if (source !== 'webhook') {
@@ -148,6 +187,10 @@ async function fulfil(order, { paymentId, source, now = new Date() }) {
       });
     }
     await BillingOrders.updateOne({ id: fresh.id }, { $set: changes });
+    if (fresh.purpose === 'subscription') {
+      // The payment is already safe; a failed invoice is retried when the list is opened.
+      await invoices.ensureForOrder({ ...fresh, ...changes }, { now }).catch((error) => console.error('[billing/orders] Invoice not issued:', error.message));
+    }
     return { fulfilled: true, duplicate: false, order: { ...fresh, ...changes }, ...outcome };
   }, { ttlMs: 20000, waitMs: 15000 });
 }
@@ -175,6 +218,30 @@ async function verifyCheckout({ orderId, paymentId, signature, userId = null }) 
 }
 
 const WEBHOOK_EVENTS = new Set(['payment.captured', 'order.paid']);
+const REFUND_EVENTS = new Set(['refund.created', 'refund.processed', 'refund.failed', 'payment.dispute.created', 'payment.dispute.lost', 'payment.dispute.won', 'payment.dispute.closed']);
+
+/**
+ * A refund or a dispute on a billing payment is recorded (audit) and nothing
+ * else changes by itself: our policy is to make good with extra validity, not
+ * money, and staff decide that (POST /api/admin/tenants/:id/billing/extend).
+ * The tenant comes from our own order row, found by the payment id.
+ */
+async function handleRefundOrDispute(event) {
+  const name = event.event;
+  const refund = event?.payload?.refund?.entity;
+  const dispute = event?.payload?.dispute?.entity;
+  const paymentId = refund?.payment_id || dispute?.payment_id || event?.payload?.payment?.entity?.id;
+  if (!paymentId) return { handled: false, status: 200, reason: 'no payment id' };
+  const order = await runAsSystem(() => BillingOrders.findOne({ razorpay_payment_id: String(paymentId) }, { _id: 0 }).lean(), 'billing:webhook');
+  if (!order) return { handled: false, status: 200, reason: 'not a billing payment' };
+  console.warn(`[billing/webhook] ${name} on payment ${paymentId} (tenant ${order.tenant_id}); staff to review`);
+  await audit.record(audit.EVENTS.PAYMENT_REFUND_NOTED, {
+    tenantId: order.tenant_id, targetType: 'billing_order', targetId: order.id,
+    actor: { actor_type: 'system', actor_user_id: null },
+    meta: { event: name, payment_id: String(paymentId), order_id: order.razorpay_order_id, amount_paise: Number((refund || dispute)?.amount || 0), status: (refund || dispute)?.status || null },
+  });
+  return { handled: true, status: 200, tenant_id: order.tenant_id, reason: 'recorded for staff review' };
+}
 
 /**
  * A failed payment becomes a notice for the workspace that owns the order. The
@@ -200,6 +267,7 @@ async function handleWebhook({ rawBody, signature, event }) {
   if (!razorpay.verifyWebhookSignature({ rawBody, signature })) return { handled: false, status: 401, reason: 'invalid signature' };
   const name = event?.event;
   if (name === 'payment.failed') return handleFailedPayment(event);
+  if (REFUND_EVENTS.has(name)) return handleRefundOrDispute(event);
   if (!WEBHOOK_EVENTS.has(name)) return { handled: false, status: 200, reason: `ignored event ${name || 'unknown'}` };
   const payment = event?.payload?.payment?.entity;
   const razorpayOrderId = payment?.order_id || event?.payload?.order?.entity?.id;
@@ -286,4 +354,4 @@ async function listOrders(limit = 20) {
   return rows.map(publicOrder);
 }
 
-module.exports = { BillingError, PURPOSES, topupMinInr, topupMaxInr, publicOrder, createOrder, fulfil, verifyCheckout, handleWebhook, buyExtra, expireLapsed, listOrders };
+module.exports = { upgradeQuote, BillingError, PURPOSES, topupMinInr, topupMaxInr, publicOrder, createOrder, fulfil, verifyCheckout, handleWebhook, buyExtra, expireLapsed, listOrders };

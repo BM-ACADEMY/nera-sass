@@ -37,6 +37,8 @@ module.exports = defineModel('tenants', {
   deletion_request_reference: { type: String },
   deletion_requested_at: { type: Date },
   deleted_at: { type: Date },
+  // Legal details printed on GST invoices: { legal_name, gstin, address, state_code }.
+  billing_profile: { type: Mixed, default: null },
   created_by: { type: Number },
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
