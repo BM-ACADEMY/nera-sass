@@ -11,9 +11,10 @@ const plans = require('./plans');
 const subscriptions = require('./subscriptions');
 const wallet = require('./wallet');
 const orders = require('./orders');
+const invoices = require('./invoices');
 const aiAllowance = require('./aiAllowance');
 const alerts = require('./alerts');
 const razorpay = require('./razorpay');
 const { limits, seatLimit, numberLimit } = require('./limits');
 
-module.exports = { plans, subscriptions, wallet, orders, aiAllowance, alerts, razorpay, limits, seatLimit, numberLimit };
+module.exports = { plans, subscriptions, wallet, orders, invoices, aiAllowance, alerts, razorpay, limits, seatLimit, numberLimit };

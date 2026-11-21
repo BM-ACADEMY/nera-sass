@@ -160,8 +160,8 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.strictEqual(patched.body.plan.price_inr, 899);
     const order = await request(app).post('/api/billing/orders').set(bearer(owner)).send({ purpose: 'subscription', plan_code: 'desk', amount_inr: 1 });
     assert.strictEqual(order.status, 201);
-    assert.strictEqual(order.body.checkout.amount, 89900, 'amount comes from the table, never from the browser');
-    assert.strictEqual(gatewayCalls[0].amountPaise, 89900);
+    assert.strictEqual(order.body.checkout.amount, 106082, 'amount comes from the table plus 18% GST, never from the browser');
+    assert.strictEqual(gatewayCalls[0].amountPaise, 106082);
     assert.ok(await sys(() => AuditEvents.exists({ event: 'PLAN_UPDATED' })));
     // Seeding again never overwrites an edited price.
     await billing.plans.ensureDefaultPlans();
@@ -281,7 +281,7 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.strictEqual(foreign.status, 404);
   });
 
-  await t.test('O3. Renewal of the same plan extends the period; a different plan starts a new period', async () => {
+  await t.test('O3. Renewal of the same plan extends the period; an upgrade keeps the paid period', async () => {
     const { owner } = await workspace(1);
     const first = await subscribe(owner, 'desk');
     const end1 = new Date(first.body.subscription.current_period_end).getTime();
@@ -290,7 +290,7 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.ok(end2 > end1 + 27 * 86400000, 'a renewal adds a month to the paid period');
     const upgraded = await subscribe(owner, 'complete');
     assert.strictEqual(upgraded.body.subscription.plan_code, 'complete');
-    assert.ok(new Date(upgraded.body.subscription.current_period_end).getTime() < end2, 'a plan change starts from now');
+    assert.strictEqual(new Date(upgraded.body.subscription.current_period_end).getTime(), end2, 'an upgrade keeps the period already paid for');
     assert.strictEqual(await runAsTenant(1, () => Subscriptions.countDocuments({})), 1, 'one row per workspace');
   });
 
@@ -347,8 +347,8 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     const { owner } = await workspace(1);
     const created = await request(app).post('/api/billing/orders').set(bearer(owner)).send({ purpose: 'subscription', plan_code: 'desk' });
     const orderId = created.body.checkout.order_id;
-    await signedWebhook(webhookBody(orderId, 'pay_s1', 79900));
-    await signedWebhook(webhookBody(orderId, 'pay_s1', 79900));
+    await signedWebhook(webhookBody(orderId, 'pay_s1', 94282)); // ₹799 + 18% GST
+    await signedWebhook(webhookBody(orderId, 'pay_s1', 94282));
     const sub = await runAsTenant(1, () => Subscriptions.findOne({}).lean());
     assert.strictEqual(sub.plan_code, 'desk');
     assert.strictEqual(sub.status, 'active');
@@ -526,6 +526,124 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.strictEqual(rows.length, 2);
     assert.ok(rows.every((r) => Number.isInteger(r.id)), JSON.stringify(rows));
     assert.notStrictEqual(rows[0].id, rows[1].id);
+  });
+
+  await t.test('G1. Plan orders add 18% GST on top and record the split; wallet top-ups carry none', async () => {
+    const { owner } = await workspace(1);
+    const plan = await request(app).post('/api/billing/orders').set(bearer(owner)).send({ purpose: 'subscription', plan_code: 'whatsapp' });
+    assert.strictEqual(plan.status, 201);
+    assert.strictEqual(plan.body.order.base_paise, 199900);
+    assert.strictEqual(plan.body.order.gst_paise, 35982);
+    assert.strictEqual(plan.body.order.amount_paise, 235882);
+    assert.strictEqual(plan.body.checkout.amount, 235882);
+    const topup = await request(app).post('/api/billing/orders').set(bearer(owner)).send({ purpose: 'wallet_topup', amount_inr: 500 });
+    assert.strictEqual(topup.body.order.gst_paise, 0);
+    assert.strictEqual(topup.body.checkout.amount, 50000);
+    const plans = await request(app).get('/api/billing/plans').set(bearer(owner));
+    assert.strictEqual(plans.body.plans[0].total_paise, 94282);
+  });
+
+  await t.test('U1. An upgrade pays the difference for the days left (plus GST) and keeps the period; a downgrade waits for renewal', async () => {
+    const { owner } = await workspace(1);
+    const first = await subscribe(owner, 'whatsapp');
+    const end = new Date(first.body.subscription.current_period_end).getTime();
+    const down = await request(app).post('/api/billing/orders').set(bearer(owner)).send({ purpose: 'subscription', plan_code: 'desk' });
+    assert.strictEqual(down.status, 409);
+    assert.strictEqual(down.body.code, 'DOWNGRADE_AT_RENEWAL');
+    const up = await request(app).post('/api/billing/orders').set(bearer(owner)).send({ purpose: 'subscription', plan_code: 'complete' });
+    assert.strictEqual(up.status, 201, JSON.stringify(up.body));
+    assert.strictEqual(up.body.order.upgrade, true);
+    // Just paid for the month, so nearly all of it is credit: base is a little over 399900 - 199900.
+    assert.ok(up.body.order.base_paise >= 200000 && up.body.order.base_paise < 205000, `base ${up.body.order.base_paise}`);
+    assert.strictEqual(up.body.order.gst_paise, Math.round(up.body.order.base_paise * 0.18));
+    assert.strictEqual(up.body.order.amount_paise, up.body.order.base_paise + up.body.order.gst_paise);
+    const orderId = up.body.checkout.order_id;
+    await signedWebhook(webhookBody(orderId, 'pay_up1', up.body.order.amount_paise));
+    const sub = await runAsTenant(1, () => Subscriptions.findOne({}).lean());
+    assert.strictEqual(sub.plan_code, 'complete');
+    assert.strictEqual(new Date(sub.current_period_end).getTime(), end, 'the paid period did not move');
+  });
+
+  await t.test('R1. A refund or dispute on a plan payment is recorded for staff and changes nothing; staff make good with extra days', async () => {
+    const ws = await workspace(1);
+    const paid = await subscribe(ws.owner, 'desk');
+    const end = new Date(paid.body.subscription.current_period_end).getTime();
+    const refundEvent = JSON.stringify({ event: 'refund.processed', payload: { refund: { entity: { id: 'rfnd_1', payment_id: paid.paymentId, amount: 94282, status: 'processed' } } } });
+    const res = await signedWebhook(refundEvent);
+    assert.strictEqual(res.status, 200);
+    assert.ok(await sys(() => AuditEvents.exists({ event: 'PAYMENT_REFUND_NOTED', tenant_id: 1 })));
+    assert.strictEqual((await runAsTenant(1, () => Subscriptions.findOne({}).lean())).status, 'active');
+    assert.strictEqual(await balance(1), 0);
+
+    const staff = await founder();
+    assert.strictEqual((await request(app).post('/api/admin/tenants/1/billing/extend').set(bearer(staff)).send({ days: 5 })).status, 400, 'a note is required');
+    const extended = await request(app).post('/api/admin/tenants/1/billing/extend').set(bearer(staff)).send({ days: 5, note: 'Service issue, made good' });
+    assert.strictEqual(extended.status, 200, JSON.stringify(extended.body));
+    const after = new Date((await runAsTenant(1, () => Subscriptions.findOne({}).lean())).current_period_end).getTime();
+    assert.strictEqual(after, end + 5 * 86400000);
+    assert.ok(await sys(() => AuditEvents.exists({ event: 'SUBSCRIPTION_EXTENDED', tenant_id: 1 })));
+    assert.strictEqual((await request(app).post('/api/admin/tenants/1/billing/extend').set(bearer(ws.owner)).send({ days: 5, note: 'nope nope' })).status, 403);
+  });
+
+  await t.test('I1. A paid plan gets one numbered GST invoice: CGST+SGST in Puducherry, IGST elsewhere; wallet top-ups get none', async () => {
+    const a = await workspace(1);
+    const paid = await subscribe(a.owner, 'desk');
+    // Fulfilling twice does not issue a second invoice.
+    await signedWebhook(webhookBody(paid.orderId, paid.paymentId, 94282));
+    const list = await request(app).get('/api/billing/invoices').set(bearer(a.owner));
+    assert.strictEqual(list.status, 200);
+    assert.strictEqual(list.body.invoices.length, 1);
+    assert.match(list.body.invoices[0].invoice_number, /^AV\/\d{2}-\d{2}\/0001$/);
+    assert.strictEqual(list.body.invoices[0].total_paise, 94282);
+    const page = await request(app).get(`/api/billing/invoices/${list.body.invoices[0].id}`).set(bearer(a.owner));
+    assert.strictEqual(page.status, 200);
+    assert.match(page.text, /AFRA VENTURES PRIVATE LIMITED/);
+    assert.match(page.text, /34ABGCA7083D1ZS/);
+    assert.match(page.text, /CGST @ 9%/);
+    assert.match(page.text, /SGST @ 9%/);
+    await topUp(a.owner, 1, 500);
+    assert.strictEqual((await request(app).get('/api/billing/invoices').set(bearer(a.owner))).body.invoices.length, 1, 'a top-up is not invoiced');
+
+    // A workspace in another state pays IGST; the other workspace cannot see invoice 1.
+    const b = await workspace(2);
+    const bad = await request(app).put('/api/billing/invoice-details').set(bearer(b.owner)).send({ legal_name: 'Chennai Dental', gstin: 'BAD' });
+    assert.strictEqual(bad.status, 400);
+    const saved = await request(app).put('/api/billing/invoice-details').set(bearer(b.owner)).send({ legal_name: 'Chennai Dental', state_code: '33', address: 'Anna Nagar, Chennai' });
+    assert.strictEqual(saved.status, 200, JSON.stringify(saved.body));
+    await subscribe(b.owner, 'desk');
+    const listB = await request(app).get('/api/billing/invoices').set(bearer(b.owner));
+    assert.strictEqual(listB.body.invoices.length, 1);
+    const pageB = await request(app).get(`/api/billing/invoices/${listB.body.invoices[0].id}`).set(bearer(b.owner));
+    assert.match(pageB.text, /IGST @ 18%/);
+    assert.ok(!/CGST/.test(pageB.text));
+    assert.match(pageB.text, /Chennai Dental/);
+    assert.notStrictEqual(listB.body.invoices[0].invoice_number, list.body.invoices[0].invoice_number);
+    assert.strictEqual((await request(app).get(`/api/billing/invoices/${list.body.invoices[0].id}`).set(bearer(b.owner))).status, 404, 'tenant isolation');
+  });
+
+  await t.test('E2. If adding the extra fails after the wallet was charged, the wallet is refunded', async () => {
+    const ws = await workspace(1);
+    await subscribe(ws.owner, 'desk');
+    await topUp(ws.owner, 1, 2000);
+    const original = billing.subscriptions.addExtras;
+    billing.subscriptions.addExtras = async () => null;
+    try {
+      const res = await request(app).post('/api/billing/extras').set(bearer(ws.owner)).send({ kind: 'seat', quantity: 1 });
+      assert.strictEqual(res.status, 500);
+      assert.strictEqual(res.body.code, 'EXTRAS_FAILED');
+    } finally { billing.subscriptions.addExtras = original; }
+    assert.strictEqual(await balance(1), 200000, 'the wallet got its money back');
+    const rows = await ledgerRows(1);
+    assert.ok(rows.some((r) => r.reason === 'refund' && r.reference_type === 'extra_undo'));
+  });
+
+  await t.test('E3. A billing error in the old /webhook/razorpay address answers 500 so Razorpay retries', async () => {
+    const original = billing.orders.handleWebhook;
+    billing.orders.handleWebhook = async () => { throw new Error('database down'); };
+    try {
+      const res = await signedWebhook(webhookBody('order_x', 'pay_retry', 10000), '/webhook/razorpay');
+      assert.strictEqual(res.status, 500);
+    } finally { billing.orders.handleWebhook = original; }
   });
 
   // ── Expiry, staff tools, isolation ───────────────────────
