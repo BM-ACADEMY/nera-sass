@@ -169,9 +169,9 @@ test('Send to client', async (t) => {
     assert.ok(!stored[0].text.includes(token), 'the link is not kept in the admin inbox');
     assert.match(stored[0].text, /\[one-time set-password link\]/);
 
-    const events = await sys(() => AuditEvents.find({ event: 'WORKSPACE_LOGIN_LINK_SENT' }).lean());
-    assert.strictEqual(events.length, 1);
-    const [event] = events;
+    const events = await sys(() => AuditEvents.find({ event: 'WORKSPACE_LOGIN_LINK_SENT' }).sort({ created_at: 1 }).lean());
+    assert.deepStrictEqual(events.map((e) => e.meta.status), ['attempted', 'sent'], 'an attempt row before the send, then the result');
+    const event = events[1];
     assert.strictEqual(event.tenant_id, 7);
     assert.strictEqual(event.actor_type, 'staff');
     assert.strictEqual(event.actor_user_id, ops.id);
@@ -245,8 +245,8 @@ test('Send to client', async (t) => {
     assert.match(res.body.error, /try again/);
     const owner = await sys(() => Users.findOne({ email: 'ravi@kaveri.test' }).lean());
     assert.ok(!owner.reset_token_hash, 'link cancelled');
-    const event = await sys(() => AuditEvents.findOne({ event: 'WORKSPACE_LOGIN_LINK_SENT' }).lean());
-    assert.strictEqual(event.meta.status, 'failed');
+    const event = await sys(() => AuditEvents.findOne({ event: 'WORKSPACE_LOGIN_LINK_SENT', 'meta.status': 'failed' }).lean());
+    assert.ok(event, 'the failure is audited');
   });
 
   await t.test('W10. A pending owner invitation gets a fresh invitation link instead', async () => {
@@ -306,12 +306,13 @@ test('Send to client', async (t) => {
     assert.strictEqual(owner.reset_token_hash, sha256(tokenOf(sends()[0])));
     const minutes = (new Date(owner.reset_token_expires_at) - Date.now()) / 60000;
     assert.ok(minutes > 59.5 && minutes <= 60, `link valid 60 minutes (got ${minutes})`);
-    const event = await sys(() => AuditEvents.findOne({ event: 'WORKSPACE_LOGIN_LINK_SENT' }).lean());
+    const event = await sys(() => AuditEvents.findOne({ event: 'WORKSPACE_LOGIN_LINK_SENT', 'meta.status': 'sent' }).lean());
     assert.strictEqual(event.meta.owner_signed_in, true);
     assert.strictEqual(event.actor_user_id, founder.id);
     const mails = notify.outbox().filter((m) => m.to === 'ravi@kaveri.test');
     assert.strictEqual(mails.length, 1);
     assert.match(mails[0].subject, /sign-in link was sent on WhatsApp/);
+    assert.match(mails[0].text, /sign in now or use "Forgot password"/);
     assert.match(mails[0].text, /\+91\*\*\*\*\*\*3210/);
   });
 
@@ -410,6 +411,73 @@ test('Send to client', async (t) => {
     assert.strictEqual(logged('/invite/AbC123'), '/invite/[token]');
     assert.strictEqual(logged('/api/auth/invitations/accept'), '/api/auth/invitations/accept');
     assert.strictEqual(logged('/api/admin/tenants/7/invitations/12/resend'), '/api/admin/tenants/7/invitations/12/resend');
+  });
+
+  await t.test('W21. A never-signed-in owner login in a workspace already in use is founder-only', async () => {
+    const { Leads } = require('../models');
+    const { ops, founder } = await seed();
+    // Another login in the workspace.
+    const agent = (await runAsTenant(7, () => Users.create({ role: 'agent', email: 'asha@kaveri.test', name: 'Asha', is_active: true, token_version: 0, password_hash: bcrypt.hashSync('Agent-Pass-1', 4) }))).toObject();
+    let view = await preview(ops);
+    assert.strictEqual(view.body.can_send, false);
+    let res = await send(ops);
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.code, 'WORKSPACE_HAS_USERS');
+    assert.strictEqual(sends().length, 0);
+    const ok = await send(founder);
+    assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
+    const minutes = (new Date(ok.body.expires_at) - Date.now()) / 60000;
+    assert.ok(minutes > 59.5 && minutes <= 60, `short link life (got ${minutes})`);
+
+    // No other login, but contacts already exist.
+    await sys(() => Users.deleteOne({ id: agent.id }));
+    await runAsTenant(7, () => Leads.create({ name: 'A customer', phone: '919800000001' }));
+    view = await preview(ops);
+    assert.strictEqual(view.body.can_send, false);
+    res = await send(ops);
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.code, 'WORKSPACE_IN_USE');
+  });
+
+  await t.test('W22. A sign-in between the check and the link write stops the link (non-founder sends)', async () => {
+    const welcome = require('../services/workspaceWelcome');
+    const { owner } = await seed();
+    const tenant = await sys(() => Tenants.findOne({ id: 7 }).lean());
+    const stale = { kind: 'user', id: owner.id, signed_in: false, in_use: null };
+    await sys(() => Users.updateOne({ id: owner.id }, { $set: { last_login: new Date() } }));
+    await assert.rejects(welcome.issueLink(tenant, stale, { unclaimedOnly: true }), (error) => error.code === 'OWNER_CHANGED');
+    let row = await sys(() => Users.findOne({ id: owner.id }).lean());
+    assert.ok(!row.reset_token_hash, 'no link was written');
+    // The founder path is not conditional.
+    await welcome.issueLink(tenant, stale, { unclaimedOnly: false });
+    row = await sys(() => Users.findOne({ id: owner.id }).lean());
+    assert.ok(row.reset_token_hash);
+  });
+
+  await t.test('W23. No audit row, no send; a failed audit after the send still emails the owner and counts', async () => {
+    const { ops } = await seed();
+    const realCreate = AuditEvents.create;
+    try {
+      AuditEvents.create = async () => { throw new Error('audit store down'); };
+      const res = await send(ops);
+      assert.strictEqual(res.status, 500);
+      assert.strictEqual(sends().length, 0, 'nothing sent without the audit row');
+      const owner = await sys(() => Users.findOne({ email: 'ravi@kaveri.test' }).lean());
+      assert.ok(!owner.reset_token_hash, 'no link was created');
+
+      AuditEvents.create = function create(doc, ...rest) {
+        if (doc?.meta?.status === 'sent') return Promise.reject(new Error('audit store down'));
+        return realCreate.call(this, doc, ...rest);
+      };
+      const ok = await send(ops);
+      assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
+      assert.strictEqual(sends().length, 1);
+      assert.strictEqual(notify.outbox().filter((m) => m.to === 'ravi@kaveri.test').length, 1, 'the owner was still emailed');
+    } finally {
+      AuditEvents.create = realCreate;
+    }
+    const view = await preview(ops);
+    assert.strictEqual(view.body.rate.used, 1, 'the attempt counts toward the hourly limit');
   });
 
   await t.test('W12. Provisioning a workspace never sends anything by itself', async () => {
