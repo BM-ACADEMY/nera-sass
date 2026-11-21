@@ -37,9 +37,17 @@ const audit = require('./audit');
 const LINK_TTL_HOURS = 72; // first-time owners; the template text says 72 hours
 // An owner who already signed in: the same life as a "Forgot password" link (authController).
 const resetTtlMinutes = () => Number(process.env.PASSWORD_RESET_TTL_MINUTES || 60);
-const linkTtlMinutes = (owner) => (owner?.signed_in ? resetTtlMinutes() : LINK_TTL_HOURS * 60);
+const linkTtlMinutes = (owner) => (owner?.signed_in || owner?.has_users ? resetTtlMinutes() : LINK_TTL_HOURS * 60);
 const canReachSignedInOwner = (staffRole) => staffRole === 'founder';
 const SIGNED_IN_MESSAGE = 'This owner already signs in to Getnera. Only the Admin (Owner) can send them a new set-password link. If they forgot their password, ask them to use "Forgot password" on the sign-in page.';
+const HAS_USERS_MESSAGE = 'This workspace already has users but no owner login on record. Only the Admin (Owner) can send an owner invitation link here.';
+// Why this staff member may not send, or null.
+function refusal(owner, staffRole) {
+  if (!owner || canReachSignedInOwner(staffRole)) return null;
+  if (owner.signed_in) return { code: 'OWNER_ALREADY_SIGNED_IN', message: SIGNED_IN_MESSAGE };
+  if (owner.has_users) return { code: 'WORKSPACE_HAS_USERS', message: HAS_USERS_MESSAGE };
+  return null;
+}
 const EVENT = audit.EVENTS.WORKSPACE_LOGIN_LINK_SENT;
 const LINK_PLACEHOLDER = '[one-time set-password link]';
 
@@ -123,17 +131,27 @@ async function loadTenant(tenantId) {
   return tenant;
 }
 
-// The owner's login, or their still-pending invitation.
+// The owner's login, or their still-pending invitation. `signed_in`: the owner
+// has taken control (signed in, or chose their own password through a link).
 async function ownerOf(tenant) {
   const user = tenant.owner_user_id
-    ? await sys(() => Users.findOne({ id: tenant.owner_user_id, tenant_id: tenant.id }, { _id: 0, id: 1, name: 1, email: 1, phone: 1, is_active: 1, last_login: 1 }).lean())
+    ? await sys(() => Users.findOne({ id: tenant.owner_user_id, tenant_id: tenant.id }, { _id: 0, id: 1, name: 1, email: 1, phone: 1, is_active: 1, last_login: 1, password_claimed_at: 1 }).lean())
     : null;
-  if (user) return { kind: 'user', id: user.id, name: user.name, email: user.email, phone: user.phone || null, active: user.is_active !== false, signed_in: Boolean(user.last_login) };
+  if (user) {
+    return {
+      kind: 'user', id: user.id, name: user.name, email: user.email, phone: user.phone || null, active: user.is_active !== false,
+      signed_in: Boolean(user.last_login || user.password_claimed_at),
+    };
+  }
   const invite = await runAsTenant(tenant.id, () => Invitations.findOne(
     { role: 'owner', accepted_at: null, revoked_at: null },
     { _id: 0, id: 1, name: 1, email: 1 },
   ).sort({ created_at: -1 }).lean());
-  if (invite) return { kind: 'invitation', id: invite.id, name: invite.name, email: invite.email, phone: null, active: true, signed_in: false };
+  if (invite) {
+    // Logins already in the workspace: the invitation path is then founder-only.
+    const hasUsers = Boolean(await sys(() => Users.exists({ tenant_id: tenant.id })));
+    return { kind: 'invitation', id: invite.id, name: invite.name, email: invite.email, phone: null, active: true, signed_in: false, has_users: hasUsers };
+  }
   return null;
 }
 
@@ -174,9 +192,10 @@ async function preview(tenantId, { staffRole = null } = {}) {
     preview_text: text,
     login_url: notify.appUrl(),
     link_valid_minutes: linkTtlMinutes(owner),
-    // false: the owner already signs in and this staff member is not the founder.
-    can_send: !(owner?.signed_in && !canReachSignedInOwner(staffRole)),
-    blocked_message: owner?.signed_in && !canReachSignedInOwner(staffRole) ? SIGNED_IN_MESSAGE : null,
+    // false: only the founder may send here (the owner already took control, or
+    // the workspace already has users).
+    can_send: !refusal(owner, staffRole),
+    blocked_message: refusal(owner, staffRole)?.message || null,
     rate: { limit: maxPerHour(), used, remaining: Math.max(0, maxPerHour() - used) },
   };
 }
@@ -221,7 +240,8 @@ async function send({ tenantId, phone, phoneConfirm, confirmOptIn, staff = {}, r
   const owner = await ownerOf(tenant);
   if (!owner) throw new WelcomeError(409, 'This workspace has no owner login yet, so there is nothing to send.', 'NO_OWNER');
   if (!owner.active) throw new WelcomeError(409, 'The owner login is deactivated. Reactivate it first.', 'OWNER_INACTIVE');
-  if (owner.signed_in && !canReachSignedInOwner(staff.role)) throw new WelcomeError(403, SIGNED_IN_MESSAGE, 'OWNER_ALREADY_SIGNED_IN');
+  const refused = refusal(owner, staff.role);
+  if (refused) throw new WelcomeError(403, refused.message, refused.code);
 
   const status = await templateStatus();
   if (!status.ok) throw new WelcomeError(409, status.message, status.code);
@@ -242,7 +262,7 @@ async function send({ tenantId, phone, phoneConfirm, confirmOptIn, staff = {}, r
     const meta = {
       to: maskNumber(number), email: owner.email, template: status.name, language: status.language,
       link_kind: owner.kind === 'user' ? 'set_password' : 'invitation', expires_at: link.expires, opt_in_confirmed: true,
-      owner_signed_in: owner.signed_in,
+      owner_signed_in: owner.signed_in, workspace_has_users: Boolean(owner.has_users),
     };
     const actor = req ? null : { actor_type: 'staff', actor_user_id: staff.id ?? null };
 
@@ -252,13 +272,15 @@ async function send({ tenantId, phone, phoneConfirm, confirmOptIn, staff = {}, r
     } catch (error) {
       await link.revoke().catch(() => {});
       const reason = error.message || 'WhatsApp did not accept the message';
-      await audit.record(EVENT, { tenantId: tenant.id, req, actor, targetType: 'user', targetId: owner.id, meta: { ...meta, status: 'failed', error: reason.slice(0, 300) } });
+      // strict: these events are the hourly rate-limit counter, so a lost one must not pass silently.
+      await audit.record(EVENT, { tenantId: tenant.id, req, actor, targetType: 'user', targetId: owner.id, meta: { ...meta, status: 'failed', error: reason.slice(0, 300) }, strict: true });
       if (error instanceof inbox.InboxError && error.code === 'INBOX_NOT_CONFIGURED') throw new WelcomeError(409, status.message || error.message, 'PLATFORM_NOT_CONFIGURED');
       throw new WelcomeError(502, `${reason.replace(/^Not sent: /, 'WhatsApp did not send the message: ')}. The link was cancelled; you can try again.`, 'SEND_FAILED');
     }
     await audit.record(EVENT, {
       tenantId: tenant.id, req, actor, targetType: 'user', targetId: owner.id,
       meta: { ...meta, status: 'sent', wa_message_id: result.message?.wa_message_id || null },
+      strict: true,
     });
     if (owner.kind === 'user') {
       // The owner hears about every set-password link for their login, by email, so a

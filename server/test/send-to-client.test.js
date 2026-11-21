@@ -342,6 +342,76 @@ test('Send to client', async (t) => {
     assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
   });
 
+  await t.test('W17. Signing in or changing the password kills an unused welcome link', async () => {
+    const { ops, owner } = await seed();
+    await send(ops);
+    const token = tokenOf(sends()[0]);
+    const login = await request(app).post('/api/auth/login').send({ email: 'ravi@kaveri.test', password: OWNER_PASSWORD });
+    assert.strictEqual(login.status, 200, JSON.stringify(login.body));
+    let row = await sys(() => Users.findOne({ id: owner.id }).lean());
+    assert.ok(!row.reset_token_hash && !row.reset_token_expires_at, 'sign-in cleared the link');
+    const reset = await request(app).post('/api/auth/password/reset').send({ token, password: 'Brand-New-Pass-9' });
+    assert.strictEqual(reset.status, 410, 'the old welcome link no longer works');
+
+    // A password change does the same (a "Forgot password" link left over).
+    await sys(() => Users.updateOne({ id: owner.id }, { $set: { reset_token_hash: sha256('left-over'), reset_token_expires_at: new Date(Date.now() + 3600000) } }));
+    const fresh = await sys(() => Users.findOne({ id: owner.id }).lean());
+    const change = await request(app).post('/api/auth/change-password').set(bearer(fresh))
+      .send({ current: OWNER_PASSWORD, newPassword: 'Changed-Pass-2026' });
+    assert.strictEqual(change.status, 200, JSON.stringify(change.body));
+    row = await sys(() => Users.findOne({ id: owner.id }).lean());
+    assert.ok(!row.reset_token_hash, 'password change cleared the link');
+    assert.ok(row.password_claimed_at, 'changing the password counts as taking control');
+  });
+
+  await t.test('W18. An owner who set their own password through the link has taken control, even before signing in', async () => {
+    const { ops, founder, owner } = await seed();
+    await send(ops);
+    const ok = await request(app).post('/api/auth/password/reset').send({ token: tokenOf(sends()[0]), password: 'Brand-New-Pass-9' });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const row = await sys(() => Users.findOne({ id: owner.id }).lean());
+    assert.ok(!row.last_login, 'not signed in yet');
+    assert.ok(row.password_claimed_at, 'the reset is recorded');
+    const view = await preview(ops);
+    assert.strictEqual(view.body.owner.signed_in, true);
+    assert.strictEqual(view.body.can_send, false);
+    const res = await send(ops);
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.code, 'OWNER_ALREADY_SIGNED_IN');
+    assert.strictEqual(sends().length, 1, 'no second link went out');
+    assert.strictEqual((await preview(founder)).body.link_valid_minutes, 60, 'the founder gets the short link life');
+  });
+
+  await t.test('W19. A pending owner invitation in a workspace that already has users is founder-only', async () => {
+    const { ops, founder, owner } = await seed();
+    // The owner login record is gone, but another login is still in the workspace.
+    await sys(() => Users.updateOne({ id: owner.id }, { $set: { role: 'agent', email: 'agent@kaveri.test' } }));
+    await sys(() => Tenants.updateOne({ id: 7 }, { $set: { owner_user_id: null } }));
+    await runAsTenant(7, () => Invitations.create({ tenant_id: 7, email: 'ravi@kaveri.test', name: 'Ravi', role: 'owner', token_hash: 'old', expires_at: new Date(Date.now() + 3600000) }));
+    const view = await preview(ops);
+    assert.strictEqual(view.body.owner.kind, 'invitation');
+    assert.strictEqual(view.body.can_send, false);
+    const res = await send(ops);
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.code, 'WORKSPACE_HAS_USERS');
+    assert.strictEqual(sends().length, 0);
+    const ok = await send(founder);
+    assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
+    assert.strictEqual(ok.body.link_kind, 'invitation');
+    const minutes = (new Date(ok.body.expires_at) - Date.now()) / 60000;
+    assert.ok(minutes > 59.5 && minutes <= 60, `short link life (got ${minutes})`);
+  });
+
+  await t.test('W20. One-time tokens in URLs are not written to the request log', async () => {
+    const morgan = require('morgan');
+    const logged = (url) => morgan.url({ originalUrl: url, url });
+    assert.strictEqual(logged('/api/auth/invitations/AbC123-xyz_9'), '/api/auth/invitations/[token]');
+    assert.strictEqual(logged('/reset-password/AbC123?from=wa'), '/reset-password/[token]?from=wa');
+    assert.strictEqual(logged('/invite/AbC123'), '/invite/[token]');
+    assert.strictEqual(logged('/api/auth/invitations/accept'), '/api/auth/invitations/accept');
+    assert.strictEqual(logged('/api/admin/tenants/7/invitations/12/resend'), '/api/admin/tenants/7/invitations/12/resend');
+  });
+
   await t.test('W12. Provisioning a workspace never sends anything by itself', async () => {
     const { founder } = await seed();
     const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send({

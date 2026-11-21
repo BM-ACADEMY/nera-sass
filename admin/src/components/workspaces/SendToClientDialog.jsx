@@ -19,7 +19,7 @@ const ERRORS = {
 };
 const errorText = (err, fallback) => {
   if (!err.response) return 'Could not reach the server. Check your connection and try again.';
-  if (err.response.data?.code === 'OWNER_ALREADY_SIGNED_IN') return err.response.data.error;
+  if (['OWNER_ALREADY_SIGNED_IN', 'WORKSPACE_HAS_USERS'].includes(err.response.data?.code)) return err.response.data.error;
   if (err.response.status === 403) return 'You do not have permission to send sign-in details. Ask the founder or an ops admin.';
   const data = err.response.data || {};
   return ERRORS[data.code] || data.error || fallback;
@@ -103,7 +103,7 @@ const SendToClientDialog = ({ open, onOpenChange, tenantId, onSent }) => {
       if (err.response?.data?.code === 'BAD_NUMBER') setPhoneError(text);
       else if (err.response?.data?.code === 'NUMBER_MISMATCH') setConfirmError(text);
       else setSendError(text);
-      if (err.response?.data?.code === 'OWNER_ALREADY_SIGNED_IN') load();
+      if (err.response?.status === 403 && err.response.data?.code) load();
       if (err.response?.status === 429 || err.response?.status === 502) load();
     } finally {
       setSending(false);
