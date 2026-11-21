@@ -248,6 +248,8 @@ async function acceptInvitation({ token, name, password, phone = null }) {
       token_version: 0,
       invited_by: claimed.invited_by ?? null,
       password_changed_at: new Date(),
+      // The invitee chose this password themselves (not one staff preset).
+      password_claimed_at: presetPassword ? null : new Date(),
       created_at: new Date(),
     };
     const user = staff

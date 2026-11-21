@@ -25,6 +25,7 @@ const createMetaInventoryRouter = require('./adminMetaInventory');
 const { logScope } = require('../services/workflowLog');
 const n8nApi = require('../services/n8nApi');
 const billing = require('../services/billing');
+const workspaceWelcome = require('../services/workspaceWelcome');
 
 function fail(res, error) {
   if (error.status && error.status < 500) return res.status(error.status).json({ error: error.message, details: error.details, code: error.code });
@@ -400,6 +401,35 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       return res.json({ invitation: await invitations.revokeInvitation({ invitationId: req.params.invitationId, tenantId: tenantIdParam(req), revokedBy: req.user.id, req }) });
     } catch (error) {
       return fail(res, error);
+    }
+  });
+
+  // ── "Send to client": sign-in details on WhatsApp ─────────
+  // Staff send the owner a one-time set-password link and where to sign in,
+  // from the platform number with an approved utility template. Never the
+  // password, never automatic (services/workspaceWelcome.js).
+  const welcomeFail = (res, error) => (error instanceof workspaceWelcome.WelcomeError
+    ? res.status(error.status).json({ error: error.message, code: error.code })
+    : fail(res, error));
+
+  router.get('/tenants/:id/welcome-message', permit('platform.users.manage'), async (req, res) => {
+    try {
+      return res.json(await workspaceWelcome.preview(tenantIdParam(req), { staffRole: req.identity.staffRole }));
+    } catch (error) {
+      return welcomeFail(res, error);
+    }
+  });
+
+  router.post('/tenants/:id/welcome-message', permit('platform.users.manage'), async (req, res) => {
+    try {
+      const result = await workspaceWelcome.send({
+        tenantId: tenantIdParam(req), phone: req.body?.phone, phoneConfirm: req.body?.phone_confirm,
+        confirmOptIn: req.body?.confirm_opt_in === true,
+        staff: { id: req.user.id, name: req.user.name, role: req.identity.staffRole }, req,
+      });
+      return res.status(201).json(result);
+    } catch (error) {
+      return welcomeFail(res, error);
     }
   });
 

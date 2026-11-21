@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   FiArrowLeft, FiBriefcase, FiUser, FiShield, FiLogOut, FiKey, FiSlash, FiCheckCircle, FiRefreshCw,
-  FiActivity, FiGlobe, FiMail, FiMapPin, FiTag, FiAlertTriangle,
+  FiActivity, FiGlobe, FiMail, FiMapPin, FiTag, FiAlertTriangle, FiSend,
 } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import axiosClient from '../../api/axiosClient';
@@ -64,7 +64,7 @@ const DetailSkeleton = () => (
 
 // Everything about one workspace: who owns it, its login, WhatsApp number,
 // brand profile, usage and the audit trail of what staff did to it.
-const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) => {
+const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, onSendToClient, refreshKey = 0 }) => {
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -170,6 +170,11 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
+          {onSendToClient && !suspended && (owner || invitations.length > 0) && (
+            <Button onClick={() => onSendToClient(tenant)} title="Send the owner a set-password link and sign-in details on WhatsApp">
+              <FiSend /> Send to client
+            </Button>
+          )}
           <Button variant="outline" onClick={() => navigate(`/dashboard/whatsapp-numbers?workspace=${tenant.id}`)}>
             <FaWhatsapp className="text-[#25D366]" /> {connected ? 'Manage WhatsApp' : 'Connect WhatsApp'}
           </Button>
@@ -364,6 +369,7 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
                   <div className="text-xs text-muted-foreground">
                     {e.actor_name ? `By ${e.actor_name}` : e.actor_type === 'system' ? 'By the system' : e.actor_type === 'user' ? 'By the workspace' : 'By staff'}
                     {e.meta?.email ? ` · ${e.meta.email}` : ''}
+                    {e.event === 'WORKSPACE_LOGIN_LINK_SENT' && e.meta?.to ? ` · WhatsApp ${e.meta.to}${e.meta.status === 'failed' ? ' (not delivered)' : ''}` : ''}
                     {e.meta?.reason ? ` · Reason: ${e.meta.reason}` : ''}
                   </div>
                 </div>
