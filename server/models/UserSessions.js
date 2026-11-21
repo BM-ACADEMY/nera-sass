@@ -19,6 +19,13 @@ module.exports = defineModel('user_sessions', {
   browser: { type: String },
   os: { type: String },
   device_type: { type: String }, // desktop | mobile | tablet | unknown
+  // From User-Agent Client Hints sent by the app (Chromium only), cleaned:
+  // e.g. model 'SM-S918B', platform 'Android', platform_version '14.0.0'.
+  model: { type: String, default: null },
+  platform: { type: String, default: null },
+  platform_version: { type: String, default: null },
+  // The user's own name for this device ("Aakash's laptop"), plain text.
+  name: { type: String, default: null },
   ip_masked: { type: String },
   location: { type: Mixed, default: null }, // { city, region, country, country_code }
   created_at: { type: Date, default: Date.now },

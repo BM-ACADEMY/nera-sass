@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { FiMonitor, FiSmartphone, FiTablet, FiHelpCircle, FiMapPin, FiRefreshCw, FiLogOut, FiShield } from 'react-icons/fi';
+import { FiMonitor, FiSmartphone, FiTablet, FiHelpCircle, FiMapPin, FiRefreshCw, FiLogOut, FiShield, FiEdit2 } from 'react-icons/fi';
 import { api } from '../../services/api.js';
-import { timeAgo, shortDateTime, locationLabel, deviceLabel, deviceKind, sessionsError } from '../../services/sessionFormat.js';
+import { timeAgo, shortDateTime, locationLabel, deviceLabel, sessionTitle, deviceKind, sessionsError, collectClientHints } from '../../services/sessionFormat.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import ConfirmSignOutDialog from './ConfirmSignOutDialog.jsx';
+import RenameDeviceDialog from './RenameDeviceDialog.jsx';
 
 const ICONS = { desktop: FiMonitor, mobile: FiSmartphone, tablet: FiTablet, unknown: FiHelpCircle };
 
-function SessionRow({ session, onSignOut }) {
+function SessionRow({ session, onSignOut, onRename }) {
   const Icon = ICONS[deviceKind(session)];
   return (
     <div className="flex flex-col gap-3 border-b border-border p-4 last:border-b-0 sm:flex-row sm:items-center">
@@ -20,9 +21,13 @@ function SessionRow({ session, onSignOut }) {
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-semibold text-foreground">{deviceLabel(session)}</span>
+          <span className="font-semibold text-foreground">{sessionTitle(session)}</span>
           {session.current && <Badge variant="info">This device</Badge>}
+          <button type="button" className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground" onClick={() => onRename(session)} aria-label="Rename this device">
+            <FiEdit2 size={12} /> Rename
+          </button>
         </div>
+        {session.name && <div className="mt-0.5 text-[13px] text-muted-foreground">{deviceLabel(session)}</div>}
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground">
           <span className="inline-flex items-center gap-1"><FiMapPin size={12} /> {locationLabel(session.location)}</span>
           {session.ip && <span>IP {session.ip}</span>}
@@ -50,6 +55,7 @@ const SessionsPage = () => {
   const [loading, setLoading] = useState(false);
   // { title, description, actionLabel, run(body) } while the password dialog is open
   const [confirm, setConfirm] = useState(null);
+  const [renaming, setRenaming] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -62,7 +68,15 @@ const SessionsPage = () => {
       setLoading(false);
     }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    // Once per visit: tell the server this browser's model / platform (Chromium
+    // client hints) so this device gets a real name, then load the list.
+    (async () => {
+      const hints = await collectClientHints();
+      if (hints) await api.put('/account/sessions/current/hints', { client_hints: hints }).catch(() => {});
+      load();
+    })();
+  }, []);
 
   const sessions = data?.sessions || [];
   const others = sessions.filter((s) => !s.current);
@@ -71,11 +85,11 @@ const SessionsPage = () => {
   // them and errors stay in the dialog.
   const signOutOne = (session) => setConfirm({
     title: 'Sign out this device?',
-    description: `${deviceLabel(session)} (${locationLabel(session.location)}) will be signed out right away and must sign in again.`,
+    description: `${sessionTitle(session)} (${locationLabel(session.location)}) will be signed out right away and must sign in again.`,
     actionLabel: 'Sign out',
     run: async (body) => {
       await api.delete(`/account/sessions/${session.id}`, { body: JSON.stringify(body) });
-      toast.success(`Signed out ${deviceLabel(session)}`);
+      toast.success(`Signed out ${sessionTitle(session)}`);
       load();
     },
   });
@@ -91,6 +105,12 @@ const SessionsPage = () => {
       load();
     },
   });
+  const renameDevice = async (name) => {
+    await api.patch(`/account/sessions/${renaming.id}`, { name });
+    toast.success(name ? 'Device renamed' : 'Name removed');
+    load();
+  };
+
   const confirmError = (err, fallback) => ([403, 423].includes(err?.status) || err?.code === 'OTP_RESEND_WAIT' ? err.message : sessionsError(err, fallback));
 
   return (
@@ -129,13 +149,20 @@ const SessionsPage = () => {
             <div className="flex-1 space-y-2"><Skeleton className="h-4 w-48" /><Skeleton className="h-3 w-72" /></div>
           </div>
         ))}
-        {data && sessions.map((s) => <SessionRow key={s.id} session={s} onSignOut={signOutOne} />)}
+        {data && sessions.map((s) => <SessionRow key={s.id} session={s} onSignOut={signOutOne} onRename={setRenaming} />)}
         {data && !sessions.length && <div className="p-6 text-center text-sm text-muted-foreground">No other signed-in devices.</div>}
       </Card>
       {data && sessions.length > 0 && !others.length && (
         <p className="mt-3 text-center text-xs text-muted-foreground">You are signed in on this device only.</p>
       )}
 
+      <RenameDeviceDialog
+        session={renaming}
+        label={renaming ? deviceLabel(renaming) : ''}
+        onClose={() => setRenaming(null)}
+        save={renameDevice}
+        messageOf={(err, fallback) => (err?.status === 400 ? err.message : sessionsError(err, fallback))}
+      />
       <ConfirmSignOutDialog
         open={confirm}
         onClose={() => setConfirm(null)}

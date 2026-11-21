@@ -5,6 +5,8 @@
  *   DELETE /api/account/sessions/:id           sign one of them out
  *   POST   /api/account/sessions/revoke-others sign out every other device
  *   POST   /api/account/sessions/confirm-code  email a two-step code for those
+ *   PUT    /api/account/sessions/current/hints  device details from the app
+ *   PATCH  /api/account/sessions/:id           rename one of them ({ name })
  *
  * Signing a device out (one or all others) needs the password again, plus a
  * two-step code when that is on, so a stolen token alone cannot keep the
@@ -32,6 +34,9 @@ const sys = (fn) => runAsSystem(fn, 'account-sessions');
 const writeLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 60, key: (req) => `sessions:${req.user?.id ?? req.ip}` });
 // Password / code tries for signing devices out.
 const confirmLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, key: (req) => `sessions-confirm:${req.user?.id ?? req.ip}`, message: 'Too many attempts. Wait a few minutes and try again.' });
+
+// Device details and names: cheap writes, own sessions only.
+const detailsLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 60, key: (req) => `sessions-details:${req.user?.id ?? req.ip}`, message: 'Too many changes. Wait a few minutes and try again.' });
 
 const loadUser = (id) => sys(() => Users.findOne({ id }, { _id: 0 }).lean());
 
@@ -91,6 +96,33 @@ router.post('/revoke-others', writeLimit, confirmLimit, async (req, res) => {
     await audit.record(audit.EVENTS.SESSIONS_REVOKED, { tenantId: req.user.tenant_id ?? null, req, targetType: 'user', targetId: req.user.id, meta: { self: true, scope: 'others', count: revoked } });
     const token = issueAccessToken(updated, { mfa: hasMfa(updated) || Boolean(req.sessionMfa), sid, expiresAt });
     return res.json({ success: true, revoked, token });
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+// The app's User-Agent Client Hints for this device (model, platform,
+// version); only the caller's own current session is updated.
+router.put('/current/hints', detailsLimit, async (req, res) => {
+  try {
+    if (!req.authSessionId) return res.json({ success: true, stored: false });
+    const user = await loadUser(req.user.id);
+    const stored = await sessions.setHints(user, req.authSessionId, req.body?.client_hints);
+    return res.json({ success: true, stored });
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+router.patch('/:id', detailsLimit, async (req, res) => {
+  try {
+    const name = req.body?.name;
+    if (name != null && typeof name !== 'string') return res.status(400).json({ error: 'The name must be text.' });
+    if (typeof name === 'string' && Array.from(name.trim()).length > 40) return res.status(400).json({ error: 'Use 40 characters or fewer.', code: 'NAME_TOO_LONG' });
+    const user = await loadUser(req.user.id);
+    const ok = await sessions.rename(user, req.params.id, name);
+    if (!ok) return res.status(404).json({ error: 'This session has already ended or does not exist', code: 'SESSION_NOT_FOUND' });
+    return res.json({ success: true, name: sessions.sanitizeName(name) });
   } catch (error) {
     return fail(res, error);
   }

@@ -4,6 +4,7 @@
  */
 
 import { isInvalidMfaCode, NOTICE_KEY, NOTICES, USER_KEY } from './session.js';
+import { collectClientHints } from './sessionFormat.js';
 
 export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3601').replace(/\/+$/, '');
 
@@ -134,7 +135,8 @@ class LeadOSAPI {
   async login(email, password) {
     const data = await this.request('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      // client_hints: device model / platform for My sessions (Chromium only).
+      body: JSON.stringify({ email, password, client_hints: (await collectClientHints()) || undefined }),
     });
     // With MFA the first step returns an mfa_token and no session yet.
     if (data.token) this.setToken(data.token);
@@ -145,7 +147,7 @@ class LeadOSAPI {
   async verifyMfa(mfaToken, { code, recoveryCode, method } = {}) {
     const data = await this.request('/api/auth/mfa/verify', {
       method: 'POST',
-      body: JSON.stringify({ mfa_token: mfaToken, method: method || undefined, code: code || undefined, recovery_code: recoveryCode || undefined }),
+      body: JSON.stringify({ mfa_token: mfaToken, method: method || undefined, code: code || undefined, recovery_code: recoveryCode || undefined, client_hints: (await collectClientHints()) || undefined }),
     });
     if (data.token) this.setToken(data.token);
     return data;

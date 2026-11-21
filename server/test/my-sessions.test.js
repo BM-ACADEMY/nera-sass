@@ -590,6 +590,91 @@ test('My sessions', async (t) => {
     assert.ok(!JSON.stringify(data).includes('session_hash'));
   });
 
+  await t.test('S24. Client hints from login and from the app are stored cleaned; nothing extra without them', async () => {
+    await tenant(1);
+    const user = await owner(1);
+    // Login with hints (Chromium): model / platform / version land on the row, cleaned.
+    const res = await request(app).post('/api/auth/login').set('User-Agent', CHROME_WIN)
+      .send({ email: user.email, password: PASSWORD, client_hints: { model: '  SM-S918B<script>alert(1)</script>', platform: 'Android', platformVersion: '14.0.0', extra: 'x' } });
+    assert.strictEqual(res.status, 200);
+    const row = await rowOf(res.body.token);
+    assert.strictEqual(row.model, 'SM-S918Bscriptalert(1)/script');
+    assert.strictEqual(row.platform, 'Android');
+    assert.strictEqual(row.platform_version, '14.0.0');
+    assert.strictEqual(row.extra, undefined);
+    const listed = (await list(res.body.token)).body.sessions[0];
+    assert.strictEqual(listed.model, 'SM-S918Bscriptalert(1)/script');
+    assert.strictEqual(listed.platform_version, '14.0.0');
+
+    // Junk is dropped: non-strings, bad versions, overlong text is cut.
+    const tok = await login(user);
+    const put = (hints) => request(app).put('/api/account/sessions/current/hints').set(as(tok)).send({ client_hints: hints });
+    let out = await put({ model: { $gt: '' }, platform: ['Windows'], platformVersion: '15.0.0; rm -rf' });
+    assert.strictEqual(out.status, 200);
+    assert.strictEqual(out.body.stored, false, 'nothing usable');
+    out = await put({ model: 'M'.repeat(100), platform: 'Windows', platformVersion: '15.0.0' });
+    assert.strictEqual(out.body.stored, true);
+    const row2 = await rowOf(tok);
+    assert.strictEqual(row2.model.length, 40);
+    assert.strictEqual(row2.platform, 'Windows');
+    assert.strictEqual(row2.platform_version, '15.0.0');
+
+    // No hints (Safari, Firefox): the row and the list carry nothing extra, so the apps fall back to the UA label.
+    const plain = await login(user, { ua: SAFARI_IPHONE });
+    const bare = (await list(plain)).body.sessions.find((s) => s.current);
+    assert.strictEqual(bare.model, null);
+    assert.strictEqual(bare.platform, null);
+    assert.strictEqual(bare.platform_version, null);
+    assert.strictEqual(bare.name, null);
+    assert.strictEqual(bare.browser, 'Safari 17');
+    assert.strictEqual(bare.os, 'iOS');
+
+    // Old-style token (no session): accepted, nothing stored.
+    const legacy = await request(app).put('/api/account/sessions/current/hints').set(as(makeToken(user))).send({ client_hints: { platform: 'Linux' } });
+    assert.strictEqual(legacy.status, 200);
+    assert.strictEqual(legacy.body.stored, false);
+  });
+
+  await t.test('S25. Renaming a device: only own live sessions, plain text, at most 40 characters', async () => {
+    await tenant(1);
+    await tenant(2);
+    const user = await owner(1);
+    const mate = await owner(1);
+    const stranger = await owner(2);
+    const tokMine = await login(user);
+    const tokPhone = await login(user, { ua: SAFARI_IPHONE });
+    const tokMate = await login(mate);
+    const tokStranger = await login(stranger);
+    const phone = await rowOf(tokPhone);
+    const rename = (token, id, name) => request(app).patch(`/api/account/sessions/${id}`).set(as(token)).send({ name });
+
+    const ok = await rename(tokMine, phone.id, "  Aakash's   <b>phone</b>\n ");
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual(ok.body.name, "Aakash's b phone /b");
+    assert.strictEqual((await rowOf(tokPhone)).name, "Aakash's b phone /b");
+    const shown = (await list(tokMine)).body.sessions.find((s) => s.id === phone.id);
+    assert.strictEqual(shown.name, "Aakash's b phone /b");
+    assert.strictEqual((await rename(tokMine, (await rowOf(tokMine)).id, 'This laptop')).status, 200, 'the current device can be named too');
+
+    // Others' sessions answer 404 like missing ones, and are unchanged.
+    for (const token of [tokMate, tokStranger]) {
+      const res = await rename(token, phone.id, 'mine now');
+      assert.strictEqual(res.status, 404);
+    }
+    assert.strictEqual((await rowOf(tokPhone)).name, "Aakash's b phone /b");
+
+    assert.strictEqual((await rename(tokMine, phone.id, 'x'.repeat(41))).status, 400, 'too long');
+    assert.strictEqual((await rename(tokMine, phone.id, { $set: 'x' })).status, 400, 'not text');
+    assert.strictEqual((await rename(tokMine, 'abc', 'x')).status, 404);
+    const cleared = await rename(tokMine, phone.id, '   ');
+    assert.strictEqual(cleared.status, 200);
+    assert.strictEqual((await rowOf(tokPhone)).name, null, 'empty clears the name');
+
+    // A signed-out session cannot be renamed.
+    await request(app).delete(`/api/account/sessions/${phone.id}`).set(as(tokMine)).send({ password: PASSWORD }).expect(200);
+    assert.strictEqual((await rename(tokMine, phone.id, 'gone')).status, 404);
+  });
+
   await t.test('S14. Helpers: IP masking and user-agent reading', () => {
     assert.strictEqual(sessions.maskIp('203.0.113.42'), '203.0.113.x');
     assert.strictEqual(sessions.maskIp('::ffff:203.0.113.42'), '203.0.113.x');

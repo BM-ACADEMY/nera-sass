@@ -5,6 +5,7 @@ import getneraLogo from '@/assets/getnera-logo.png';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import axiosClient from '../api/axiosClient';
+import { collectClientHints } from '../api/sessionFormat';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -128,7 +129,8 @@ const Login = () => {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await axiosClient.post('/auth/login', values);
+      // client_hints: device model / platform for My sessions (Chromium only).
+      const res = await axiosClient.post('/auth/login', { ...values, client_hints: (await collectClientHints()) || undefined });
       const data = res.data;
       if (data.token) {
         finish(data);
@@ -177,7 +179,7 @@ const Login = () => {
       const body = useRecovery
         ? { mfa_token: mfaToken, recovery_code: value.trim() }
         : { mfa_token: mfaToken, method, code: value.replace(/\s/g, '') };
-      const res = await axiosClient.post('/auth/mfa/verify', body);
+      const res = await axiosClient.post('/auth/mfa/verify', { ...body, client_hints: (await collectClientHints()) || undefined });
       finish(res.data);
     } catch (err) {
       onError(err, 'Invalid verification code');

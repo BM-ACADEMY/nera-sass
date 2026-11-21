@@ -124,10 +124,40 @@ function parseUserAgent(raw) {
   return { browser, os, device_type: deviceType };
 }
 
+// ── Device details from the app (User-Agent Client Hints) ───
+
+// Plain text only: letters, digits, space and . _ - ( ) / + , ; nothing else
+// survives, and the result is length-limited.
+function plainText(value, max) {
+  if (typeof value !== 'string') return null;
+  const clean = value.normalize('NFKC').replace(/[^\p{L}\p{N} ._\-()/+,]/gu, '').replace(/\s+/g, ' ').trim();
+  return clean ? Array.from(clean).slice(0, max).join('') : null;
+}
+
+/**
+ * Cleans the hints an app sends from navigator.userAgentData
+ * (getHighEntropyValues: model, platform, platformVersion). Anything that is
+ * not a short plain string is dropped. Returns null when nothing is left.
+ */
+function sanitizeHints(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const version = typeof raw.platformVersion === 'string' && /^\d{1,4}(\.\d{1,6}){0,3}$/.test(raw.platformVersion.trim())
+    ? raw.platformVersion.trim() : null;
+  const hints = { model: plainText(raw.model, 40), platform: plainText(raw.platform, 20), platform_version: version };
+  return Object.values(hints).some(Boolean) ? hints : null;
+}
+
+/** A device name typed by the user: plain text, one line, at most 40 characters. */
+function sanitizeName(value) {
+  if (typeof value !== 'string') return null;
+  const clean = value.normalize('NFKC').replace(/[\p{C}<>]/gu, ' ').replace(/\s+/g, ' ').trim();
+  return clean ? Array.from(clean).slice(0, 40).join('').trim() : null;
+}
+
 function clientInfo(req) {
   const userAgent = String(req?.headers?.['user-agent'] || '').slice(0, 400);
   const ip = req?.ip || req?.socket?.remoteAddress || null;
-  return { userAgent, ip };
+  return { userAgent, ip, hints: sanitizeHints(req?.body?.client_hints) };
 }
 
 // Socket.io handshake details (the same proxy hop rule as Express: only a
@@ -164,6 +194,7 @@ async function createSession(user, info = {}, { expiresAt = null } = {}) {
     token_version: Number(user.token_version || 0),
     user_agent: info.userAgent || '',
     ...parseUserAgent(info.userAgent),
+    ...(info.hints || {}),
     ip_masked: maskIp(info.ip),
     location: locate(info.ip),
     created_at: now,
@@ -246,6 +277,10 @@ function present(row, currentHash) {
     browser: row.browser || null,
     os: row.os || null,
     device_type: row.device_type || 'unknown',
+    model: row.model || null,
+    platform: row.platform || null,
+    platform_version: row.platform_version || null,
+    name: row.name || null,
     ip: row.ip_masked || null,
     location: loc ? { city: loc.city || null, region: loc.region || null, country: loc.country || null, private: Boolean(loc.private) } : null,
     created_at: row.created_at,
@@ -281,6 +316,22 @@ async function revokeWhere(filter, reason) {
   return ids.length;
 }
 
+/** Stores cleaned client hints on the caller's own session. Returns false when there was nothing to store. */
+async function setHints(user, sid, raw) {
+  const hints = sanitizeHints(raw);
+  if (!sid || !hints) return false;
+  const res = await sys(() => UserSessions.updateOne({ ...activeFilter(user), session_hash: hashSessionId(sid) }, { $set: hints }));
+  return res.matchedCount === 1;
+}
+
+/** Names one of the user's own live sessions (empty clears it). Returns false when it is not theirs or not live. */
+async function rename(user, sessionId, rawName) {
+  const id = Number(sessionId);
+  if (!Number.isInteger(id) || id <= 0) return false;
+  const res = await sys(() => UserSessions.updateOne({ ...activeFilter(user), id }, { $set: { name: sanitizeName(rawName) } }));
+  return res.matchedCount === 1;
+}
+
 /** Signs one of the user's own sessions out. Returns false when it is not theirs or not live. */
 async function revokeOne(user, sessionId, reason = 'signed_out') {
   const id = Number(sessionId);
@@ -309,6 +360,10 @@ module.exports = {
   locate,
   parseUserAgent,
   clientInfo,
+  sanitizeHints,
+  sanitizeName,
+  setHints,
+  rename,
   socketClientInfo,
   createSession,
   renewSession,
