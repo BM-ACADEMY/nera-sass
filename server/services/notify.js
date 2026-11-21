@@ -157,6 +157,21 @@ function passwordResetEmail({ to, name, url, expiresMinutes }) {
   return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: 'Choose a new password' }) });
 }
 
+// Staff sent a one-time set-password link for this login on WhatsApp (admin
+// "Send to client"). A notice only: the link itself is never in the email.
+function signInLinkSentEmail({ to, name, workspaceName, maskedNumber, expiresAt }) {
+  const product = productName();
+  const title = `A ${product} sign-in link was sent on WhatsApp`;
+  const url = `${appUrl()}/login`;
+  const lines = [
+    `Hi ${name || 'there'},`,
+    `${product} staff sent a one-time link to set the password of your ${workspaceName ? `${workspaceName} ` : ''}login to the WhatsApp number ${maskedNumber}. It works once and expires on ${new Date(expiresAt).toUTCString()}.`,
+    'Using the link replaces your current password and signs you out everywhere.',
+    `If that is not your number, or you did not ask for this, contact ${product} support now. Until the link is used, your password stays the same.`,
+  ];
+  return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: 'Sign in' }) });
+}
+
 // Six-digit sign-in / setup code. The code is the whole message, so it is
 // shown large; nothing else in the mail is actionable.
 function signInCodeEmail({ to, name, code, minutes, purpose }) {
@@ -253,6 +268,7 @@ module.exports = {
   invitationEmail,
   staffWelcomeEmail,
   passwordResetEmail,
+  signInLinkSentEmail,
   appUrl,
   adminUrl,
   productName,

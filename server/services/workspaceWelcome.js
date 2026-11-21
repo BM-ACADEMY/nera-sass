@@ -1,7 +1,7 @@
 /**
  * "Send to client": staff send a new workspace's owner a WhatsApp message from
  * the platform number with what they need to start, in order:
- *   1. a one-time link to set their password (valid 72 hours, works once),
+ *   1. a one-time link to set their password (works once),
  *   2. where to sign in (app.getnera.in) and with which email.
  *
  * Rules, all enforced here:
@@ -15,6 +15,13 @@
  *     WORKSPACE_READY_TEMPLATE_LANG (default en), with exactly four body
  *     variables: {{1}} owner name, {{2}} workspace, {{3}} link, {{4}} email.
  *   - Always a deliberate staff action; never sent on provisioning.
+ *   - Staff type the number twice; both must match.
+ *   - An owner who has already signed in keeps control of their account:
+ *     only the founder (Admin (Owner)) can send them a link, it lasts as long
+ *     as a "Forgot password" link (PASSWORD_RESET_TTL_MINUTES, default 60),
+ *     and the owner is emailed that a link went to the masked number.
+ *     First-time owners (never signed in) get a 72-hour link, as the template
+ *     text says.
  *   - At most WORKSPACE_READY_MAX_PER_HOUR (default 3) sends per workspace per hour.
  *   - Every attempt that reaches WhatsApp is audit-logged with the staff
  *     member, time and a masked number. The link is never logged or stored
@@ -27,7 +34,12 @@ const inbox = require('./platformInbox');
 const notify = require('./notify');
 const audit = require('./audit');
 
-const LINK_TTL_HOURS = 72; // the template text says 72 hours
+const LINK_TTL_HOURS = 72; // first-time owners; the template text says 72 hours
+// An owner who already signed in: the same life as a "Forgot password" link (authController).
+const resetTtlMinutes = () => Number(process.env.PASSWORD_RESET_TTL_MINUTES || 60);
+const linkTtlMinutes = (owner) => (owner?.signed_in ? resetTtlMinutes() : LINK_TTL_HOURS * 60);
+const canReachSignedInOwner = (staffRole) => staffRole === 'founder';
+const SIGNED_IN_MESSAGE = 'This owner already signs in to Getnera. Only the Admin (Owner) can send them a new set-password link. If they forgot their password, ask them to use "Forgot password" on the sign-in page.';
 const EVENT = audit.EVENTS.WORKSPACE_LOGIN_LINK_SENT;
 const LINK_PLACEHOLDER = '[one-time set-password link]';
 
@@ -144,7 +156,7 @@ function bodyValues(template, { name, workspace, link, email }) {
 }
 
 /** What the dialog shows before sending. Never creates a link. */
-async function preview(tenantId) {
+async function preview(tenantId, { staffRole = null } = {}) {
   const tenant = await loadTenant(tenantId);
   const owner = await ownerOf(tenant);
   const status = await templateStatus();
@@ -161,7 +173,10 @@ async function preview(tenantId) {
     template: { ok: status.ok, name: status.name, language: status.language, code: status.code || null, message: status.message || null },
     preview_text: text,
     login_url: notify.appUrl(),
-    link_valid_hours: LINK_TTL_HOURS,
+    link_valid_minutes: linkTtlMinutes(owner),
+    // false: the owner already signs in and this staff member is not the founder.
+    can_send: !(owner?.signed_in && !canReachSignedInOwner(staffRole)),
+    blocked_message: owner?.signed_in && !canReachSignedInOwner(staffRole) ? SIGNED_IN_MESSAGE : null,
     rate: { limit: maxPerHour(), used, remaining: Math.max(0, maxPerHour() - used) },
   };
 }
@@ -170,7 +185,7 @@ async function preview(tenantId) {
 async function issueLink(tenant, owner) {
   const token = crypto.randomBytes(32).toString('base64url');
   const hash = sha256(token);
-  const expires = new Date(Date.now() + LINK_TTL_HOURS * 3600 * 1000);
+  const expires = new Date(Date.now() + linkTtlMinutes(owner) * 60000);
   if (owner.kind === 'user') {
     await sys(() => Users.updateOne({ id: owner.id }, { $set: { reset_token_hash: hash, reset_token_expires_at: expires } }));
     return {
@@ -191,17 +206,22 @@ async function issueLink(tenant, owner) {
 const inFlight = new Set();
 
 /**
- * Sends the "workspace ready" message. { tenantId, phone, confirmOptIn, staff: { id, name }, req }
+ * Sends the "workspace ready" message.
+ * { tenantId, phone, phoneConfirm, confirmOptIn, staff: { id, name, role }, req }
  * Resolves to { sent: true, to (masked), expires_at, link_kind }.
  */
-async function send({ tenantId, phone, confirmOptIn, staff = {}, req = null }) {
+async function send({ tenantId, phone, phoneConfirm, confirmOptIn, staff = {}, req = null }) {
   const tenant = await loadTenant(tenantId);
   if (tenant.status === 'suspended') throw new WelcomeError(409, 'This workspace is suspended. Reinstate it before sending sign-in details.', 'WORKSPACE_SUSPENDED');
   const number = normalizeNumber(phone);
+  let confirmed = null;
+  try { confirmed = normalizeNumber(phoneConfirm); } catch { /* reported as a mismatch below */ }
+  if (confirmed !== number) throw new WelcomeError(400, 'The two WhatsApp numbers do not match. Type the client\'s number again in both boxes.', 'NUMBER_MISMATCH');
   if (confirmOptIn !== true) throw new WelcomeError(400, 'Confirm that the client agreed to get this message on WhatsApp.', 'OPT_IN_REQUIRED');
   const owner = await ownerOf(tenant);
   if (!owner) throw new WelcomeError(409, 'This workspace has no owner login yet, so there is nothing to send.', 'NO_OWNER');
   if (!owner.active) throw new WelcomeError(409, 'The owner login is deactivated. Reactivate it first.', 'OWNER_INACTIVE');
+  if (owner.signed_in && !canReachSignedInOwner(staff.role)) throw new WelcomeError(403, SIGNED_IN_MESSAGE, 'OWNER_ALREADY_SIGNED_IN');
 
   const status = await templateStatus();
   if (!status.ok) throw new WelcomeError(409, status.message, status.code);
@@ -222,6 +242,7 @@ async function send({ tenantId, phone, confirmOptIn, staff = {}, req = null }) {
     const meta = {
       to: maskNumber(number), email: owner.email, template: status.name, language: status.language,
       link_kind: owner.kind === 'user' ? 'set_password' : 'invitation', expires_at: link.expires, opt_in_confirmed: true,
+      owner_signed_in: owner.signed_in,
     };
     const actor = req ? null : { actor_type: 'staff', actor_user_id: staff.id ?? null };
 
@@ -239,6 +260,13 @@ async function send({ tenantId, phone, confirmOptIn, staff = {}, req = null }) {
       tenantId: tenant.id, req, actor, targetType: 'user', targetId: owner.id,
       meta: { ...meta, status: 'sent', wa_message_id: result.message?.wa_message_id || null },
     });
+    if (owner.kind === 'user') {
+      // The owner hears about every set-password link for their login, by email, so a
+      // link sent to the wrong number does not go unnoticed. Never the link itself.
+      await notify.signInLinkSentEmail({
+        to: owner.email, name: owner.name, workspaceName: tenant.name, maskedNumber: meta.to, expiresAt: link.expires,
+      }).catch((error) => console.warn(`[workspace-welcome] notice email to the owner failed: ${error.message}`));
+    }
     return { sent: true, to: meta.to, expires_at: link.expires, link_kind: meta.link_kind, contact_id: result.contact_id };
   } finally {
     inFlight.delete(tenant.id);
@@ -246,6 +274,6 @@ async function send({ tenantId, phone, confirmOptIn, staff = {}, req = null }) {
 }
 
 module.exports = {
-  WelcomeError, EVENT, LINK_TTL_HOURS, LINK_PLACEHOLDER,
+  WelcomeError, EVENT, LINK_TTL_HOURS, LINK_PLACEHOLDER, resetTtlMinutes,
   normalizeNumber, maskNumber, templateConfig, templateStatus, preview, send,
 };

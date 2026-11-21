@@ -62,10 +62,12 @@ const sends = () => metaCalls.filter((c) => c.url.endsWith('/messages'));
 test('Send to client', async (t) => {
   const { Users, Tenants, Clients, AuditEvents, PlatformWaMessages, MetaWhatsappTemplates, Invitations } = require('../models');
   const { runAsSystem, runAsTenant } = require('../services/tenantContext');
+  const notify = require('../services/notify');
   const sys = (fn) => runAsSystem(fn, 'test');
 
   async function seed({ template = { status: 'APPROVED', category: 'UTILITY' } } = {}) {
     await clearCollections();
+    notify.clearOutbox();
     metaCalls.length = 0;
     metaFail = false;
     const staff = async (role) => (await sys(() => Users.create({
@@ -91,7 +93,7 @@ test('Send to client', async (t) => {
     return { ops, support, founder, owner };
   }
 
-  const send = (user, body = { phone: '+91 98765 43210', confirm_opt_in: true }) => request(app).post('/api/admin/tenants/7/welcome-message').set(bearer(user)).send(body);
+  const send = (user, body = { phone: '+91 98765 43210', phone_confirm: '+919876543210', confirm_opt_in: true }) => request(app).post('/api/admin/tenants/7/welcome-message').set(bearer(user)).send(body);
   const linkOf = (call) => call.data.template.components[0].parameters[2].text;
   const tokenOf = (call) => linkOf(call).split('/reset-password/')[1];
 
@@ -178,6 +180,11 @@ test('Send to client', async (t) => {
     const auditRaw = JSON.stringify(event);
     assert.ok(!auditRaw.includes('919876543210'), 'full number not in the audit log');
     assert.ok(!auditRaw.includes(token), 'link not in the audit log');
+
+    const mails = notify.outbox().filter((m) => m.to === 'ravi@kaveri.test');
+    assert.strictEqual(mails.length, 1, 'the owner is told by email');
+    assert.match(mails[0].text, /\+91\*\*\*\*\*\*3210/);
+    assert.ok(!mails[0].text.includes(token) && !mails[0].html.includes(token), 'the email never carries the link');
   });
 
   await t.test('W5. The link works once; a newer link replaces the older one', async () => {
@@ -222,7 +229,7 @@ test('Send to client', async (t) => {
       assert.strictEqual(res.status, 400, phone);
       assert.strictEqual(res.body.code, 'BAD_NUMBER');
     }
-    const res = await send(ops, { phone: '+919876543210' });
+    const res = await send(ops, { phone: '+919876543210', phone_confirm: '+919876543210' });
     assert.strictEqual(res.status, 400);
     assert.strictEqual(res.body.code, 'OPT_IN_REQUIRED');
     assert.strictEqual(sends().length, 0);
@@ -265,6 +272,74 @@ test('Send to client', async (t) => {
     await sys(() => Tenants.updateOne({ id: 7 }, { $set: { status: 'suspended' } }));
     assert.strictEqual((await send(ops)).body.code, 'WORKSPACE_SUSPENDED');
     assert.strictEqual(sends().length, 0);
+  });
+
+  const signIn = () => sys(() => Users.updateOne({ email: 'ravi@kaveri.test' }, { $set: { last_login: new Date() } }));
+  const preview = (user) => request(app).get('/api/admin/tenants/7/welcome-message').set(bearer(user));
+
+  await t.test('W13. Ops cannot send a link to an owner who already signs in', async () => {
+    const { ops } = await seed();
+    await signIn();
+    const view = await preview(ops);
+    assert.strictEqual(view.status, 200);
+    assert.strictEqual(view.body.can_send, false);
+    assert.match(view.body.blocked_message, /Only the Admin \(Owner\)/);
+    const res = await send(ops);
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.code, 'OWNER_ALREADY_SIGNED_IN');
+    assert.match(res.body.error, /Forgot password/);
+    assert.strictEqual(sends().length, 0);
+    const owner = await sys(() => Users.findOne({ email: 'ravi@kaveri.test' }).lean());
+    assert.ok(!owner.reset_token_hash, 'no link was created');
+    assert.strictEqual(notify.outbox().length, 0);
+  });
+
+  await t.test('W14. The founder can still send, with a short "Forgot password" link life, and the owner is emailed', async () => {
+    const { founder } = await seed();
+    await signIn();
+    const view = await preview(founder);
+    assert.strictEqual(view.body.can_send, true);
+    assert.strictEqual(view.body.link_valid_minutes, 60);
+    const res = await send(founder);
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    const owner = await sys(() => Users.findOne({ email: 'ravi@kaveri.test' }).lean());
+    assert.strictEqual(owner.reset_token_hash, sha256(tokenOf(sends()[0])));
+    const minutes = (new Date(owner.reset_token_expires_at) - Date.now()) / 60000;
+    assert.ok(minutes > 59.5 && minutes <= 60, `link valid 60 minutes (got ${minutes})`);
+    const event = await sys(() => AuditEvents.findOne({ event: 'WORKSPACE_LOGIN_LINK_SENT' }).lean());
+    assert.strictEqual(event.meta.owner_signed_in, true);
+    assert.strictEqual(event.actor_user_id, founder.id);
+    const mails = notify.outbox().filter((m) => m.to === 'ravi@kaveri.test');
+    assert.strictEqual(mails.length, 1);
+    assert.match(mails[0].subject, /sign-in link was sent on WhatsApp/);
+    assert.match(mails[0].text, /\+91\*\*\*\*\*\*3210/);
+  });
+
+  await t.test('W15. A first-time owner (never signed in) still gets a 72-hour link from ops', async () => {
+    const { ops } = await seed();
+    const view = await preview(ops);
+    assert.strictEqual(view.body.can_send, true);
+    assert.strictEqual(view.body.link_valid_minutes, 72 * 60);
+    assert.strictEqual(view.body.blocked_message, null);
+    const res = await send(ops);
+    assert.strictEqual(res.status, 201, JSON.stringify(res.body));
+    const hours = (new Date(res.body.expires_at) - Date.now()) / 3600000;
+    assert.ok(hours > 71.9 && hours <= 72, `link valid 72 hours (got ${hours})`);
+  });
+
+  await t.test('W16. The number must be typed twice and match', async () => {
+    const { ops } = await seed();
+    for (const confirm of ['+91 98765 43211', '', undefined, 'abc']) {
+      const res = await send(ops, { phone: '+91 98765 43210', phone_confirm: confirm, confirm_opt_in: true });
+      assert.strictEqual(res.status, 400, String(confirm));
+      assert.strictEqual(res.body.code, 'NUMBER_MISMATCH');
+    }
+    assert.strictEqual(sends().length, 0);
+    const owner = await sys(() => Users.findOne({ email: 'ravi@kaveri.test' }).lean());
+    assert.ok(!owner.reset_token_hash, 'no link was created');
+    // The same number written differently is a match.
+    const ok = await send(ops, { phone: '+91 98765 43210', phone_confirm: '0091-98765-43210', confirm_opt_in: true });
+    assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
   });
 
   await t.test('W12. Provisioning a workspace never sends anything by itself', async () => {

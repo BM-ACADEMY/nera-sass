@@ -15,9 +15,11 @@ const ERRORS = {
   RATE_LIMITED: 'The hourly sending limit for this workspace is reached. Wait a while before sending again.',
   SEND_IN_PROGRESS: 'A message to this client is being sent right now. Wait a moment.',
   OPT_IN_REQUIRED: 'Tick the box to confirm the client agreed to get this on WhatsApp.',
+  NUMBER_MISMATCH: 'The two numbers do not match. Type the client\'s number again in both boxes.',
 };
 const errorText = (err, fallback) => {
   if (!err.response) return 'Could not reach the server. Check your connection and try again.';
+  if (err.response.data?.code === 'OWNER_ALREADY_SIGNED_IN') return err.response.data.error;
   if (err.response.status === 403) return 'You do not have permission to send sign-in details. Ask the founder or an ops admin.';
   const data = err.response.data || {};
   return ERRORS[data.code] || data.error || fallback;
@@ -34,6 +36,9 @@ const numberProblem = (value) => {
   if (digits.startsWith('0') || digits.length < 11 || digits.length > 15) return 'Use the full number with country code, for example +91 98765 43210';
   return null;
 };
+// The same number however it is written ("+91 98765 43210" = "0091-98765-43210").
+const numberDigits = (value) => String(value || '').trim().replace(/^00/, '').replace(/\D/g, '');
+const linkLife = (minutes) => (minutes % 60 === 0 && minutes >= 120 ? `${minutes / 60} hours` : `${minutes} minutes`);
 
 /**
  * "Send to client": sends the workspace owner a WhatsApp message from the
@@ -45,6 +50,8 @@ const SendToClientDialog = ({ open, onOpenChange, tenantId, onSent }) => {
   const [info, setInfo] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [phone, setPhone] = useState('');
+  const [phoneConfirm, setPhoneConfirm] = useState('');
+  const [confirmError, setConfirmError] = useState('');
   const [optIn, setOptIn] = useState(false);
   const [phoneError, setPhoneError] = useState('');
   const [sendError, setSendError] = useState('');
@@ -66,6 +73,8 @@ const SendToClientDialog = ({ open, onOpenChange, tenantId, onSent }) => {
   useEffect(() => {
     if (!open || !tenantId) return;
     setPhone('');
+    setPhoneConfirm('');
+    setConfirmError('');
     setOptIn(false);
     setPhoneError('');
     setSendError('');
@@ -78,29 +87,35 @@ const SendToClientDialog = ({ open, onOpenChange, tenantId, onSent }) => {
     const problem = numberProblem(phone);
     setPhoneError(problem || '');
     if (problem) return;
+    const mismatch = numberDigits(phone) !== numberDigits(phoneConfirm);
+    setConfirmError(mismatch ? ERRORS.NUMBER_MISMATCH : '');
+    if (mismatch) return;
     if (!optIn) return setSendError(ERRORS.OPT_IN_REQUIRED);
     setSending(true);
     setSendError('');
     try {
-      const { data } = await axiosClient.post(`/admin/tenants/${tenantId}/welcome-message`, { phone: phone.trim(), confirm_opt_in: true });
+      const { data } = await axiosClient.post(`/admin/tenants/${tenantId}/welcome-message`, { phone: phone.trim(), phone_confirm: phoneConfirm.trim(), confirm_opt_in: true });
       setSent(data);
       toast.success(`Sign-in details sent to ${data.to}`);
       onSent?.(data);
     } catch (err) {
       const text = errorText(err, 'The message could not be sent. Try again.');
       if (err.response?.data?.code === 'BAD_NUMBER') setPhoneError(text);
+      else if (err.response?.data?.code === 'NUMBER_MISMATCH') setConfirmError(text);
       else setSendError(text);
+      if (err.response?.data?.code === 'OWNER_ALREADY_SIGNED_IN') load();
       if (err.response?.status === 429 || err.response?.status === 502) load();
     } finally {
       setSending(false);
     }
   };
 
-  const blocked = info && (!info.template.ok || !info.owner || !info.owner.active || info.workspace.status === 'suspended' || info.rate.remaining === 0);
+  const blocked = info && (!info.template.ok || !info.owner || !info.owner.active || info.workspace.status === 'suspended' || info.rate.remaining === 0 || !info.can_send);
   const blockReason = info && (
     !info.owner ? 'This workspace has no owner login yet.'
       : !info.owner.active ? 'The owner login is deactivated. Reactivate it first.'
         : info.workspace.status === 'suspended' ? 'This workspace is suspended. Reinstate it before sending sign-in details.'
+          : !info.can_send ? info.blocked_message
           : !info.template.ok ? info.template.message
             : info.rate.remaining === 0 ? ERRORS.RATE_LIMITED : null);
 
@@ -136,14 +151,22 @@ const SendToClientDialog = ({ open, onOpenChange, tenantId, onSent }) => {
           <div className="min-w-0"><div className="text-[11px] font-semibold text-muted-foreground uppercase">Owner</div><div className="truncate font-medium">{info.owner?.name || '—'}</div></div>
           <div className="min-w-0"><div className="text-[11px] font-semibold text-muted-foreground uppercase">Login email</div><div className="truncate font-medium">{info.owner?.email || '—'}</div></div>
         </div>
-        {info.owner?.signed_in && (
-          <p className="text-xs text-amber-700">This owner has signed in before. Using the link replaces their current password and signs them out everywhere.</p>
+        {info.owner?.signed_in && info.can_send && (
+          <p className="text-xs text-amber-700">
+            This owner already signs in. Send this only if they asked for it: the link replaces their current password and signs them out everywhere.
+            It works for {linkLife(info.link_valid_minutes)} only (the message text says 72 hours, so tell the client), and the owner gets an email that a link was sent.
+          </p>
         )}
 
         <FormField label="Client's WhatsApp number" htmlFor="client_wa" error={phoneError}
           hint={info.suggested_number ? 'Prefilled from the workspace. Check it with the client.' : 'With country code, for example +91 98765 43210.'}>
           <IconInput id="client_wa" icon={FiPhone} inputMode="tel" placeholder="+91 98765 43210" value={phone}
-            onChange={(e) => { setPhone(e.target.value); setPhoneError(''); }} disabled={sending} />
+            onChange={(e) => { setPhone(e.target.value); setPhoneError(''); setConfirmError(''); }} disabled={sending || blocked} />
+        </FormField>
+        <FormField label="Type the number again" htmlFor="client_wa_confirm" error={confirmError}
+          hint="The link goes to this number, so check every digit.">
+          <IconInput id="client_wa_confirm" icon={FiPhone} inputMode="tel" placeholder="+91 98765 43210" value={phoneConfirm} autoComplete="off"
+            onChange={(e) => { setPhoneConfirm(e.target.value); setConfirmError(''); }} onPaste={(e) => e.preventDefault()} disabled={sending || blocked} />
         </FormField>
 
         <div>
@@ -157,7 +180,7 @@ const SendToClientDialog = ({ open, onOpenChange, tenantId, onSent }) => {
             <div className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">The preview shows once the template is approved.</div>
           )}
           <p className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-            <FiLock className="shrink-0" /> The password is never sent. A new one-time link, valid {info.link_valid_hours} hours, is created when you click Send; any older link stops working.
+            <FiLock className="shrink-0" /> The password is never sent. A new one-time link, valid {linkLife(info.link_valid_minutes)}, is created when you click Send; any older link stops working.
           </p>
         </div>
 

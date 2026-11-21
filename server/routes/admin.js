@@ -414,7 +414,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
 
   router.get('/tenants/:id/welcome-message', permit('platform.users.manage'), async (req, res) => {
     try {
-      return res.json(await workspaceWelcome.preview(tenantIdParam(req)));
+      return res.json(await workspaceWelcome.preview(tenantIdParam(req), { staffRole: req.identity.staffRole }));
     } catch (error) {
       return welcomeFail(res, error);
     }
@@ -423,8 +423,9 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   router.post('/tenants/:id/welcome-message', permit('platform.users.manage'), async (req, res) => {
     try {
       const result = await workspaceWelcome.send({
-        tenantId: tenantIdParam(req), phone: req.body?.phone, confirmOptIn: req.body?.confirm_opt_in === true,
-        staff: { id: req.user.id, name: req.user.name }, req,
+        tenantId: tenantIdParam(req), phone: req.body?.phone, phoneConfirm: req.body?.phone_confirm,
+        confirmOptIn: req.body?.confirm_opt_in === true,
+        staff: { id: req.user.id, name: req.user.name, role: req.identity.staffRole }, req,
       });
       return res.status(201).json(result);
     } catch (error) {
