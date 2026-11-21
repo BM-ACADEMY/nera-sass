@@ -157,32 +157,35 @@ class LeadOSAPI {
   }
 
   // Email codes as the two-step method: send a code, then confirm it.
-  async startEmailSetup(mfaToken) {
-    return this.request('/api/auth/mfa/email/setup', { method: 'POST', body: JSON.stringify(mfaToken ? { mfa_token: mfaToken } : {}) });
+  // From login pass the mfaToken; from Settings (signed in) pass reauth:
+  // { password } (plus the current code when two-step is already on).
+  async startEmailSetup(mfaToken, reauth = {}) {
+    return this.request('/api/auth/mfa/email/setup', { method: 'POST', body: JSON.stringify(mfaToken ? { mfa_token: mfaToken } : reauth) });
   }
 
-  async confirmEmailSetup(code, mfaToken) {
+  async confirmEmailSetup(code, mfaToken, reauth = {}) {
     const data = await this.request('/api/auth/mfa/email/setup/confirm', {
       method: 'POST',
-      body: JSON.stringify(mfaToken ? { code, mfa_token: mfaToken } : { code }),
+      body: JSON.stringify(mfaToken ? { code, mfa_token: mfaToken } : { password: reauth.password, code }),
       allowInvalidMfaCode: true,
     });
     if (data.token) this.setToken(data.token);
     return data;
   }
 
-  // MFA enrolment, from Settings (signed in) or from login (mfaToken).
-  async startMfaSetup(mfaToken) {
+  // MFA enrolment, from Settings (signed in, with reauth: { password } plus
+  // the current code when two-step is already on) or from login (mfaToken).
+  async startMfaSetup(mfaToken, reauth = {}) {
     return this.request('/api/auth/mfa/setup', {
       method: 'POST',
-      body: JSON.stringify(mfaToken ? { mfa_token: mfaToken } : {}),
+      body: JSON.stringify(mfaToken ? { mfa_token: mfaToken } : reauth),
     });
   }
 
-  async confirmMfaSetup(code, mfaToken) {
+  async confirmMfaSetup(code, mfaToken, reauth = {}) {
     const data = await this.request('/api/auth/mfa/setup/confirm', {
       method: 'POST',
-      body: JSON.stringify(mfaToken ? { code, mfa_token: mfaToken } : { code }),
+      body: JSON.stringify(mfaToken ? { code, mfa_token: mfaToken } : { password: reauth.password, code }),
       allowInvalidMfaCode: true,
     });
     if (data.token) this.setToken(data.token);
