@@ -476,6 +476,23 @@ test('WhatsApp two-step verification', async (t) => {
     }
   });
 
+  await t.test('W21. My sessions: signing other devices out accepts a WhatsApp confirm code', async () => {
+    const user = await staff({ ...waOn });
+    const noPass = await request(app).post('/api/account/sessions/confirm-code').set(auth(user)).send({ channel: 'whatsapp' });
+    assert.strictEqual(noPass.status, 403, 'the password comes first');
+    assert.strictEqual(sent.length, 0);
+    const send = await request(app).post('/api/account/sessions/confirm-code').set(auth(user)).send({ password: PASSWORD, channel: 'whatsapp' });
+    assert.strictEqual(send.status, 200, JSON.stringify(send.body));
+    assert.strictEqual(sent.at(-1).to, '919876543210');
+    const code = lastWa();
+    const asLogin = await request(app).post('/api/auth/mfa/recovery-codes').set(auth(user)).send({ password: PASSWORD, code_method: 'whatsapp', code });
+    assert.strictEqual(asLogin.status, 403, 'a confirm code is not a reauth code');
+    const wrong = await request(app).post('/api/account/sessions/revoke-others').set(auth(user)).send({ password: PASSWORD, method: 'whatsapp', code: code === '000000' ? '111111' : '000000' });
+    assert.strictEqual(wrong.status, 403);
+    const ok = await request(app).post('/api/account/sessions/revoke-others').set(auth(user)).send({ password: PASSWORD, method: 'whatsapp', code });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+  });
+
   await t.test('W8. Rate limit: per-account limit on code requests', async () => {
     const user = await staff({ ...waOn });
     process.env.AUTH_RATE_LIMIT = 'on';
