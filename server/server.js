@@ -616,6 +616,7 @@ app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api', require('./routes/team'));
 // Plans, subscription and wallet of the signed-in workspace (customer login).
 app.use('/api/billing', require('./routes/billing'));
+app.use('/api/shop', require('./routes/shop'));
 // Razorpay webhook for plan payments and wallet top-ups. Signed with
 // RAZORPAY_WEBHOOK_SECRET (503 until it is set); the tenant comes from the
 // order the server created, never from the payload. Wallet credits happen only
