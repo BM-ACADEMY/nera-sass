@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { message } from 'antd';
 import { QRCodeSVG } from 'qrcode.react';
-import { Mail, Lock, Eye, EyeOff, ShieldCheck, Smartphone, ChevronRight, ArrowLeft, KeyRound, Copy, Download, Info, Loader2 } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, ShieldCheck, ChevronRight, ArrowLeft, KeyRound, Copy, Download, Info, Loader2 } from 'lucide-react';
 import leadosLogo from '../../assets/getnera-logo.png';
 import { api } from '../../services/api.js';
 import { mfaErrorKind, NOTICES } from '../../services/session.js';
 import OtpInput from '../../components/auth/OtpInput.jsx';
 import { AuthenticatorArt, EmailCodeArt, ShieldArt } from '../../components/auth/Art.jsx';
+import { MethodTile } from '../../components/auth/MfaBrandIcons.jsx';
 
 const YEAR = new Date().getFullYear();
 const cn = (...parts) => parts.filter(Boolean).join(' ');
@@ -40,14 +41,14 @@ const LinkButton = ({ children, className, ...props }) => (
   </button>
 );
 
-const MethodCard = ({ icon: Icon, tone, title, text, onClick, disabled }) => (
+const MethodCard = ({ icon: Icon, tone, tile, title, text, onClick, disabled }) => (
   <button
     type="button"
     onClick={onClick}
     disabled={disabled}
     className="group flex w-full cursor-pointer items-center gap-3.5 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md disabled:pointer-events-none disabled:opacity-60"
   >
-    <span className={cn('flex h-12 w-12 shrink-0 items-center justify-center rounded-xl', tone)}><Icon size={22} /></span>
+    {tile ? <MethodTile method={tile} size={44} /> : <span className={cn('flex h-12 w-12 shrink-0 items-center justify-center rounded-xl', tone)}><Icon size={22} /></span>}
     <span className="min-w-0 flex-1">
       <span className="block font-semibold leading-snug text-slate-900">{title}</span>
       <span className="mt-0.5 block text-[13px] leading-snug text-slate-500">{text}</span>
@@ -65,19 +66,23 @@ const Field = ({ label, htmlFor, children }) => (
 
 const inputClass = 'h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-10 pr-3 text-[15px] text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10';
 
-// Customer sign-in: password, then the second step (choose a method when
-// both are on, enter an email or authenticator code, or a recovery code).
-// Accounts that must use two-step verification set a method up here first.
+// Customer sign-in: password, then the second step: the default method's
+// code (app, email or WhatsApp), with a switch to any other method that is on,
+// or a recovery code. Accounts that must use two-step verification set a
+// method up here first.
 export function LoginScreen({ login, completeSession, authLoading, initialNotice }) {
   const [values, setValues] = useState({ email: '', password: '' });
   const [showPassword, setShowPassword] = useState(false);
   const [notice, setNotice] = useState(initialNotice || '');
-  const [step, setStep] = useState('password'); // password | choose | verify | setup-choose | setup-email | setup-totp | codes
+  const [step, setStep] = useState('password'); // password | choose | verify | setup-choose | setup-email | setup-whatsapp-number | setup-whatsapp | setup-totp | codes
   const [busy, setBusy] = useState(false);
   const [mfaToken, setMfaToken] = useState('');
   const [methods, setMethods] = useState([]);
   const [method, setMethod] = useState('totp');
   const [emailHint, setEmailHint] = useState('');
+  const [whatsappHint, setWhatsappHint] = useState('');
+  const [whatsappAvailable, setWhatsappAvailable] = useState(false);
+  const [phone, setPhone] = useState('');
   const [setup, setSetup] = useState(null);
   const [code, setCode] = useState('');
   const [invalid, setInvalid] = useState(false);
@@ -114,11 +119,15 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
     return message.error(err?.message || fallback);
   };
 
-  const sendEmailCode = async (purpose = 'login', token = mfaToken) => {
+  // Sends a code by email or WhatsApp, for the login step or for setup.
+  const sendCode = async (channel, purpose = 'login', token = mfaToken) => {
     setBusy(true);
     try {
-      const res = purpose === 'setup' ? await api.startEmailSetup(token) : await api.sendMfaEmail(token);
-      setEmailHint(res.sent_to || emailHint);
+      const res = channel === 'whatsapp'
+        ? (purpose === 'setup' ? await api.startWhatsappSetup(phone, token) : await api.sendMfaWhatsapp(token))
+        : (purpose === 'setup' ? await api.startEmailSetup(token) : await api.sendMfaEmail(token));
+      if (channel === 'whatsapp') setWhatsappHint(res.sent_to || whatsappHint);
+      else setEmailHint(res.sent_to || emailHint);
       setResendIn(res.resend_after || 45);
       message.success(`Code sent to ${res.sent_to}`);
       return true;
@@ -143,30 +152,33 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
     const info = result.mfaInfo || {};
     setMfaToken(result.mfaToken);
     setEmailHint(info.email_hint || '');
+    setWhatsappHint(info.whatsapp_hint || '');
+    setWhatsappAvailable(Boolean(info.whatsapp_available));
     setCode('');
     if (result.mfa === 'setup') {
       setStep('setup-choose');
       return;
     }
-    const list = info.methods?.length ? info.methods : ['totp'];
+    const list = info.methods || [];
     setMethods(list);
-    if (list.length > 1) {
-      setStep('choose');
+    setStep('verify');
+    // Only a recovery code works (for example WhatsApp codes are switched off).
+    if (info.recovery_only || !list.length) {
+      setUseRecovery(true);
       return;
     }
-    setMethod(list[0]);
-    setStep('verify');
-    if (list[0] === 'email') {
-      if (info.email) setResendIn(info.email.resend_after || 45);
-      if (info.email_error) message.error(info.email_error);
-    }
+    const first = list.includes(info.default_method) ? info.default_method : list[0];
+    setMethod(first);
+    const delivery = first === 'email' ? [info.email, info.email_error] : first === 'whatsapp' ? [info.whatsapp, info.whatsapp_error] : [];
+    if (delivery[0]) setResendIn(delivery[0].resend_after || 45);
+    if (delivery[1]) message.error(delivery[1]);
   };
 
   const chooseMethod = async (picked) => {
     setMethod(picked);
     setCode('');
     setUseRecovery(false);
-    if (picked === 'email' && !(await sendEmailCode('login'))) return;
+    if ((picked === 'email' || picked === 'whatsapp') && !(await sendCode(picked, 'login'))) return;
     setStep('verify');
   };
 
@@ -186,7 +198,11 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
   const startSetup = async (picked) => {
     setCode('');
     if (picked === 'email') {
-      if (await sendEmailCode('setup')) setStep('setup-email');
+      if (await sendCode('email', 'setup')) setStep('setup-email');
+      return;
+    }
+    if (picked === 'whatsapp') {
+      setStep('setup-whatsapp-number');
       return;
     }
     setBusy(true);
@@ -205,7 +221,9 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
     setBusy(true);
     try {
       const clean = value.replace(/\s/g, '');
-      const data = step === 'setup-email' ? await api.confirmEmailSetup(clean, mfaToken) : await api.confirmMfaSetup(clean, mfaToken);
+      const data = step === 'setup-email' ? await api.confirmEmailSetup(clean, mfaToken)
+        : step === 'setup-whatsapp' ? await api.confirmWhatsappSetup(clean, mfaToken)
+          : await api.confirmMfaSetup(clean, mfaToken);
       if (data.recovery_codes?.length) {
         setRecoveryCodes(data.recovery_codes);
         setPending(data);
@@ -232,9 +250,11 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
 
   const art = {
     choose: <ShieldArt className="h-24 w-auto" />,
-    verify: useRecovery ? <ShieldArt className="h-24 w-auto" /> : method === 'email' ? <EmailCodeArt className="h-24 w-auto" /> : <AuthenticatorArt className="h-24 w-auto" />,
+    verify: useRecovery ? <ShieldArt className="h-24 w-auto" /> : method === 'email' ? <EmailCodeArt className="h-24 w-auto" /> : method === 'whatsapp' ? <MethodTile method="whatsapp" size={72} /> : <AuthenticatorArt className="h-24 w-auto" />,
     'setup-choose': <ShieldArt className="h-24 w-auto" />,
     'setup-email': <EmailCodeArt className="h-24 w-auto" />,
+    'setup-whatsapp-number': <MethodTile method="whatsapp" size={72} />,
+    'setup-whatsapp': <MethodTile method="whatsapp" size={72} />,
     codes: <ShieldArt className="h-24 w-auto" />,
   }[step];
 
@@ -245,16 +265,20 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
       ? ['Use a recovery code', 'Enter one of the recovery codes you saved when you set up two-step verification.']
       : method === 'email'
         ? ['Check your email', `We sent a 6-digit code to ${emailHint || 'your email'}.`]
-        : ['Authenticator code', 'Open Google Authenticator (or your authenticator app) and enter the 6-digit code for Getnera.'],
+        : method === 'whatsapp'
+          ? ['Check WhatsApp', `We sent a 6-digit code to your WhatsApp ${whatsappHint || 'number'}.`]
+          : ['Authenticator code', 'Open Google Authenticator (or your authenticator app) and enter the 6-digit code for Getnera.'],
     'setup-choose': ['Protect your account', 'Your account needs two-step verification. Pick a method to finish signing in.'],
     'setup-email': ['Check your email', `Enter the 6-digit code we sent to ${emailHint || 'your email'} to turn on email verification.`],
+    'setup-whatsapp-number': ['Your WhatsApp number', 'We send a 6-digit code to it to check it is yours.'],
+    'setup-whatsapp': ['Check WhatsApp', `Enter the 6-digit code we sent to ${whatsappHint || 'your WhatsApp'} to turn on WhatsApp verification.`],
     'setup-totp': ['Set up the authenticator app', 'Scan the QR code with Google Authenticator, Microsoft Authenticator or Authy.'],
     codes: ['Save your recovery codes', 'If you lose your phone or email access, each code lets you sign in once.'],
   }[step];
 
   const back = <LinkButton onClick={() => restart()} className="text-slate-500"><ArrowLeft size={14} /> Back to sign in</LinkButton>;
-  const resend = (purpose) => (
-    <LinkButton disabled={resendIn > 0 || busy} onClick={() => sendEmailCode(purpose)} className="text-blue-600">
+  const resend = (channel, purpose) => (
+    <LinkButton disabled={resendIn > 0 || busy} onClick={() => sendCode(channel, purpose)} className="text-blue-600">
       {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Didn’t get it? Resend code'}
     </LinkButton>
   );
@@ -308,8 +332,9 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
 
             {step === 'choose' && (
               <div className="flex flex-col gap-3">
-                <MethodCard icon={Mail} tone="bg-blue-50 text-blue-600" title="Email code" text={`Send a code to ${emailHint}`} onClick={() => chooseMethod('email')} disabled={busy} />
-                <MethodCard icon={Smartphone} tone="bg-emerald-50 text-emerald-600" title="Authenticator app" text="Use the code from Google Authenticator" onClick={() => chooseMethod('totp')} disabled={busy} />
+                {methods.includes('totp') && <MethodCard tile="totp" title="Authenticator app" text="Use the code from Google Authenticator" onClick={() => chooseMethod('totp')} disabled={busy} />}
+                {methods.includes('email') && <MethodCard tile="email" title="Email code" text={`Send a code to ${emailHint}`} onClick={() => chooseMethod('email')} disabled={busy} />}
+                {methods.includes('whatsapp') && <MethodCard tile="whatsapp" title="WhatsApp code" text={`Send a code to ${whatsappHint || 'your WhatsApp'}`} onClick={() => chooseMethod('whatsapp')} disabled={busy} />}
                 <div className="mt-2 flex justify-center">{back}</div>
               </div>
             )}
@@ -325,15 +350,17 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
                   {busy ? <><Spinner /> Checking…</> : 'Verify and sign in'}
                 </PrimaryButton>
                 <div className="flex flex-col items-center gap-2">
-                  {method === 'email' && !useRecovery && resend('login')}
+                  {(method === 'email' || method === 'whatsapp') && !useRecovery && resend(method, 'login')}
                   {methods.length > 1 && !useRecovery && (
                     <LinkButton onClick={() => { setStep('choose'); setCode(''); }} className="text-slate-600">
-                      Use {method === 'email' ? 'the authenticator app' : 'an email code'} instead
+                      Use another method
                     </LinkButton>
                   )}
-                  <LinkButton onClick={() => { setUseRecovery((v) => !v); setCode(''); }} className="text-slate-500">
-                    <KeyRound size={14} /> {useRecovery ? 'Use a verification code instead' : 'Lost access? Use a recovery code'}
-                  </LinkButton>
+                  {methods.length > 0 && (
+                    <LinkButton onClick={() => { setUseRecovery((v) => !v); setCode(''); }} className="text-slate-500">
+                      <KeyRound size={14} /> {useRecovery ? 'Use a verification code instead' : 'Lost access? Use a recovery code'}
+                    </LinkButton>
+                  )}
                   {back}
                 </div>
               </form>
@@ -341,8 +368,9 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
 
             {step === 'setup-choose' && (
               <div className="flex flex-col gap-3">
-                <MethodCard icon={Mail} tone="bg-blue-50 text-blue-600" title="Email code" text={`Get a code at ${emailHint || 'your email'} each sign-in`} onClick={() => startSetup('email')} disabled={busy} />
-                <MethodCard icon={Smartphone} tone="bg-emerald-50 text-emerald-600" title="Authenticator app (recommended)" text="Google Authenticator, Microsoft Authenticator or Authy" onClick={() => startSetup('totp')} disabled={busy} />
+                <MethodCard tile="totp" title="Authenticator app (recommended)" text="Google Authenticator, Microsoft Authenticator or Authy" onClick={() => startSetup('totp')} disabled={busy} />
+                <MethodCard tile="email" title="Email code" text={`Get a code at ${emailHint || 'your email'} each sign-in`} onClick={() => startSetup('email')} disabled={busy} />
+                {whatsappAvailable && <MethodCard tile="whatsapp" title="WhatsApp code" text="Get a code on WhatsApp each sign-in" onClick={() => startSetup('whatsapp')} disabled={busy} />}
                 <p className="mt-1 text-center text-xs text-slate-400">You can change this later in Settings.</p>
                 <div className="flex justify-center">{back}</div>
               </div>
@@ -355,8 +383,35 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
                   {busy ? <><Spinner /> Checking…</> : 'Turn on and sign in'}
                 </PrimaryButton>
                 <div className="flex flex-col items-center gap-2">
-                  {resend('setup')}
+                  {resend('email', 'setup')}
                   <LinkButton onClick={() => { setStep('setup-choose'); setCode(''); }} className="text-slate-600">Choose another method</LinkButton>
+                </div>
+              </form>
+            )}
+
+            {step === 'setup-whatsapp-number' && (
+              <form onSubmit={async (e) => { e.preventDefault(); if (await sendCode('whatsapp', 'setup')) setStep('setup-whatsapp'); }} className="flex flex-col gap-5">
+                <Field label="WhatsApp number (with country code)" htmlFor="wa-phone">
+                  <input id="wa-phone" type="tel" autoComplete="tel" autoFocus placeholder="+91 98765 43210" value={phone} onChange={(e) => setPhone(e.target.value)} className={cn(inputClass, 'pl-3')} />
+                </Field>
+                <PrimaryButton type="submit" disabled={busy || phone.replace(/\D/g, '').length < 10}>
+                  {busy ? <><Spinner /> Sending…</> : 'Send code'}
+                </PrimaryButton>
+                <div className="flex justify-center">
+                  <LinkButton onClick={() => { setStep('setup-choose'); setCode(''); }} className="text-slate-600">Choose another method</LinkButton>
+                </div>
+              </form>
+            )}
+
+            {step === 'setup-whatsapp' && (
+              <form onSubmit={(e) => { e.preventDefault(); confirmSetup(); }} className="flex flex-col gap-5">
+                <OtpInput value={code} onChange={setCode} onComplete={confirmSetup} invalid={invalid} disabled={busy} />
+                <PrimaryButton type="submit" disabled={busy || code.length !== 6}>
+                  {busy ? <><Spinner /> Checking…</> : 'Turn on and sign in'}
+                </PrimaryButton>
+                <div className="flex flex-col items-center gap-2">
+                  {resend('whatsapp', 'setup')}
+                  <LinkButton onClick={() => { setStep('setup-whatsapp-number'); setCode(''); }} className="text-slate-600">Change the number</LinkButton>
                 </div>
               </form>
             )}

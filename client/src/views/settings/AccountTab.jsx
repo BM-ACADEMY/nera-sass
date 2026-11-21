@@ -2,7 +2,7 @@ import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { api } from '../../services/api.js';
 import { roleLabel } from './settingsPolicy.js';
-import { MfaEnrollment } from './MfaEnrollment.jsx';
+import { TwoStepMethods } from './TwoStepMethods.jsx';
 import { SectionTitle, SubTitle, Field, ReadOnly, Button, Notice, Actions, Divider } from './ui.jsx';
 import { inputStyle } from './styles.js';
 
@@ -12,7 +12,6 @@ export const AccountTab = ({ me, onChanged, onSignedOutEverywhere }) => {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
-  const [enrolling, setEnrolling] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
 
   const changePassword = async (event) => {
@@ -65,20 +64,13 @@ export const AccountTab = ({ me, onChanged, onSignedOutEverywhere }) => {
       </form>
 
       <Divider />
-      <SubTitle>Two-factor authentication</SubTitle>
-      {me?.mfa_enabled ? (
-        <Notice tone="ok">Two-factor authentication is on. You will be asked for a code when you sign in.</Notice>
-      ) : enrolling ? (
-        <MfaEnrollment
-          onDone={() => { setEnrolling(false); onChanged?.(); }}
-          onCancel={() => setEnrolling(false)}
-        />
-      ) : (
-        <>
-          <Notice tone="muted">Two-factor authentication is off.</Notice>
-          <Button type="button" onClick={() => setEnrolling(true)}>Turn on two-factor authentication</Button>
-        </>
-      )}
+      <SubTitle>Two-step verification</SubTitle>
+      <Notice tone={me?.mfa_enabled ? 'ok' : 'muted'}>
+        {me?.mfa_enabled
+          ? 'Two-step verification is on. At sign-in you get a code from your default method and can switch to another one.'
+          : 'Two-step verification is off. Set up a method below to protect your account.'}
+      </Notice>
+      <TwoStepMethods me={me} onChanged={onChanged} />
 
       <Divider />
       <SubTitle>Sessions</SubTitle>

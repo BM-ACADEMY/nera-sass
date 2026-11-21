@@ -192,6 +192,45 @@ class LeadOSAPI {
     return data;
   }
 
+  // WhatsApp codes as a two-step method: give the number (a code is sent to
+  // it), then confirm the code. From login pass mfaToken; from Settings pass
+  // reauth ({ password } plus the current code when two-step is on).
+  async startWhatsappSetup(phone, mfaToken, reauth = {}) {
+    return this.request('/api/auth/mfa/whatsapp/setup', { method: 'POST', body: JSON.stringify(mfaToken ? { mfa_token: mfaToken, phone } : { ...reauth, phone }) });
+  }
+
+  async confirmWhatsappSetup(code, mfaToken, reauth = {}) {
+    const data = await this.request('/api/auth/mfa/whatsapp/setup/confirm', {
+      method: 'POST',
+      body: JSON.stringify(mfaToken ? { code, mfa_token: mfaToken } : { password: reauth.password, code }),
+      allowInvalidMfaCode: true,
+    });
+    if (data.token) this.setToken(data.token);
+    return data;
+  }
+
+  // Sends the sign-in code by WhatsApp during the second login step.
+  async sendMfaWhatsapp(mfaToken) {
+    return this.request('/api/auth/mfa/whatsapp/send', { method: 'POST', body: JSON.stringify({ mfa_token: mfaToken }) });
+  }
+
+  // A code for confirming a security change while signed in ('email' | 'whatsapp').
+  async sendReauthCode(channel) {
+    return this.request(`/api/auth/mfa/reauth/${channel}/send`, { method: 'POST', body: '{}' });
+  }
+
+  async disableMfaMethod(method, reauth) {
+    return this.request('/api/auth/mfa/disable', { method: 'POST', body: JSON.stringify({ ...reauth, method }) });
+  }
+
+  async regenerateRecoveryCodes(reauth) {
+    return this.request('/api/auth/mfa/recovery-codes', { method: 'POST', body: JSON.stringify(reauth) });
+  }
+
+  async setDefaultMfaMethod(method) {
+    return this.request('/api/auth/mfa/default', { method: 'POST', body: JSON.stringify({ method }) });
+  }
+
   async getMe() {
     return this.request('/api/auth/me');
   }

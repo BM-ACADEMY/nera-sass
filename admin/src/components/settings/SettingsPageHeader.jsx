@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 // Settings sections; each opens its own page at /dashboard/settings/<slug>.
 export const SETTINGS_SECTIONS = {
   profile: { title: 'Profile', icon: FiUser, tone: 'bg-blue-50 text-blue-600 ring-blue-100', text: 'Your name, phone number and sign-in email.' },
-  'two-step': { title: 'Two-step verification', icon: FiShield, tone: 'bg-emerald-50 text-emerald-600 ring-emerald-100', text: 'Email codes, authenticator app and recovery codes.' },
+  'two-step': { title: 'Two-step verification', icon: FiShield, tone: 'bg-emerald-50 text-emerald-600 ring-emerald-100', text: 'Authenticator app, email or WhatsApp codes, and recovery codes.' },
   password: { title: 'Password & sessions', icon: FiLock, tone: 'bg-amber-50 text-amber-600 ring-amber-100', text: 'Change your password or sign out of every device.' },
 };
 
