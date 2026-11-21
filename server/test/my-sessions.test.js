@@ -568,15 +568,34 @@ test('My sessions', async (t) => {
     assert.ok(iat && exp);
     const aged = jwt.sign(claims, process.env.JWT_SECRET, { expiresIn: Math.floor((ends.getTime() - Date.now()) / 1000) });
     await sys(() => UserSessions.updateOne({ session_hash: sessions.hashSessionId(sidOf(tokMine)) }, { $set: { expires_at: ends } }));
-    const start = await request(app).post('/api/auth/mfa/setup').set(as(aged)).send({});
-    assert.strictEqual(start.status, 200);
-    const confirm = await request(app).post('/api/auth/mfa/setup/confirm').set(as(aged)).send({ code: mfa.totp(start.body.secret) });
+    // #43: enrolment on a normal session needs the current password (step-up).
+    const noPassword = await request(app).post('/api/auth/mfa/setup').set(as(aged)).send({});
+    assert.strictEqual(noPassword.status, 403);
+    assert.strictEqual(noPassword.body.code, 'PASSWORD_REQUIRED');
+    const start = await request(app).post('/api/auth/mfa/setup').set(as(aged)).send({ password: PASSWORD });
+    assert.strictEqual(start.status, 200, JSON.stringify(start.body));
+    const confirm = await request(app).post('/api/auth/mfa/setup/confirm').set(as(aged)).send({ password: PASSWORD, code: mfa.totp(start.body.secret) });
     assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
     assert.strictEqual(sidOf(confirm.body.token), sidOf(tokMine), 'same session');
     assert.ok(jwt.decode(confirm.body.token).exp <= jwt.decode(aged).exp, 'token not extended');
     assert.strictEqual((await rowOf(confirm.body.token)).expires_at.getTime(), ends.getTime(), 'row not extended');
     assert.strictEqual(jwt.decode(confirm.body.token).mfa, true);
     assert.strictEqual((await me(confirm.body.token)).status, 200);
+  });
+
+  await t.test('S26. Wrong codes after a right password still count toward the lockout', async () => {
+    await tenant(1);
+    const mfa = require('../services/mfa');
+    const { encrypt } = require('../utils/crypto');
+    const user = await owner(1);
+    const tokMine = await login(user);
+    const secret = mfa.generateSecret();
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_enabled: true, mfa_secret_enc: encrypt(secret) } }));
+    const post = () => request(app).post('/api/account/sessions/revoke-others').set(as(tokMine)).send({ password: PASSWORD, code: '12345' });
+    for (let i = 0; i < 4; i += 1) assert.strictEqual((await post()).body.code, 'CONFIRM_FAILED');
+    const fifth = await post();
+    assert.strictEqual(fifth.status, 423);
+    assert.strictEqual(fifth.body.code, 'ACCOUNT_LOCKED');
   });
 
   await t.test('S23. Tenant data export leaves signed-in sessions out', async () => {
