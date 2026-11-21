@@ -10,10 +10,20 @@
  * Long messages are never treated as opt-outs: "please don't stop the class"
  * is a question for a person, not an unsubscribe.
  *
- * Opt back in only on an exact keyword (START, UNSTOP, தொடங்கு, ...).
+ * A very short message (4 words or fewer) that contains the word "stop" also
+ * opts out ("please stop", "stop pls", "stop calling me"), unless it is negated
+ * or is clearly about something else ("dont stop", "bus stop", "stop by").
+ *
+ * Opt back in only on an exact keyword (START, UNSTOP, தொடங்கு, ...), and only
+ * for a contact who is currently opted out (see consentKeywordChange). A keyword
+ * never creates first-time marketing consent.
  */
 
 const SHORT_MESSAGE_WORDS = 8;
+// "please stop", "stop pls", "stop calling me": a bare "stop" in a message this short is a request to stop.
+const STOP_WORD_MAX_WORDS = 4;
+// Words that turn a short "stop" message into something else: negations, and "bus stop", "stop by" ...
+const STOP_WORD_BLOCKERS = new Set(['dont', 'do', 'not', 'no', 'never', 'cant', 'wont', 'didnt', 'doesnt', 'bus', 'by', 'at', 'over', 'here', 'there']);
 
 // Whole-message matches (after normalisation).
 const EXACT_OPT_OUT = {
@@ -62,8 +72,9 @@ const PHRASE_OPT_OUT = {
 
 const EXACT_OPT_IN = {
   en: ['start', 'unstop', 'subscribe', 'resubscribe', 'join', 'opt in', 'optin', 'yes start', 'start again', 'resume'],
-  ta: ['தொடங்கு', 'தொடங்குங்கள்', 'ஆரம்பி', 'ஆரம்பிக்கவும்', 'தொடரவும்', 'தொடருங்கள்', 'அனுப்புங்கள்', 'அனுப்பு',
-    'thodangu', 'thodangunga', 'arambi', 'aarambi', 'thodaravum', 'anuppunga', 'anupunga'],
+  // "send" (அனுப்பு, anuppunga) is left out on purpose: it is an everyday request, not consent.
+  ta: ['தொடங்கு', 'தொடங்குங்கள்', 'ஆரம்பி', 'ஆரம்பிக்கவும்', 'தொடரவும்', 'தொடருங்கள்',
+    'thodangu', 'thodangunga', 'arambi', 'aarambi', 'thodaravum'],
 };
 
 const TAMIL_LETTERS = /[஀-௿]/;
@@ -116,6 +127,12 @@ function detectOptOut(text) {
     const phrase = matchPhrase(normalised, PHRASE_OPT_OUT);
     if (phrase) return { matched: true, ...phrase };
   }
+  if (wordCount(normalised) <= STOP_WORD_MAX_WORDS) {
+    const words = normalised.split(' ');
+    if (words.includes('stop') && !words.some((word) => STOP_WORD_BLOCKERS.has(word))) {
+      return { matched: true, keyword: 'stop', language: 'en' };
+    }
+  }
   return { matched: false };
 }
 
@@ -124,6 +141,23 @@ function detectOptIn(text) {
   if (!normalised) return { matched: false };
   const exact = matchExact(normalised, EXACT_OPT_IN);
   return exact ? { matched: true, ...exact } : { matched: false };
+}
+
+/**
+ * What an inbound text does to the contact's marketing consent.
+ *   opt-out keyword                       -> { kind: 'opt_out', ... } always
+ *   opt-in keyword AND contact opted out  -> { kind: 'opt_in', ... } (re-subscribe)
+ *   opt-in keyword, contact not opted out -> { kind: null, ignoredOptIn: true }: a
+ *                                            keyword never creates first-time consent
+ * `optedOut` is the contact's current state (see consent.optedOut).
+ */
+function consentKeywordChange(text, { optedOut }) {
+  const stop = detectOptOut(text);
+  if (stop.matched) return { kind: 'opt_out', keyword: stop.keyword, language: stop.language };
+  const start = detectOptIn(text);
+  if (!start.matched) return { kind: null };
+  if (optedOut) return { kind: 'opt_in', keyword: start.keyword, language: start.language };
+  return { kind: null, ignoredOptIn: true, keyword: start.keyword };
 }
 
 /** What we reply (inside the open 24-hour window) when a contact opts out or back in. */
@@ -147,6 +181,7 @@ module.exports = {
   normalise,
   detectOptOut,
   detectOptIn,
+  consentKeywordChange,
   confirmationText,
   languageOf,
 };

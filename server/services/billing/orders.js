@@ -24,6 +24,7 @@ const wallet = require('./wallet');
 const alerts = require('./alerts');
 const customerAlerts = require('../alerts');
 const razorpay = require('./razorpay');
+const invoices = require('./invoices');
 
 class BillingError extends Error {
   constructor(status, message, code) {
@@ -186,6 +187,10 @@ async function fulfil(order, { paymentId, source, now = new Date() }) {
       });
     }
     await BillingOrders.updateOne({ id: fresh.id }, { $set: changes });
+    if (fresh.purpose === 'subscription') {
+      // The payment is already safe; a failed invoice is retried when the list is opened.
+      await invoices.ensureForOrder({ ...fresh, ...changes }, { now }).catch((error) => console.error('[billing/orders] Invoice not issued:', error.message));
+    }
     return { fulfilled: true, duplicate: false, order: { ...fresh, ...changes }, ...outcome };
   }, { ttlMs: 20000, waitMs: 15000 });
 }

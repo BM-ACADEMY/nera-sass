@@ -276,6 +276,21 @@ test('B. STOP and START keywords', async (t) => {
     assert.strictEqual(await runAsTenant(1, () => Messages.countDocuments({ direction: 'inbound' })), 4, 'every inbound message is still stored');
   });
 
+  await t.test('B5. START never creates first-time consent; a short "please stop" opts out', async () => {
+    const { lead } = await seed({ inboundAgo: 60000 });
+    metaCalls.length = 0;
+    await inboundWebhook('PN1', PHONE, 'START');
+    await inboundWebhook('PN1', PHONE, 'anuppunga');
+    assert.strictEqual(await runAsTenant(1, () => consent.getConsent({ phone: PHONE })), null, 'no consent row was created');
+    const stored = await runAsTenant(1, () => Leads.findOne({ id: lead.id }, { _id: 0 }).lean());
+    assert.notStrictEqual(stored.whatsapp_opt_in, true);
+    assert.strictEqual(metaCalls.length, 0, 'no confirmation for an ignored keyword');
+    await runAsTenant(1, () => consent.recordOptIn({ leadId: lead.id, source: 'form', text: 'Agreed' }));
+    await inboundWebhook('PN1', PHONE, 'please stop');
+    assert.strictEqual((await runAsTenant(1, () => consent.getConsent({ phone: PHONE }))).status, 'opted_out');
+    assert.match(metaCalls.at(-1).body.text.body, /no longer receive marketing/);
+  });
+
   await t.test('B4. A STOP in one workspace does not touch the same number in another', async () => {
     await seed({ tenantId: 1, phoneNumberId: 'PN1', inboundAgo: 60000 });
     const two = await seed({ tenantId: 2, phoneNumberId: 'PN2' });
