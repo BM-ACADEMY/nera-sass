@@ -21,4 +21,6 @@ module.exports = defineModel('templates', {
   samples: { type: Mixed, default: () => [] },
   parameter_definitions: { type: Mixed, default: () => ({}) },
   template_scope: { type: String, default: "shared" },
-}, { autoId: true, unique: [['name']], indexes: [['client_id']] });
+  // One row per brand, name and language inside a workspace (migration 040 drops the
+  // old name-only index that made every workspace share one 'hello_world').
+}, { autoId: true, unique: [['tenant_id', 'client_id', 'name', 'language']], indexes: [['client_id']] });
