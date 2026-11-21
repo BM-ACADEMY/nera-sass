@@ -396,6 +396,9 @@ exports.startWhatsappSetup = async (req, res) => {
     if (!number) {
       return res.status(400).json({ error: `Enter your WhatsApp number with the country code. Allowed: +${whatsappOtp.allowedCountryCodes().join(', +')}.`, code: 'WHATSAPP_NUMBER_INVALID' });
     }
+    // Re-authenticate first, so a session without the password cannot use up
+    // the daily number slots below.
+    if (viaSession) await stepUpForStart(user, req);
     // At most WHATSAPP_SETUP_NUMBERS_PER_DAY (5) different numbers per account
     // in a 24-hour window, so setup cannot be used to send codes to many
     // numbers. One atomic update: the number is added only when it is already
@@ -412,10 +415,15 @@ exports.startWhatsappSetup = async (req, res) => {
     if (added.matchedCount !== 1) {
       return res.status(429).json({ error: 'Too many different numbers today. Try again tomorrow or use another method.', code: 'WHATSAPP_NUMBER_LIMIT' });
     }
-    if (viaSession) await stepUpForStart(user, req);
     await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_whatsapp_pending_number: number } }));
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
-    return res.json(await whatsappOtp.sendCode(fresh, 'setup'));
+    try {
+      return res.json(await whatsappOtp.sendCode(fresh, 'setup'));
+    } catch (error) {
+      // Nothing was sent: a number that took a new slot gives it back.
+      if (added.modifiedCount === 1) await sys(() => Users.updateOne({ id: user.id }, { $pull: { mfa_whatsapp_setup_set: number } }));
+      throw error;
+    }
   } catch (error) {
     return fail(res, error);
   }

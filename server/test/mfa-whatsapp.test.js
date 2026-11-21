@@ -409,8 +409,10 @@ test('WhatsApp two-step verification', async (t) => {
     const user = await staff();
     const phones = Array.from({ length: 9 }, (_, i) => `91900000010${i}`);
     const results = await Promise.all(phones.map((phone) => request(app).post('/api/auth/mfa/whatsapp/setup').set(auth(user)).send({ password: PASSWORD, phone })));
-    assert.ok(results.filter((r) => r.body.code === 'WHATSAPP_NUMBER_LIMIT').length >= 4, results.map((r) => r.body.code || r.status).join(','));
-    assert.ok((await fresh(user.id)).mfa_whatsapp_setup_set.length <= 5);
+    // Only numbers a code really went to keep a slot (the parallel ones hit the resend wait).
+    const stored = (await fresh(user.id)).mfa_whatsapp_setup_set || [];
+    assert.ok(stored.length <= 5, stored.join(','));
+    assert.strictEqual(stored.length, results.filter((r) => r.status === 200).length, results.map((r) => r.body.code || r.status).join(','));
   });
 
   await t.test('W18. At most N WhatsApp codes per account and per number in an hour', async () => {
@@ -429,6 +431,46 @@ test('WhatsApp two-step verification', async (t) => {
       const other = await staff({ ...waOn });
       const otherLogin = await login(other);
       assert.match(otherLogin.body.whatsapp_error || '', /too many/i);
+    } finally {
+      delete process.env.WHATSAPP_OTP_PER_TARGET_HOURLY;
+    }
+  });
+
+  await t.test('W19. Setup without the password, or a failed send, does not use up the daily number slots', async () => {
+    const user = await staff();
+    for (let i = 0; i < 6; i += 1) {
+      const r = await request(app).post('/api/auth/mfa/whatsapp/setup').set(auth(user)).send({ phone: `91900000020${i}` });
+      assert.strictEqual(r.status, 403, 'no password');
+    }
+    assert.ok(!((await fresh(user.id)).mfa_whatsapp_setup_set || []).length, 'no slot taken without the password');
+
+    const platformInbox = require('../services/platformInbox');
+    const realSend = platformInbox.sendAuthCode;
+    platformInbox.sendAuthCode = async () => { throw new Error('Meta is down'); };
+    try {
+      const failed = await request(app).post('/api/auth/mfa/whatsapp/setup').set(auth(user)).send({ password: PASSWORD, phone: '919000000300' });
+      assert.strictEqual(failed.status, 502);
+    } finally {
+      platformInbox.sendAuthCode = realSend;
+    }
+    assert.ok(!((await fresh(user.id)).mfa_whatsapp_setup_set || []).includes('919000000300'), 'the slot is given back');
+
+    await coolDown(user);
+    const ok = await request(app).post('/api/auth/mfa/whatsapp/setup').set(auth(user)).send({ password: PASSWORD, phone: '919000000301' });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+  });
+
+  await t.test('W20. Setup sends to a verified number do not block its login codes', async () => {
+    process.env.WHATSAPP_OTP_PER_TARGET_HOURLY = '1';
+    try {
+      const owner = await staff({ ...waOn }); // verified number 919876543210
+      const other = await staff();
+      const setup = await request(app).post('/api/auth/mfa/whatsapp/setup').set(auth(other)).send({ password: PASSWORD, phone: '919876543210' });
+      assert.strictEqual(setup.status, 200, JSON.stringify(setup.body));
+      const ownerLogin = await login(owner);
+      assert.ok(ownerLogin.body.whatsapp?.sent_to, `login code still sent: ${ownerLogin.body.whatsapp_error || ''}`);
+      const buckets = require('../services/whatsappOtp').sendBucketsForTests();
+      assert.ok(buckets.includes('num:setup:919876543210') && buckets.includes('num:919876543210'), buckets.join(','));
     } finally {
       delete process.env.WHATSAPP_OTP_PER_TARGET_HOURLY;
     }
