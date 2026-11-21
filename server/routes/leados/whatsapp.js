@@ -117,14 +117,15 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
           if (convCheck) {
             const convId = convCheck.id;
             const existingTemplateMsg = waMsgId ? await Messages.exists({ wa_msg_id: waMsgId }) : null;
+            const wakeupText = await require('../../services/templateText').renderTemplateText(WAKEUP_TEMPLATE, 'en', null, WAKEUP_TEMPLATE);
             if (!existingTemplateMsg) {
               await Messages.create({
-                conversation_id: convId, direction: 'outbound', content: WAKEUP_TEMPLATE, msg_type: 'template',
+                conversation_id: convId, direction: 'outbound', content: wakeupText, msg_type: 'template',
                 wa_msg_id: waMsgId, status: 'sent', is_ai: false, sent_at: new Date(),
               });
             }
             // Push to inbox in real-time
-            io.emit('outgoing_message', { lead_id: String(lead.id), message: { direction: 'outbound', content: `[Template] ${WAKEUP_TEMPLATE}`, msg_type: 'template', sent_at: new Date() } });
+            io.emit('outgoing_message', { lead_id: String(lead.id), message: { direction: 'outbound', content: wakeupText, type: 'template', msg_type: 'template', sent_at: new Date() } });
           }
         } catch (err) {
           console.error('[Template Wakeup Error]', JSON.stringify(err.response?.data) || err.message);

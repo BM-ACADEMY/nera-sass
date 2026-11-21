@@ -20,6 +20,7 @@ const ai = require('../../services/aiAutomation');
 const sendPolicy = require('../../services/sendPolicy');
 const numberHealth = require('../../services/numberHealth');
 const aiLatency = require('../../services/aiLatency');
+const { renderTemplateText } = require('../../services/templateText');
 const brainEngine = require('../../services/brainEngine');
 const aiAllowance = require('../../services/billing/aiAllowance');
 const erasure = require('../../services/erasure');
@@ -192,9 +193,9 @@ app.post('/api/internal/send-template', internalAuth, sendRoute('send-template',
   if (!/^[a-zA-Z_]{2,10}$/.test(language)) throw new SendError(400, 'language must be a code such as en or en_US');
   if (params.length > 20 || params.some((v) => String(v ?? '').length > 1024)) throw new SendError(400, 'body_params: up to 20 values of 1024 characters');
   const components = params.length ? [{ type: 'body', parameters: params.map((v) => ({ type: 'text', text: String(v ?? '') })) }] : undefined;
-  return sendToLead(req, req.body?.lead_id, `[Template] ${template}`, () => ({
+  return renderTemplateText(template, language, params.map((v) => String(v ?? '')), `[Template] ${template}`).then((shown) => sendToLead(req, req.body?.lead_id, shown, () => ({
     type: 'template', template: { name: template, language: { code: language }, ...(components ? { components } : {}) },
-  }), { messageType: 'template', templateName: template });
+  }), { messageType: 'template', templateName: template }));
 }));
 
 // GET /api/internal/context?lead_id=&before_message_id=&limit=
