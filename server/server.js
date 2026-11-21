@@ -1012,6 +1012,7 @@ async function leadInboxMessages(conversationIds, { sort = { sent_at: 1 }, skip 
   const replyIds = [...new Set(rows.map((m) => m.reply_to_wa_id).filter(Boolean))];
   const replies = new Map((replyIds.length ? await Messages.find({ wa_msg_id: { $in: replyIds } }, { wa_msg_id: 1, direction: 1, media_url: 1, content: 1, msg_type: 1 }).lean() : [])
     .map((r) => [r.wa_msg_id, r]));
+  await require('./services/templateText').resolvePlaceholders(rows);
   return rows.map((m) => {
     const reply = m.reply_to_wa_id ? replies.get(m.reply_to_wa_id) : null;
     return {

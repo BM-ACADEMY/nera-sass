@@ -1723,6 +1723,9 @@ return (
                       })()}
 
                       <div style={{ display: 'block', minWidth: '70px', position: 'relative' }}>
+                        {(m.type === 'template' || m.msg_type === 'template') && (
+                          <div style={{ fontSize: 10.5, fontWeight: 600, color: '#128c7e', marginBottom: 2 }}>Template</div>
+                        )}
                         <span style={{ fontSize: '14.2px', color: '#111b21', whiteSpace: 'pre-wrap', lineHeight: '19px', wordBreak: 'break-word' }}>
                           {renderMessageWithLinks(getMessageText(m))}
                         </span>
@@ -2040,33 +2043,6 @@ return (
               <input type="file" ref={fileInputRef} accept={attachAccept} style={{ display: 'none' }} onChange={handleFileChange} />
 
               <div style={{ position: 'relative' }}>
-                {showAttachMenu && (
-                  <div style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: 10, background: C.card, border: '1px solid ' + C.border, borderRadius: 8, padding: 5, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10, minWidth: 120, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
-                    {[
-                      { label: 'Image', accept: 'image/*', icon: <Image size={14} color={C.muted} /> },
-                      { label: 'Video', accept: 'video/*', icon: <Film size={14} color={C.muted} /> },
-                      { label: 'Audio', accept: 'audio/*', icon: <Music size={14} color={C.muted} /> },
-                      { label: 'Document', accept: '.pdf,.doc,.docx,.xls,.xlsx,.txt', icon: <FileText size={14} color={C.muted} /> },
-                    ].map((opt) => (
-                      <button
-                        key={opt.label}
-                        type="button"
-                        onClick={() => handleAttachOptionClick(opt.accept)}
-                        style={{ background: 'transparent', border: 'none', color: C.text, padding: '8px 12px', textAlign: 'left', borderRadius: 5, cursor: 'pointer', fontSize: 12, display: 'flex', gap: 10, alignItems: 'center' }}
-                        onMouseOver={(e) => e.currentTarget.style.background = C.bg}
-                        onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
-                      >
-                        {opt.icon} {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <button type="button" onClick={() => setShowAttachMenu(!showAttachMenu)} style={{ background: 'transparent', border: 'none', width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} title="Attach File">
-                  <Paperclip size={24} color={'#8696a0'} />
-                </button>
-              </div>
-
-              <div style={{ position: 'relative' }}>
                 {showEmojiPicker && (
                   <div style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: 10, zIndex: 100 }}>
                     <EmojiPicker
@@ -2078,8 +2054,35 @@ return (
                     />
                   </div>
                 )}
-                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} style={{ background: 'transparent', border: 'none', width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} title="Add Emoji">
-                  <Smile size={24} color={'#8696a0'} />
+                <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} style={{ background: 'transparent', border: 'none', width: 40, height: 40, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} title="Add Emoji">
+                  <Smile size={22} color={showEmojiPicker ? '#15803d' : '#667781'} />
+                </button>
+              </div>
+
+              <div style={{ position: 'relative' }}>
+                {showAttachMenu && (
+                  <div style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: 10, background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10, minWidth: 224, boxShadow: '0 12px 32px rgba(0,0,0,0.18)' }}>
+                    {[
+                      { label: 'Image', color: '#3b82f6', accept: 'image/*', icon: <Image size={16} color="#fff" /> },
+                      { label: 'Video', color: '#ec4899', accept: 'video/*', icon: <Film size={16} color="#fff" /> },
+                      { label: 'Audio', color: '#f97316', accept: 'audio/*', icon: <Music size={16} color="#fff" /> },
+                      { label: 'Document', color: '#8b5cf6', accept: '.pdf,.doc,.docx,.xls,.xlsx,.txt', icon: <FileText size={16} color="#fff" /> },
+                    ].map((opt) => (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        onClick={() => handleAttachOptionClick(opt.accept)}
+                        style={{ background: 'transparent', border: 'none', color: C.text, padding: '8px 10px', textAlign: 'left', borderRadius: 8, cursor: 'pointer', fontSize: 14, display: 'flex', gap: 12, alignItems: 'center' }}
+                        onMouseOver={(e) => e.currentTarget.style.background = C.bg}
+                        onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <span style={{ width: 32, height: 32, borderRadius: '50%', background: opt.color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{opt.icon}</span> {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button type="button" onClick={() => setShowAttachMenu(!showAttachMenu)} style={{ background: 'transparent', border: 'none', width: 40, height: 40, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }} title="Attach File">
+                  <Plus size={22} color={'#667781'} style={{ transition: 'transform .15s', transform: showAttachMenu ? 'rotate(45deg)' : 'none' }} />
                 </button>
               </div>
 
@@ -2131,8 +2134,8 @@ return (
                     flex: 1, 
                     background: '#ffffff', 
                     border: '1px solid #e2e8f0', 
-                    borderRadius: 20, 
-                    padding: '10px 16px', 
+                    borderRadius: 8, 
+                    padding: '10px 14px', 
                     color: '#111b21', 
                     fontSize: 14, 
                     outline: 'none',
@@ -2148,12 +2151,12 @@ return (
               )}
 
               {!msg.trim() && !attachedFile && !isRecording ? (
-                <button type="button" onClick={startRecording} style={{ background: 'transparent', border: 'none', width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                  <Mic size={24} color={'#8696a0'} />
+                <button type="button" onClick={startRecording} title="Record a voice message" aria-label="Record a voice message" style={{ background: '#25D366', border: 'none', width: 40, height: 40, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#fff' }}>
+                  <Mic size={20} color="#fff" />
                 </button>
               ) : (
-                <button type="submit" disabled={sending || isRecording} style={{ background: 'transparent', border: 'none', width: 42, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: (sending || isRecording) ? 0.6 : 1 }}>
-                  <Send size={22} color={WA_GREEN} />
+                <button type="submit" disabled={sending || isRecording} aria-label="Send" style={{ background: '#25D366', border: 'none', width: 40, height: 40, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#fff', opacity: (sending || isRecording) ? 0.6 : 1 }}>
+                  <Send size={20} color="#fff" />
                 </button>
               )}
             </form>
