@@ -31,6 +31,20 @@ WhatsApp numbers.
    ledger key `tenant_id + reference_type + reference_id`). Replays are no-ops.
    Without the webhook secret the route answers 503 and credits nothing.
 
+## GST invoices (`invoices.js`, migrations `040_invoices.js`, `042_invoice_series.js`)
+
+- A plan payment gets its invoice in the same `fulfil()` call that activates
+  the plan. Wallet top-ups are not a sale and get none.
+- If that step fails or the server stops between the two, the job
+  `invoices.issueMissing()` (every 15 minutes, `server.js`) issues it. A repeat
+  checkout call or webhook for the same payment does the same.
+- One invoice per order: unique `billing_order_id`. Safe to run twice at once.
+- Numbers (`AV/26-27/0001`) have no gaps: the row is written first without a
+  number, then under one lock per series it gets the highest `seq` of that
+  series plus one in a single update. No counter is taken ahead, so a failure
+  uses up no number; unique `(series, seq)` refuses a duplicate. Invoices are
+  never deleted. The invoice date is when the number is given.
+
 ## AI replies
 
 `services/billing/aiAllowance.js` is called before every AI reply (AI Brain
