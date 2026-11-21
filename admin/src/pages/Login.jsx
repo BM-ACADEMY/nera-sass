@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { FiMail, FiShield, FiCopy, FiArrowLeft, FiSmartphone, FiChevronRight, FiKey, FiCheckCircle, FiDownload } from 'react-icons/fi';
+import { FiMail, FiShield, FiCopy, FiArrowLeft, FiChevronRight, FiKey, FiCheckCircle, FiDownload } from 'react-icons/fi';
 import getneraLogo from '@/assets/getnera-logo.png';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import axiosClient from '../api/axiosClient';
+import { collectClientHints } from '../api/sessionFormat';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,6 +13,7 @@ import { Spinner } from '@/components/ui/spinner';
 import OtpInput from '@/components/security/OtpInput';
 import PasswordInput from '@/components/security/PasswordInput';
 import { AuthenticatorArt, EmailCodeArt, ShieldArt } from '@/components/security/Art';
+import { MethodTile } from '@/components/security/MfaBrandIcons';
 import { cn } from '@/lib/utils';
 
 const YEAR = new Date().getFullYear();
@@ -27,14 +29,14 @@ const useCountdown = () => {
   return [left, setLeft];
 };
 
-const MethodCard = ({ icon: Icon, tone, title, text, onClick, disabled }) => (
+const MethodCard = ({ tile, title, text, onClick, disabled }) => (
   <button
     type="button"
     onClick={onClick}
     disabled={disabled}
     className="group flex w-full cursor-pointer items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md disabled:pointer-events-none disabled:opacity-60"
   >
-    <span className={cn('flex size-12 shrink-0 items-center justify-center rounded-xl', tone)}><Icon size={22} /></span>
+    <MethodTile method={tile} size={44} />
     <span className="min-w-0 flex-1">
       <span className="block font-semibold text-slate-900">{title}</span>
       <span className="block text-[13px] text-slate-500">{text}</span>
@@ -43,19 +45,23 @@ const MethodCard = ({ icon: Icon, tone, title, text, onClick, disabled }) => (
   </button>
 );
 
-// Sign-in: password, then the second step (pick a method when both are on,
-// enter an email or authenticator code, or a recovery code). Admins without
-// a method set one up here before the first session.
+// Sign-in: password, then the second step: the default method's code (app,
+// email or WhatsApp) with a switch to any other method that is on, or a
+// recovery code. Admins without a method set one up here before the first
+// session.
 const Login = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const [values, setValues] = useState({ email: location.state?.email || '', password: '' });
-  const [step, setStep] = useState('password'); // password | choose | verify | setup-choose | setup-email | setup-totp | codes
+  const [step, setStep] = useState('password'); // password | choose | verify | setup-choose | setup-email | setup-whatsapp-number | setup-whatsapp | setup-totp | codes
   const [loading, setLoading] = useState(false);
   const [mfaToken, setMfaToken] = useState('');
   const [methods, setMethods] = useState([]);
   const [method, setMethod] = useState('totp');
   const [emailHint, setEmailHint] = useState('');
+  const [whatsappHint, setWhatsappHint] = useState('');
+  const [whatsappAvailable, setWhatsappAvailable] = useState(false);
+  const [phone, setPhone] = useState('');
   const [setup, setSetup] = useState(null);
   const [code, setCode] = useState('');
   const [invalid, setInvalid] = useState(false);
@@ -102,13 +108,14 @@ const Login = () => {
     toast.error(err.response?.data?.error || fallback);
   };
 
-  const sendEmailCode = async (token = mfaToken, purpose = 'login') => {
+  // Sends a code by email or WhatsApp, for the login step or for setup.
+  const sendCode = async (channel, purpose = 'login') => {
     setLoading(true);
     try {
-      const res = purpose === 'setup'
-        ? await axiosClient.post('/auth/mfa/email/setup', { mfa_token: token })
-        : await axiosClient.post('/auth/mfa/email/send', { mfa_token: token });
-      setEmailHint(res.data.sent_to || emailHint);
+      const url = purpose === 'setup' ? `/auth/mfa/${channel}/setup` : `/auth/mfa/${channel}/send`;
+      const res = await axiosClient.post(url, channel === 'whatsapp' && purpose === 'setup' ? { mfa_token: mfaToken, phone } : { mfa_token: mfaToken });
+      if (channel === 'whatsapp') setWhatsappHint(res.data.sent_to || whatsappHint);
+      else setEmailHint(res.data.sent_to || emailHint);
       setResendIn(res.data.resend_after || 45);
       toast.success(`Code sent to ${res.data.sent_to}`);
       return true;
@@ -128,29 +135,33 @@ const Login = () => {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await axiosClient.post('/auth/login', values);
+      // client_hints: device model / platform for My sessions (Chromium only).
+      const res = await axiosClient.post('/auth/login', { ...values, client_hints: (await collectClientHints()) || undefined });
       const data = res.data;
       if (data.token) {
         finish(data);
       } else if (data.mfa_required) {
+        const list = data.methods || [];
         setMfaToken(data.mfa_token);
-        setMethods(data.methods || ['totp']);
+        setMethods(list);
         setEmailHint(data.email_hint || '');
+        setWhatsappHint(data.whatsapp_hint || '');
         setCode('');
-        if ((data.methods || []).length > 1) {
-          setStep('choose');
+        setStep('verify');
+        if (data.recovery_only || !list.length) {
+          // Only a recovery code works (for example WhatsApp codes are switched off).
+          setUseRecovery(true);
         } else {
-          const only = (data.methods || ['totp'])[0];
-          setMethod(only);
-          setStep('verify');
-          if (only === 'email') {
-            if (data.email) setResendIn(data.email.resend_after || 45);
-            if (data.email_error) toast.error(data.email_error);
-          }
+          const first = list.includes(data.default_method) ? data.default_method : list[0];
+          setMethod(first);
+          const delivery = first === 'email' ? [data.email, data.email_error] : first === 'whatsapp' ? [data.whatsapp, data.whatsapp_error] : [];
+          if (delivery[0]) setResendIn(delivery[0].resend_after || 45);
+          if (delivery[1]) toast.error(delivery[1]);
         }
       } else if (data.mfa_setup_required) {
         setMfaToken(data.mfa_token);
         setEmailHint(data.email_hint || '');
+        setWhatsappAvailable(Boolean(data.whatsapp_available));
         setStep('setup-choose');
       } else {
         toast.error('Authentication response missing session token');
@@ -166,7 +177,7 @@ const Login = () => {
     setMethod(picked);
     setCode('');
     setUseRecovery(false);
-    if (picked === 'email' && !(await sendEmailCode())) return;
+    if ((picked === 'email' || picked === 'whatsapp') && !(await sendCode(picked))) return;
     setStep('verify');
   };
 
@@ -177,7 +188,7 @@ const Login = () => {
       const body = useRecovery
         ? { mfa_token: mfaToken, recovery_code: value.trim() }
         : { mfa_token: mfaToken, method, code: value.replace(/\s/g, '') };
-      const res = await axiosClient.post('/auth/mfa/verify', body);
+      const res = await axiosClient.post('/auth/mfa/verify', { ...body, client_hints: (await collectClientHints()) || undefined });
       finish(res.data);
     } catch (err) {
       onError(err, 'Invalid verification code');
@@ -189,7 +200,11 @@ const Login = () => {
   const startSetup = async (picked) => {
     setCode('');
     if (picked === 'email') {
-      if (await sendEmailCode(mfaToken, 'setup')) setStep('setup-email');
+      if (await sendCode('email', 'setup')) setStep('setup-email');
+      return;
+    }
+    if (picked === 'whatsapp') {
+      setStep('setup-whatsapp-number');
       return;
     }
     setLoading(true);
@@ -208,7 +223,7 @@ const Login = () => {
     if (loading) return;
     setLoading(true);
     try {
-      const url = step === 'setup-email' ? '/auth/mfa/email/setup/confirm' : '/auth/mfa/setup/confirm';
+      const url = step === 'setup-email' ? '/auth/mfa/email/setup/confirm' : step === 'setup-whatsapp' ? '/auth/mfa/whatsapp/setup/confirm' : '/auth/mfa/setup/confirm';
       const res = await axiosClient.post(url, { mfa_token: mfaToken, code: value.replace(/\s/g, '') });
       if (res.data.recovery_codes?.length) {
         setRecoveryCodes(res.data.recovery_codes);
@@ -239,9 +254,11 @@ const Login = () => {
   const art = {
     password: null,
     choose: <ShieldArt />,
-    verify: useRecovery ? <ShieldArt /> : method === 'email' ? <EmailCodeArt /> : <AuthenticatorArt />,
+    verify: useRecovery ? <ShieldArt /> : method === 'email' ? <EmailCodeArt /> : method === 'whatsapp' ? <MethodTile method="whatsapp" size={72} /> : <AuthenticatorArt />,
     'setup-choose': <ShieldArt />,
     'setup-email': <EmailCodeArt />,
+    'setup-whatsapp-number': <MethodTile method="whatsapp" size={72} />,
+    'setup-whatsapp': <MethodTile method="whatsapp" size={72} />,
     'setup-totp': null,
     codes: <ShieldArt />,
   }[step];
@@ -253,9 +270,13 @@ const Login = () => {
       ? ['Use a recovery code', 'Enter one of the recovery codes you saved when you set up two-step verification.']
       : method === 'email'
         ? ['Check your email', `We sent a 6-digit code to ${emailHint || 'your email'}.`]
-        : ['Authenticator code', 'Open Google Authenticator (or your authenticator app) and enter the 6-digit code for Getnera.'],
+        : method === 'whatsapp'
+          ? ['Check WhatsApp', `We sent a 6-digit code to your WhatsApp ${whatsappHint || 'number'}.`]
+          : ['Authenticator code', 'Open Google Authenticator (or your authenticator app) and enter the 6-digit code for Getnera.'],
     'setup-choose': ['Protect your account', 'Admin accounts need two-step verification. Pick a method to finish signing in.'],
     'setup-email': ['Check your email', `Enter the 6-digit code we sent to ${emailHint || 'your email'} to turn on email verification.`],
+    'setup-whatsapp-number': ['Your WhatsApp number', 'We send a 6-digit code to it to check it is yours.'],
+    'setup-whatsapp': ['Check WhatsApp', `Enter the 6-digit code we sent to ${whatsappHint || 'your WhatsApp'} to turn on WhatsApp verification.`],
     'setup-totp': ['Set up the authenticator app', 'Scan the QR code with Google Authenticator, Microsoft Authenticator or Authy.'],
     codes: ['Save your recovery codes', 'If you lose your phone or email access, each code lets you sign in once.'],
   }[step];
@@ -284,7 +305,7 @@ const Login = () => {
           <h2 className="text-3xl leading-tight font-extrabold">Run every workspace from one secure place.</h2>
           <p className="mt-3 max-w-md text-sm text-blue-100">Workspaces, WhatsApp numbers, customers and the platform inbox, protected by two-step verification.</p>
           <ul className="mt-6 flex flex-col gap-2.5 text-sm text-blue-50">
-            {['Two-step sign-in by email or authenticator app', 'Every admin action recorded in the audit log', 'Live updates across the team'].map((t) => (
+            {['Two-step sign-in by authenticator app, email or WhatsApp', 'Every admin action recorded in the audit log', 'Live updates across the team'].map((t) => (
               <li key={t} className="flex items-center gap-2.5"><FiCheckCircle className="shrink-0 text-emerald-300" /> {t}</li>
             ))}
           </ul>
@@ -329,8 +350,9 @@ const Login = () => {
 
             {step === 'choose' && (
               <div className="flex flex-col gap-3">
-                <MethodCard icon={FiMail} tone="bg-blue-50 text-blue-600" title="Email code" text={`Send a code to ${emailHint}`} onClick={() => chooseMethod('email')} disabled={loading} />
-                <MethodCard icon={FiSmartphone} tone="bg-emerald-50 text-emerald-600" title="Authenticator app" text="Use the code from Google Authenticator" onClick={() => chooseMethod('totp')} disabled={loading} />
+                {methods.includes('totp') && <MethodCard tile="totp" title="Authenticator app" text="Use the code from Google Authenticator" onClick={() => chooseMethod('totp')} disabled={loading} />}
+                {methods.includes('email') && <MethodCard tile="email" title="Email code" text={`Send a code to ${emailHint}`} onClick={() => chooseMethod('email')} disabled={loading} />}
+                {methods.includes('whatsapp') && <MethodCard tile="whatsapp" title="WhatsApp code" text={`Send a code to ${whatsappHint || 'your WhatsApp'}`} onClick={() => chooseMethod('whatsapp')} disabled={loading} />}
                 <div className="mt-2 flex justify-center">{back}</div>
               </div>
             )}
@@ -346,19 +368,21 @@ const Login = () => {
                   {loading ? <><Spinner /> Checking…</> : 'Verify and sign in'}
                 </Button>
                 <div className="flex flex-col items-center gap-2 text-[13px]">
-                  {method === 'email' && !useRecovery && (
-                    <button type="button" disabled={resendIn > 0 || loading} onClick={() => sendEmailCode()} className="cursor-pointer text-primary hover:underline disabled:cursor-default disabled:text-slate-400 disabled:no-underline">
+                  {(method === 'email' || method === 'whatsapp') && !useRecovery && (
+                    <button type="button" disabled={resendIn > 0 || loading} onClick={() => sendCode(method)} className="cursor-pointer text-primary hover:underline disabled:cursor-default disabled:text-slate-400 disabled:no-underline">
                       {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Didn’t get it? Resend code'}
                     </button>
                   )}
                   {methods.length > 1 && !useRecovery && (
                     <button type="button" onClick={() => { setStep('choose'); setCode(''); }} className="cursor-pointer text-slate-600 hover:underline">
-                      Use {method === 'email' ? 'the authenticator app' : 'an email code'} instead
+                      Use another method
                     </button>
                   )}
-                  <button type="button" onClick={() => { setUseRecovery((v) => !v); setCode(''); }} className="inline-flex cursor-pointer items-center gap-1.5 text-slate-500 hover:underline">
-                    <FiKey className="size-3.5" /> {useRecovery ? 'Use a verification code instead' : 'Lost access? Use a recovery code'}
-                  </button>
+                  {methods.length > 0 && (
+                    <button type="button" onClick={() => { setUseRecovery((v) => !v); setCode(''); }} className="inline-flex cursor-pointer items-center gap-1.5 text-slate-500 hover:underline">
+                      <FiKey className="size-3.5" /> {useRecovery ? 'Use a verification code instead' : 'Lost access? Use a recovery code'}
+                    </button>
+                  )}
                   {back}
                 </div>
               </form>
@@ -366,9 +390,10 @@ const Login = () => {
 
             {step === 'setup-choose' && (
               <div className="flex flex-col gap-3">
-                <MethodCard icon={FiMail} tone="bg-blue-50 text-blue-600" title="Email code" text={`Get a code at ${emailHint} each sign-in`} onClick={() => startSetup('email')} disabled={loading} />
-                <MethodCard icon={FiSmartphone} tone="bg-emerald-50 text-emerald-600" title="Authenticator app (recommended)" text="Google Authenticator, Microsoft Authenticator or Authy" onClick={() => startSetup('totp')} disabled={loading} />
-                <p className="mt-1 text-center text-xs text-slate-400">You can add the other method later in Settings → Two-step verification.</p>
+                <MethodCard tile="totp" title="Authenticator app (recommended)" text="Google Authenticator, Microsoft Authenticator or Authy" onClick={() => startSetup('totp')} disabled={loading} />
+                <MethodCard tile="email" title="Email code" text={`Get a code at ${emailHint} each sign-in`} onClick={() => startSetup('email')} disabled={loading} />
+                {whatsappAvailable && <MethodCard tile="whatsapp" title="WhatsApp code" text="Get a code on WhatsApp each sign-in" onClick={() => startSetup('whatsapp')} disabled={loading} />}
+                <p className="mt-1 text-center text-xs text-slate-400">You can add other methods later in Settings → Two-step verification.</p>
                 <div className="flex justify-center">{back}</div>
               </div>
             )}
@@ -380,10 +405,40 @@ const Login = () => {
                   {loading ? <><Spinner /> Checking…</> : 'Turn on and sign in'}
                 </Button>
                 <div className="flex flex-col items-center gap-2 text-[13px]">
-                  <button type="button" disabled={resendIn > 0 || loading} onClick={() => sendEmailCode(mfaToken, 'setup')} className="cursor-pointer text-primary hover:underline disabled:cursor-default disabled:text-slate-400 disabled:no-underline">
+                  <button type="button" disabled={resendIn > 0 || loading} onClick={() => sendCode('email', 'setup')} className="cursor-pointer text-primary hover:underline disabled:cursor-default disabled:text-slate-400 disabled:no-underline">
                     {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Didn’t get it? Resend code'}
                   </button>
                   <button type="button" onClick={() => { setStep('setup-choose'); setCode(''); }} className="cursor-pointer text-slate-600 hover:underline">Choose another method</button>
+                </div>
+              </form>
+            )}
+
+            {step === 'setup-whatsapp-number' && (
+              <form onSubmit={async (e) => { e.preventDefault(); if (await sendCode('whatsapp', 'setup')) setStep('setup-whatsapp'); }} className="flex flex-col gap-5">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="wa-phone">WhatsApp number (with country code)</Label>
+                  <Input id="wa-phone" type="tel" autoComplete="tel" autoFocus placeholder="+91 98765 43210" value={phone} onChange={(e) => setPhone(e.target.value)} className="h-11" />
+                </div>
+                <Button type="submit" size="lg" disabled={loading || phone.replace(/\D/g, '').length < 10} className="h-11 w-full font-semibold">
+                  {loading ? <><Spinner /> Sending…</> : 'Send code'}
+                </Button>
+                <div className="flex justify-center">
+                  <button type="button" onClick={() => { setStep('setup-choose'); setCode(''); }} className="cursor-pointer text-[13px] text-slate-600 hover:underline">Choose another method</button>
+                </div>
+              </form>
+            )}
+
+            {step === 'setup-whatsapp' && (
+              <form onSubmit={(e) => { e.preventDefault(); confirmSetup(); }} className="flex flex-col gap-5">
+                <OtpInput value={code} onChange={setCode} onComplete={confirmSetup} invalid={invalid} disabled={loading} />
+                <Button type="submit" size="lg" disabled={loading || code.length !== 6} className="h-11 w-full font-semibold">
+                  {loading ? <><Spinner /> Checking…</> : 'Turn on and sign in'}
+                </Button>
+                <div className="flex flex-col items-center gap-2 text-[13px]">
+                  <button type="button" disabled={resendIn > 0 || loading} onClick={() => sendCode('whatsapp', 'setup')} className="cursor-pointer text-primary hover:underline disabled:cursor-default disabled:text-slate-400 disabled:no-underline">
+                    {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Didn’t get it? Resend code'}
+                  </button>
+                  <button type="button" onClick={() => { setStep('setup-whatsapp-number'); setCode(''); }} className="cursor-pointer text-slate-600 hover:underline">Change the number</button>
                 </div>
               </form>
             )}

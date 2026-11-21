@@ -79,15 +79,50 @@ function generateRecoveryCodes(count = 10) {
   return { codes, hashes: codes.map(hashRecoveryCode) };
 }
 
-// Second-step methods a user has turned on: 'email' (one-time code by mail)
-// and 'totp' (authenticator app; stored as mfa_enabled for older accounts).
+// WhatsApp codes need an approved Meta template (whatsappOtp.js).
+const whatsappOtpEnabled = () => String(process.env.WHATSAPP_OTP_TEMPLATE_APPROVED || '').toLowerCase() === 'true';
+
+const METHOD_ORDER = ['totp', 'email', 'whatsapp'];
+
+// whatsappOtp.js registers the full check (flag + platform number configured).
+let whatsappUsable = whatsappOtpEnabled;
+const setWhatsappAvailability = (fn) => { whatsappUsable = fn; };
+
+// Second-step methods a user can use now: 'email' (one-time code by mail),
+// 'totp' (authenticator app; stored as mfa_enabled for older accounts) and
+// 'whatsapp' (one-time code by WhatsApp, only while it is available: template
+// flag on and the platform number configured).
 function methodsOf(user) {
   const methods = [];
   if (user?.mfa_email_enabled) methods.push('email');
   if (user?.mfa_enabled) methods.push('totp');
+  if (user?.mfa_whatsapp_enabled && whatsappUsable()) methods.push('whatsapp');
   return methods;
 }
 
-const hasMfa = (user) => methodsOf(user).length > 0;
+// Every method turned on, usable now or not (turning a method off works even
+// while WhatsApp codes are switched off).
+function enrolledMethodsOf(user) {
+  const methods = [];
+  if (user?.mfa_email_enabled) methods.push('email');
+  if (user?.mfa_enabled) methods.push('totp');
+  if (user?.mfa_whatsapp_enabled) methods.push('whatsapp');
+  return methods;
+}
 
-module.exports = { generateSecret, totp, verifyTotp, otpauthUrl, generateRecoveryCodes, hashRecoveryCode, base32Encode, base32Decode, methodsOf, hasMfa };
+// Turned on at all (a WhatsApp method still counts while the flag is off: the
+// account keeps two-step verification and the recovery codes still work).
+const hasMfa = (user) => Boolean(user?.mfa_email_enabled || user?.mfa_enabled || user?.mfa_whatsapp_enabled);
+
+// The method offered first at sign-in: the user's choice when it is usable,
+// else the authenticator app, else the first usable one.
+function defaultMethodOf(user) {
+  const methods = methodsOf(user);
+  if (methods.includes(user?.mfa_default_method)) return user.mfa_default_method;
+  return METHOD_ORDER.find((m) => methods.includes(m)) || null;
+}
+
+module.exports = {
+  generateSecret, totp, verifyTotp, otpauthUrl, generateRecoveryCodes, hashRecoveryCode, base32Encode, base32Decode,
+  methodsOf, enrolledMethodsOf, hasMfa, defaultMethodOf, whatsappOtpEnabled, setWhatsappAvailability, METHOD_ORDER,
+};

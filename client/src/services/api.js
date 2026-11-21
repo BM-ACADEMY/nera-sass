@@ -4,6 +4,7 @@
  */
 
 import { isInvalidMfaCode, NOTICE_KEY, NOTICES, USER_KEY } from './session.js';
+import { collectClientHints } from './sessionFormat.js';
 
 export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3601').replace(/\/+$/, '');
 
@@ -134,7 +135,8 @@ class LeadOSAPI {
   async login(email, password) {
     const data = await this.request('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      // client_hints: device model / platform for My sessions (Chromium only).
+      body: JSON.stringify({ email, password, client_hints: (await collectClientHints()) || undefined }),
     });
     // With MFA the first step returns an mfa_token and no session yet.
     if (data.token) this.setToken(data.token);
@@ -145,7 +147,7 @@ class LeadOSAPI {
   async verifyMfa(mfaToken, { code, recoveryCode, method } = {}) {
     const data = await this.request('/api/auth/mfa/verify', {
       method: 'POST',
-      body: JSON.stringify({ mfa_token: mfaToken, method: method || undefined, code: code || undefined, recovery_code: recoveryCode || undefined }),
+      body: JSON.stringify({ mfa_token: mfaToken, method: method || undefined, code: code || undefined, recovery_code: recoveryCode || undefined, client_hints: (await collectClientHints()) || undefined }),
     });
     if (data.token) this.setToken(data.token);
     return data;
@@ -190,6 +192,45 @@ class LeadOSAPI {
     });
     if (data.token) this.setToken(data.token);
     return data;
+  }
+
+  // WhatsApp codes as a two-step method: give the number (a code is sent to
+  // it), then confirm the code. From login pass mfaToken; from Settings pass
+  // reauth ({ password } plus the current code when two-step is on).
+  async startWhatsappSetup(phone, mfaToken, reauth = {}) {
+    return this.request('/api/auth/mfa/whatsapp/setup', { method: 'POST', body: JSON.stringify(mfaToken ? { mfa_token: mfaToken, phone } : { ...reauth, phone }) });
+  }
+
+  async confirmWhatsappSetup(code, mfaToken, reauth = {}) {
+    const data = await this.request('/api/auth/mfa/whatsapp/setup/confirm', {
+      method: 'POST',
+      body: JSON.stringify(mfaToken ? { code, mfa_token: mfaToken } : { password: reauth.password, code }),
+      allowInvalidMfaCode: true,
+    });
+    if (data.token) this.setToken(data.token);
+    return data;
+  }
+
+  // Sends the sign-in code by WhatsApp during the second login step.
+  async sendMfaWhatsapp(mfaToken) {
+    return this.request('/api/auth/mfa/whatsapp/send', { method: 'POST', body: JSON.stringify({ mfa_token: mfaToken }) });
+  }
+
+  // A code for confirming a security change while signed in ('email' | 'whatsapp').
+  async sendReauthCode(channel) {
+    return this.request(`/api/auth/mfa/reauth/${channel}/send`, { method: 'POST', body: '{}' });
+  }
+
+  async disableMfaMethod(method, reauth) {
+    return this.request('/api/auth/mfa/disable', { method: 'POST', body: JSON.stringify({ ...reauth, method }) });
+  }
+
+  async regenerateRecoveryCodes(reauth) {
+    return this.request('/api/auth/mfa/recovery-codes', { method: 'POST', body: JSON.stringify(reauth) });
+  }
+
+  async setDefaultMfaMethod(method) {
+    return this.request('/api/auth/mfa/default', { method: 'POST', body: JSON.stringify({ method }) });
   }
 
   async getMe() {

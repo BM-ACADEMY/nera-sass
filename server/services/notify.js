@@ -183,13 +183,16 @@ function twoStepChangedEmail({ to, name, method, action, byStaff = false, staff 
 // shown large; nothing else in the mail is actionable.
 function signInCodeEmail({ to, name, code, minutes, purpose }) {
   const product = productName();
-  const title = purpose === 'setup' ? `Confirm email verification for ${product}`
-    : purpose === 'reauth' ? `Confirm a security change on ${product}` : `Your ${product} sign-in code`;
-  const intro = purpose === 'setup'
-    ? 'Use this code to turn on two-step verification by email.'
-    : purpose === 'reauth'
-      ? 'Use this code to confirm a change to your two-step verification settings.'
-      : 'Use this code to finish signing in.';
+  const title = {
+    setup: `Confirm email verification for ${product}`,
+    reauth: `Confirm a security change on ${product}`,
+    confirm: `Your ${product} confirmation code`,
+  }[purpose] || `Your ${product} sign-in code`;
+  const intro = {
+    setup: 'Use this code to turn on two-step verification by email.',
+    reauth: 'Use this code to confirm a change to your two-step verification settings.',
+    confirm: 'Use this code to confirm signing a device out of your account.',
+  }[purpose] || 'Use this code to finish signing in.';
   const lines = [
     `Hi ${name || 'there'},`,
     intro,
