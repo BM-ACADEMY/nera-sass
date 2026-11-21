@@ -514,6 +514,20 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.deepStrictEqual([...reasons].sort(), ['extra_number', 'extra_seat', 'topup']);
   });
 
+  await t.test("S1. Staff can grant plans to two workspaces; each subscription gets its own id", async () => {
+    await workspace(1);
+    await workspace(2);
+    const staff = await founder();
+    for (const id of [1, 2]) {
+      const grant = await request(app).post(`/api/admin/tenants/${id}/billing/grant`).set(bearer(staff)).send({ plan_code: "desk", note: "Invited pilot" });
+      assert.strictEqual(grant.status, 200, JSON.stringify(grant.body));
+    }
+    const rows = await sys(() => Subscriptions.find({}, { _id: 0, id: 1, tenant_id: 1 }).lean());
+    assert.strictEqual(rows.length, 2);
+    assert.ok(rows.every((r) => Number.isInteger(r.id)), JSON.stringify(rows));
+    assert.notStrictEqual(rows[0].id, rows[1].id);
+  });
+
   // ── Expiry, staff tools, isolation ───────────────────────
   await t.test('X1. A lapsed period expires (nothing deleted) and the AI then needs a plan; staff can grant and adjust, audited', async () => {
     const ws = await aiWorkspace(1);
