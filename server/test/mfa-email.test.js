@@ -120,21 +120,28 @@ test('Email two-step verification', async (t) => {
   await t.test('E5. Settings: add the app, keep recovery codes, refuse removing the last method, require the password', async () => {
     const user = await staff({ mfa_email_enabled: true, mfa_recovery_hashes: ['x'] });
     const auth = { Authorization: `Bearer ${makeToken(user, { mfa: true })}` };
-    const setup = await request(app).post('/api/auth/mfa/setup').set(auth).send({});
-    assert.strictEqual(setup.status, 200);
-    const confirm = await request(app).post('/api/auth/mfa/setup/confirm').set(auth).send({ code: mfa.totp(setup.body.secret) });
+    const sent = await request(app).post('/api/auth/mfa/reauth/email/send').set(auth).send({});
+    assert.strictEqual(sent.status, 200);
+    const setup = await request(app).post('/api/auth/mfa/setup').set(auth).send({ password: PASSWORD, code_method: 'email', code: lastCode() });
+    assert.strictEqual(setup.status, 200, JSON.stringify(setup.body));
+    const confirm = await request(app).post('/api/auth/mfa/setup/confirm').set(auth).send({ password: PASSWORD, code: mfa.totp(setup.body.secret) });
     assert.strictEqual(confirm.status, 200);
     assert.strictEqual(confirm.body.recovery_codes, undefined, 'existing recovery codes are kept');
 
     const me = await request(app).get('/api/auth/me').set(auth);
     assert.deepStrictEqual(me.body.mfa_methods, ['email', 'totp']);
 
-    const badPass = await request(app).post('/api/auth/mfa/disable').set(auth).send({ method: 'email', password: 'wrong' });
-    assert.strictEqual(badPass.status, 400);
-    const offEmail = await request(app).post('/api/auth/mfa/disable').set(auth).send({ method: 'email', password: PASSWORD });
+    const appCode = () => mfa.totp(setup.body.secret);
+    const badPass = await request(app).post('/api/auth/mfa/disable').set(auth).send({ method: 'email', password: 'wrong', code_method: 'totp', code: appCode() });
+    assert.strictEqual(badPass.status, 403);
+    assert.strictEqual(badPass.body.code, 'PASSWORD_INCORRECT');
+    const noCode = await request(app).post('/api/auth/mfa/disable').set(auth).send({ method: 'email', password: PASSWORD });
+    assert.strictEqual(noCode.status, 403);
+    assert.strictEqual(noCode.body.code, 'MFA_CODE_REQUIRED');
+    const offEmail = await request(app).post('/api/auth/mfa/disable').set(auth).send({ method: 'email', password: PASSWORD, code_method: 'totp', code: appCode() });
     assert.strictEqual(offEmail.status, 200);
     assert.deepStrictEqual(offEmail.body.mfa_methods, ['totp']);
-    const last = await request(app).post('/api/auth/mfa/disable').set(auth).send({ method: 'totp', password: PASSWORD });
+    const last = await request(app).post('/api/auth/mfa/disable').set(auth).send({ method: 'totp', password: PASSWORD, code: appCode() });
     assert.strictEqual(last.status, 400);
     assert.strictEqual(last.body.code, 'MFA_LAST_METHOD');
   });

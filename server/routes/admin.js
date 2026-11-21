@@ -488,7 +488,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
 
   router.post('/users/:userId/reset-mfa', permit('platform.users.manage'), async (req, res) => {
     try {
-      return res.json(await userAdmin.resetMfa({ userId: req.params.userId, req }));
+      return res.json(await userAdmin.resetMfa({ userId: req.params.userId, actor: staffActor(req), req }));
     } catch (error) {
       return fail(res, error);
     }

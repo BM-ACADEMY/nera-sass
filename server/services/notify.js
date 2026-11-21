@@ -161,10 +161,13 @@ function passwordResetEmail({ to, name, url, expiresMinutes }) {
 // shown large; nothing else in the mail is actionable.
 function signInCodeEmail({ to, name, code, minutes, purpose }) {
   const product = productName();
-  const title = purpose === 'setup' ? `Confirm email verification for ${product}` : `Your ${product} sign-in code`;
+  const title = purpose === 'setup' ? `Confirm email verification for ${product}`
+    : purpose === 'reauth' ? `Confirm a security change on ${product}` : `Your ${product} sign-in code`;
   const intro = purpose === 'setup'
     ? 'Use this code to turn on two-step verification by email.'
-    : 'Use this code to finish signing in.';
+    : purpose === 'reauth'
+      ? 'Use this code to confirm a change to your two-step verification settings.'
+      : 'Use this code to finish signing in.';
   const lines = [
     `Hi ${name || 'there'},`,
     intro,

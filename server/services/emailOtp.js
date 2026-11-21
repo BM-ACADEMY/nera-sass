@@ -12,7 +12,9 @@ const notify = require('./notify');
 const TTL_MINUTES = Number(process.env.EMAIL_OTP_TTL_MINUTES || 10);
 const RESEND_SECONDS = 45;
 const MAX_ATTEMPTS = 5;
-const PURPOSES = ['login', 'setup'];
+// login: second sign-in step; setup: turning on email codes; reauth: confirming
+// a security change while signed in.
+const PURPOSES = ['login', 'setup', 'reauth'];
 
 class EmailOtpError extends Error {
   constructor(status, message, code) {

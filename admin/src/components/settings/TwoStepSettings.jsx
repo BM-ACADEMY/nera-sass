@@ -10,6 +10,7 @@ import { AuthenticatorArt, EmailCodeArt, ShieldArt } from '../security/Art';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
@@ -52,35 +53,110 @@ const RecoveryCodesDialog = ({ codes, onClose }) => {
   );
 };
 
-// Asks for the password before turning a method off or replacing recovery codes.
-const PasswordDialog = ({ request, onClose }) => {
+// Confirms it is really the account owner before any two-step change (turning
+// a method on or off, new recovery codes): the current password and, when
+// two-step verification is already on, a current code from the app, by email
+// or a recovery code. request.run gets the proof to send with the request.
+const ConfirmIdentityDialog = ({ request, methods, onClose }) => {
+  const hasMfa = methods.length > 0;
   const [password, setPassword] = useState('');
+  const [method, setMethod] = useState('totp'); // 'totp' | 'email' | 'recovery'
+  const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
-  useEffect(() => { setPassword(''); }, [request]);
+  const [sending, setSending] = useState(false);
+  const [sentTo, setSentTo] = useState('');
+  const [wait, setWait] = useState(0);
+  useEffect(() => {
+    setPassword('');
+    setCode('');
+    setSentTo('');
+    setMethod(methods.includes('totp') ? 'totp' : 'email');
+  }, [request]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (wait <= 0) return undefined;
+    const t = setTimeout(() => setWait((n) => n - 1), 1000);
+    return () => clearTimeout(t);
+  }, [wait]);
+
+  const choose = (m) => { setMethod(m); setCode(''); };
+  const sendEmail = async () => {
+    setSending(true);
+    try {
+      const res = await axiosClient.post('/auth/mfa/reauth/email/send', {});
+      setSentTo(res.data.sent_to);
+      setWait(res.data.resend_after || 45);
+      toast.success(`Code sent to ${res.data.sent_to}`);
+    } catch (err) {
+      toast.error(errorOf(err, 'The code could not be sent'));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const proof = () => {
+    if (!hasMfa) return { password };
+    if (method === 'recovery') return { password, recovery_code: code.trim() };
+    return { password, code_method: method, code };
+  };
+  const ready = password && (!hasMfa || (method === 'recovery' ? code.trim().length >= 6 : code.length === 6));
   const submit = async (e) => {
     e.preventDefault();
+    if (!ready) return;
     setBusy(true);
     try {
-      await request.run(password);
+      await request.run(proof());
       onClose();
     } catch (err) {
+      if (method !== 'recovery') setCode('');
       toast.error(errorOf(err, 'Something went wrong'));
     } finally {
       setBusy(false);
     }
   };
+  const tab = (m, label) => (
+    <button type="button" key={m} onClick={() => choose(m)} disabled={busy}
+      className={cn('cursor-pointer rounded-md px-2.5 py-1 text-xs font-semibold', method === m ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+      {label}
+    </button>
+  );
   return (
     <Dialog open={Boolean(request)} onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent className="sm:max-w-sm">
         <form onSubmit={submit} className="flex flex-col gap-4">
           <DialogHeader>
             <DialogTitle>{request?.title}</DialogTitle>
-            <DialogDescription>{request?.description}</DialogDescription>
+            <DialogDescription>
+              {request?.description} {hasMfa ? 'Enter your password and a current verification code.' : 'Enter your password to continue.'}
+            </DialogDescription>
           </DialogHeader>
           <PasswordInput autoFocus placeholder="Your password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          {hasMfa && (
+            <div className="flex flex-col gap-3">
+              <div className="flex w-fit gap-1 rounded-lg bg-slate-100 p-1">
+                {methods.includes('totp') && tab('totp', 'Authenticator app')}
+                {methods.includes('email') && tab('email', 'Email code')}
+                {tab('recovery', 'Recovery code')}
+              </div>
+              {method === 'recovery' ? (
+                <Input placeholder="Recovery code" autoComplete="off" value={code} onChange={(e) => setCode(e.target.value)} className="h-10 font-mono" />
+              ) : (
+                <>
+                  {method === 'email' && (
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <span>{sentTo ? `Code sent to ${sentTo}` : 'We will email you a 6-digit code.'}</span>
+                      <Button type="button" variant="outline" size="sm" onClick={sendEmail} disabled={sending || wait > 0 || busy}>
+                        {sending && <Spinner />} {wait > 0 ? `Resend in ${wait}s` : sentTo ? 'Resend' : 'Email me a code'}
+                      </Button>
+                    </div>
+                  )}
+                  <OtpInput value={code} onChange={setCode} disabled={busy} autoFocus={false} />
+                </>
+              )}
+            </div>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
-            <Button type="submit" variant={request?.destructive ? 'destructive' : 'default'} disabled={busy || !password}>{busy && <Spinner />} {request?.action}</Button>
+            <Button type="submit" variant={request?.destructive ? 'destructive' : 'default'} disabled={busy || !ready}>{busy && <Spinner />} {request?.action}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -88,13 +164,22 @@ const PasswordDialog = ({ request, onClose }) => {
   );
 };
 
-// Turning on email codes: send a code, enter it.
-const EmailSetupDialog = ({ open, email, onClose, onDone }) => {
+// Turning on email codes: the first code was sent when the identity was
+// confirmed (start.sent); enter it. A resend needs the password again (and,
+// with the app already on, a fresh app code), so it goes back to that step
+// (onRestart) unless the password alone is enough.
+const EmailSetupDialog = ({ start, onClose, onDone, onRestart }) => {
+  const open = Boolean(start);
   const [sent, setSent] = useState(null);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [wait, setWait] = useState(0);
-  useEffect(() => { if (open) { setSent(null); setCode(''); } }, [open]);
+  useEffect(() => {
+    if (!start) return;
+    setSent(start.sent);
+    setCode('');
+    setWait(start.sent?.resend_after || 45);
+  }, [start]);
   useEffect(() => {
     if (wait <= 0) return undefined;
     const t = setTimeout(() => setWait((s) => s - 1), 1000);
@@ -102,9 +187,10 @@ const EmailSetupDialog = ({ open, email, onClose, onDone }) => {
   }, [wait]);
 
   const send = async () => {
+    if (start.needsCode) { onRestart(); return; }
     setBusy(true);
     try {
-      const res = await axiosClient.post('/auth/mfa/email/setup', {});
+      const res = await axiosClient.post('/auth/mfa/email/setup', { password: start.password });
       setSent(res.data);
       setWait(res.data.resend_after || 45);
       toast.success(`Code sent to ${res.data.sent_to}`);
@@ -118,7 +204,7 @@ const EmailSetupDialog = ({ open, email, onClose, onDone }) => {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await axiosClient.post('/auth/mfa/email/setup/confirm', { code: value });
+      const res = await axiosClient.post('/auth/mfa/email/setup/confirm', { code: value, password: start.password });
       keepToken(res.data);
       toast.success('Email verification is on');
       onDone(res.data.recovery_codes);
@@ -137,7 +223,7 @@ const EmailSetupDialog = ({ open, email, onClose, onDone }) => {
         <DialogHeader className="text-center sm:text-center">
           <DialogTitle>Turn on email codes</DialogTitle>
           <DialogDescription>
-            {sent ? `Enter the 6-digit code we sent to ${sent.sent_to}.` : `We'll send a 6-digit code to ${email}. At each sign-in you'll get a new one.`}
+            {sent ? `Enter the 6-digit code we sent to ${sent.sent_to}. At each sign-in you'll get a new one.` : 'Sending the code…'}
           </DialogDescription>
         </DialogHeader>
         {sent ? (
@@ -150,9 +236,7 @@ const EmailSetupDialog = ({ open, email, onClose, onDone }) => {
         ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
-          {sent
-            ? <Button onClick={() => confirm()} disabled={busy || code.length !== 6}>{busy && <Spinner />} Verify and turn on</Button>
-            : <Button onClick={send} disabled={busy}>{busy && <Spinner />} Send code</Button>}
+          <Button onClick={() => confirm()} disabled={busy || !sent || code.length !== 6}>{busy && <Spinner />} Verify and turn on</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -160,25 +244,20 @@ const EmailSetupDialog = ({ open, email, onClose, onDone }) => {
 };
 
 // Setting up the authenticator app: QR code, key, then a code from the app.
-const AppSetupDialog = ({ open, onClose, onDone }) => {
-  const [setup, setSetup] = useState(null);
+// The setup was started when the identity was confirmed (start.setup).
+const AppSetupDialog = ({ start, onClose, onDone }) => {
+  const open = Boolean(start);
+  const setup = start?.setup;
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (!open) return;
-    setSetup(null);
-    setCode('');
-    axiosClient.post('/auth/mfa/setup', {})
-      .then((r) => setSetup(r.data))
-      .catch((err) => { toast.error(errorOf(err, 'Could not start the setup')); onClose(); });
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setCode(''); }, [start]);
 
   const confirm = async (value = code) => {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await axiosClient.post('/auth/mfa/setup/confirm', { code: value });
+      const res = await axiosClient.post('/auth/mfa/setup/confirm', { code: value, password: start.password });
       keepToken(res.data);
       toast.success('Authenticator app is on');
       onDone(res.data.recovery_codes);
@@ -253,7 +332,8 @@ const MethodCard = ({ art, icon: Icon, tone, title, text, on, detail, onEnable, 
 );
 
 const TwoStepSettings = ({ account, onChanged }) => {
-  const [dialog, setDialog] = useState(null); // 'email' | 'app'
+  const [emailStart, setEmailStart] = useState(null); // { sent, password, needsCode }
+  const [appStart, setAppStart] = useState(null); // { setup, password }
   const [codes, setCodes] = useState(null);
   const [passwordRequest, setPasswordRequest] = useState(null);
   const methods = account?.mfa_methods || [];
@@ -261,18 +341,42 @@ const TwoStepSettings = ({ account, onChanged }) => {
   const appOn = methods.includes('totp');
 
   const done = (recoveryCodes) => {
-    setDialog(null);
+    setEmailStart(null);
+    setAppStart(null);
     if (recoveryCodes?.length) setCodes(recoveryCodes);
     onChanged();
   };
 
+  // Turning a method on starts the setup with the proof; the setup dialog
+  // then needs only the password again to finish.
+  const turnOnEmail = () => setPasswordRequest({
+    title: 'Turn on email codes',
+    description: `A 6-digit code will be sent to ${account.email}.`,
+    action: 'Send code',
+    run: async (proof) => {
+      const res = await axiosClient.post('/auth/mfa/email/setup', proof);
+      toast.success(`Code sent to ${res.data.sent_to}`);
+      setEmailStart({ sent: res.data, password: proof.password, needsCode: methods.length > 0 });
+    },
+  });
+
+  const turnOnApp = () => setPasswordRequest({
+    title: 'Set up the authenticator app',
+    description: 'First confirm it is you.',
+    action: 'Continue',
+    run: async (proof) => {
+      const res = await axiosClient.post('/auth/mfa/setup', proof);
+      setAppStart({ setup: res.data, password: proof.password });
+    },
+  });
+
   const turnOff = (method) => setPasswordRequest({
     title: method === 'email' ? 'Turn off email codes?' : 'Turn off the authenticator app?',
-    description: 'Enter your password to confirm.',
+    description: 'Confirm it is you.',
     action: 'Turn off',
     destructive: true,
-    run: async (password) => {
-      await axiosClient.post('/auth/mfa/disable', { method, password });
+    run: async (proof) => {
+      await axiosClient.post('/auth/mfa/disable', { ...proof, method });
       toast.success('Turned off');
       onChanged();
     },
@@ -280,10 +384,10 @@ const TwoStepSettings = ({ account, onChanged }) => {
 
   const regenerate = () => setPasswordRequest({
     title: 'Create new recovery codes?',
-    description: 'Your old recovery codes stop working. Enter your password to continue.',
+    description: 'Your old recovery codes stop working.',
     action: 'Create new codes',
-    run: async (password) => {
-      const res = await axiosClient.post('/auth/mfa/recovery-codes', { password });
+    run: async (proof) => {
+      const res = await axiosClient.post('/auth/mfa/recovery-codes', proof);
       setCodes(res.data.recovery_codes);
       onChanged();
     },
@@ -330,7 +434,7 @@ const TwoStepSettings = ({ account, onChanged }) => {
           detail={`Codes go to ${account.email}`}
           on={emailOn}
           enableLabel="Turn on email codes"
-          onEnable={() => setDialog('email')}
+          onEnable={turnOnEmail}
           onDisable={() => turnOff('email')}
         />
         <MethodCard
@@ -342,7 +446,7 @@ const TwoStepSettings = ({ account, onChanged }) => {
           detail="Recommended: works without email access."
           on={appOn}
           enableLabel="Set up authenticator app"
-          onEnable={() => setDialog('app')}
+          onEnable={turnOnApp}
           onDisable={() => turnOff('totp')}
         />
       </div>
@@ -364,10 +468,10 @@ const TwoStepSettings = ({ account, onChanged }) => {
         <FiInfo className="mt-0.5 shrink-0" /> Admin accounts must keep at least one method on. To switch, turn the new one on first, then turn the old one off.
       </p>
 
-      <EmailSetupDialog open={dialog === 'email'} email={account.email} onClose={() => setDialog(null)} onDone={done} />
-      <AppSetupDialog open={dialog === 'app'} onClose={() => setDialog(null)} onDone={done} />
+      <EmailSetupDialog start={emailStart} onClose={() => setEmailStart(null)} onDone={done} onRestart={() => { setEmailStart(null); turnOnEmail(); }} />
+      <AppSetupDialog start={appStart} onClose={() => setAppStart(null)} onDone={done} />
       <RecoveryCodesDialog codes={codes} onClose={() => setCodes(null)} />
-      <PasswordDialog request={passwordRequest} onClose={() => setPasswordRequest(null)} />
+      <ConfirmIdentityDialog request={passwordRequest} methods={methods} onClose={() => setPasswordRequest(null)} />
     </div>
   );
 };

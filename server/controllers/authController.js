@@ -74,6 +74,53 @@ async function afterPassword(user) {
 // The code lets apps tell it apart from an expired session, which is also 401.
 const INVALID_MFA_CODE = Object.freeze({ error: 'Invalid verification code', code: 'INVALID_MFA_CODE' });
 
+// Checks a second-factor code: an authenticator code, an emailed code (with
+// the given purpose) or a recovery code (used up when it matches). Without
+// `method`, an authenticator code is assumed when the app is set up (older
+// clients send only `code`).
+async function secondFactorOk(user, { method, code, recoveryCode }, emailPurpose) {
+  const methods = mfa.methodsOf(user);
+  let ok = false;
+  if (code) {
+    const use = method || (methods.includes('totp') ? 'totp' : 'email');
+    if (!methods.includes(use)) throw new AuthError(400, 'This verification method is not turned on for this account', 'MFA_METHOD_OFF');
+    ok = use === 'totp' ? mfa.verifyTotp(decrypt(user.mfa_secret_enc), code) : await emailOtp.verifyCode(user, code, emailPurpose);
+  }
+  if (!ok && recoveryCode) {
+    const hash = mfa.hashRecoveryCode(recoveryCode);
+    const updated = await sys(() => Users.updateOne({ id: user.id, mfa_recovery_hashes: hash }, { $pull: { mfa_recovery_hashes: hash } }));
+    ok = updated.modifiedCount === 1;
+  }
+  return ok;
+}
+
+// Re-authentication for security changes made with a normal session (adding
+// a two-step method, turning one off, new recovery codes). A stolen session
+// token alone must not be enough: the current password is needed and, when
+// two-step verification is already on (and `withCode`), a current code from
+// the app, an emailed code (purpose 'reauth') or a recovery code.
+// Refusals are 403, never 401: the apps sign the user out on 401.
+async function requireReauth(user, body, { withCode = true } = {}) {
+  const password = body?.password ?? body?.current_password;
+  if (typeof password !== 'string' || !password) {
+    throw new AuthError(403, 'Enter your current password to continue.', 'PASSWORD_REQUIRED');
+  }
+  if (!(await bcrypt.compare(password, user.password_hash || ''))) {
+    throw new AuthError(403, 'That password is not correct.', 'PASSWORD_INCORRECT');
+  }
+  if (!withCode || !mfa.methodsOf(user).length) return;
+  // code_method: which method the code is from ('totp' | 'email'); without
+  // it an app code is assumed when the app is on. (`method` on /mfa/disable
+  // is the method being turned off, so it is not read here.)
+  const { code_method: method, code, recovery_code: recoveryCode } = body || {};
+  if (!code && !recoveryCode) {
+    throw new AuthError(403, 'Two-step verification is on. Enter a code from your authenticator app or email, or a recovery code.', 'MFA_CODE_REQUIRED');
+  }
+  if (!(await secondFactorOk(user, { method, code, recoveryCode }, 'reauth'))) {
+    throw new AuthError(403, 'That verification code is not correct or has expired.', 'MFA_CODE_INCORRECT');
+  }
+}
+
 exports.login = async (req, res) => {
   const { email, password } = req.body || {};
   try {
@@ -121,19 +168,8 @@ exports.verifyMfa = async (req, res) => {
   try {
     const { mfa_token: mfaToken, method, code, recovery_code: recoveryCode } = req.body || {};
     const { user } = await resolveIdentity(mfaToken, { purpose: 'mfa' });
-    const methods = mfa.methodsOf(user);
-    if (!methods.length) return res.status(400).json({ error: 'MFA is not enabled for this account' });
-    let ok = false;
-    if (code) {
-      const use = method || (methods.includes('totp') ? 'totp' : 'email');
-      if (!methods.includes(use)) return res.status(400).json({ error: 'This verification method is not turned on for this account' });
-      ok = use === 'totp' ? mfa.verifyTotp(decrypt(user.mfa_secret_enc), code) : await emailOtp.verifyCode(user, code, 'login');
-    }
-    if (!ok && recoveryCode) {
-      const hash = mfa.hashRecoveryCode(recoveryCode);
-      const updated = await sys(() => Users.updateOne({ id: user.id, mfa_recovery_hashes: hash }, { $pull: { mfa_recovery_hashes: hash } }));
-      ok = updated.modifiedCount === 1;
-    }
+    if (!mfa.methodsOf(user).length) return res.status(400).json({ error: 'MFA is not enabled for this account' });
+    const ok = await secondFactorOk(user, { method, code, recoveryCode }, 'login');
     if (!ok) return res.status(401).json(INVALID_MFA_CODE);
     return res.json(await sessionPayload(user, { mfaPassed: true }));
   } catch (error) {
@@ -156,18 +192,60 @@ exports.sendMfaEmail = async (req, res) => {
   }
 };
 
-// Starts enrolment: with the mfa_setup token from login, or a normal session.
+// Emails a code for confirming a security change while signed in (when
+// email codes are on): used with requireReauth.
+exports.sendReauthEmail = async (req, res) => {
+  try {
+    const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
+    if (!user) throw new AuthError(401, 'Not signed in');
+    if (!mfa.methodsOf(user).includes('email')) return res.status(400).json({ error: 'Email codes are not turned on for this account' });
+    return res.json(await emailOtp.sendCode(user, 'reauth'));
+  } catch (error) {
+    if (!(error instanceof emailOtp.EmailOtpError) && !(error instanceof AuthError)) {
+      console.error('[account] Confirmation code not sent:', error.message);
+      return res.status(502).json({ error: 'The code could not be emailed. Try again in a minute.' });
+    }
+    return fail(res, error);
+  }
+};
+
+// Enrolment runs with the mfa_setup token from login (forced enrolment: the
+// password was just checked) or with a normal session, which must
+// re-authenticate first.
+const STEP_UP_MINUTES = 15;
 async function enrolmentUser(req) {
   const mfaToken = req.body?.mfa_token;
-  if (mfaToken) return (await resolveIdentity(mfaToken, { purpose: 'mfa_setup' })).user;
-  if (req.user?.id) return sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
+  if (mfaToken) return { user: (await resolveIdentity(mfaToken, { purpose: 'mfa_setup' })).user, viaSession: false };
+  if (req.user?.id) {
+    const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
+    if (!user) throw new AuthError(401, 'Not signed in');
+    return { user, viaSession: true };
+  }
   throw new AuthError(401, 'Not signed in');
+}
+
+// Starting enrolment from a session: password, plus a current code when
+// two-step verification is already on. The check is remembered for a few
+// minutes so the confirm step (which then needs only the password again)
+// cannot complete an enrolment that was not started this way.
+async function stepUpForStart(user, body) {
+  await requireReauth(user, body);
+  await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_stepup_until: new Date(Date.now() + STEP_UP_MINUTES * 60000) } }));
+}
+
+async function stepUpForConfirm(user, body) {
+  await requireReauth(user, body, { withCode: false });
+  const recent = user.mfa_stepup_until && new Date(user.mfa_stepup_until) > new Date();
+  if (mfa.methodsOf(user).length && !recent) {
+    throw new AuthError(403, 'Confirm with your password and a current code first, then try again.', 'MFA_CODE_REQUIRED');
+  }
 }
 
 exports.startMfaSetup = async (req, res) => {
   try {
-    const user = await enrolmentUser(req);
+    const { user, viaSession } = await enrolmentUser(req);
     if (user.mfa_enabled) return res.status(400).json({ error: 'The authenticator app is already set up' });
+    if (viaSession) await stepUpForStart(user, req.body);
     const secret = mfa.generateSecret();
     await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_pending_secret_enc: encrypt(secret) } }));
     return res.json({ secret, otpauth_url: mfa.otpauthUrl(secret, user.email, notify.productName()) });
@@ -178,14 +256,15 @@ exports.startMfaSetup = async (req, res) => {
 
 exports.confirmMfaSetup = async (req, res) => {
   try {
-    const user = await enrolmentUser(req);
+    const { user, viaSession } = await enrolmentUser(req);
+    if (viaSession) await stepUpForConfirm(user, req.body);
     if (!user.mfa_pending_secret_enc) return res.status(400).json({ error: 'Start MFA setup first' });
     const secret = decrypt(user.mfa_pending_secret_enc);
     if (!mfa.verifyTotp(secret, req.body?.code)) return res.status(401).json(INVALID_MFA_CODE);
     const recovery = newRecoveryCodes(user);
     await sys(() => Users.updateOne({ id: user.id }, {
       $set: { mfa_enabled: true, mfa_secret_enc: encrypt(secret), mfa_enrolled_at: user.mfa_enrolled_at || new Date(), ...(recovery ? { mfa_recovery_hashes: recovery.hashes } : {}) },
-      $unset: { mfa_pending_secret_enc: '' },
+      $unset: { mfa_pending_secret_enc: '', mfa_stepup_until: '' },
     }));
     await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'totp' } });
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
@@ -207,8 +286,9 @@ const actorOf = (user) => ({ actor_type: user.tenant_id ? 'user' : 'staff', acto
 // Email as a second step: a code is mailed, and entering it turns it on.
 exports.startEmailSetup = async (req, res) => {
   try {
-    const user = await enrolmentUser(req);
+    const { user, viaSession } = await enrolmentUser(req);
     if (user.mfa_email_enabled) return res.status(400).json({ error: 'Email codes are already turned on' });
+    if (viaSession) await stepUpForStart(user, req.body);
     return res.json(await emailOtp.sendCode(user, 'setup'));
   } catch (error) {
     if (!(error instanceof emailOtp.EmailOtpError) && !(error instanceof AuthError)) {
@@ -221,12 +301,14 @@ exports.startEmailSetup = async (req, res) => {
 
 exports.confirmEmailSetup = async (req, res) => {
   try {
-    const user = await enrolmentUser(req);
+    const { user, viaSession } = await enrolmentUser(req);
+    if (viaSession) await stepUpForConfirm(user, req.body);
     if (user.mfa_email_enabled) return res.status(400).json({ error: 'Email codes are already turned on' });
     if (!(await emailOtp.verifyCode(user, req.body?.code, 'setup'))) return res.status(401).json(INVALID_MFA_CODE);
     const recovery = newRecoveryCodes(user);
     await sys(() => Users.updateOne({ id: user.id }, {
       $set: { mfa_email_enabled: true, mfa_enrolled_at: user.mfa_enrolled_at || new Date(), ...(recovery ? { mfa_recovery_hashes: recovery.hashes } : {}) },
+      $unset: { mfa_stepup_until: '' },
     }));
     await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'email' } });
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
@@ -236,15 +318,14 @@ exports.confirmEmailSetup = async (req, res) => {
   }
 };
 
-// Turns one method off (password required). Accounts that must use two-step
-// verification keep at least one method.
+// Turns one method off (password and a current code required). Accounts that
+// must use two-step verification keep at least one method.
 exports.disableMfaMethod = async (req, res) => {
   try {
-    const { method, password } = req.body || {};
+    const { method } = req.body || {};
     const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
-    if (!user || typeof password !== 'string' || !(await bcrypt.compare(password, user.password_hash || ''))) {
-      return res.status(400).json({ error: 'Password incorrect' });
-    }
+    if (!user) throw new AuthError(401, 'Not signed in');
+    await requireReauth(user, req.body);
     const methods = mfa.methodsOf(user);
     if (!methods.includes(method)) return res.status(400).json({ error: 'This method is not turned on' });
     const remaining = methods.filter((m) => m !== method);
@@ -263,13 +344,13 @@ exports.disableMfaMethod = async (req, res) => {
   }
 };
 
-// Replaces the recovery codes (password required); the old ones stop working.
+// Replaces the recovery codes (password and a current code required); the
+// old ones stop working.
 exports.regenerateRecoveryCodes = async (req, res) => {
   try {
     const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
-    if (!user || typeof req.body?.password !== 'string' || !(await bcrypt.compare(req.body.password, user.password_hash || ''))) {
-      return res.status(400).json({ error: 'Password incorrect' });
-    }
+    if (!user) throw new AuthError(401, 'Not signed in');
+    await requireReauth(user, req.body);
     if (!mfa.hasMfa(user)) return res.status(400).json({ error: 'Turn on two-step verification first' });
     const { codes, hashes } = mfa.generateRecoveryCodes();
     await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_recovery_hashes: hashes } }));
