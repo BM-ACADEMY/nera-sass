@@ -573,7 +573,10 @@ app.use(cors({
   origin: corsOrigin,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-internal-key', 'x-data-mode']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-internal-key', 'x-data-mode'],
+  // Browsers may reuse a preflight answer for 10 minutes instead of sending an
+  // OPTIONS before every API call from app.getnera.in.
+  maxAge: 600,
 }));
 app.use(express.json({
   limit: '10mb',
@@ -1002,18 +1005,19 @@ async function enrichLeadRows(leads) {
 }
 
 // Lead conversation messages shaped for the CRM inbox (with reply previews)
-async function leadInboxMessages(conversationIds, { sort = { sent_at: 1 }, skip = 0, limit = 0 } = {}) {
+// `clientId`: the lead's brand, so template text is looked up in its own WABA.
+async function leadInboxMessages(conversationIds, { sort = { sent_at: 1 }, skip = 0, limit = 0, clientId = null } = {}) {
   let query = Messages.find({ conversation_id: { $in: conversationIds } }, NO_ID).sort(sort).skip(skip);
   if (limit) query = query.limit(limit);
   const rows = await query.lean();
   const replyIds = [...new Set(rows.map((m) => m.reply_to_wa_id).filter(Boolean))];
   const replies = new Map((replyIds.length ? await Messages.find({ wa_msg_id: { $in: replyIds } }, { wa_msg_id: 1, direction: 1, media_url: 1, content: 1, msg_type: 1 }).lean() : [])
     .map((r) => [r.wa_msg_id, r]));
-  await require('./services/templateText').resolvePlaceholders(rows);
+  await require('./services/templateText').resolvePlaceholders(rows, { clientId });
   return rows.map((m) => {
     const reply = m.reply_to_wa_id ? replies.get(m.reply_to_wa_id) : null;
     return {
-      id: m.id, direction: m.direction, content: m.content, type: m.msg_type, media_url: mediaStore.presentUrl(m.media_url), wa_msg_id: m.wa_msg_id,
+      id: m.id, direction: m.direction, content: m.content, type: m.msg_type, template_name: m.template_name || null, template_buttons: m.template_buttons || undefined, media_url: mediaStore.presentUrl(m.media_url), wa_msg_id: m.wa_msg_id,
       status: m.status, is_ai: m.is_ai, timestamp: m.sent_at, read_at: m.read_at, is_deleted: m.is_deleted, is_forwarded: m.is_forwarded,
       pinned_until: m.pinned_until, is_starred: m.is_starred, reactions: m.reactions,
       reply_to: reply ? { direction: reply.direction, media_url: mediaStore.presentUrl(reply.media_url), content: reply.content, msg_type: reply.msg_type } : null,

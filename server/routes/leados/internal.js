@@ -20,7 +20,7 @@ const ai = require('../../services/aiAutomation');
 const sendPolicy = require('../../services/sendPolicy');
 const numberHealth = require('../../services/numberHealth');
 const aiLatency = require('../../services/aiLatency');
-const { renderTemplateText } = require('../../services/templateText');
+const { renderTemplate } = require('../../services/templateText');
 const brainEngine = require('../../services/brainEngine');
 const aiAllowance = require('../../services/billing/aiAllowance');
 const erasure = require('../../services/erasure');
@@ -72,11 +72,13 @@ class SendError extends Error {
 
 // Sends one WhatsApp message to a lead of the calling tenant with the brand's
 // own token (never handed to n8n), then stores it on the lead's thread.
-// `build(to)` returns the Graph payload; `content` is what the inbox shows.
+// `build(to)` returns the Graph payload; `content` is what the inbox shows (or
+// an async function of { lead, brand } returning { text, buttons }, for templates
+// rendered in the brand's own WABA).
 // Every send passes the send policy first: free text only inside the 24-hour
 // window, marketing templates only to opted-in contacts on a healthy number,
 // and the number's per-minute and daily limits.
-async function sendToLead(req, leadIdRaw, content, build, { kind = 'service', messageType = 'text', templateName = null } = {}) {
+async function sendToLead(req, leadIdRaw, content, build, { kind = 'service', messageType = 'text', templateName = null, templateLanguage = null } = {}) {
   const leadId = Number(leadIdRaw);
   if (!Number.isInteger(leadId) || leadId <= 0) throw new SendError(400, 'lead_id is required');
   if (!(await tenantCanSend(req.tenant.id))) throw new SendError(403, 'This workspace cannot send messages', 'SEND_BLOCKED');
@@ -88,6 +90,7 @@ async function sendToLead(req, leadIdRaw, content, build, { kind = 'service', me
     ? await Clients.findOne({ id: lead.client_id }, { _id: 0, id: 1, phone_number_id: 1, wa_access_token: 1 }).lean()
     : null;
   if (!brand?.phone_number_id || !brand?.wa_access_token) throw new SendError(409, 'WhatsApp is not connected for this lead', 'WHATSAPP_NOT_CONNECTED');
+  const shown = typeof content === 'function' ? await content({ lead, brand }) : { text: content, buttons: [] };
 
   const resolvedKind = messageType === 'template' && templateName ? await sendPolicy.templateKind(templateName) : kind;
   const check = await sendPolicy.checkSend({ lead, kind: resolvedKind, messageType, phoneNumberId: brand.phone_number_id });
@@ -113,16 +116,19 @@ async function sendToLead(req, leadIdRaw, content, build, { kind = 'service', me
   const conversation = await upsertOne(
     Conversations,
     { phone: to.slice(-10) },
-    { $set: { lead_id: lead.id, last_message: content, last_message_at: new Date() } },
-    { lead_id: lead.id, status: 'open', last_message: content, last_message_at: new Date(), created_at: new Date() }
+    { $set: { lead_id: lead.id, last_message: shown.text, last_message_at: new Date() } },
+    { lead_id: lead.id, status: 'open', last_message: shown.text, last_message_at: new Date(), created_at: new Date() }
   );
+  const isTemplate = messageType === 'template';
   const saved = await Messages.create({
-    conversation_id: conversation.id, direction: 'outbound', content, msg_type: 'text',
+    conversation_id: conversation.id, direction: 'outbound', content: shown.text, msg_type: isTemplate ? 'template' : 'text',
+    ...(isTemplate ? { template_name: templateName, template_language: templateLanguage } : {}),
     wa_msg_id: waMessageId, is_ai: true, status: 'sent', sent_at: new Date(),
   });
   io.emit('ai_typing', { lead_id: String(lead.id), typing: false });
   io.emit('outgoing_message', { lead_id: String(lead.id), message: {
-    id: saved.id, direction: 'outbound', content, type: 'text', wa_msg_id: waMessageId, status: 'sent', is_ai: true, timestamp: saved.sent_at,
+    id: saved.id, direction: 'outbound', content: shown.text, type: saved.msg_type, wa_msg_id: waMessageId, status: 'sent', is_ai: true, timestamp: saved.sent_at,
+    ...(isTemplate ? { template_name: templateName, template_buttons: shown.buttons || [] } : {}),
   } });
   return { success: true, wa_message_id: waMessageId, message_id: saved.id };
 }
@@ -183,19 +189,30 @@ app.post('/api/internal/ai/reply', internalAuth, async (req, res) => {
   }
 });
 
-// POST /api/internal/send-template   { lead_id, template, language?, body_params? }
+// POST /api/internal/send-template   { lead_id, template, language?, body_params?, header_params? }
 // Approved templates (welcome, payment confirmation); work outside the window.
+// The inbox shows the real text: header and body with these values, footer
+// and buttons, from the template in the lead's brand WABA.
 app.post('/api/internal/send-template', internalAuth, sendRoute('send-template', (req) => {
   const template = String(req.body?.template || '').trim();
   const language = String(req.body?.language || 'en').trim();
   const params = Array.isArray(req.body?.body_params) ? req.body.body_params : [];
+  const headerParams = Array.isArray(req.body?.header_params) ? req.body.header_params : [];
   if (!/^[a-z0-9_]{1,512}$/.test(template)) throw new SendError(400, 'template must be an approved template name (a-z, 0-9, _)');
   if (!/^[a-zA-Z_]{2,10}$/.test(language)) throw new SendError(400, 'language must be a code such as en or en_US');
   if (params.length > 20 || params.some((v) => String(v ?? '').length > 1024)) throw new SendError(400, 'body_params: up to 20 values of 1024 characters');
-  const components = params.length ? [{ type: 'body', parameters: params.map((v) => ({ type: 'text', text: String(v ?? '') })) }] : undefined;
-  return renderTemplateText(template, language, params.map((v) => String(v ?? '')), `[Template] ${template}`).then((shown) => sendToLead(req, req.body?.lead_id, shown, () => ({
-    type: 'template', template: { name: template, language: { code: language }, ...(components ? { components } : {}) },
-  }), { messageType: 'template', templateName: template }));
+  if (headerParams.length > 1 || headerParams.some((v) => String(v ?? '').length > 60)) throw new SendError(400, 'header_params: one value of up to 60 characters');
+  const body = params.map((v) => String(v ?? ''));
+  const header = headerParams.map((v) => String(v ?? ''));
+  const components = [
+    ...(header.length ? [{ type: 'header', parameters: header.map((text) => ({ type: 'text', text })) }] : []),
+    ...(body.length ? [{ type: 'body', parameters: body.map((text) => ({ type: 'text', text })) }] : []),
+  ];
+  const content = async ({ lead }) => (await renderTemplate(template, language, { header, body }, { clientId: lead.client_id }))
+    || { text: `[Template] ${template}`, buttons: [] };
+  return sendToLead(req, req.body?.lead_id, content, () => ({
+    type: 'template', template: { name: template, language: { code: language }, ...(components.length ? { components } : {}) },
+  }), { messageType: 'template', templateName: template, templateLanguage: language });
 }));
 
 // GET /api/internal/context?lead_id=&before_message_id=&limit=

@@ -3,6 +3,8 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { SalesTasks } = require('../../models');
+
 module.exports = function registerInboxRoutes(app, ctx) {
 const {
   Clients,
@@ -66,6 +68,16 @@ app.put('/api/conversations/:lead_id/read', auth, async (req, res) => {
     const readFilter = [{ lead_id: req.params.lead_id }];
     if (readLead && readLead.phone != null) readFilter.push({ phone: phoneTailRegex(readLead.phone) });
     await Conversations.updateMany({ $or: readFilter }, { $set: { unread_count: 0 } });
+    // Opening the chat also clears the lead's Sales Task badge, so the inbox
+    // needs one request instead of a second PUT /api/sales-tasks/lead/:id/read.
+    const leadId = Number(req.params.lead_id);
+    if (Number.isFinite(leadId)) {
+      const cleared = await SalesTasks.updateMany({ lead_id: leadId, unread: true }, { $set: { unread: false, updated_at: new Date() } });
+      if (cleared.modifiedCount) {
+        const unreadCount = await SalesTasks.countDocuments({ unread: true, status: { $ne: 'completed' } });
+        req.app.get('io')?.emit('sales_task_update', { event: 'read', task: { lead_id: leadId }, unread_count: unreadCount });
+      }
+    }
     res.json({ success: true });
   } catch (err) {
     console.error('Mark read error:', err);
