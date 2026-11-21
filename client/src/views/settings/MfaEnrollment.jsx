@@ -6,9 +6,11 @@ import { inputStyle } from './styles.js';
 
 // Two-factor enrolment with the existing APIs: start, then confirm with a
 // code from the authenticator app. Used from Settings (signed in) and from
-// login when enrolment is required (mfaToken). A wrong code keeps the session;
-// an expired session or sign-in step says so (from Settings the app has
-// already gone to the login page; at login, onExpired restarts sign-in).
+// login when enrolment is required (mfaToken). From Settings the current
+// password is asked first (the server refuses enrolment with a session alone).
+// A wrong code keeps the session; an expired session or sign-in step says so
+// (from Settings the app has already gone to the login page; at login,
+// onExpired restarts sign-in).
 const describeMfaError = (err, mfaToken, fallback) => {
   const kind = mfaErrorKind(err);
   if (kind === 'expired') return mfaToken ? NOTICES.signInStepExpired : NOTICES.sessionEnded;
@@ -24,6 +26,9 @@ export const MfaEnrollment = ({ mfaToken, onDone, onCancel, onExpired }) => {
   const [busy, setBusy] = useState(false);
   const [recoveryCodes, setRecoveryCodes] = useState(null);
   const [session, setSession] = useState(null);
+  const [password, setPassword] = useState('');
+  // From login the start is automatic; from Settings it waits for the password.
+  const [needsPassword, setNeedsPassword] = useState(!mfaToken);
   // Each start stores a new pending secret on the server, so start exactly
   // once (React development mode runs effects twice).
   const started = useRef(false);
@@ -34,7 +39,7 @@ export const MfaEnrollment = ({ mfaToken, onDone, onCancel, onExpired }) => {
   };
 
   useEffect(() => {
-    if (started.current) return;
+    if (!mfaToken || started.current) return;
     started.current = true;
     api.startMfaSetup(mfaToken)
       .then(setSetup)
@@ -43,6 +48,22 @@ export const MfaEnrollment = ({ mfaToken, onDone, onCancel, onExpired }) => {
         setError(describeMfaError(err, mfaToken, 'Could not start two-factor setup'));
       });
   }, [mfaToken]);
+
+  // Settings: confirm the password, then start.
+  const startWithPassword = async (event) => {
+    event.preventDefault();
+    if (!password) return setError('Enter your current password');
+    setBusy(true);
+    setError('');
+    try {
+      setSetup(await api.startMfaSetup(null, { password }));
+      setNeedsPassword(false);
+    } catch (err) {
+      fail(err, 'Could not start two-factor setup');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // An expired session or sign-in step hands back to the caller.
   useEffect(() => {
@@ -55,10 +76,11 @@ export const MfaEnrollment = ({ mfaToken, onDone, onCancel, onExpired }) => {
     setBusy(true);
     setError('');
     try {
-      const data = await api.confirmMfaSetup(code, mfaToken);
+      const data = await api.confirmMfaSetup(code, mfaToken, { password });
       setSession(data);
       setRecoveryCodes(data.recovery_codes || []);
       setSetup(null);
+      setPassword('');
     } catch (err) {
       fail(err, 'Could not turn on two-factor authentication');
     } finally {
@@ -74,6 +96,22 @@ export const MfaEnrollment = ({ mfaToken, onDone, onCancel, onExpired }) => {
         <pre style={{ ...inputStyle(), fontFamily: 'monospace', whiteSpace: 'pre-wrap', marginBottom: 12 }}>{recoveryCodes.join('\n')}</pre>
         <Button type="button" onClick={() => onDone?.(session)}>I have saved my recovery codes</Button>
       </div>
+    );
+  }
+
+  if (needsPassword) {
+    return (
+      <form onSubmit={startWithPassword}>
+        {error && <Notice tone="error">{error}</Notice>}
+        <p style={{ fontSize: 12, marginBottom: 10 }}>To keep your account safe, enter your current password before turning on two-factor authentication.</p>
+        <Field label="Current password">
+          <input type="password" autoComplete="current-password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle()} />
+        </Field>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <Button type="submit" busy={busy}>{busy ? 'Checking…' : 'Continue'}</Button>
+          {onCancel && <Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button>}
+        </div>
+      </form>
     );
   }
 

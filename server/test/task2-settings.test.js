@@ -237,17 +237,17 @@ test('Task 2: customer Settings APIs', async (t) => {
   await t.test('C2. MFA enrolment from Settings: a wrong code changes nothing; a correct code enables MFA and returns a session', async () => {
     const { users } = await workspace(10);
     const session = tokenFor(users.manager);
-    const start = await request(app).post('/api/auth/mfa/setup').set(bearerToken(session)).send({});
+    const start = await request(app).post('/api/auth/mfa/setup').set(bearerToken(session)).send({ password: PASSWORD });
     assert.strictEqual(start.status, 200, JSON.stringify(start.body));
     assert.ok(start.body.secret && start.body.otpauth_url.startsWith('otpauth://'));
 
-    const wrong = await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ code: '000000' });
+    const wrong = await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ password: PASSWORD, code: '000000' });
     assert.strictEqual(wrong.status, 401);
     assert.strictEqual(wrong.body.code, 'INVALID_MFA_CODE', 'a wrong code, not a dead session: the app keeps the session');
     assert.strictEqual((await freshUser(users.manager.id)).mfa_enabled ?? false, false);
     assert.strictEqual((await request(app).get('/api/auth/me').set(bearerToken(session))).status, 200, 'session still valid');
 
-    const confirm = await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ code: mfa.totp(start.body.secret) });
+    const confirm = await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ password: PASSWORD, code: mfa.totp(start.body.secret) });
     assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
     assert.ok(confirm.body.token);
     assert.strictEqual(confirm.body.recovery_codes.length, 10);
@@ -264,8 +264,8 @@ test('Task 2: customer Settings APIs', async (t) => {
   await t.test('C3. After enrolment, login asks for the code; a TOTP or recovery code completes it', async () => {
     const { users } = await workspace(10);
     const session = tokenFor(users.agent);
-    const start = await request(app).post('/api/auth/mfa/setup').set(bearerToken(session)).send({});
-    const confirm = await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ code: mfa.totp(start.body.secret) });
+    const start = await request(app).post('/api/auth/mfa/setup').set(bearerToken(session)).send({ password: PASSWORD });
+    const confirm = await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ password: PASSWORD, code: mfa.totp(start.body.secret) });
 
     const login = await request(app).post('/api/auth/login').send({ email: users.agent.email, password: PASSWORD });
     assert.strictEqual(login.status, 200);

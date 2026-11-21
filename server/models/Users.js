@@ -38,6 +38,8 @@ module.exports = defineModel('users', {
   mfa_email_code_expires_at: { type: Date },
   mfa_email_code_sent_at: { type: Date },
   mfa_email_code_attempts: { type: Number, default: 0 },
+  // Until when a re-authenticated enrolment (password + current code) may be confirmed.
+  mfa_stepup_until: { type: Date },
   invited_by: { type: Number },
   last_login: { type: Date },
   created_at: { type: Date, default: Date.now },
