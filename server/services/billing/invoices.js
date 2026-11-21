@@ -155,8 +155,7 @@ async function claim(order, now) {
 
 /** Step 2: gives the claimed row the next number of its series. */
 async function assignNumber(orderId, now) {
-  const issuedAt = now;
-  const fy = financialYear(issuedAt);
+  const fy = financialYear(now);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const row = await Invoices.findOne({ billing_order_id: orderId }, { _id: 0, invoice_number: 1, seller: 1 }).lean();
     if (!row) throw new InvoiceError(500, `The invoice row of order ${orderId} is missing`);
@@ -164,8 +163,13 @@ async function assignNumber(orderId, now) {
     const prefix = row.seller?.invoice_prefix || seller().invoice_prefix;
     const series = `${prefix}/${fy}`;
     const done = await withLock(`invoice-series:${series}`, async () => {
-      const last = await runAsSystem(() => Invoices.findOne({ series, seq: { $type: 'number' } }, { _id: 0, seq: 1 }).sort({ seq: -1 }).lean(), 'billing:invoice');
+      const last = await runAsSystem(() => Invoices.findOne({ series, seq: { $type: 'number' } }, { _id: 0, seq: 1, issued_at: 1 }).sort({ seq: -1 }).lean(), 'billing:invoice');
       const seq = (Number(last?.seq) || 0) + 1;
+      // `now` was taken before this lock; a parallel caller with a later `now`
+      // may have numbered first. Never date a number before the one above it
+      // (same series, so the same financial year).
+      const lastAt = last?.issued_at ? new Date(last.issued_at) : null;
+      const issuedAt = lastAt && lastAt > now ? lastAt : now;
       try {
         await Invoices.updateOne({ billing_order_id: orderId, invoice_number: null }, {
           $set: { invoice_number: `${series}/${String(seq).padStart(4, '0')}`, series, seq, financial_year: fy, issued_at: issuedAt },
