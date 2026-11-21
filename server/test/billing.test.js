@@ -621,6 +621,111 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.strictEqual((await request(app).get(`/api/billing/invoices/${list.body.invoices[0].id}`).set(bearer(b.owner))).status, 404, 'tenant isolation');
   });
 
+  // ── Invoices: issued at fulfil, retried, numbered without gaps ──
+  const invoiceRows = () => sys(() => models.Invoices.find({}, { _id: 0 }).sort({ seq: 1 }).lean());
+  // Creates a plan order through the API; returns the Razorpay order id and a unique payment id.
+  async function planOrder(owner, planCode = 'desk') {
+    const created = await request(app).post('/api/billing/orders').set(bearer(owner)).send({ purpose: 'subscription', plan_code: planCode });
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    const orderId = created.body.checkout.order_id;
+    return { orderId, paymentId: `pay_${orderId}`, amount: created.body.order.amount_paise };
+  }
+  const verifyOrder = (owner, { orderId, paymentId }) => request(app).post('/api/billing/orders/verify').set(bearer(owner))
+    .send({ razorpay_order_id: orderId, razorpay_payment_id: paymentId, razorpay_signature: checkoutSignature(orderId, paymentId) });
+  // Pays a plan while invoicing is broken, as if the server died between fulfilment and the invoice.
+  async function subscribeWithoutInvoice(owner) {
+    const original = billing.invoices.ensureForOrder;
+    billing.invoices.ensureForOrder = async () => { throw new Error('crash between fulfil and invoice'); };
+    try { return await subscribe(owner, 'desk'); } finally { billing.invoices.ensureForOrder = original; }
+  }
+
+  await t.test('I2. The invoice is issued in the same flow that fulfils the payment', async () => {
+    const ws = await workspace(1);
+    const paid = await subscribe(ws.owner, 'desk');
+    const rows = await invoiceRows();
+    assert.strictEqual(rows.length, 1, 'issued by the checkout call itself, before any invoice list is opened');
+    const order = await runAsTenant(1, () => BillingOrders.findOne({ razorpay_order_id: paid.orderId }).lean());
+    assert.strictEqual(rows[0].billing_order_id, order.id);
+    assert.match(rows[0].invoice_number, /^AV\/\d{2}-\d{2}\/0001$/);
+    assert.strictEqual(rows[0].seq, 1);
+    assert.strictEqual(rows[0].series, rows[0].invoice_number.slice(0, -5));
+    assert.strictEqual(rows[0].tenant_id, 1);
+  });
+
+  await t.test('I3. The retry job issues an invoice that a fulfilled payment is missing', async () => {
+    const ws = await workspace(1);
+    await subscribeWithoutInvoice(ws.owner);
+    assert.strictEqual((await invoiceRows()).length, 0);
+    assert.strictEqual((await runAsTenant(1, () => BillingOrders.findOne({ purpose: 'subscription' }).lean())).status, 'fulfilled');
+    const result = await billing.invoices.issueMissing();
+    assert.deepStrictEqual(result, { issued: 1, failed: 0 });
+    const rows = await invoiceRows();
+    assert.strictEqual(rows.length, 1);
+    assert.match(rows[0].invoice_number, /\/0001$/);
+    assert.strictEqual(rows[0].tenant_id, 1);
+    const list = await request(app).get('/api/billing/invoices').set(bearer(ws.owner));
+    assert.strictEqual(list.body.invoices.length, 1);
+    assert.deepStrictEqual(await billing.invoices.issueMissing(), { issued: 0, failed: 0 }, 'nothing left to do');
+  });
+
+  await t.test('I4. Retry job twice at once and alongside a repeated fulfil still gives one invoice per payment', async () => {
+    const a = await workspace(1);
+    const b = await workspace(2);
+    const paidA = await subscribeWithoutInvoice(a.owner);
+    await subscribeWithoutInvoice(b.owner);
+    const orderA = await runAsTenant(1, () => BillingOrders.findOne({ razorpay_order_id: paidA.orderId }).lean());
+    await Promise.all([
+      billing.invoices.issueMissing(),
+      billing.invoices.issueMissing(),
+      runAsTenant(1, () => billing.orders.fulfil(orderA, { paymentId: paidA.paymentId, source: 'webhook' })),
+      signedWebhook(webhookBody(paidA.orderId, paidA.paymentId, orderA.amount_paise)),
+      runAsTenant(1, () => billing.invoices.ensureForOrder(orderA)),
+    ]);
+    const rows = await invoiceRows();
+    assert.strictEqual(rows.length, 2, JSON.stringify(rows.map((r) => [r.billing_order_id, r.invoice_number])));
+    assert.deepStrictEqual(rows.map((r) => r.seq), [1, 2]);
+    assert.strictEqual(new Set(rows.map((r) => r.billing_order_id)).size, 2);
+    assert.ok(rows.every((r) => typeof r.invoice_number === 'string'));
+    assert.deepStrictEqual(await billing.invoices.issueMissing(), { issued: 0, failed: 0 });
+  });
+
+  await t.test('I5. Invoice numbers are consecutive: a failed numbering uses up no number, and parallel payments share the series', async () => {
+    const ws = [];
+    for (let id = 1; id <= 5; id += 1) ws.push(await workspace(id));
+    // Workspace 1: numbering fails once after the row was claimed.
+    const realUpdateOne = models.Invoices.updateOne;
+    let failNumbering = true;
+    models.Invoices.updateOne = function patched(filter, update, ...rest) {
+      if (failNumbering && update?.$set?.invoice_number) { failNumbering = false; return Promise.reject(new Error('disk full')); }
+      return realUpdateOne.call(this, filter, update, ...rest);
+    };
+    try {
+      assert.strictEqual((await verifyOrder(ws[0].owner, await planOrder(ws[0].owner))).status, 200, 'the payment still goes through');
+    } finally { models.Invoices.updateOne = realUpdateOne; }
+    const pending = await invoiceRows();
+    assert.strictEqual(pending.length, 1);
+    assert.strictEqual(pending[0].invoice_number, null, 'claimed, not numbered');
+    assert.strictEqual((await request(app).get('/api/billing/invoices').set(bearer(ws[0].owner))).body.invoices.length, 0, 'an unnumbered row is not shown');
+
+    // Workspace 2 pays next and takes 0001: the failure used up nothing.
+    assert.strictEqual((await verifyOrder(ws[1].owner, await planOrder(ws[1].owner))).status, 200);
+    // The retry job numbers workspace 1 next.
+    assert.deepStrictEqual(await billing.invoices.issueMissing(), { issued: 1, failed: 0 });
+    // Workspaces 3 to 5 pay at the same moment.
+    const orders = [];
+    for (const w of ws.slice(2)) orders.push(await planOrder(w.owner));
+    const results = await Promise.all(ws.slice(2).map((w, i) => verifyOrder(w.owner, orders[i])));
+    for (const res of results) assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+
+    const rows = await invoiceRows();
+    assert.strictEqual(rows.length, 5);
+    assert.deepStrictEqual(rows.map((r) => r.seq), [1, 2, 3, 4, 5]);
+    assert.deepStrictEqual(rows.map((r) => r.invoice_number.slice(-4)), ['0001', '0002', '0003', '0004', '0005']);
+    assert.strictEqual(new Set(rows.map((r) => r.series)).size, 1);
+    assert.deepStrictEqual(rows.slice(0, 2).map((r) => r.tenant_id), [2, 1]);
+    for (let i = 1; i < rows.length; i += 1) assert.ok(new Date(rows[i].issued_at) >= new Date(rows[i - 1].issued_at), 'dates follow numbers');
+  });
+
   await t.test('E2. If adding the extra fails after the wallet was charged, the wallet is refunded', async () => {
     const ws = await workspace(1);
     await subscribe(ws.owner, 'desk');

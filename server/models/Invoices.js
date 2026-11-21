@@ -3,10 +3,14 @@ const { defineModel, Mixed } = require('../db/mongo');
 // GST tax invoices for plan payments. One per paid order (unique order id).
 // The seller and buyer details are copied onto the row when it is issued, so an
 // invoice never changes if a profile is edited later. Numbers run in sequence
-// per financial year: AV/26-27/0001. Tenant-scoped like the order it belongs to.
+// per financial year with no gaps: AV/26-27/0001 (series AV/26-27, seq 1). A row
+// is first written without a number and numbered right after (see
+// services/billing/invoices.js). Tenant-scoped like the order it belongs to.
 module.exports = defineModel('invoices', {
   id: { type: Number },
-  invoice_number: { type: String },
+  invoice_number: { type: String, default: null }, // null until numbered
+  series: { type: String, default: null }, // AV/26-27
+  seq: { type: Number, default: null }, // 1, 2, 3 ... within the series
   financial_year: { type: String }, // 26-27
   billing_order_id: { type: Number },
   razorpay_order_id: { type: String },
@@ -24,4 +28,4 @@ module.exports = defineModel('invoices', {
   total_paise: { type: Number },
   currency: { type: String, default: 'INR' },
   created_at: { type: Date, default: Date.now },
-}, { autoId: true, unique: [['invoice_number'], ['billing_order_id']], indexes: [['tenant_id', 'issued_at']] });
+}, { autoId: true, unique: [['invoice_number'], ['billing_order_id'], ['series', 'seq']], indexes: [['tenant_id', 'issued_at']] });
