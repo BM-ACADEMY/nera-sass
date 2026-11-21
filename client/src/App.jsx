@@ -25,6 +25,7 @@ import { SettingsView } from './views/SettingsView.jsx';
 import BillingPage from './views/billing/BillingPage.jsx';
 import SessionsPage from './views/account/SessionsPage.jsx';
 import { LoginScreen } from './views/auth/LoginScreen.jsx';
+import { SetPasswordPage } from './views/auth/SetPasswordPage.jsx';
 import { api } from './services/api.js';
 
 
@@ -141,6 +142,9 @@ export default function App() {
         <Routes>
           <Route path="/privacy-policy" element={<PrivacyPolicy />} />
           <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
+          {/* One-time links (password set/reset, invitations): open whether signed in or not. */}
+          <Route path="/reset-password/:token" element={<SetPasswordPage mode="reset" />} />
+          <Route path="/invite/:token" element={<SetPasswordPage mode="invite" />} />
           <Route
             path="/login"
             element={

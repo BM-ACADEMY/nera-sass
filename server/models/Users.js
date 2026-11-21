@@ -24,6 +24,11 @@ module.exports = defineModel('users', {
   failed_login_count: { type: Number, default: 0 },
   locked_until: { type: Date },
   password_changed_at: { type: Date },
+  // When the person first chose their own password (a reset/set-password link,
+  // a password change, or an invitation without a preset password). Staff-set
+  // passwords leave it empty. With last_login, this tells "Send to client"
+  // that the owner has taken control of the login.
+  password_claimed_at: { type: Date },
   reset_token_hash: { type: String },
   reset_token_expires_at: { type: Date },
   mfa_enabled: { type: Boolean, default: false },

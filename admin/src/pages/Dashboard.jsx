@@ -14,6 +14,7 @@ import { MdOutlineSpaceDashboard } from 'react-icons/md';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import CreateTenantModal from '../components/CreateTenantModal';
 import WorkspaceDetail from '../components/workspaces/WorkspaceDetail';
+import SendToClientDialog from '../components/workspaces/SendToClientDialog';
 import TenantsList from '../components/TenantsList';
 import UsersPage from '../components/users/UsersPage';
 import AppSidebar from '../components/AppSidebar';
@@ -88,6 +89,8 @@ const Dashboard = () => {
 
   // Modals
   const [isTenantModalOpen, setIsTenantModalOpen] = useState(false);
+  const [sendToClientId, setSendToClientId] = useState(null); // "Send to client" dialog
+
   const [suspendModalTenant, setSuspendModalTenant] = useState(null);
   const [suspendReason, setSuspendReason] = useState('');
   const [isSuspending, setIsSuspending] = useState(false);
@@ -142,6 +145,7 @@ const Dashboard = () => {
   // Unread chats on the platform's own WhatsApp number (sidebar badge).
   const [inboxUnread, setInboxUnread] = useState(0);
   const canInbox = Boolean(permissions['platform.inbox']);
+  const canSendToClient = Boolean(permissions['platform.users.manage']);
   const fetchInboxUnread = async () => {
     try {
       const res = await axiosClient.get('/admin/inbox/status');
@@ -310,6 +314,7 @@ const Dashboard = () => {
               refreshKey={detailRefresh}
               onSuspend={(tenant) => { setSuspendModalTenant(tenant); setSuspendReason(''); }}
               onReinstate={handleReinstate}
+              onSendToClient={canSendToClient ? (tenant) => setSendToClientId(tenant.id) : null}
             />
           )}
 
@@ -345,6 +350,7 @@ const Dashboard = () => {
                   onSuspendTenant={(tenant) => { setSuspendModalTenant(tenant); setSuspendReason(''); }}
                   onReinstateTenant={handleReinstate}
                   onViewTenant={(tenant) => navigate(`/dashboard/${TAB_SLUGS.tenants}/${tenant.id}`)}
+                  onSendToClient={canSendToClient ? (tenant) => setSendToClientId(tenant.id) : null}
                 />
               </CardContent>
             </Card>
@@ -370,9 +376,16 @@ const Dashboard = () => {
           <CreateTenantModal
             onTenantCreated={() => { setIsTenantModalOpen(false); fetchTenants(); fetchUsers(); }}
             onCancel={() => setIsTenantModalOpen(false)}
+            onSendToClient={canSendToClient ? (tenantId) => { setIsTenantModalOpen(false); fetchTenants(); fetchUsers(); setSendToClientId(tenantId); } : null}
           />
         </DialogContent>
       </Dialog>
+
+      <SendToClientDialog
+        open={sendToClientId != null}
+        onOpenChange={(open) => !open && setSendToClientId(null)}
+        tenantId={sendToClientId}
+      />
 
       {/* Suspend Tenant Modal */}
       <Dialog open={Boolean(suspendModalTenant)} onOpenChange={(open) => !open && setSuspendModalTenant(null)}>

@@ -159,7 +159,14 @@ exports.login = async (req, res) => {
         return res.status(403).json({ error: 'This workspace is suspended. Contact support.', code: 'TENANT_SUSPENDED' });
       }
     }
-    await sys(() => Users.updateOne({ id: user.id }, { $set: { last_login: new Date() } }));
+    // A successful sign-in also kills any unused reset/set-password link: a link
+    // sent earlier (for example a welcome link to a wrong number) must not take
+    // over an account its owner now uses. (Failed-login count and lock are reset
+    // by passwordAttempts.checkPassword, conditionally.)
+    await sys(() => Users.updateOne({ id: user.id }, {
+      $set: { last_login: new Date() },
+      $unset: { reset_token_hash: '', reset_token_expires_at: '' },
+    }));
     return res.json(await afterPassword(user, req));
   } catch (error) {
     return fail(res, error);
@@ -433,7 +440,11 @@ exports.changePassword = async (req, res) => {
     const password_hash = await bcrypt.hash(next, 12);
     const updated = await sys(() => Users.findOneAndUpdate(
       { id: user.id },
-      { $set: { password_hash, password_changed_at: new Date() }, $inc: { token_version: 1 } },
+      {
+        $set: { password_hash, password_changed_at: new Date(), password_claimed_at: user.password_claimed_at || new Date() },
+        $unset: { reset_token_hash: '', reset_token_expires_at: '' },
+        $inc: { token_version: 1 },
+      },
       { new: true, projection: { _id: 0 } },
     ).lean());
     await audit.record(audit.EVENTS.PASSWORD_CHANGED, { tenantId: user.tenant_id ?? null, req, targetType: 'user', targetId: user.id });
@@ -509,7 +520,7 @@ exports.resetPassword = async (req, res) => {
     const result = await sys(() => Users.updateOne(
       { id: user.id, reset_token_hash: sha256(token), reset_token_expires_at: { $gt: new Date() } },
       {
-        $set: { password_hash, password_changed_at: new Date(), failed_login_count: 0 },
+        $set: { password_hash, password_changed_at: new Date(), password_claimed_at: user.password_claimed_at || new Date(), failed_login_count: 0 },
         $unset: { reset_token_hash: '', reset_token_expires_at: '', locked_until: '' },
         $inc: { token_version: 1 },
       },

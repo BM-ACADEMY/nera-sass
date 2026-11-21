@@ -628,6 +628,21 @@ async function startConversation({ phone, name, templateName, language, values, 
   return { contact_id: contact.id, message };
 }
 
+/**
+ * Sends a template that the caller already built (buildTemplateMessage) to a
+ * number. `storedText` replaces the text kept in the admin inbox, so a secret
+ * inside the message (a one-time sign-in link) never lands in chat history.
+ */
+async function sendBuiltTemplate({ phone, template, built, storedText, staff }) {
+  requireConfigured();
+  const waId = digits(phone);
+  if (waId.length < 10 || waId.length > 15) throw new InboxError(400, 'Enter the number with its country code, for example 919876543210');
+  const contact = await findOrCreateContact(waId, null);
+  const text = storedText ?? built.text;
+  const message = await deliver(contact, { type: 'template', text, templateName: template.name }, built.payload, staff);
+  return { contact_id: contact.id, message };
+}
+
 const HEADER_MEDIA_LIMITS = { IMAGE: 5, VIDEO: 16, DOCUMENT: 100 }; // MB, Meta's limits
 
 /**
@@ -655,6 +670,7 @@ module.exports = {
   sendText,
   sendTemplate,
   startConversation,
+  sendBuiltTemplate,
   listTemplates,
   templateFields,
   buildTemplateMessage,

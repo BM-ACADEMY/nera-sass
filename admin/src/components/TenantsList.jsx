@@ -1,5 +1,5 @@
 import React from 'react';
-import { FiMoreHorizontal, FiSettings, FiSlash, FiCheckCircle } from 'react-icons/fi';
+import { FiMoreHorizontal, FiSettings, FiSlash, FiCheckCircle, FiSend } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import DataTable from './DataTable';
 import { Badge } from '@/components/ui/badge';
@@ -20,6 +20,7 @@ const TenantsList = ({
   onSuspendTenant,
   onReinstateTenant,
   onViewTenant,
+  onSendToClient,
 }) => {
   const columns = [
     {
@@ -129,6 +130,11 @@ const TenantsList = ({
               <DropdownMenuItem onSelect={() => onViewTenant && onViewTenant(tenant)}>
                 <FiSettings /> Manage workspace
               </DropdownMenuItem>
+              {onSendToClient && tenant.owner && !isSuspended && (
+                <DropdownMenuItem onSelect={() => onSendToClient(tenant)}>
+                  <FiSend /> Send to client
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
               {isSuspended ? (
                 <DropdownMenuItem onSelect={() => onReinstateTenant && onReinstateTenant(tenant)}>

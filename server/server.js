@@ -567,6 +567,9 @@ function stopCampaignQueueProcessor() {
 }
 
 // ── MIDDLEWARE ────────────────────────────────────────────
+// One-time tokens in URLs (invitation preview, set-password pages) are never logged.
+morgan.token('url', (req) => String(req.originalUrl || req.url)
+  .replace(/(\/api\/auth\/invitations\/|\/invite\/|\/reset-password\/)(?!accept(?:[/?#]|$))[^/?#]+/g, '$1[token]'));
 app.use(morgan('dev')); // ← must be first so every request is logged
 app.use(helmet({
   contentSecurityPolicy: false,
