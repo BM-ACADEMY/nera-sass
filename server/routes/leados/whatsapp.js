@@ -85,7 +85,7 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
         // The wake-up template is a business-initiated message: it needs the
         // contact's consent when Meta classes it as marketing, is never sent
         // to a contact who said STOP, and counts against the number's cap.
-        const wakeupKind = await sendPolicy.templateKind(WAKEUP_TEMPLATE);
+        const wakeupKind = await sendPolicy.templateKind(WAKEUP_TEMPLATE, { phoneNumberId, clientId: lead.client_id, language: 'en' });
         const wakeupCheck = await sendPolicy.checkSend({ lead, kind: wakeupKind, messageType: 'template', phoneNumberId });
         if (!wakeupCheck.ok) {
           return res.status(200).json({ window_closed: true, blocked: true, code: wakeupCheck.code, message: wakeupCheck.message });
