@@ -122,4 +122,4 @@ async function readValidated(file) {
   }
 }
 
-module.exports = { TenantUploadError, TYPES, uploadsRoot, tenantUploadDir, publicPathFor, resolveTenantUpload, readValidated };
+module.exports = { TenantUploadError, TYPES, MIME, uploadsRoot, tenantUploadDir, publicPathFor, resolveTenantUpload, readValidated };

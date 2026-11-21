@@ -507,7 +507,7 @@ app.get('/api/leads/:id', auth, async (req, res) => {
     }
 
     // Join conversations (thread) → messages (individual) for this lead
-    const conversations = await leadInboxMessages(await Conversations.distinct('id', { lead_id: leadRow.id }));
+    const conversations = await leadInboxMessages(await Conversations.distinct('id', { lead_id: leadRow.id }), { clientId: leadRow.client_id ?? null });
 
     res.json({ lead, conversations });
   } catch (err) {
@@ -519,11 +519,11 @@ app.get('/api/leads/:id', auth, async (req, res) => {
 app.get('/api/leads/:id/messages', auth, async (req, res) => {
   try {
     const { limit = 100, offset = 0 } = req.query;
-    const messageLead = await Leads.findOne({ id: req.params.id }, { phone: 1 }).lean();
+    const messageLead = await Leads.findOne({ id: req.params.id }, { phone: 1, client_id: 1 }).lean();
     const conversationFilter = [{ lead_id: req.params.id }];
     if (messageLead && messageLead.phone != null) conversationFilter.push({ lead_id: null, phone: phoneTailRegex(messageLead.phone) });
     const conversationIds = await Conversations.distinct('id', { $or: conversationFilter });
-    const messages = await leadInboxMessages(conversationIds, { sort: { sent_at: -1 }, skip: parseInt(offset) || 0, limit: parseInt(limit) || 100 });
+    const messages = await leadInboxMessages(conversationIds, { sort: { sent_at: -1 }, skip: parseInt(offset) || 0, limit: parseInt(limit) || 100, clientId: messageLead?.client_id ?? null });
 
     res.json({ messages: messages.reverse() });
   } catch (err) {

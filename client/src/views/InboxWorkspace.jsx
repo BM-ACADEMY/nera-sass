@@ -2,12 +2,15 @@ import { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Virtuoso } from 'react-virtuoso';
 import { useFloating, autoUpdate, offset, flip, shift, FloatingPortal, useDismiss, useInteractions } from '@floating-ui/react';
-import { MessageCircle, Search, Send, ChevronLeft, ChevronRight, ChevronDown, Check, Clock, Paperclip, Copy, Edit2, Trash2, X, MoreVertical, Image, Film, Music, FileText, Smile, Mic, Square, CornerUpLeft, CornerUpRight, Pin, Star, CheckSquare, Forward, Download, ZoomIn, ZoomOut, Phone, Video, User, Sparkles, ExternalLink, Plus, Tag } from 'lucide-react';
+import { MessageCircle, Search, Send, ChevronLeft, ChevronRight, ChevronDown, Check, Clock, Paperclip, Copy, Edit2, Trash2, X, MoreVertical, Image, Film, Music, FileText, Smile, Mic, Square, CornerUpLeft, CornerUpRight, Pin, Star, CheckSquare, Forward, Download, ZoomIn, ZoomOut, Phone, Video, User, Sparkles, ExternalLink, Plus, Tag, Camera } from 'lucide-react';
 import { io as socketIO } from 'socket.io-client';
 import { C } from '../constants/theme.js';
 import { useLeads, useLead, useAllianceInbox, useAllianceLead } from '../hooks/useLeads.js';
 import { api, allianceInboxApi } from '../services/api.js';
 import { toast } from 'react-hot-toast';
+import { VoiceRecorder, voiceFileName } from '../components/chat/VoiceRecorder.jsx';
+import { CameraDialog } from '../components/chat/CameraDialog.jsx';
+import { SendPreview, toPending, MAX_FILE, MAX_FILES } from '../components/chat/SendPreview.jsx';
 
 // The emoji picker is large and only opens on demand: load it then, in its own chunk.
 const EmojiPickerLazy = lazy(() => import('emoji-picker-react'));
@@ -22,69 +25,9 @@ const EmojiPicker = (props) => (
 const isLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const SOCKET_URL = isLocalDev ? window.location.origin : import.meta.env.VITE_API_URL;
 
-const CircularProgress = ({ progress, size = 30, strokeWidth = 3 }) => {
-  const radius = (size - strokeWidth) / 2;
-  const circumference = radius * 2 * Math.PI;
-  const offset = circumference - (progress / 100) * circumference;
-  return (
-    <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
-      <circle cx={size / 2} cy={size / 2} r={radius} stroke={C.border} strokeWidth={strokeWidth} fill="none" />
-      <circle cx={size / 2} cy={size / 2} r={radius} stroke={C.accent} strokeWidth={strokeWidth} fill="none" strokeDasharray={circumference} strokeDashoffset={offset} style={{ transition: 'stroke-dashoffset 0.2s ease-out' }} />
-      <text x="50%" y="50%" fill={C.text} fontSize="9" fontWeight="600" textAnchor="middle" dy=".3em" transform={`rotate(90 ${size / 2} ${size / 2})`}>{Math.round(progress)}</text>
-    </svg>
-  );
-};
-
-// Floating-ui powered dropdown for per-message actions (Reply/Forward/etc). Unlike a
-// plain `position:absolute` menu, this flips upward and stays fully visible when the
-// message sits near the bottom of the (virtualized, scrolling) chat — the trigger button
-// and the panel it opens were previously clipped by the message list's scroll container.
-const MessageActionsMenu = ({ isOpen, onToggle, onClose, align = 'end', children }) => {
-  const { refs, floatingStyles, context } = useFloating({
-    open: isOpen,
-    onOpenChange: (open) => { if (!open) onClose(); },
-    placement: align === 'start' ? 'bottom-start' : 'bottom-end',
-    middleware: [offset(4), flip({ fallbackPlacements: ['top-start', 'top-end'] }), shift({ padding: 8 })],
-    whileElementsMounted: autoUpdate,
-    strategy: 'fixed',
-  });
-  const dismiss = useDismiss(context);
-  const { getReferenceProps, getFloatingProps } = useInteractions([dismiss]);
-
-  return (
-    <div className="wa-hover" data-open={isOpen ? 'true' : 'false'} style={{ position: 'absolute', top: 4, right: 4, zIndex: 10 }}>
-      <button
-        ref={refs.setReference}
-        type="button"
-        aria-label="Message actions"
-        {...getReferenceProps({ onClick: (e) => { e.stopPropagation(); onToggle(); } })}
-        style={{ background: 'rgba(255, 255, 255, 0.9)', border: 'none', cursor: 'pointer', padding: 2, borderRadius: 999, display: 'flex', boxShadow: '0 1px 2px rgba(11,20,26,.15)' }}
-      >
-        <ChevronDown size={14} color="#54656f" />
-      </button>
-      {isOpen && (
-        <FloatingPortal>
-          <div
-            ref={refs.setFloating}
-            style={{ ...floatingStyles, background: C.card, border: '1px solid ' + C.border, borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', zIndex: 1000, minWidth: 160, padding: '5px 0', display: 'flex', flexDirection: 'column' }}
-            {...getFloatingProps()}
-          >
-            {children}
-          </div>
-        </FloatingPortal>
-      )}
-    </div>
-  );
-};
-
-const formatBytes = (bytes) => {
-  if (bytes === 0) return '0 Bytes';
-  const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-};
 const WA_GREEN = '#25D366';
+// Files the server takes as WhatsApp documents (server/services/tenantUploads.js).
+const DOCUMENT_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.jpg,.jpeg,.png,.webp,.mp4,.3gp,.mp3,.m4a,.aac,.amr,.ogg,.opus';
 // Same palette as the admin panel's WhatsApp Chat.
 const CHAT_BG = '#efeae2';
 const BAR_BG = '#f0f2f5';
@@ -310,7 +253,9 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
     });
   }, [showTagMenu]);
   
-  const [attachedFile, setAttachedFile] = useState(null);
+  // Files picked, pasted, dropped or photographed, shown in the send preview.
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [activeDropdownId, setActiveDropdownId] = useState(null);
   const [replyingTo, setReplyingTo] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
@@ -318,19 +263,12 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
-  const [uploadProgress, setUploadProgress] = useState(null);
-
   const [isRecording, setIsRecording] = useState(false);
-  const [recordingDuration, setRecordingDuration] = useState(0);
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
-  const timerRef = useRef(null);
 
   const [forwardMessage, setForwardMessage] = useState(null);
   const [forwardSearch, setForwardSearch] = useState('');
   const [selectedForwardLeads, setSelectedForwardLeads] = useState([]);
   const [forwarding, setForwarding] = useState(false);
-  const recordingTimerRef = useRef(null);
 
   const [pinMessageModal, setPinMessageModal] = useState(null);
   const [pinDuration, setPinDuration] = useState(168); // Default 7 days (168 hours)
@@ -383,65 +321,6 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
     localStorage.setItem(storageKeys.deleted, JSON.stringify(updated));
   };
 
-  // cleanup recording on unmount
-  useEffect(() => {
-    return () => {
-      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
-      }
-    };
-  }, []);
-
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const preferredMimeTypes = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'];
-      const supportedMimeType = preferredMimeTypes.find((type) => MediaRecorder.isTypeSupported(type));
-      const mediaRecorder = supportedMimeType
-        ? new MediaRecorder(stream, { mimeType: supportedMimeType })
-        : new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.onstop = () => {
-        const recordedMimeType = mediaRecorder.mimeType || supportedMimeType || 'audio/webm';
-        const extension = recordedMimeType.includes('ogg') ? 'ogg' : recordedMimeType.includes('mp4') ? 'm4a' : 'webm';
-        const audioBlob = new Blob(audioChunksRef.current, { type: recordedMimeType });
-        const file = new File([audioBlob], `voice-message-${Date.now()}.${extension}`, { type: recordedMimeType });
-        setAttachedFile(file);
-        stream.getTracks().forEach(track => track.stop());
-      };
-
-      mediaRecorder.start();
-      setIsRecording(true);
-      setRecordingDuration(0);
-      recordingTimerRef.current = setInterval(() => {
-        setRecordingDuration(prev => prev + 1);
-      }, 1000);
-    } catch (err) {
-      alert("Microphone access denied or not available.");
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      clearInterval(recordingTimerRef.current);
-    }
-  };
-
-  const formatDuration = (seconds) => {
-    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
-    const s = (seconds % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  };
-  const [attachAccept, setAttachAccept] = useState('*/*');
 
   const socketRef = useRef(null);
   const bottomRef = useRef(null);
@@ -641,95 +520,139 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
     }
   };
 
-  const handleFileChange = (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      setAttachedFile(e.target.files[0]);
-    }
+  // Same flow as the admin WhatsApp Chat: picked, pasted, dropped or
+  // photographed files open the send preview (caption per file, up to 10).
+  const addFiles = (files) => {
+    const list = [...(files || [])];
+    if (!list.length) return;
+    const tooBig = list.filter((f) => f.size > MAX_FILE);
+    if (tooBig.length) toast.error(`${tooBig.length === 1 ? `"${tooBig[0].name}" is` : `${tooBig.length} files are`} over WhatsApp's 100 MB limit.`);
+    const fit = list.filter((f) => f.size <= MAX_FILE);
+    setPendingFiles((prev) => {
+      const room = MAX_FILES - prev.length;
+      if (fit.length > room) toast.error(`You can send up to ${MAX_FILES} files at once.`);
+      return [...prev, ...toPending(fit.slice(0, Math.max(0, room)))];
+    });
   };
 
-  const handleAttachOptionClick = (acceptString) => {
+  const handleFileChange = (e) => {
+    addFiles(e.target.files);
+    e.target.value = '';
+  };
+
+  const handleAttachOptionClick = (option) => {
     setShowAttachMenu(false);
+    if (option.camera) { setCameraOpen(true); return; }
     if (fileInputRef.current) {
-      fileInputRef.current.accept = acceptString;
+      fileInputRef.current.accept = option.accept;
       fileInputRef.current.click();
     }
   };
 
-  const handleSend = async (e) => {
-    e.preventDefault();
-    if ((!msg.trim() && !attachedFile) || !activeLeadId || sending) return;
-    setSending(true);
+  // Before the server said how Meta takes the file (alliance uploads), the
+  // browser's type decides.
+  const kindOfFile = (file) => (file.type.startsWith('image/') ? 'image'
+    : file.type.startsWith('video/') ? 'video'
+      : file.type.startsWith('audio/') ? 'audio' : 'document');
 
+  /**
+   * Sends one message: text, or a file (stored on our media server in this
+   * workspace's folder) with an optional caption. Throws when it was not
+   * sent, after telling the user why, so the send preview keeps the file.
+   */
+  const deliverMessage = async ({ text = '', file = null, onProgress } = {}) => {
+    if (!activeLeadId) throw new Error('No chat open');
+    const quoted = replyingTo;
     let mediaUrl = null;
     let msgType = 'text';
     let waMediaId = null;
-
     let optimisticId = null;
 
     try {
-      if (attachedFile) {
-        setUploadProgress(0);
+      if (file) {
         const formData = new FormData();
-        formData.append('file', attachedFile);
-        const uploadRes = await inboxApi.uploadMedia(formData, (progress) => {
-          setUploadProgress(progress);
-        });
+        formData.append('file', file);
+        const uploadRes = await inboxApi.uploadMedia(formData, onProgress);
         mediaUrl = uploadRes.fileUrl;
         // Alliance inbox: prefer the Meta media_id so we don't need a public URL.
         if (alliance && uploadRes.waMediaId) waMediaId = uploadRes.waMediaId;
-        setUploadProgress(null);
-
-        if (attachedFile.type.startsWith('image/')) msgType = 'image';
-        else if (attachedFile.type.startsWith('video/')) msgType = 'video';
-        else if (attachedFile.type.startsWith('audio/')) msgType = 'audio';
-        else msgType = 'document';
+        // The server applies Meta's limits (a 9 MB photo or a .webp goes as a document).
+        msgType = uploadRes.kind || kindOfFile(file);
       }
 
-      optimisticId = `optimistic-${Date.now()}`;
+      optimisticId = `optimistic-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
       const optimisticMsg = {
         id: optimisticId,
         direction: 'outbound',
-        content: msg,
+        content: text,
         status: 'sending',
         type: msgType,
         media_url: mediaUrl,
-        reply_to: replyingTo,
+        reply_to: quoted,
         timestamp: new Date().toISOString(),
         is_ai: alliance && allianceDraftSource === 'ai',
       };
       setLocalMessages((prev) => [...prev, optimisticMsg]);
       setReplyingTo(null);
-      setMsg('');
-      setAttachedFile(null);
 
       const sentMsg = alliance
-        ? await inboxApi.sendWhatsAppMessage(activeLeadId, msg, mediaUrl, msgType, replyingTo?.wa_msg_id, false, allianceDraftSource, waMediaId)
-        : await inboxApi.sendWhatsAppMessage(activeLeadId, msg, mediaUrl, msgType, replyingTo?.wa_msg_id);
+        ? await inboxApi.sendWhatsAppMessage(activeLeadId, text, mediaUrl, msgType, quoted?.wa_msg_id, false, allianceDraftSource, waMediaId)
+        : await inboxApi.sendWhatsAppMessage(activeLeadId, text, mediaUrl, msgType, quoted?.wa_msg_id);
       setAllianceDraftSource('human');
 
       // If window was closed, backend sent a template to reopen it silently.
-      // We must remove the optimistic message because WhatsApp API STRICTLY blocks
-      // arbitrary media/text outside the 24-hour window. The server never sent the video/text to Meta.
+      // WhatsApp blocks free text and media outside the 24-hour window, so the
+      // server never sent this message: remove it.
       if (sentMsg?.window_closed) {
         setLocalMessages((prev) => prev.filter(m => m.id !== optimisticId));
         toast.error('Message not sent! The WhatsApp 24-hour window has expired. A standard template was sent automatically to reopen the chat. You can send files once they reply.', { duration: 6000 });
-        return;
+        const closed = new Error('window_closed');
+        closed.shown = true;
+        throw closed;
       }
 
       // Socket.IO may have already inserted this confirmed message. Remove the
       // optimistic row and merge the confirmation instead of creating a duplicate.
       setLocalMessages((prev) => mergeMessages(
         prev.filter((m) => m.id !== optimisticId),
-        [{ ...sentMsg.message, reply_to: replyingTo }]
+        [{ ...sentMsg.message, reply_to: quoted }]
       ));
     } catch (err) {
-      // On error, remove the optimistic message
-      setLocalMessages((prev) => prev.filter(m => m.id !== optimisticId));
+      if (optimisticId) setLocalMessages((prev) => prev.filter(m => m.id !== optimisticId));
+      if (!err.shown) {
+        const errorData = err.response?.data;
+        toast.error(errorData?.reason === 'window_closed'
+          ? (errorData?.error || 'The 24-hour WhatsApp window is closed. The approved reopen template could not be sent.')
+          : 'Failed to send message: ' + (errorData?.error || err.message));
+        err.shown = true;
+      }
+      throw err;
+    }
+  };
 
-      const errorData = err.response?.data;
-      toast.error(errorData?.reason === 'window_closed'
-        ? (errorData?.error || 'The 24-hour WhatsApp window is closed. The approved reopen template could not be sent.')
-        : 'Failed to send message: ' + (errorData?.error || err.message));
+  const handleSend = async (e) => {
+    e?.preventDefault?.();
+    const text = msg;
+    if (!text.trim() || !activeLeadId || sending) return;
+    setSending(true);
+    setMsg('');
+    try {
+      await deliverMessage({ text });
+    } catch {
+      setMsg((current) => current || text); // keep what was typed
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // A recorded voice note goes straight out, as in the admin chat.
+  const sendVoice = async (blob) => {
+    setIsRecording(false);
+    setSending(true);
+    try {
+      await deliverMessage({ file: new File([blob], voiceFileName(blob.type), { type: blob.type }) });
+    } catch {
+      // shown already
     } finally {
       setSending(false);
     }
@@ -929,8 +852,6 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
     () => localMessages.filter(m => m.type === 'image' && m.media_url && !deletedForMeSet.has(m.id)),
     [localMessages, deletedForMeSet]
   );
-  const attachedPreviewUrl = useMemo(() => (attachedFile ? URL.createObjectURL(attachedFile) : null), [attachedFile]);
-  useEffect(() => () => { if (attachedPreviewUrl) URL.revokeObjectURL(attachedPreviewUrl); }, [attachedPreviewUrl]);
 
   // 24-hour reply window: the newest customer message we know of, from the
   // server (last_inbound_at) or from a live message received since.
@@ -1316,8 +1237,28 @@ return (
         </div>
 
         <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden', position: 'relative' }}>
-          {/* Main Chat Flow */}
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Main Chat Flow (files can be dropped anywhere on it) */}
+          <div
+            style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}
+            onDragOver={(e) => { if (!isSelectMode && e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
+            onDrop={(e) => {
+              if (isSelectMode || !e.dataTransfer?.files?.length) return;
+              e.preventDefault();
+              addFiles(e.dataTransfer.files);
+            }}
+          >
+            {pendingFiles.length > 0 && (
+              <SendPreview
+                items={pendingFiles}
+                onItems={setPendingFiles}
+                onClose={() => {
+                  pendingFiles.forEach((x) => x.preview && URL.revokeObjectURL(x.preview));
+                  setPendingFiles([]);
+                }}
+                onSend={(item, caption, onProgress) => deliverMessage({ text: caption, file: item.file, onProgress })}
+              />
+            )}
+            <CameraDialog open={cameraOpen} onOpenChange={setCameraOpen} onCapture={(file) => addFiles([file])} />
 
             {/* Pinned Messages Bar */}
         {(() => {
@@ -1724,7 +1665,9 @@ return (
 
                       <div style={{ display: 'block', minWidth: '70px', position: 'relative' }}>
                         {(m.type === 'template' || m.msg_type === 'template') && (
-                          <div style={{ fontSize: 10.5, fontWeight: 600, color: '#128c7e', marginBottom: 2 }}>Template</div>
+                          <div style={{ fontSize: 10.5, fontWeight: 600, color: '#166534', marginBottom: 2, display: 'inline-flex', alignItems: 'center', gap: 4, paddingRight: 24 }}>
+                            <FileText size={11} /> Template{m.template_name ? ` · ${m.template_name}` : ''}
+                          </div>
                         )}
                         <span style={{ fontSize: '14.2px', color: '#111b21', whiteSpace: 'pre-wrap', lineHeight: '19px', wordBreak: 'break-word' }}>
                           {renderMessageWithLinks(getMessageText(m))}
@@ -1762,7 +1705,7 @@ return (
                         {/* Clear float to prevent collapse */}
                         <div style={{ clear: 'both' }} />
                       </div>
-                      {alliance && Array.isArray(m.template_buttons) && m.template_buttons.length > 0 && (
+                      {Array.isArray(m.template_buttons) && m.template_buttons.length > 0 && (
                         <div style={{ margin: '9px -12px -8px -12px', borderTop: '1px solid #e9edef' }}>
                           {m.template_buttons.map((button, buttonIndex) => {
                             const type = String(button.type || '').toUpperCase();
@@ -1997,42 +1940,6 @@ return (
               </div>
             )}
 
-            {attachedFile && (
-              <div style={{ padding: '20px', background: C.card, borderTop: '1px solid ' + C.border, display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
-                {attachedFile.type.startsWith('image/') ? (
-                  <div style={{ position: 'relative', width: '100%', display: 'flex', justifyContent: 'center' }}>
-                    <img src={attachedPreviewUrl} style={{ maxHeight: 220, maxWidth: '100%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)', border: '1px solid ' + C.border }} alt="preview" />
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', maxWidth: 400, background: C.bg, padding: 12, borderRadius: 8, border: '1px solid ' + C.border }}>
-                    {attachedFile.type.startsWith('video/') ? (
-                      <div style={{ width: 44, height: 44, borderRadius: 8, background: C.card, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Film size={20} color={C.muted} /></div>
-                    ) : attachedFile.type.startsWith('audio/') ? (
-                      <audio src={attachedPreviewUrl} controls style={{ height: 44, outline: 'none', flex: 1 }} />
-                    ) : (
-                      <div style={{ width: 44, height: 44, borderRadius: 8, background: C.card, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FileText size={20} color={C.muted} /></div>
-                    )}
-                    
-                    {!attachedFile.type.startsWith('audio/') && (
-                      <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', flex: 1 }}>
-                        <span style={{ fontSize: 14, color: C.text, fontWeight: 500, wordBreak: 'break-all', textOverflow: 'ellipsis', whiteSpace: 'nowrap', overflow: 'hidden' }}>{attachedFile.name}</span>
-                        <span style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{formatBytes(attachedFile.size)}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-                
-                <div style={{ position: 'absolute', top: 16, right: 20 }}>
-                  {uploadProgress !== null ? (
-                    <div style={{ background: C.card, borderRadius: '50%', padding: 4, boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
-                      <CircularProgress progress={uploadProgress} />
-                    </div>
-                  ) : (
-                    <button onClick={() => setAttachedFile(null)} style={{ background: 'rgba(0,0,0,0.4)', border: 'none', cursor: 'pointer', color: '#fff', padding: 6, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.2s' }} onMouseOver={e => e.currentTarget.style.background = 'rgba(0,0,0,0.7)'} onMouseOut={e => e.currentTarget.style.background = 'rgba(0,0,0,0.4)'}><X size={16} /></button>
-                  )}
-                </div>
-              </div>
-            )}
             {windowKnown && !windowHoursLeft && (
               <div style={{ padding: '8px 14px', borderTop: '1px solid ' + LINE, background: '#fffbeb', color: '#92400e', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Clock size={14} style={{ flexShrink: 0 }} />
@@ -2040,8 +1947,10 @@ return (
               </div>
             )}
             <form onSubmit={handleSend} style={{ padding: '10px 12px', borderTop: '1px solid ' + LINE, background: BAR_BG, display: 'flex', gap: 6, position: 'relative', alignItems: 'flex-end' }}>
-              <input type="file" ref={fileInputRef} accept={attachAccept} style={{ display: 'none' }} onChange={handleFileChange} />
+              <input type="file" ref={fileInputRef} multiple style={{ display: 'none' }} onChange={handleFileChange} />
 
+              {/* While recording, the recorder takes the whole bar (as in the admin chat). */}
+              {!isRecording && (<>
               <div style={{ position: 'relative' }}>
                 {showEmojiPicker && (
                   <div style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: 10, zIndex: 100 }}>
@@ -2063,15 +1972,15 @@ return (
                 {showAttachMenu && (
                   <div style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: 10, background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10, minWidth: 224, boxShadow: '0 12px 32px rgba(0,0,0,0.18)' }}>
                     {[
-                      { label: 'Image', color: '#3b82f6', accept: 'image/*', icon: <Image size={16} color="#fff" /> },
-                      { label: 'Video', color: '#ec4899', accept: 'video/*', icon: <Film size={16} color="#fff" /> },
-                      { label: 'Audio', color: '#f97316', accept: 'audio/*', icon: <Music size={16} color="#fff" /> },
-                      { label: 'Document', color: '#8b5cf6', accept: '.pdf,.doc,.docx,.xls,.xlsx,.txt', icon: <FileText size={16} color="#fff" /> },
+                      { label: 'Document', color: '#8b5cf6', accept: DOCUMENT_ACCEPT, icon: <FileText size={16} color="#fff" /> },
+                      { label: 'Photos & videos', color: '#3b82f6', accept: 'image/jpeg,image/png,image/webp,video/mp4,video/3gpp', icon: <Image size={16} color="#fff" /> },
+                      { label: 'Camera', color: '#ec4899', camera: true, icon: <Camera size={16} color="#fff" /> },
+                      { label: 'Audio', color: '#f97316', accept: '.mp3,.m4a,.aac,.amr,.ogg,.opus,audio/mpeg,audio/mp4,audio/aac,audio/amr,audio/ogg', icon: <Music size={16} color="#fff" /> },
                     ].map((opt) => (
                       <button
                         key={opt.label}
                         type="button"
-                        onClick={() => handleAttachOptionClick(opt.accept)}
+                        onClick={() => handleAttachOptionClick(opt)}
                         style={{ background: 'transparent', border: 'none', color: C.text, padding: '8px 10px', textAlign: 'left', borderRadius: 8, cursor: 'pointer', fontSize: 14, display: 'flex', gap: 12, alignItems: 'center' }}
                         onMouseOver={(e) => e.currentTarget.style.background = C.bg}
                         onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
@@ -2097,15 +2006,10 @@ return (
                   <Sparkles size={24} color="#e0b52f" />
                 </button>
               )}
+              </>)}
 
               {isRecording ? (
-                <div style={{ flex: 1, background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 24, padding: '9px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'red', animation: 'pulse 1s infinite' }} />
-                    <span style={{ color: '#3b4a54', fontSize: 14 }}>Recording... {formatDuration(recordingDuration)}</span>
-                  </div>
-                  <button type="button" onClick={stopRecording} style={{ background: 'transparent', border: 'none', color: '#f15c6d', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>STOP</button>
-                </div>
+                <VoiceRecorder onCancel={() => setIsRecording(false)} onSend={sendVoice} onError={(message) => toast.error(message)} />
               ) : (
                 <textarea
                   value={msg}
@@ -2117,7 +2021,7 @@ return (
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
-                      if (msg.trim() || attachedFile) {
+                      if (msg.trim()) {
                         handleSend(e);
                         e.target.style.height = '40px';
                       }
@@ -2126,7 +2030,7 @@ return (
                   onPaste={(e) => {
                     if (e.clipboardData?.files?.length > 0) {
                       e.preventDefault();
-                      setAttachedFile(e.clipboardData.files[0]);
+                      addFiles(e.clipboardData.files);
                     }
                   }}
                   placeholder="Type a message"
@@ -2150,8 +2054,8 @@ return (
                 />
               )}
 
-              {!msg.trim() && !attachedFile && !isRecording ? (
-                <button type="button" onClick={startRecording} title="Record a voice message" aria-label="Record a voice message" style={{ background: '#25D366', border: 'none', width: 40, height: 40, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#fff' }}>
+              {isRecording ? null : !msg.trim() && !sending ? (
+                <button type="button" onClick={() => { setShowEmojiPicker(false); setShowAttachMenu(false); setIsRecording(true); }} title="Record a voice message" aria-label="Record a voice message" style={{ background: '#25D366', border: 'none', width: 40, height: 40, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, color: '#fff' }}>
                   <Mic size={20} color="#fff" />
                 </button>
               ) : (
