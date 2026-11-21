@@ -1,5 +1,5 @@
 import React from 'react';
-import { FiLogOut, FiMoreVertical, FiSettings, FiUser, FiShield } from 'react-icons/fi';
+import { FiLogOut, FiMoreVertical, FiSettings, FiUser, FiShield, FiMonitor } from 'react-icons/fi';
 import getneraLogo from '@/assets/getnera-logo.png';
 import { FaWhatsapp } from 'react-icons/fa';
 import UserAvatar from './UserAvatar';
@@ -119,6 +119,7 @@ const AppSidebar = ({
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => openSettings('profile')}><FiUser /> Profile</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openSettings('two-step')}><FiShield /> Two-step verification</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openSettings('sessions')}><FiMonitor /> My sessions</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openSettings(null)}><FiSettings /> Settings</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onSelect={onLogout}>

@@ -28,6 +28,7 @@ router.post('/mfa/email/setup/confirm', loginLimit, sessionOrMfaToken, authContr
 // Signed in (customer users and platform staff)
 router.get('/me', requireAuth, authController.me);
 router.post('/change-password', requireAuth, authController.changePassword);
+router.post('/logout', requireAuth, authController.logout);
 router.post('/logout-all', requireAuth, authController.logoutAll);
 router.patch('/profile', requireAuth, authController.updateProfile);
 router.post('/mfa/disable', loginLimit, requireAuth, authController.disableMfaMethod);

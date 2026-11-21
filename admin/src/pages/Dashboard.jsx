@@ -157,6 +157,10 @@ const Dashboard = () => {
 
   const handleLogout = () => {
     disconnectRealtime();
+    // Ends this device's session on the server (My sessions). The token is
+    // passed explicitly because it is removed from storage right after.
+    const token = localStorage.getItem('adminToken');
+    if (token) axiosClient.post('/auth/logout', {}, { headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
     localStorage.removeItem('adminToken');
     navigate('/login');
   };
@@ -232,7 +236,7 @@ const Dashboard = () => {
       case 'workflows': return 'Workflow Automation Engines';
       case 'founder-reports': return 'Founder Reports';
       case 'users': return 'Users & Team';
-      case 'settings': return ({ profile: 'Profile', 'two-step': 'Two-step verification', password: 'Password & sessions', system: 'System' })[itemId] || 'Settings';
+      case 'settings': return ({ profile: 'Profile', 'two-step': 'Two-step verification', password: 'Password & sessions', sessions: 'My sessions', system: 'System' })[itemId] || 'Settings';
       case 'inbox': return 'WhatsApp Chat';
       default: return 'Platform Administration';
     }

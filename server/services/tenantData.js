@@ -24,6 +24,10 @@ const ARCHIVE_DIR = path.join(__dirname, '..', 'data', 'tenant-archives');
 // Never deleted with the tenant: the audit trail is the legal record of what happened.
 const KEEP_ON_DELETE = new Set(['audit_events']);
 
+// Left out of exports: signed-in sessions are security records of single
+// users (session hashes, devices), not workspace data.
+const SKIP_ON_EXPORT = new Set(['user_sessions']);
+
 const scopedModels = () => [...TENANT_SCOPED.keys()]
   .map((collection) => [collection, mongoose.models[collection]])
   .filter(([, model]) => model);
@@ -34,6 +38,7 @@ async function exportTenant(tenantId) {
   const collections = {};
   await runAsTenant(tenantId, async () => {
     for (const [collection, model] of scopedModels()) {
+      if (SKIP_ON_EXPORT.has(collection)) continue;
       const rows = await model.find({}, { _id: 0 }).lean();
       if (rows.length) collections[collection] = rows.map(stripSecrets);
     }
