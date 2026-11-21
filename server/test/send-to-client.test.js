@@ -480,6 +480,48 @@ test('Send to client', async (t) => {
     assert.strictEqual(view.body.rate.used, 1, 'the attempt counts toward the hourly limit');
   });
 
+  await t.test('W24. If building the message fails after the link was written, the link is cancelled and the failure audited', async () => {
+    const inbox = require('../services/platformInbox');
+    const { ops } = await seed();
+    const realBuild = inbox.buildTemplateMessage;
+    try {
+      inbox.buildTemplateMessage = () => { throw new Error('template could not be built'); };
+      const res = await send(ops);
+      assert.strictEqual(res.status, 502, JSON.stringify(res.body));
+      assert.strictEqual(res.body.code, 'SEND_FAILED');
+      assert.match(res.body.error, /link was cancelled/);
+    } finally {
+      inbox.buildTemplateMessage = realBuild;
+    }
+    assert.strictEqual(sends().length, 0);
+    const owner = await sys(() => Users.findOne({ email: 'ravi@kaveri.test' }).lean());
+    assert.ok(!owner.reset_token_hash, 'the new link was cancelled');
+    const failed = await sys(() => AuditEvents.findOne({ event: 'WORKSPACE_LOGIN_LINK_SENT', 'meta.status': 'failed' }).lean());
+    assert.ok(failed, 'the failure is audited');
+    assert.ok(!failed.meta.revoke_failed);
+  });
+
+  await t.test('W25. If the link cannot be cancelled after a failed send, staff are told and the audit row says so', async () => {
+    const { ops } = await seed();
+    metaFail = true;
+    const realUpdate = Users.updateOne;
+    try {
+      Users.updateOne = function updateOne(filter, update, ...rest) {
+        if (filter?.reset_token_hash && update?.$unset?.reset_token_hash !== undefined) return Promise.reject(new Error('database unavailable'));
+        return realUpdate.call(this, filter, update, ...rest);
+      };
+      const res = await send(ops);
+      assert.strictEqual(res.status, 502);
+      assert.strictEqual(res.body.code, 'SEND_FAILED');
+      assert.doesNotMatch(res.body.error, /link was cancelled/);
+      assert.match(res.body.error, /could not be cancelled/);
+    } finally {
+      Users.updateOne = realUpdate;
+    }
+    const failed = await sys(() => AuditEvents.findOne({ event: 'WORKSPACE_LOGIN_LINK_SENT', 'meta.status': 'failed' }).lean());
+    assert.strictEqual(failed.meta.revoke_failed, true);
+  });
+
   await t.test('W12. Provisioning a workspace never sends anything by itself', async () => {
     const { founder } = await seed();
     const res = await request(app).post('/api/admin/tenants').set(bearer(founder)).send({

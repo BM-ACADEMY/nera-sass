@@ -292,22 +292,35 @@ async function send({ tenantId, phone, phoneConfirm, confirmOptIn, staff = {}, r
     // No audit row, no link and no send. This row is also what the hourly limit counts.
     await log({ status: 'attempted' }, true);
 
-    const link = await issueLink(tenant, owner, { unclaimedOnly: !canReachSignedInOwner(staff.role) });
+    const unclaimedOnly = !canReachSignedInOwner(staff.role);
+    const link = await issueLink(tenant, owner, { unclaimedOnly });
     meta.expires_at = link.expires;
-    const built = inbox.buildTemplateMessage(status.template, {
-      body: bodyValues(status.template, { name: firstName(owner), workspace: tenant.name, link: link.url, email: owner.email }),
-    });
-    const storedText = built.text.split(link.url).join(LINK_PLACEHOLDER);
 
+    // From here on, any failure cancels the new link and writes a "failed" row.
     let result;
     try {
+      // Someone joined or started using the workspace while the link was written.
+      if (unclaimedOnly && await workspaceInUse(tenant, owner.kind === 'user' ? owner.id : null)) {
+        throw new WelcomeError(409, OWNER_CHANGED, 'OWNER_CHANGED');
+      }
+      const built = inbox.buildTemplateMessage(status.template, {
+        body: bodyValues(status.template, { name: firstName(owner), workspace: tenant.name, link: link.url, email: owner.email }),
+      });
+      const storedText = built.text.split(link.url).join(LINK_PLACEHOLDER);
       result = await inbox.sendBuiltTemplate({ phone: number, template: status.template, built, storedText, staff });
     } catch (error) {
-      await link.revoke().catch(() => {});
+      const cancelled = await link.revoke().then(() => true, (revokeError) => {
+        console.error(`[workspace-welcome] could not cancel the link for workspace ${tenant.id}: ${revokeError.message}`);
+        return false;
+      });
       const reason = error.message || 'WhatsApp did not accept the message';
-      await log({ status: 'failed', error: reason.slice(0, 300) });
+      await log({ status: 'failed', error: reason.slice(0, 300), ...(cancelled ? {} : { revoke_failed: true }) });
+      if (error instanceof WelcomeError) throw error;
       if (error instanceof inbox.InboxError && error.code === 'INBOX_NOT_CONFIGURED') throw new WelcomeError(409, status.message || error.message, 'PLATFORM_NOT_CONFIGURED');
-      throw new WelcomeError(502, `${reason.replace(/^Not sent: /, 'WhatsApp did not send the message: ')}. The link was cancelled; you can try again.`, 'SEND_FAILED');
+      const next = cancelled
+        ? 'The link was cancelled; you can try again.'
+        : 'The link could not be cancelled and may still work until it expires. Ask the owner to sign in or use "Forgot password" (that cancels it), or try again later.';
+      throw new WelcomeError(502, `${reason.replace(/^Not sent: /, 'WhatsApp did not send the message: ')}. ${next}`, 'SEND_FAILED');
     }
     if (owner.kind === 'user') {
       // The owner hears about every set-password link for their login, by email, so a
