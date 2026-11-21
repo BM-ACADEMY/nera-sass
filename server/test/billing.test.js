@@ -585,6 +585,30 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.strictEqual((await request(app).post('/api/admin/tenants/1/billing/extend').set(bearer(ws.owner)).send({ days: 5, note: 'nope nope' })).status, 403);
   });
 
+  await t.test('I2. A failed invoice issue leaves no gap in the numbers and is issued by the retry sweep', async () => {
+    const a = await workspace(1);
+    const original = models.Invoices.create;
+    let failures = 1;
+    models.Invoices.create = function patched(...args) {
+      if (failures-- > 0) return Promise.reject(new Error('database blip'));
+      return original.apply(this, args);
+    };
+    let paid;
+    try {
+      paid = await subscribe(a.owner, 'desk'); // payment succeeds; the invoice does not
+    } finally {
+      models.Invoices.create = original;
+    }
+    assert.ok(paid.orderId);
+    assert.strictEqual(await sys(() => models.Invoices.countDocuments({})), 0, 'no invoice yet');
+    const result = await billing.invoices.issueMissing();
+    assert.strictEqual(result.issued, 1);
+    const rows = await sys(() => models.Invoices.find({}).lean());
+    assert.strictEqual(rows.length, 1);
+    assert.match(rows[0].invoice_number, /^AV\/\d{2}-\d{2}\/0001$/, 'the failed attempt used no number');
+    assert.deepStrictEqual(await billing.invoices.issueMissing(), { issued: 0, failed: 0 }, 'a second sweep issues nothing');
+  });
+
   await t.test('I1. A paid plan gets one numbered GST invoice: CGST+SGST in Puducherry, IGST elsewhere; wallet top-ups get none', async () => {
     const a = await workspace(1);
     const paid = await subscribe(a.owner, 'desk');

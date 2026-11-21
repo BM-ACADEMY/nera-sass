@@ -11,9 +11,9 @@
  * treated as in the seller's state, as the rules do for a B2C supply.
  */
 const { Invoices, BillingOrders, Tenants } = require('../../models');
-const { runAsSystem, requireTenantId } = require('../tenantContext');
-const { nextId } = require('../../db/mongo');
+const { runAsSystem, runAsTenant, requireTenantId } = require('../tenantContext');
 const { withLock } = require('../../db/mongo');
+const { financialYear, nextSequence, gstinChecksumOk } = require('./invoiceNumber');
 
 const env = (name, fallback) => (process.env[name] && String(process.env[name]).trim()) || fallback;
 const SAC = () => env('INVOICE_SAC', '998314');
@@ -35,14 +35,6 @@ class InvoiceError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
-/** 12 Sep 2026 -> '26-27'; 5 Feb 2027 -> '26-27'. India's financial year runs April to March (IST). */
-function financialYear(date) {
-  const ist = new Date(new Date(date).getTime() + 330 * 60000);
-  const year = ist.getUTCFullYear();
-  const start = ist.getUTCMonth() >= 3 ? year : year - 1;
-  return `${String(start).slice(-2)}-${String(start + 1).slice(-2)}`;
-}
-
 const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const STATE_CODES = new Set([...Array.from({ length: 38 }, (_, i) => String(i + 1).padStart(2, '0')), '97', '99']);
 
@@ -55,7 +47,7 @@ function cleanProfile(input = {}) {
   if (legalName.length < 2 || legalName.length > 120) throw new InvoiceError(400, 'Enter the business name for your invoices (2 to 120 characters)');
   if (address.length > 300) throw new InvoiceError(400, 'The address is too long (300 characters at most)');
   if (gstin) {
-    if (!GSTIN_RE.test(gstin)) throw new InvoiceError(400, 'That GSTIN does not look right. It has 15 characters, for example 34ABGCA7083D1ZS.');
+    if (!GSTIN_RE.test(gstin) || !gstinChecksumOk(gstin)) throw new InvoiceError(400, 'That GSTIN does not look right. It has 15 characters, for example 34ABGCA7083D1ZS.');
     stateCode = gstin.slice(0, 2); // a GSTIN fixes the state
   }
   if (stateCode && !STATE_CODES.has(stateCode)) throw new InvoiceError(400, 'State code must be a two-digit GST state code, for example 34 for Puducherry');
@@ -96,14 +88,14 @@ async function ensureForOrder(order, { now = new Date() } = {}) {
     const sellerInfo = seller();
     const { profile, workspace_name: workspaceName } = await billingProfile();
     const buyerState = profile?.state_code || null;
-    const issuedAt = order.fulfilled_at ? new Date(order.fulfilled_at) : now;
+    // Dated when it is issued, so numbers and dates run in the same order even
+    // when a retry issues it later than the payment.
+    const issuedAt = now;
     const fy = financialYear(issuedAt);
-    const seq = await nextId(`invoice_seq_${sellerInfo.invoice_prefix}_${fy}`);
     const gst = Number(order.gst_paise || 0);
     const split = taxSplit({ gstPaise: gst, buyerStateCode: buyerState, sellerStateCode: sellerInfo.state_code });
     const upgrade = Boolean(order.meta?.upgrade);
-    const invoice = await Invoices.create({
-      invoice_number: `${sellerInfo.invoice_prefix}/${fy}/${String(seq).padStart(4, '0')}`,
+    const row = {
       financial_year: fy,
       billing_order_id: order.id,
       razorpay_order_id: order.razorpay_order_id,
@@ -128,9 +120,41 @@ async function ensureForOrder(order, { now = new Date() } = {}) {
       total_paise: Number(order.amount_paise),
       currency: order.currency || 'INR',
       created_at: now,
-    });
+    };
+    // One series for the whole company, across workspaces: take the next number
+    // and save in the same locked step. If the save fails, nothing was used up.
+    const invoice = await withLock(`invoice_series:${sellerInfo.invoice_prefix}:${fy}`, async () => {
+      const numbers = (await runAsSystem(() => Invoices.find({ financial_year: fy }, { _id: 0, invoice_number: 1 }).lean(), 'billing:invoice-series')).map((r) => r.invoice_number);
+      const seq = nextSequence(numbers, sellerInfo.invoice_prefix, fy);
+      return Invoices.create({ ...row, invoice_number: `${sellerInfo.invoice_prefix}/${fy}/${String(seq).padStart(4, '0')}` });
+    }, { ttlMs: 20000, waitMs: 15000 });
     return invoice.toObject();
   }, { ttlMs: 20000, waitMs: 15000 });
+}
+
+/**
+ * Issues every invoice a paid plan order is still missing, oldest payment first,
+ * across all workspaces. Run by a timer: a failed issue (database blip) is
+ * retried within minutes, not when the customer happens to open the page.
+ */
+async function issueMissing({ limit = 100, now = new Date() } = {}) {
+  const orders = await runAsSystem(() => BillingOrders.find({ purpose: 'subscription', status: 'fulfilled' }, { _id: 0 }).sort({ fulfilled_at: 1, id: 1 }).limit(1000).lean(), 'billing:invoice-sweep');
+  if (!orders.length) return { issued: 0, failed: 0 };
+  const have = new Set((await runAsSystem(() => Invoices.find({}, { _id: 0, billing_order_id: 1, tenant_id: 1 }).lean(), 'billing:invoice-sweep')).map((r) => `${r.tenant_id}:${r.billing_order_id}`));
+  let issued = 0;
+  let failed = 0;
+  for (const order of orders) {
+    if (issued + failed >= limit) break;
+    if (have.has(`${order.tenant_id}:${order.id}`)) continue;
+    try {
+      await runAsTenant(order.tenant_id, () => ensureForOrder(order, { now }));
+      issued += 1;
+    } catch (error) {
+      failed += 1;
+      console.error('[billing/invoices] Sweep could not issue invoice for order', order.id, error.message);
+    }
+  }
+  return { issued, failed };
 }
 
 const publicInvoice = (inv) => inv && ({
@@ -181,4 +205,4 @@ function renderHtml(inv) {
 <p class="muted">Paid online through Razorpay (payment ${esc(inv.razorpay_payment_id || '')}). This is a computer-generated invoice.</p></body></html>`;
 }
 
-module.exports = { InvoiceError, financialYear, cleanProfile, billingProfile, saveBillingProfile, ensureForOrder, listInvoices, getInvoice, renderHtml, publicInvoice, seller };
+module.exports = { InvoiceError, financialYear, cleanProfile, billingProfile, saveBillingProfile, ensureForOrder, issueMissing, nextSequence, listInvoices, getInvoice, renderHtml, publicInvoice, seller };

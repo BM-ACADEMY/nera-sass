@@ -1239,6 +1239,20 @@ async function leadFunnel(filter) {
 // Customer notices (plan N4): every 15 minutes, check each active workspace for a
 // rejected template, a low wallet, a number quality drop and unfinished setup,
 // close notices whose problem is gone, and retry emails that did not go out.
+// Issues any GST invoice a paid plan order is still missing (a failed issue is retried here).
+let invoiceSweepRunning = false;
+if (jobsEnabled()) scheduleJob('*/10 * * * *', async () => {
+  if (invoiceSweepRunning) return;
+  invoiceSweepRunning = true;
+  try {
+    await require('./services/billing/invoices').issueMissing();
+  } catch (err) {
+    console.error('[billing/invoices] Sweep failed:', err.message);
+  } finally {
+    invoiceSweepRunning = false;
+  }
+});
+
 let alertSweepRunning = false;
 if (jobsEnabled()) scheduleJob('*/15 * * * *', async () => {
   if (alertSweepRunning) return;
