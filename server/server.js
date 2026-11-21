@@ -45,6 +45,7 @@ const { tenantCanSend } = require('./services/lifecycle');
 const { sanitizeClient } = require('./services/clientSecrets');
 const { assertPhoneNumberAvailable } = require('./services/whatsappIdentity');
 const { customerResponseGuard } = require('./services/responseGuard');
+const { friendlyErrorGuard, finalErrorHandler } = require('./services/errorResponse');
 const { inventoryAccessToken, requireInventoryAccessToken } = require('./services/metaInventoryCredentials');
 const mediaStore = require('./services/mediaStore');
 
@@ -583,6 +584,8 @@ app.use(express.json({
 }));
 // Customer responses never carry a WhatsApp credential (services/responseGuard.js).
 app.use(customerResponseGuard);
+// Error answers are plain language; 500s carry a reference id (services/errorResponse.js).
+app.use(friendlyErrorGuard);
 // Media that Meta downloads for outbound messages stays public (unguessable
 // names). Lead exports, archives and logs are never served statically: lead
 // exports are downloaded through the tenant-checked export route.
@@ -1570,17 +1573,7 @@ const leadosRouteContext = {
 // ── ERRORS ────────────────────────────────────────────────
 // A query outside its tenant is refused by the tenant-scope plugin. Route
 // handlers usually catch their own errors; this covers the ones that do not.
-app.use((err, req, res, next) => {
-  if (err?.name === 'TenantContextError') {
-    console.warn('[Tenant isolation]', req.method, req.originalUrl, err.message);
-    return res.status(403).json({ error: 'Access denied' });
-  }
-  if (err?.name === 'MulterError') {
-    return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'This file is too large.' : 'This file could not be uploaded.' });
-  }
-  console.error('[Unhandled]', req.method, req.originalUrl, err?.message);
-  return res.status(err?.status || 500).json({ error: err?.status && err.status < 500 ? err.message : 'Server error' });
-});
+app.use(finalErrorHandler);
 
 // ── START ─────────────────────────────────────────────────
 function startBackgroundJobs() {

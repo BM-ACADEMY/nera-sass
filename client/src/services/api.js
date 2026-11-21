@@ -4,8 +4,43 @@
  */
 
 import { isInvalidMfaCode, NOTICE_KEY, NOTICES, USER_KEY } from './session.js';
+import { toApiError } from '../utils/friendlyError.js';
 
 export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3601').replace(/\/+$/, '');
+
+// ─── ERRORS ───────────────────────────────
+// Every failure leaves this file as an Error whose message is a plain sentence
+// for the customer (utils/friendlyError.js). The raw server text stays in
+// err.detail and, in development, in the console. Never show err.detail.
+function logApiError(where, status, detail) {
+  if (import.meta.env.DEV) console.warn(`[API] ${where} failed`, status ?? '', detail);
+}
+
+// fetch() that turns a network failure (offline, DNS, CORS, server down) into
+// a plain-language error. A caller's own abort stays an AbortError.
+async function safeFetch(url, options) {
+  try {
+    return await fetch(url, options);
+  } catch (error) {
+    logApiError(url, undefined, error);
+    const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+    const kind = error?.name === 'AbortError' ? 'cancelled'
+      : error?.name === 'TimeoutError' ? 'timeout'
+        : offline ? 'offline' : 'network';
+    throw toApiError({ kind, raw: error?.message });
+  }
+}
+
+// The error for a response that is not ok, whatever its body.
+async function errorFromResponse(response, where) {
+  const text = await response.text().catch(() => '');
+  let data = null;
+  try { data = text ? JSON.parse(text) : {}; } catch { data = null; }
+  logApiError(where, response.status, data ?? text);
+  return data === null
+    ? toApiError({ status: response.status, kind: 'invalid', raw: text })
+    : toApiError({ status: response.status, data });
+}
 
 class LeadOSAPI {
   constructor() {
@@ -41,7 +76,7 @@ class LeadOSAPI {
       headers.Authorization = `Bearer ${this.token}`;
     }
 
-    const response = await fetch(`${API_URL}${endpoint}`, {
+    const response = await safeFetch(`${API_URL}${endpoint}`, {
       ...options,
       headers,
     });
@@ -64,16 +99,14 @@ class LeadOSAPI {
     }
 
     if (data === null) {
-      console.error('API Error: Non-JSON response:', text);
-      throw new Error('Received invalid data from server');
+      // An HTML error page from the proxy, or a broken reply.
+      logApiError(endpoint, response.status, text);
+      throw toApiError({ status: response.status, kind: 'invalid', raw: text });
     }
 
     if (!response.ok) {
-      const err = new Error(data.error || 'API Error');
-      err.status = response.status;
-      err.code = data.code;
-      err.response = { data };
-      throw err;
+      logApiError(endpoint, response.status, data);
+      throw toApiError({ status: response.status, data });
     }
 
     return data;
@@ -113,14 +146,13 @@ class LeadOSAPI {
 
   async upload(endpoint, formData) {
     const path = endpoint.startsWith('/api') ? endpoint : `/api${endpoint}`;
-    const response = await fetch(`${API_URL}${path}`, {
+    const response = await safeFetch(`${API_URL}${path}`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${this.token}` },
       body: formData
     });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || `HTTP error! status: ${response.status}`);
-    return data;
+    if (!response.ok) throw await errorFromResponse(response, path);
+    return response.json().catch(() => ({}));
   }
 
   async delete(endpoint, options = {}) {
@@ -302,13 +334,10 @@ class LeadOSAPI {
 
   async downloadLeadExport(id) {
     const token = localStorage.getItem('leados_token');
-    const response = await fetch(`${API_URL}/api/leads/exports/${id}/download`, {
+    const response = await safeFetch(`${API_URL}/api/leads/exports/${id}/download`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || 'Export download failed');
-    }
+    if (!response.ok) throw await errorFromResponse(response, 'download');
     return response.blob();
   }
 
@@ -408,15 +437,12 @@ class LeadOSAPI {
     const headers = {};
     if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
 
-    const res = await fetch(`${this.baseUrl}/api/templates/upload-media`, {
+    const res = await safeFetch(`${this.baseUrl}/api/templates/upload-media`, {
       method: 'POST',
       headers,
       body: formData,
     });
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.error || 'Failed to upload media');
-    }
+    if (!res.ok) throw await errorFromResponse(res, 'upload-media');
     return res.json();
   }
 
@@ -504,7 +530,7 @@ class LeadOSAPI {
 
   async uploadMedia(formData, onProgress) {
     const token = localStorage.getItem('leados_token');
-    if (!token) throw new Error('No authentication token found');
+    if (!token) throw toApiError({ status: 401, data: {} });
     
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -528,16 +554,16 @@ class LeadOSAPI {
             resolve(xhr.responseText);
           }
         } else {
-          try {
-            const errorData = JSON.parse(xhr.responseText);
-            reject(new Error(errorData.error || `HTTP error! status: ${xhr.status}`));
-          } catch (e) {
-            reject(new Error(`HTTP error! status: ${xhr.status}`));
-          }
+          let errorData = null;
+          try { errorData = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
+          logApiError('/api/messages/upload', xhr.status, errorData ?? xhr.responseText);
+          reject(errorData
+            ? toApiError({ status: xhr.status, data: errorData })
+            : toApiError({ status: xhr.status, kind: 'invalid', raw: xhr.responseText }));
         }
       };
 
-      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.onerror = () => reject(toApiError({ kind: typeof navigator !== 'undefined' && navigator.onLine === false ? 'offline' : 'network' }));
       xhr.send(formData);
     });
   }
@@ -636,14 +662,13 @@ class LeadOSAPI {
   async uploadClientMetaLogo(id, file) {
     const formData = new FormData();
     formData.append('logo', file);
-    const response = await fetch(`${API_URL}/api/clients/${id}/meta-profile-logo`, {
+    const response = await safeFetch(`${API_URL}/api/clients/${id}/meta-profile-logo`, {
       method: 'POST',
       headers: this.token ? { Authorization: `Bearer ${this.token}` } : {},
       body: formData,
     });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'Failed to upload Meta profile logo');
-    return data;
+    if (!response.ok) throw await errorFromResponse(response, 'meta-profile-logo');
+    return response.json().catch(() => ({}));
   }
 
   async getMetaEmbeddedSignupConfig() {
@@ -659,7 +684,7 @@ class LeadOSAPI {
 
   async importLeads(formData, forceStatus = null) {
     const token = localStorage.getItem('leados_token');
-    if (!token) throw new Error('No authentication token found');
+    if (!token) throw toApiError({ status: 401, data: {} });
     
     if (forceStatus) {
       formData.append('force_status', forceStatus);
@@ -668,7 +693,7 @@ class LeadOSAPI {
     // FormData requires a direct fetch because our this.request stringifies the body
     // if the body is an object, and FormData shouldn't be stringified, nor should the
     // Content-Type be set to application/json (browser sets it to multipart/form-data with boundary)
-    const response = await fetch(`${API_URL}/api/leads/import`, {
+    const response = await safeFetch(`${API_URL}/api/leads/import`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`
@@ -676,10 +701,7 @@ class LeadOSAPI {
       body: formData
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-    }
+    if (!response.ok) throw await errorFromResponse(response, 'upload');
 
     return response.json();
   }
@@ -732,16 +754,13 @@ class LeadOSAPI {
   // ─── ALLIANCE OS ────────────────────────
   async uploadAllianceCSV(formData) {
     const token = localStorage.getItem('leados_token');
-    if (!token) throw new Error('No authentication token found');
-    const response = await fetch(`${API_URL}/api/alliance/prospects/import`, {
+    if (!token) throw toApiError({ status: 401, data: {} });
+    const response = await safeFetch(`${API_URL}/api/alliance/prospects/import`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` },
       body: formData
     });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || errorData.message || `HTTP error! status: ${response.status}`);
-    }
+    if (!response.ok) throw await errorFromResponse(response, 'upload');
     return response.json();
   }
 
@@ -758,15 +777,13 @@ class LeadOSAPI {
     ).toString();
     const url = `/api/alliance/prospects/export${query ? `?${query}` : ''}`;
     
-    const response = await fetch(`${API_URL}${url}`, {
+    const response = await safeFetch(`${API_URL}${url}`, {
       headers: {
         'Authorization': this.token ? `Bearer ${this.token}` : '',
       }
     });
 
-    if (!response.ok) {
-      throw new Error('Failed to export prospects');
-    }
+    if (!response.ok) throw await errorFromResponse(response, 'export');
 
     const blob = await response.blob();
     const downloadUrl = window.URL.createObjectURL(blob);
@@ -790,7 +807,7 @@ class LeadOSAPI {
   }
 
   async exportSalesTasks(ids) {
-    const response = await fetch(`${API_URL}/api/sales-tasks/export`, {
+    const response = await safeFetch(`${API_URL}/api/sales-tasks/export`, {
       method: 'POST',
       headers: {
         'Authorization': this.token ? `Bearer ${this.token}` : '',
@@ -799,7 +816,7 @@ class LeadOSAPI {
       body: JSON.stringify({ ids })
     });
 
-    if (!response.ok) throw new Error('Failed to export sales tasks');
+    if (!response.ok) throw await errorFromResponse(response, 'export');
 
     const blob = await response.blob();
     const downloadUrl = window.URL.createObjectURL(blob);
@@ -879,13 +896,10 @@ class LeadOSAPI {
 
   async downloadAllianceAudienceTemplate(code) {
     const token = localStorage.getItem('leados_token');
-    const response = await fetch(`${API_URL}/api/alliance/audiences/${encodeURIComponent(code)}/template`, {
+    const response = await safeFetch(`${API_URL}/api/alliance/audiences/${encodeURIComponent(code)}/template`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error.error || 'Failed to download Excel template');
-    }
+    if (!response.ok) throw await errorFromResponse(response, 'download');
     return response.blob();
   }
 
@@ -1184,16 +1198,13 @@ class LeadOSAPI {
 
   async uploadKnowledgeDoc(formData) {
     const token = localStorage.getItem('leados_token');
-    if (!token) throw new Error('No authentication token found');
-    const response = await fetch(`${API_URL}/api/knowledge/upload`, {
+    if (!token) throw toApiError({ status: 401, data: {} });
+    const response = await safeFetch(`${API_URL}/api/knowledge/upload`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` },
       body: formData
     });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-    }
+    if (!response.ok) throw await errorFromResponse(response, 'upload');
     return response.json();
   }
 
@@ -1433,9 +1444,9 @@ export const allianceInboxApi = {
         let data = {};
         try { data = JSON.parse(xhr.responseText || '{}'); } catch { /* handled below */ }
         if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-        else reject(Object.assign(new Error(data.error || 'Alliance media upload failed'), { response: { data } }));
+        else reject(toApiError({ status: xhr.status, data }));
       };
-      xhr.onerror = () => reject(new Error('Alliance media upload failed'));
+      xhr.onerror = () => reject(toApiError({ kind: 'network' }));
       xhr.send(formData);
     });
   },
