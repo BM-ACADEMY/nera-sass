@@ -89,16 +89,19 @@ async function processQueuedAllianceWelcomes(io) {
           { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
         );
         const waMessageId = response.data?.messages?.[0]?.id || null;
+        const shownText = parameters.length
+          ? String(job.content || '').replace(/\{\{(\d+)\}\}/g, (m, n) => parameters[Number(n) - 1] ?? m)
+          : job.content;
         const saved = await AllianceInboxMessages.findOneAndUpdate(
           { id: job.id },
-          { $set: { status: 'sent', wa_msg_id: waMessageId, 'raw_payload.meta_response': response.data, sent_at: new Date() } },
+          { $set: { content: shownText, status: 'sent', wa_msg_id: waMessageId, 'raw_payload.meta_response': response.data, sent_at: new Date() } },
           { new: true, projection: { _id: 0 } }
         ).lean();
         await AllianceInboxConversations.updateOne(
           { id: job.conversation_id },
           { $set: {
             welcome_status: 'sent', welcome_wa_msg_id: waMessageId, welcome_sent_at: new Date(),
-            welcome_error: null, last_message: job.content || `[Template: ${templateName}]`, last_message_at: new Date(), updated_at: new Date(),
+            welcome_error: null, last_message: shownText || `[Template: ${templateName}]`, last_message_at: new Date(), updated_at: new Date(),
           } }
         );
         io?.emit('alliance_outgoing_message', {

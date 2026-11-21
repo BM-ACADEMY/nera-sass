@@ -65,52 +65,9 @@ app.post('/api/clients/:id/meta-embedded-signup/complete', auth, requirePermissi
   res.status(503).json(SECURE_SIGNUP_PENDING);
 });
 
-app.post('/api/clients/:id/meta-profile-logo', auth, requirePermission('whatsapp.manage'), profileLogoUpload.single('logo'), async (req, res) => {
-  try {
-    await metaInventoryReady;
-    if (!req.file) return res.status(400).json({ error: 'Select a JPEG or PNG logo image' });
-    if (!process.env.META_APP_ID) {
-      return res.status(503).json({ error: 'META_APP_ID is required in server/.env to upload a Meta profile logo' });
-    }
-    const client = await Clients.findOne({ id: req.params.id }, NO_ID).lean();
-    if (!client) return res.status(404).json({ error: 'Client not found' });
-    if (!client.phone_number_id) {
-      return res.status(400).json({ error: 'Add this brand’s real Meta Phone Number ID before uploading its profile logo' });
-    }
-    try {
-      await assertPhoneNumberAvailable(client.phone_number_id, { exceptClientId: client.id });
-    } catch (inUse) {
-      if (inUse.code === 'PHONE_NUMBER_IN_USE') return sendPhoneInUse(res, inUse);
-      throw inUse;
-    }
-    const config = await assertPhoneBelongsToWaba(client);
-
-    const image = await Jimp.read(req.file.buffer);
-    const logoBuffer = await image.cover(640, 640).quality(90).getBufferAsync(Jimp.MIME_JPEG);
-    const base = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
-    const sessionResponse = await axios.post(`${base}/${process.env.META_APP_ID}/uploads`, null, {
-      params: { file_name: `client-${client.id}-logo.jpg`, file_length: logoBuffer.length, file_type: 'image/jpeg' },
-      headers: { Authorization: `Bearer ${config.token}` }
-    });
-    const uploadId = sessionResponse.data?.id;
-    if (!uploadId) throw new Error('Meta did not return an upload session ID');
-    const uploadResponse = await axios.post(`${base}/${uploadId}`, logoBuffer, {
-      headers: { Authorization: `Bearer ${config.token}`, file_offset: '0', 'Content-Type': 'image/jpeg' },
-      maxBodyLength: 6 * 1024 * 1024
-    });
-    const handle = uploadResponse.data?.h;
-    if (!handle) throw new Error('Meta did not return a profile-picture handle');
-    await axios.post(`${base}/${config.phoneId}/whatsapp_business_profile`, {
-      messaging_product: 'whatsapp', profile_picture_handle: handle
-    }, { headers: { Authorization: `Bearer ${config.token}` } });
-    await MetaWhatsappPhoneNumbers.updateOne({ phone_number_id: config.phoneId }, { $set: { client_id: client.id } });
-    const profile = await cacheMetaBusinessProfile(config.phoneId, config.token);
-    res.json({ success: true, profile_picture_url: profile.profile_picture_url || null });
-  } catch (error) {
-    const message = error.response?.data?.error?.message || error.message || 'Meta logo upload failed';
-    console.error(`[Clients] Meta logo upload failed for client ${req.params.id}:`, message);
-    res.status(400).json({ error: `Meta logo upload failed: ${message}` });
-  }
+// The WhatsApp profile photo is admin-only (admin panel: POST /api/admin/tenants/:id/whatsapp-profile/photo).
+app.post('/api/clients/:id/meta-profile-logo', auth, (req, res) => {
+  res.status(403).json({ error: 'The WhatsApp profile photo can only be changed by the Getnera team.' });
 });
 
 // The platform Meta inventory (view, sync, cache, registration, link/unlink)

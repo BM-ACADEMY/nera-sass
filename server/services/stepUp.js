@@ -2,38 +2,18 @@
  * Re-checking who is at the keyboard before a sensitive account action
  * (step-up): the current password and, when two-step verification is on, a
  * second-step code. The second-step check is the same one the login uses, and
- * wrong passwords count toward the same lockout as wrong logins.
+ * wrong passwords (and wrong codes) count toward the same lockout as wrong
+ * logins: counting and locking live in passwordAttempts.js only.
  */
-const bcrypt = require('bcryptjs');
 const { Users } = require('../models');
 const { runAsSystem } = require('./tenantContext');
 const { decrypt } = require('../utils/crypto');
 const mfa = require('./mfa');
 const emailOtp = require('./emailOtp');
-const audit = require('./audit');
+const passwordAttempts = require('./passwordAttempts');
 
 const sys = (fn) => runAsSystem(fn, 'step-up');
-const maxFailures = () => Number(process.env.LOGIN_MAX_FAILURES || 5);
-const lockMinutes = () => Number(process.env.LOGIN_LOCK_MINUTES || 15);
-
-const isLocked = (user) => Boolean(user?.locked_until && new Date(user.locked_until) > new Date());
-
-/** One more wrong password (login or step-up); locks the account at the limit. */
-async function recordPasswordFailure(user, req) {
-  const failures = Number(user.failed_login_count || 0) + 1;
-  const lock = failures >= maxFailures();
-  await sys(() => Users.updateOne({ id: user.id }, {
-    $set: lock ? { failed_login_count: 0, locked_until: new Date(Date.now() + lockMinutes() * 60000) } : { failed_login_count: failures },
-  }));
-  if (lock) {
-    await audit.record(audit.EVENTS.LOGIN_FAILED_LOCKOUT, { tenantId: user.tenant_id ?? null, req, targetType: 'user', targetId: user.id, meta: { email: user.email } });
-  }
-  return lock;
-}
-
-const clearPasswordFailures = (user) => (Number(user.failed_login_count || 0) || user.locked_until
-  ? sys(() => Users.updateOne({ id: user.id }, { $set: { failed_login_count: 0 }, $unset: { locked_until: '' } }))
-  : null);
+const { isLocked } = passwordAttempts;
 
 /**
  * An authenticator code, an emailed code (for `emailPurpose`) or a recovery
@@ -58,19 +38,22 @@ async function verifySecondStep(user, { method, code, recoveryCode } = {}, email
   return { ok };
 }
 
-const LOCKED = { status: 423, body: { error: 'Too many wrong attempts. Try again later or reset your password.', code: 'ACCOUNT_LOCKED' } };
+const LOCKED = { status: 423, body: { error: passwordAttempts.LOCKED_MESSAGE, code: 'ACCOUNT_LOCKED' } };
 
-/** Password only (counted toward the lockout). Returns null when it is right, else { status, body }. */
+/**
+ * Password only (counted toward the lockout). Returns null when it is right,
+ * else { status, body }. A right password does not reset the counter here:
+ * that happens in confirmIdentity once every part has passed.
+ */
 async function confirmPassword(user, body = {}, req = null) {
   if (isLocked(user)) return LOCKED;
   const password = body.password ?? body.current_password;
   if (typeof password !== 'string' || !password) {
     return { status: 403, body: { error: 'Enter your password to continue.', code: 'PASSWORD_REQUIRED' } };
   }
-  if (!(await bcrypt.compare(password, user.password_hash || ''))) {
-    if (await recordPasswordFailure(user, req)) return LOCKED;
-    return { status: 403, body: { error: 'That password is not correct.', code: 'CONFIRM_FAILED' } };
-  }
+  const check = await passwordAttempts.checkPassword(user, password, { req, resetOnSuccess: false });
+  if (check.result === 'locked' || check.lockedNow) return LOCKED;
+  if (check.result !== 'ok') return { status: 403, body: { error: 'That password is not correct.', code: 'CONFIRM_FAILED' } };
   return null;
 }
 
@@ -100,13 +83,14 @@ async function confirmIdentity(user, body = {}, emailPurpose = 'confirm', req = 
     const check = await verifySecondStep(user, { method: body.method, code, recoveryCode }, emailPurpose);
     if (check.methodOff) return { status: 400, body: { error: 'This verification method is not turned on for this account' } };
     if (!check.ok) {
-      const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
-      if (await recordPasswordFailure(fresh || user, req)) return LOCKED;
+      const { locked } = await passwordAttempts.recordPasswordFailure(user, { req });
+      if (locked) return LOCKED;
       return { status: 403, body: { error: 'The password or the code is not correct.', code: 'CONFIRM_FAILED' } };
     }
   }
-  await clearPasswordFailures(user);
+  // Conditional reset: refused when a parallel burst locked the account meanwhile.
+  if (!(await passwordAttempts.recordPasswordSuccess(user))) return LOCKED;
   return null;
 }
 
-module.exports = { verifySecondStep, confirmIdentity, confirmPassword, recordPasswordFailure, isLocked };
+module.exports = { verifySecondStep, confirmIdentity, confirmPassword, isLocked };

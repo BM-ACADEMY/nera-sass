@@ -73,13 +73,13 @@ test('Task 2A: Settings polish', async (t) => {
   await t.test('E1. Enrolment: a wrong code is INVALID_MFA_CODE; an expired session is a different 401', async () => {
     const { owner } = await workspace();
     const session = makeToken(owner);
-    await request(app).post('/api/auth/mfa/setup').set(bearerToken(session)).send({});
-    const wrong = await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ code: '000000' });
+    await request(app).post('/api/auth/mfa/setup').set(bearerToken(session)).send({ password: PASSWORD });
+    const wrong = await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ password: PASSWORD, code: '000000' });
     assert.strictEqual(wrong.status, 401);
     assert.strictEqual(wrong.body.code, 'INVALID_MFA_CODE');
 
     await sys(() => Users.updateOne({ id: owner.id }, { $inc: { token_version: 1 } })); // session revoked elsewhere
-    const expired = await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ code: '000000' });
+    const expired = await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ password: PASSWORD, code: '000000' });
     assert.strictEqual(expired.status, 401);
     assert.notStrictEqual(expired.body.code, 'INVALID_MFA_CODE', 'an ended session is not reported as a wrong code');
     assert.strictEqual(expired.body.code, 'SESSION_REVOKED');
@@ -88,8 +88,8 @@ test('Task 2A: Settings polish', async (t) => {
   await t.test('E2. Login step: a wrong code is INVALID_MFA_CODE; an expired sign-in step is a different 401', async () => {
     const { owner } = await workspace();
     const session = makeToken(owner);
-    const start = await request(app).post('/api/auth/mfa/setup').set(bearerToken(session)).send({});
-    await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ code: mfa.totp(start.body.secret) });
+    const start = await request(app).post('/api/auth/mfa/setup').set(bearerToken(session)).send({ password: PASSWORD });
+    await request(app).post('/api/auth/mfa/setup/confirm').set(bearerToken(session)).send({ password: PASSWORD, code: mfa.totp(start.body.secret) });
 
     const login = await request(app).post('/api/auth/login').send({ email: owner.email, password: PASSWORD });
     const wrong = await request(app).post('/api/auth/mfa/verify').send({ mfa_token: login.body.mfa_token, code: '000000' });

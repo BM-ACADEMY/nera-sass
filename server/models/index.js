@@ -49,6 +49,7 @@ module.exports = {
   BacklinkTrackerHistory: require('./BacklinkTrackerHistory'),
   BillingAlerts: require('./BillingAlerts'),
   BillingOrders: require('./BillingOrders'),
+  Invoices: require('./Invoices'),
   BookingNotificationLog: require('./BookingNotificationLog'),
   AiReplyLogs: require('./AiReplyLogs'),
   Appointments: require('./Appointments'),

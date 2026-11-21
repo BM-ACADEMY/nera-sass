@@ -44,8 +44,7 @@ export const ClientModal = ({ client, onClose, onUpdate }) => {
   
   const [loading, setLoading] = useState(false);
   const [phoneError, setPhoneError] = useState('');
-  const [logoFile, setLogoFile] = useState(null);
-  const [logoPreview, setLogoPreview] = useState(client?.meta_profile_picture_url || '');
+  const [logoPreview] = useState(client?.meta_profile_picture_url || '');
   const [metaOnboardingStep, setMetaOnboardingStep] = useState(0);
   const [metaOnboardingLoading, setMetaOnboardingLoading] = useState(false);
   const [onboardingCountry, setOnboardingCountry] = useState('IN');
@@ -68,8 +67,7 @@ export const ClientModal = ({ client, onClose, onUpdate }) => {
     try {
       if (isEditing) {
         const result = await api.updateClient(client.id, payload);
-        if (logoFile) await api.uploadClientMetaLogo(client.id, logoFile);
-        toast.success(result.meta_profile_synced || logoFile
+        toast.success(result.meta_profile_synced
           ? 'Client and Meta profile updated successfully'
           : result.meta_profile_pending
             ? 'Draft saved. Add the real Meta Phone Number ID to sync the profile.'
@@ -289,14 +287,7 @@ export const ClientModal = ({ client, onClose, onUpdate }) => {
                     <div style={{ width: 58, height: 58, borderRadius: 12, overflow: 'hidden', background: C.bg, border: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 9 }}>
                       {logoPreview ? <img src={logoPreview} alt="Business logo preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : 'No logo'}
                     </div>
-                    <div style={{ flex: 1 }}>
-                      <input type="file" accept="image/jpeg,image/png" disabled={!formData.phone_number_id} onChange={event => {
-                        const file = event.target.files?.[0] || null;
-                        setLogoFile(file);
-                        if (file) setLogoPreview(URL.createObjectURL(file));
-                      }} style={{ ...inputStyle, padding: 9, opacity: formData.phone_number_id ? 1 : .5 }} />
-                      <div style={{ color: C.muted, fontSize: 9, marginTop: 5 }}>{formData.phone_number_id ? 'JPEG or PNG, maximum 5 MB. Uploaded to Meta as a square logo.' : 'Add this brand’s real Meta Phone Number ID before uploading its logo.'}</div>
-                    </div>
+                    <div style={{ flex: 1, color: C.muted, fontSize: 10 }}>The WhatsApp profile photo is set by the Getnera team. Contact support to change it.</div>
                   </div>
                 </div>
                 <div>

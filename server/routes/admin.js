@@ -488,7 +488,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
 
   router.post('/users/:userId/reset-mfa', permit('platform.users.manage'), async (req, res) => {
     try {
-      return res.json(await userAdmin.resetMfa({ userId: req.params.userId, req }));
+      return res.json(await userAdmin.resetMfa({ userId: req.params.userId, actor: staffActor(req), req }));
     } catch (error) {
       return fail(res, error);
     }
@@ -853,6 +853,24 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       if (note.length < 3 || note.length > 300) return res.status(400).json({ error: 'A note of 3 to 300 characters is required' });
       const { subscription, renewal } = await runAsTenant(tenant.id, () => billing.subscriptions.activate({ plan, source: `staff:${req.user.id}` }));
       await audit.record(audit.EVENTS.SUBSCRIPTION_GRANTED, { tenantId: tenant.id, req, targetType: 'subscription', targetId: subscription.id, meta: { plan_code: plan.code, note, renewal } });
+      return res.json({ subscription: billing.subscriptions.publicSubscription(subscription) });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // Makes good with extra validity instead of a refund: adds whole days to the paid period.
+  router.post('/tenants/:id/billing/extend', permit('platform.billing.manage'), async (req, res) => {
+    try {
+      const tenant = await loadTenant(tenantIdParam(req));
+      if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
+      const days = Number(req.body?.days);
+      if (!Number.isInteger(days) || days < 1 || days > 365) return res.status(400).json({ error: 'days must be a whole number from 1 to 365' });
+      const note = String(req.body?.note || '').trim();
+      if (note.length < 3 || note.length > 300) return res.status(400).json({ error: 'A note of 3 to 300 characters is required' });
+      const subscription = await runAsTenant(tenant.id, () => billing.subscriptions.extendDays({ days }));
+      if (!subscription) return res.status(409).json({ error: 'This workspace has no subscription to extend' });
+      await audit.record(audit.EVENTS.SUBSCRIPTION_EXTENDED, { tenantId: tenant.id, req, targetType: 'subscription', targetId: subscription.id, meta: { days, note, new_period_end: subscription.current_period_end } });
       return res.json({ subscription: billing.subscriptions.publicSubscription(subscription) });
     } catch (error) {
       return fail(res, error);

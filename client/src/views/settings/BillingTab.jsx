@@ -174,7 +174,7 @@ export const BillingTab = ({ me }) => {
           return (
             <div key={plan.code} style={{ border: '1px solid ' + (currentPlan ? C.accent : C.border), borderRadius: 12, padding: 14, background: currentPlan ? C.accentDim : C.surface }}>
               <div style={{ fontSize: 14, fontWeight: 800, color: C.text }}>{plan.name}</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: C.text, margin: '4px 0' }}>{formatRupees(plan.price_inr)}<span style={{ fontSize: 11, color: C.muted, fontWeight: 500 }}> / month</span></div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: C.text, margin: '4px 0' }}>{formatRupees(plan.price_inr)}<span style={{ fontSize: 11, color: C.muted, fontWeight: 500 }}> / month + GST</span></div>
               <div style={{ fontSize: 11, color: C.muted, minHeight: 28 }}>{plan.description}</div>
               <ul style={{ paddingLeft: 16, margin: '8px 0', fontSize: 11, color: C.text }}>
                 {plan.features.map((feature) => <li key={feature}>{feature}</li>)}

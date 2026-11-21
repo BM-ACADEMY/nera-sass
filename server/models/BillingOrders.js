@@ -8,7 +8,10 @@ module.exports = defineModel('billing_orders', {
   purpose: { type: String }, // subscription | wallet_topup
   plan_id: { type: Number, default: null },
   plan_code: { type: String, default: null },
-  amount_paise: { type: Number },
+  amount_paise: { type: Number }, // the total charged, GST included
+  base_paise: { type: Number, default: null }, // before GST
+  gst_paise: { type: Number, default: 0 },
+  gst_rate_percent: { type: Number, default: 0 },
   currency: { type: String, default: 'INR' },
   razorpay_order_id: { type: String },
   razorpay_payment_id: { type: String, default: null },

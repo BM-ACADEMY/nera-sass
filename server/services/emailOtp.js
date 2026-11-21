@@ -12,8 +12,10 @@ const notify = require('./notify');
 const TTL_MINUTES = Number(process.env.EMAIL_OTP_TTL_MINUTES || 10);
 const RESEND_SECONDS = 45;
 const MAX_ATTEMPTS = 5;
-// 'confirm': re-checking a signed-in user before a sensitive action.
-const PURPOSES = ['login', 'setup', 'confirm'];
+// login: second sign-in step; setup: turning on email codes; reauth: confirming
+// a two-step change while signed in; confirm: re-checking a signed-in user
+// before signing a device out (My sessions).
+const PURPOSES = ['login', 'setup', 'reauth', 'confirm'];
 
 class EmailOtpError extends Error {
   constructor(status, message, code) {
@@ -51,27 +53,39 @@ async function sendCode(user, purpose) {
 }
 
 // True when the code matches; a used, expired or over-tried code is cleared.
+// Atomic: each wrong try is one conditional $inc (parallel guesses cannot
+// share a count), and a match is accepted only by the request that clears
+// that exact code, so one code cannot be accepted twice.
 async function verifyCode(user, code, purpose) {
   const clean = String(code || '').replace(/\s/g, '');
   const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
-  if (!fresh?.mfa_email_code_hash || fresh.mfa_email_code_purpose !== purpose) return false;
-  const clear = () => sys(() => Users.updateOne({ id: user.id }, {
-    $unset: { mfa_email_code_hash: '', mfa_email_code_purpose: '', mfa_email_code_expires_at: '' },
-    $set: { mfa_email_code_attempts: 0 },
-  }));
+  const hash = fresh?.mfa_email_code_hash;
+  if (!hash || fresh.mfa_email_code_purpose !== purpose) return false;
+  const unset = { mfa_email_code_hash: '', mfa_email_code_purpose: '', mfa_email_code_expires_at: '' };
+  const clear = () => sys(() => Users.updateOne({ id: user.id, mfa_email_code_hash: hash }, { $unset: unset, $set: { mfa_email_code_attempts: 0 } }));
   if (!fresh.mfa_email_code_expires_at || new Date(fresh.mfa_email_code_expires_at) <= new Date()) {
     await clear();
     return false;
   }
-  if (!/^\d{6}$/.test(clean)) return false;
-  const ok = crypto.timingSafeEqual(Buffer.from(hashCode(user.id, clean)), Buffer.from(fresh.mfa_email_code_hash));
-  if (ok) {
+  if (Number(fresh.mfa_email_code_attempts || 0) >= MAX_ATTEMPTS) {
     await clear();
-    return true;
+    return false;
   }
-  const attempts = Number(fresh.mfa_email_code_attempts || 0) + 1;
-  if (attempts >= MAX_ATTEMPTS) await clear();
-  else await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_email_code_attempts: attempts } }));
+  if (!/^\d{6}$/.test(clean)) return false;
+  const ok = crypto.timingSafeEqual(Buffer.from(hashCode(user.id, clean)), Buffer.from(hash));
+  if (ok) {
+    const used = await sys(() => Users.updateOne(
+      { id: user.id, mfa_email_code_hash: hash, mfa_email_code_attempts: { $lt: MAX_ATTEMPTS } },
+      { $unset: unset, $set: { mfa_email_code_attempts: 0 } },
+    ));
+    return used.modifiedCount === 1;
+  }
+  const counted = await sys(() => Users.findOneAndUpdate(
+    { id: user.id, mfa_email_code_hash: hash, mfa_email_code_attempts: { $lt: MAX_ATTEMPTS } },
+    { $inc: { mfa_email_code_attempts: 1 } },
+    { new: true, projection: { _id: 0, mfa_email_code_attempts: 1 } },
+  ).lean());
+  if (!counted || counted.mfa_email_code_attempts >= MAX_ATTEMPTS) await clear();
   return false;
 }
 

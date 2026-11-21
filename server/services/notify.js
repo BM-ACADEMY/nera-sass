@@ -157,16 +157,40 @@ function passwordResetEmail({ to, name, url, expiresMinutes }) {
   return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: 'Choose a new password' }) });
 }
 
+// Security notice: a two-step method was turned on or off (by the user, or
+// reset by platform staff). Sent so the owner notices a change they did not make.
+const METHOD_NAMES = { totp: 'the authenticator app', email: 'email codes', whatsapp: 'WhatsApp codes', all: 'all two-step methods' };
+function twoStepChangedEmail({ to, name, method, action, byStaff = false, staff = false }) {
+  const product = productName();
+  const what = METHOD_NAMES[method] || 'a two-step method';
+  const title = action === 'added' ? `Two-step verification added on ${product}`
+    : action === 'recovery_codes' ? `New recovery codes created on ${product}` : `Two-step verification removed on ${product}`;
+  const lines = [
+    `Hi ${name || 'there'},`,
+    action === 'recovery_codes' ? 'New two-step recovery codes were created for your account. The old ones no longer work.'
+    : action === 'added'
+      ? `Two-step verification with ${what} was turned on for your account.`
+      : byStaff
+        ? `Platform staff reset two-step verification on your account (${what} removed). You will set it up again at your next sign-in.`
+        : `Two-step verification with ${what} was turned off for your account.`,
+    'If this was not you, change your password now and contact support.',
+  ];
+  const url = staff ? adminUrl() : appUrl();
+  return send({ to, subject: title, text: `${lines.join('\n\n')}\n`, html: layout(title, lines, { url, label: `Open ${product}` }) });
+}
+
 // Six-digit sign-in / setup code. The code is the whole message, so it is
 // shown large; nothing else in the mail is actionable.
 function signInCodeEmail({ to, name, code, minutes, purpose }) {
   const product = productName();
   const title = {
     setup: `Confirm email verification for ${product}`,
+    reauth: `Confirm a security change on ${product}`,
     confirm: `Your ${product} confirmation code`,
   }[purpose] || `Your ${product} sign-in code`;
   const intro = {
     setup: 'Use this code to turn on two-step verification by email.',
+    reauth: 'Use this code to confirm a change to your two-step verification settings.',
     confirm: 'Use this code to confirm signing a device out of your account.',
   }[purpose] || 'Use this code to finish signing in.';
   const lines = [
@@ -253,6 +277,7 @@ module.exports = {
   qualityAlertEmail,
   billingAlertEmail,
   signInCodeEmail,
+  twoStepChangedEmail,
   deliveryMode,
   invitationEmail,
   staffWelcomeEmail,
