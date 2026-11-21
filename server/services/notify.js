@@ -163,10 +163,12 @@ const METHOD_NAMES = { totp: 'the authenticator app', email: 'email codes', what
 function twoStepChangedEmail({ to, name, method, action, byStaff = false, staff = false }) {
   const product = productName();
   const what = METHOD_NAMES[method] || 'a two-step method';
-  const title = action === 'added' ? `Two-step verification added on ${product}` : `Two-step verification removed on ${product}`;
+  const title = action === 'added' ? `Two-step verification added on ${product}`
+    : action === 'recovery_codes' ? `New recovery codes created on ${product}` : `Two-step verification removed on ${product}`;
   const lines = [
     `Hi ${name || 'there'},`,
-    action === 'added'
+    action === 'recovery_codes' ? 'New two-step recovery codes were created for your account. The old ones no longer work.'
+    : action === 'added'
       ? `Two-step verification with ${what} was turned on for your account.`
       : byStaff
         ? `Platform staff reset two-step verification on your account (${what} removed). You will set it up again at your next sign-in.`

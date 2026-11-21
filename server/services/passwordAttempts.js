@@ -44,23 +44,33 @@ async function recordPasswordFailure(user, { req } = {}) {
   return { count, locked };
 }
 
+// Resets the counter after a correct password, but only while the account is
+// not locked in the database: the caller's copy of the user may be stale (a
+// parallel burst of guesses can lock it after the copy was read). Returns
+// false when the account is locked, so the caller refuses with 423.
 async function recordPasswordSuccess(user, extraSet = {}) {
-  await sys(() => Users.updateOne({ id: user.id }, { $set: { failed_login_count: 0, ...extraSet }, $unset: { locked_until: '' } }));
+  const now = new Date();
+  const res = await sys(() => Users.updateOne(
+    { id: user.id, $or: [{ locked_until: null }, { locked_until: { $lte: now } }] },
+    { $set: { failed_login_count: 0, ...extraSet }, $unset: { locked_until: '' } },
+  ));
+  return res.matchedCount === 1;
 }
 
 /**
  * Checks a password against the account with the counter and lock:
- * 'locked' (refused without comparing), 'wrong' (counted; lockedNow when this
- * attempt locked the account) or 'ok' (counter reset unless resetOnSuccess
- * is false, for callers that reset it themselves).
+ * 'locked' (refused; also when the database says locked although the given
+ * copy did not), 'wrong' (counted; lockedNow when this attempt locked the
+ * account) or 'ok' (counter reset; `extraSet` is written with the reset, for
+ * example last_login).
  */
-async function checkPassword(user, password, { req, resetOnSuccess = true } = {}) {
+async function checkPassword(user, password, { req, extraSet = {} } = {}) {
   if (isLocked(user)) return { result: 'locked' };
   if (typeof password !== 'string' || !password || !(await bcrypt.compare(password, user.password_hash || ''))) {
     const { locked } = await recordPasswordFailure(user, { req });
     return { result: 'wrong', lockedNow: locked };
   }
-  if (resetOnSuccess && (user.failed_login_count || user.locked_until)) await recordPasswordSuccess(user);
+  if (!(await recordPasswordSuccess(user, extraSet))) return { result: 'locked' };
   return { result: 'ok' };
 }
 

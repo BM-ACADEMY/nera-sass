@@ -136,7 +136,7 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     // Counted atomically, so parallel wrong passwords still lock the account.
-    const check = await passwordAttempts.checkPassword(user, password, { req, resetOnSuccess: false });
+    const check = await passwordAttempts.checkPassword(user, password, { req });
     if (check.result === 'locked') {
       return res.status(423).json({ error: passwordAttempts.LOCKED_MESSAGE, code: 'ACCOUNT_LOCKED' });
     }
@@ -150,7 +150,7 @@ exports.login = async (req, res) => {
         return res.status(403).json({ error: 'This workspace is suspended. Contact support.', code: 'TENANT_SUSPENDED' });
       }
     }
-    await sys(() => Users.updateOne({ id: user.id }, { $set: { failed_login_count: 0, last_login: new Date() }, $unset: { locked_until: '' } }));
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { last_login: new Date() } }));
     return res.json(await afterPassword(user));
   } catch (error) {
     return fail(res, error);
@@ -211,7 +211,13 @@ exports.sendReauthEmail = async (req, res) => {
 const STEP_UP_MINUTES = 15;
 async function enrolmentUser(req) {
   const mfaToken = req.body?.mfa_token;
-  if (mfaToken) return { user: (await resolveIdentity(mfaToken, { purpose: 'mfa_setup' })).user, viaSession: false };
+  if (mfaToken) {
+    const { user } = await resolveIdentity(mfaToken, { purpose: 'mfa_setup' });
+    // The setup token only enrols the first method. Once one is on, adding
+    // another needs a session and the current code (step-up).
+    if (mfa.hasMfa(user)) throw new AuthError(401, 'This sign-in step has ended. Sign in again.', 'MFA_SETUP_DONE');
+    return { user, viaSession: false };
+  }
   if (req.user?.id) {
     const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
     if (!user) throw new AuthError(401, 'Not signed in');
@@ -360,6 +366,7 @@ exports.regenerateRecoveryCodes = async (req, res) => {
     if (!mfa.hasMfa(user)) return res.status(400).json({ error: 'Turn on two-step verification first' });
     const { codes, hashes } = mfa.generateRecoveryCodes();
     await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_recovery_hashes: hashes } }));
+    await mailTwoStepChange(user, 'recovery', 'recovery_codes');
     return res.json({ recovery_codes: codes });
   } catch (error) {
     return fail(res, error);
@@ -404,6 +411,9 @@ exports.changePassword = async (req, res) => {
     const next = req.body?.newPassword ?? req.body?.new_password;
     const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
     if (!user) throw new AuthError(401, 'Not signed in');
+    if (typeof current !== 'string' || !current) {
+      return res.status(403).json({ error: 'Enter your current password to continue.', code: 'PASSWORD_REQUIRED' });
+    }
     // Counted like a login: wrong passwords lock the account; locked → 423.
     const check = await passwordAttempts.checkPassword(user, current, { req });
     if (check.result === 'locked' || check.lockedNow) return res.status(423).json({ error: passwordAttempts.LOCKED_MESSAGE, code: 'ACCOUNT_LOCKED' });

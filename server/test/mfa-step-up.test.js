@@ -276,6 +276,61 @@ test('2FA changes need re-authentication; reset-mfa respects staff roles', async
     assert.strictEqual(locked.body.code, 'ACCOUNT_LOCKED');
   });
 
+  await t.test('Review 1. A correct password does not clear a lock set after the user copy was read', async () => {
+    const passwordAttempts = require('../services/passwordAttempts');
+    const user = await tenantUser();
+    const stale = await fresh(user.id); // read before the lock, as a parallel request would
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { locked_until: new Date(Date.now() + 10 * 60000) } }));
+    const check = await passwordAttempts.checkPassword(stale, PASSWORD);
+    assert.strictEqual(check.result, 'locked');
+    assert.ok((await fresh(user.id)).locked_until, 'the lock stays');
+  });
+
+  await t.test('Review 2. The mfa_setup token stops working once a method is on', async () => {
+    const user = await staff('ops');
+    const login = await request(app).post('/api/auth/login').send({ email: user.email, password: PASSWORD });
+    const token = login.body.mfa_token;
+    const start = await request(app).post('/api/auth/mfa/email/setup').send({ mfa_token: token });
+    assert.strictEqual(start.status, 200);
+    const confirm = await request(app).post('/api/auth/mfa/email/setup/confirm').send({ mfa_token: token, code: lastCode() });
+    assert.strictEqual(confirm.status, 200, JSON.stringify(confirm.body));
+    const second = await request(app).post('/api/auth/mfa/setup').send({ mfa_token: token });
+    assert.strictEqual(second.status, 401, 'no second method without a current code');
+    assert.strictEqual(second.body.code, 'MFA_SETUP_DONE');
+  });
+
+  await t.test('Review 3. An email code is accepted once even when sent twice in parallel; wrong tries stop at five', async () => {
+    const emailOtp = require('../services/emailOtp');
+    const user = await staff('ops', { mfa_email_enabled: true });
+    await emailOtp.sendCode(user, 'login');
+    const code = lastCode();
+    const results = await Promise.all([emailOtp.verifyCode(user, code, 'login'), emailOtp.verifyCode(user, code, 'login')]);
+    assert.strictEqual(results.filter(Boolean).length, 1, 'accepted exactly once');
+
+    await sys(() => Users.updateOne({ id: user.id }, { $unset: { mfa_email_code_sent_at: '' } }));
+    await emailOtp.sendCode(await fresh(user.id), 'login');
+    const right = lastCode();
+    const wrong = right === '000000' ? '111111' : '000000';
+    await Promise.all(Array.from({ length: 12 }, () => emailOtp.verifyCode(user, wrong, 'login')));
+    const after = await fresh(user.id);
+    assert.ok(!after.mfa_email_code_hash, 'cleared after five wrong tries');
+    assert.strictEqual(await emailOtp.verifyCode(user, right, 'login'), false);
+  });
+
+  await t.test('Review 4/5. Change password without the current one is 403 and not counted; new recovery codes are emailed', async () => {
+    const user = await tenantUser();
+    const res = await request(app).post('/api/auth/change-password').set(auth(user)).send({ newPassword: 'Brand-New-Pass-9' });
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.code, 'PASSWORD_REQUIRED');
+    assert.strictEqual((await fresh(user.id)).failed_login_count || 0, 0);
+
+    const secret = mfa.generateSecret();
+    const withApp2 = await staff('ops', withApp(secret));
+    const codes = await request(app).post('/api/auth/mfa/recovery-codes').set(auth(withApp2)).send({ password: PASSWORD, code: mfa.totp(secret) });
+    assert.strictEqual(codes.status, 200);
+    assert.match(notify.outbox().at(-1).subject, /New recovery codes/);
+  });
+
   await t.test('M3. /change-password has a per-account rate limit', async () => {
     const user = await tenantUser();
     process.env.AUTH_RATE_LIMIT = 'on';
