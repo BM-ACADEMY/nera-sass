@@ -76,7 +76,7 @@ class SendError extends Error {
 // Every send passes the send policy first: free text only inside the 24-hour
 // window, marketing templates only to opted-in contacts on a healthy number,
 // and the number's per-minute and daily limits.
-async function sendToLead(req, leadIdRaw, content, build, { kind = 'service', messageType = 'text', templateName = null } = {}) {
+async function sendToLead(req, leadIdRaw, content, build, { kind = 'service', messageType = 'text', templateName = null, templateLanguage = null } = {}) {
   const leadId = Number(leadIdRaw);
   if (!Number.isInteger(leadId) || leadId <= 0) throw new SendError(400, 'lead_id is required');
   if (!(await tenantCanSend(req.tenant.id))) throw new SendError(403, 'This workspace cannot send messages', 'SEND_BLOCKED');
@@ -89,7 +89,9 @@ async function sendToLead(req, leadIdRaw, content, build, { kind = 'service', me
     : null;
   if (!brand?.phone_number_id || !brand?.wa_access_token) throw new SendError(409, 'WhatsApp is not connected for this lead', 'WHATSAPP_NOT_CONNECTED');
 
-  const resolvedKind = messageType === 'template' && templateName ? await sendPolicy.templateKind(templateName) : kind;
+  const resolvedKind = messageType === 'template' && templateName
+    ? await sendPolicy.templateKind(templateName, { phoneNumberId: brand.phone_number_id, clientId: brand.id, language: templateLanguage })
+    : kind;
   const check = await sendPolicy.checkSend({ lead, kind: resolvedKind, messageType, phoneNumberId: brand.phone_number_id });
   if (!check.ok) throw new SendError(check.status, check.message, check.code);
   const slot = await numberHealth.reserveSlot(brand.phone_number_id, { countsTowardDailyCap: messageType === 'template' });
@@ -195,7 +197,7 @@ app.post('/api/internal/send-template', internalAuth, sendRoute('send-template',
   const components = params.length ? [{ type: 'body', parameters: params.map((v) => ({ type: 'text', text: String(v ?? '') })) }] : undefined;
   return renderTemplateText(template, language, params.map((v) => String(v ?? '')), `[Template] ${template}`).then((shown) => sendToLead(req, req.body?.lead_id, shown, () => ({
     type: 'template', template: { name: template, language: { code: language }, ...(components ? { components } : {}) },
-  }), { messageType: 'template', templateName: template }));
+  }), { messageType: 'template', templateName: template, templateLanguage: language }));
 }));
 
 // GET /api/internal/context?lead_id=&before_message_id=&limit=
