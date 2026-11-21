@@ -11,6 +11,7 @@ import ConfirmDialog from '../ConfirmDialog';
 import EditBrandDialog from './EditBrandDialog';
 import WhatsAppProfileDialog from './WhatsAppProfileDialog';
 import BusinessProfileCard from './BusinessProfileCard';
+import BillingCard from './BillingCard';
 import { Spinner } from '@/components/ui/spinner';
 import UserAvatar from '../UserAvatar';
 import { Badge } from '@/components/ui/badge';
@@ -346,6 +347,9 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, refreshKey = 0 }) =
           <Section icon={FiTag} title="Brand profile"><div className="text-sm text-muted-foreground">No brand profile.</div></Section>
         )}
       </div>
+
+      {/* Plan and AI replies (staff with billing access) */}
+      <BillingCard tenantId={tenant.id} />
 
       {/* Activity */}
       <Section icon={FiActivity} title="Activity" description="What happened in this workspace and who did it (latest 50).">
