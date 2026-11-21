@@ -69,17 +69,55 @@ Prices confirmed by Kamar (14 Nov): Desk ₹799, WhatsApp ₹1999, Complete ₹3
 - [ ] ₹799 + GST live test payment and its invoice, then Razorpay live keys
 - [ ] #26 overnight summary for owners; #27 product list and AI order taking
 
-## Before the first paid customer
-- [ ] Full pilot dry run on a test number (connect, message, reply, STOP, START)
-- [ ] Remove old global WhatsApp variables from the live settings (docs/launch-gap.md §4)
-- [ ] Seats per plan instead of one login per workspace
-- [ ] App Review approval, then Embedded Signup
-- [ ] Fix the staff password-change test (phase1-security D1)
+## Before the first free pilot
+Items from the 20 Nov draft. Owners and dates were guesses there; correct them as needed.
 
-## Later
-- [ ] Campaign cost preview (Meta India price × recipients)
-- [ ] AI reply polish: sandbox test set
-- [ ] Wallet charging for AI overage, extra seats and extra numbers
+### Confirm the launch-critical slices work on the live server
+- Owner: Aakash · Due: 2026-11-27 · Priority: High
+- [x] Code is live: signed webhooks, per-workspace WhatsApp credentials, STOP and consent, subscribing our app to the customer's WhatsApp account (see Done)
+- [ ] Check each one on the live server with the checks in docs/pilot-onboarding.md
+- [ ] Remove the old global WhatsApp variables from the live settings (docs/launch-gap.md §4), after the old token clean-up
+
+### Run one full pilot dry run on a test number
+- Owner: Aakash · Due: 2026-11-30 · Priority: High
+- [ ] Follow docs/pilot-onboarding.md end to end with a second phone: connect, verify, check webhook_subscribed, send a message and see it in the inbox, reply, send STOP and START. Write down anything that did not match the page.
+
+### Fix the failing staff password change test
+- Owner: Aakash · Due: 2026-12-04 · Priority: Normal
+- [ ] test/phase1-security.test.js D1: after a staff user changes their password, the new token is rejected with 401. Check if it is still failing.
+
+## Next, during the pilot
+
+### Plans, limits and seats
+- Owner: Aakash · Due: 2026-12-18 · Priority: Normal
+- [x] Plans, subscriptions, wallet and plan grants are live (#22–#25)
+- [ ] Check seats, numbers, contacts and campaigns are enforced per plan
+- [ ] Replace the one-login-per-workspace rule with a plan seat limit (blocking for paid go-live)
+
+### Check the AI reply polish with a sandbox test set
+- Owner: Aakash · Due: 2026-12-11 · Priority: Normal
+- [ ] Greeting that mirrors the customer, staying on the same brand and topic, saving the customer's name and phone from the chat. docs/n2-ai-booking.md covers greeting and booking for clinics and education; confirm what is left and run a sandbox set of real-style chats.
+
+### Campaign cost preview
+- Owner: Aakash · Due: 2027-01-15 · Priority: Low
+- [ ] Show recipients × Meta's per-category price for India on the campaign screen, with the plan's remaining campaign allowance. No rate card exists in the code yet.
+
+### Wallet charging for extras
+- Owner: Aakash · Due: 2027-02-15 · Priority: Low
+- [x] Wallet ledger and AI overage charging from the wallet are in the code (#22–#24)
+- [ ] Charge for extra seats and extra numbers; check pricing with Kamar
+
+### Meta App Review and Embedded Signup
+- Owner: Aakash · Priority: Normal
+- [ ] After App Review approval, build Embedded Signup so customers connect their own WhatsApp account
 
 ## Decisions for Kamar
-- [ ] Pilot customers and pilot length
+
+### Pilot customers and pricing
+- Owner: Kamar · Due: 2026-12-04 · Priority: Normal
+- [x] Paid plan prices: Desk ₹799, WhatsApp ₹1999, Complete ₹3999 + GST (confirmed 14 Nov)
+- [ ] Which customers get the first free pilots, and for how long
+
+## History
+- 2026-11-20: first draft written from docs/launch-gap.md, docs/pilot-onboarding.md, docs/claude-pr-log.md and the code.
+- 2026-11-21: updated with the production and staging deploys of 21 Nov; old draft items kept above with their owners and dates.
