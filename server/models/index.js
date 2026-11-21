@@ -172,6 +172,7 @@ module.exports = {
   TrackedCitations: require('./TrackedCitations'),
   UsageSettings: require('./UsageSettings'),
   Users: require('./Users'),
+  UserSessions: require('./UserSessions'),
   WalletLedger: require('./WalletLedger'),
   WebhookDeliveries: require('./WebhookDeliveries'),
   WorkflowLogs: require('./WorkflowLogs'),

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { io as socketIO } from 'socket.io-client';
-import { FiGrid, FiUsers, FiCheckSquare, FiSmartphone, FiFileText, FiSend, FiCpu, FiBarChart2, FiSettings, FiCalendar, FiPackage, FiLogOut, FiMoreVertical, FiCreditCard } from 'react-icons/fi';
+import { FiGrid, FiUsers, FiCheckSquare, FiSmartphone, FiFileText, FiSend, FiCpu, FiBarChart2, FiSettings, FiCalendar, FiPackage, FiLogOut, FiMoreVertical, FiCreditCard, FiMonitor } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import getneraLogo from '../../assets/getnera-logo.png';
 import { api } from '../../services/api.js';
@@ -152,6 +152,7 @@ const AppSidebar = ({ onLogout }) => {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => go('/settings')}><FiSettings /> Settings</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => go('/billing')}><FiCreditCard /> Billing</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => go('/account/sessions')}><FiMonitor /> My sessions</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onSelect={onLogout}><FiLogOut /> Log out</DropdownMenuItem>
               </DropdownMenuContent>

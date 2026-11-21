@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FiUser, FiShield, FiLock, FiArrowLeft } from 'react-icons/fi';
+import { FiUser, FiShield, FiLock, FiArrowLeft, FiMonitor } from 'react-icons/fi';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -9,6 +9,7 @@ export const SETTINGS_SECTIONS = {
   profile: { title: 'Profile', icon: FiUser, tone: 'bg-blue-50 text-blue-600 ring-blue-100', text: 'Your name, phone number and sign-in email.' },
   'two-step': { title: 'Two-step verification', icon: FiShield, tone: 'bg-emerald-50 text-emerald-600 ring-emerald-100', text: 'Email codes, authenticator app and recovery codes.' },
   password: { title: 'Password & sessions', icon: FiLock, tone: 'bg-amber-50 text-amber-600 ring-amber-100', text: 'Change your password or sign out of every device.' },
+  sessions: { title: 'My sessions', icon: FiMonitor, tone: 'bg-indigo-50 text-indigo-600 ring-indigo-100', text: 'Where you are signed in; sign out a device you do not recognise.' },
 };
 
 // Header of one settings page: breadcrumb back to the hub, icon and title.

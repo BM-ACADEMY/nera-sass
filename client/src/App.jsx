@@ -23,6 +23,7 @@ import PluginsPage from './views/plugins/PluginsPage.jsx';
 import { ReportsView } from './views/ReportsView.jsx';
 import { SettingsView } from './views/SettingsView.jsx';
 import BillingPage from './views/billing/BillingPage.jsx';
+import SessionsPage from './views/account/SessionsPage.jsx';
 import { LoginScreen } from './views/auth/LoginScreen.jsx';
 import { api } from './services/api.js';
 
@@ -85,6 +86,7 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
               <Route path="/reports" element={<ReportsView />} />
               <Route path="/settings/:section?" element={<SettingsView />} />
               <Route path="/billing" element={<BillingPage />} />
+              <Route path="/account/sessions" element={<SessionsPage />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </div>

@@ -15,7 +15,9 @@ const emailOtp = require('../services/emailOtp');
 const notify = require('../services/notify');
 const audit = require('../services/audit');
 const invitations = require('../services/invitations');
+const sessions = require('../services/sessions');
 const passwordAttempts = require('../services/passwordAttempts');
+const { verifySecondStep } = require('../services/stepUp');
 const { passwordProblem, normalizeEmail } = require('../utils/passwordPolicy');
 const {
   issueAccessToken, issueMfaToken, resolveIdentity, publicUser, AuthError,
@@ -33,11 +35,28 @@ function fail(res, error) {
   return res.status(500).json({ error: 'Internal server error' });
 }
 
-async function sessionPayload(user, { mfaPassed }) {
+// The signed-in session for this request: the caller's own session when it
+// already has one (MFA enrolment from settings, password change), otherwise a
+// new one for this browser (login). Returns the raw sid for the token.
+// keepExpiry: a signed-in request (it has req.user) gets a new token for the
+// same session that ends when the session already ends (two-step enrolment).
+// Otherwise (login, password change) the session gets a full new lifetime.
+async function sessionFor(user, req, { keepExpiry = false } = {}) {
+  if (keepExpiry && req?.user) return sessions.continueSession(user, req);
+  if (req?.authSessionId) {
+    await sessions.renewSession(req.authSessionId, user);
+    return { sid: req.authSessionId, expiresAt: null };
+  }
+  return { sid: await sessions.createSession(user, sessions.clientInfo(req)), expiresAt: null };
+}
+const sessionIdFor = async (user, req) => (await sessionFor(user, req)).sid;
+
+async function sessionPayload(user, { mfaPassed, req, keepExpiry = false }) {
   const identity = describeUser(user);
   const lifecycle = identity.kind === 'tenant' ? await tenantLifecycle(identity.tenantId) : null;
+  const { sid, expiresAt } = await sessionFor(user, req, { keepExpiry });
   return {
-    token: issueAccessToken(user, { mfa: mfaPassed }),
+    token: issueAccessToken(user, { mfa: mfaPassed, sid, expiresAt }),
     user: publicUser(user, identity, lifecycle?.tenant),
     workspace: lifecycle ? { state: lifecycle.state, access: lifecycle.access } : null,
   };
@@ -48,7 +67,7 @@ const mfaEnforcedFor = (user) => process.env.MFA_ENFORCED !== 'false' && mfaRequ
 // Decides what happens after a correct password: a full session, an MFA
 // challenge (with the methods the user may pick from), or mandatory enrolment.
 // With email as the only method the code is mailed straight away.
-async function afterPassword(user) {
+async function afterPassword(user, req) {
   const methods = mfa.methodsOf(user);
   if (methods.length) {
     const out = { mfa_required: true, mfa_token: issueMfaToken(user, 'mfa'), methods };
@@ -66,7 +85,7 @@ async function afterPassword(user) {
   if (mfaEnforcedFor(user)) {
     return { mfa_setup_required: true, mfa_token: issueMfaToken(user, 'mfa_setup'), email_hint: emailOtp.maskEmail(user.email) };
   }
-  return sessionPayload(user, { mfaPassed: false });
+  return sessionPayload(user, { mfaPassed: false, req });
 }
 
 // A wrong two-factor code (the session or sign-in step itself is still valid).
@@ -78,18 +97,8 @@ const INVALID_MFA_CODE = Object.freeze({ error: 'Invalid verification code', cod
 // `method`, an authenticator code is assumed when the app is set up (older
 // clients send only `code`).
 async function secondFactorOk(user, { method, code, recoveryCode }, emailPurpose) {
-  const methods = mfa.methodsOf(user);
-  let ok = false;
-  if (code) {
-    const use = method || (methods.includes('totp') ? 'totp' : 'email');
-    if (!methods.includes(use)) throw new AuthError(400, 'This verification method is not turned on for this account', 'MFA_METHOD_OFF');
-    ok = use === 'totp' ? mfa.verifyTotp(decrypt(user.mfa_secret_enc), code) : await emailOtp.verifyCode(user, code, emailPurpose);
-  }
-  if (!ok && recoveryCode) {
-    const hash = mfa.hashRecoveryCode(recoveryCode);
-    const updated = await sys(() => Users.updateOne({ id: user.id, mfa_recovery_hashes: hash }, { $pull: { mfa_recovery_hashes: hash } }));
-    ok = updated.modifiedCount === 1;
-  }
+  const { ok, methodOff } = await verifySecondStep(user, { method, code, recoveryCode }, emailPurpose);
+  if (methodOff) throw new AuthError(400, 'This verification method is not turned on for this account', 'MFA_METHOD_OFF');
   return ok;
 }
 
@@ -151,7 +160,7 @@ exports.login = async (req, res) => {
       }
     }
     await sys(() => Users.updateOne({ id: user.id }, { $set: { last_login: new Date() } }));
-    return res.json(await afterPassword(user));
+    return res.json(await afterPassword(user, req));
   } catch (error) {
     return fail(res, error);
   }
@@ -167,7 +176,7 @@ exports.verifyMfa = async (req, res) => {
     if (!mfa.methodsOf(user).length) return res.status(400).json({ error: 'MFA is not enabled for this account' });
     const ok = await secondFactorOk(user, { method, code, recoveryCode }, 'login');
     if (!ok) return res.status(401).json(INVALID_MFA_CODE);
-    return res.json(await sessionPayload(user, { mfaPassed: true }));
+    return res.json(await sessionPayload(user, { mfaPassed: true, req }));
   } catch (error) {
     return fail(res, error);
   }
@@ -271,7 +280,8 @@ exports.confirmMfaSetup = async (req, res) => {
     await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'totp' } });
     await mailTwoStepChange(user, 'totp', 'added');
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
-    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
+    // Enrolling while signed in does not extend the session.
+    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true, req, keepExpiry: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
   } catch (error) {
     return fail(res, error);
   }
@@ -323,7 +333,7 @@ exports.confirmEmailSetup = async (req, res) => {
     await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'email' } });
     await mailTwoStepChange(user, 'email', 'added');
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
-    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
+    return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true, req, keepExpiry: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
   } catch (error) {
     return fail(res, error);
   }
@@ -431,7 +441,21 @@ exports.changePassword = async (req, res) => {
     // session's two-factor state: a session that passed MFA stays passed, even for
     // a user with no enrolled method (otherwise the new token is refused with
     // MFA_REQUIRED and the user is logged out right after changing the password).
-    return res.json({ success: true, token: issueAccessToken(updated, { mfa: mfa.hasMfa(updated) || Boolean(req.sessionMfa) }) });
+    await sessions.revokeOthers(user.id, req.authSessionId, 'password_changed');
+    const sid = await sessionIdFor(updated, req);
+    return res.json({ success: true, token: issueAccessToken(updated, { mfa: mfa.hasMfa(updated) || Boolean(req.sessionMfa), sid }) });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
+// Log out of this device: the session row is revoked, so this token is refused
+// from the next request on and the device leaves My sessions. A token from
+// before sessions were tracked has no row; it simply expires.
+exports.logout = async (req, res) => {
+  try {
+    const ended = await sessions.revokeCurrent(req.user.id, req.authSessionId);
+    return res.json({ success: true, session_ended: ended });
   } catch (error) {
     return fail(res, error);
   }
@@ -440,6 +464,7 @@ exports.changePassword = async (req, res) => {
 exports.logoutAll = async (req, res) => {
   try {
     await sys(() => Users.updateOne({ id: req.user.id }, { $inc: { token_version: 1 } }));
+    await sessions.revokeOthers(req.user.id, null, 'signed_out_everywhere');
     await audit.record(audit.EVENTS.SESSIONS_REVOKED, { tenantId: req.user.tenant_id, req, targetType: 'user', targetId: req.user.id, meta: { self: true } });
     return res.json({ success: true });
   } catch (error) {
@@ -490,6 +515,7 @@ exports.resetPassword = async (req, res) => {
       },
     ));
     if (result.modifiedCount !== 1) return res.status(410).json({ error: 'This reset link is not valid or has expired' });
+    await sessions.revokeOthers(user.id, null, 'password_reset');
     await audit.record(audit.EVENTS.PASSWORD_RESET, { tenantId: user.tenant_id ?? null, actor: { actor_type: 'user', actor_user_id: user.id }, targetType: 'user', targetId: user.id });
     return res.json({ success: true });
   } catch (error) {

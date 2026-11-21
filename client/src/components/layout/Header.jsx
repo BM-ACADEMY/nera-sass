@@ -24,6 +24,7 @@ const LABELS = {
   'sales-tasks': 'Sales Tasks',
   calendar: 'Calendar',
   plugins: 'Plugins',
+  account: 'My sessions',
 };
 
 // Only the pages in the sidebar; other addresses are not routed.

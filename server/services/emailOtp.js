@@ -13,8 +13,9 @@ const TTL_MINUTES = Number(process.env.EMAIL_OTP_TTL_MINUTES || 10);
 const RESEND_SECONDS = 45;
 const MAX_ATTEMPTS = 5;
 // login: second sign-in step; setup: turning on email codes; reauth: confirming
-// a security change while signed in.
-const PURPOSES = ['login', 'setup', 'reauth'];
+// a two-step change while signed in; confirm: re-checking a signed-in user
+// before signing a device out (My sessions).
+const PURPOSES = ['login', 'setup', 'reauth', 'confirm'];
 
 class EmailOtpError extends Error {
   constructor(status, message, code) {
