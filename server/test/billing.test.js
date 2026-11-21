@@ -597,6 +597,12 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     assert.strictEqual(list.body.invoices[0].total_paise, 94282);
     const page = await request(app).get(`/api/billing/invoices/${list.body.invoices[0].id}`).set(bearer(a.owner));
     assert.strictEqual(page.status, 200);
+    assert.strictEqual(page.headers['cache-control'], 'no-store', 'the invoice page is never cached');
+    assert.strictEqual(page.headers['x-content-type-options'], 'nosniff');
+    assert.strictEqual(page.headers['referrer-policy'], 'no-referrer');
+    assert.match(page.headers['content-security-policy'], /default-src 'none'/);
+    assert.match(page.headers['content-security-policy'], /frame-ancestors 'none'/);
+    assert.ok(!/<script/i.test(page.text), 'the page needs no script, so the CSP allows none');
     assert.match(page.text, /AFRA VENTURES PRIVATE LIMITED/);
     assert.match(page.text, /34ABGCA7083D1ZS/);
     assert.match(page.text, /CGST @ 9%/);
