@@ -20,4 +20,4 @@ module.exports = defineModel('messages', {
   pinned_until: { type: Date },
   is_starred: { type: Boolean, default: false },
   reactions: { type: Mixed, default: () => ({}) },
-}, { autoId: true, indexes: [['conversation_id']] });
+}, { autoId: true, indexes: [['conversation_id'], ['conversation_id', 'sent_at']] });

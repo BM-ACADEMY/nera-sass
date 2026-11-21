@@ -33,6 +33,8 @@ const {
 } = ctx;
 const { requireBrandSender, sendError } = require('../../services/tenantSender');
 const erasure = require('../../services/erasure');
+const { Tenants } = require('../../models');
+const { runAsSystem } = require('../../services/tenantContext');
 // ═══════════════════════════════════════════════════════════════════
 // FOLLOWUP ENGINE APIs (WF02)
 // ═══════════════════════════════════════════════════════════════════
@@ -482,6 +484,27 @@ app.get('/api/leads/:id', auth, async (req, res) => {
       assigned_name: enriched.assigned_name,
       tags: enriched.tags,
     };
+
+    // The inbox asks for ?messages=0: it pages messages through
+    // /api/leads/:id/messages, so the full thread here was sent twice.
+    if (req.query.messages === '0') {
+      const threadFilter = [{ lead_id: leadRow.id }];
+      if (leadRow.phone != null) threadFilter.push({ lead_id: null, phone: phoneTailRegex(leadRow.phone) });
+      const [lastInbound, tenant] = await Promise.all([
+        Conversations.distinct('id', { $or: threadFilter }).then((ids) => Messages.findOne(
+          { conversation_id: { $in: ids }, direction: 'inbound' }, { _id: 0, sent_at: 1 },
+        ).sort({ sent_at: -1 }).lean()),
+        req.identity?.tenantId != null
+          ? runAsSystem(() => Tenants.findOne({ id: req.identity.tenantId }, { _id: 0, ai_enabled: 1 }).lean(), 'inbox')
+          : null,
+      ]);
+      // last_inbound_at drives the 24-hour reply window; workspace_ai_enabled is
+      // false only when the workspace's AI is turned off (Tenants.ai_enabled).
+      return res.json({
+        lead: { ...lead, last_inbound_at: lastInbound?.sent_at ?? null },
+        workspace_ai_enabled: tenant ? tenant.ai_enabled !== false : null,
+      });
+    }
 
     // Join conversations (thread) → messages (individual) for this lead
     const conversations = await leadInboxMessages(await Conversations.distinct('id', { lead_id: leadRow.id }));

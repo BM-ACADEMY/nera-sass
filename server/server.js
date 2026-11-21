@@ -573,7 +573,10 @@ app.use(cors({
   origin: corsOrigin,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-internal-key', 'x-data-mode']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-internal-key', 'x-data-mode'],
+  // Browsers may reuse a preflight answer for 10 minutes instead of sending an
+  // OPTIONS before every API call from app.getnera.in.
+  maxAge: 600,
 }));
 app.use(express.json({
   limit: '10mb',
