@@ -4,7 +4,7 @@
  *   GET    /api/account/sessions               the caller's live sessions
  *   DELETE /api/account/sessions/:id           sign one of them out
  *   POST   /api/account/sessions/revoke-others sign out every other device
- *   POST   /api/account/sessions/confirm-code  email a two-step code for those
+ *   POST   /api/account/sessions/confirm-code  send a two-step code (email or WhatsApp) for those
  *   PUT    /api/account/sessions/current/hints  device details from the app
  *   PATCH  /api/account/sessions/:id           rename one of them ({ name })
  *
@@ -24,6 +24,7 @@ const { requireAuth, issueAccessToken } = require('../middleware/authMiddleware'
 const { runAsSystem } = require('../services/tenantContext');
 const { hasMfa, methodsOf } = require('../services/mfa');
 const emailOtp = require('../services/emailOtp');
+const whatsappOtp = require('../services/whatsappOtp');
 const { confirmIdentity, confirmPassword } = require('../services/stepUp');
 const sessions = require('../services/sessions');
 const audit = require('../services/audit');
@@ -60,19 +61,27 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Emails a two-step code for signing devices out (email two-step). Needs the
-// password first, so a token alone cannot overwrite a pending sign-in code.
+// Sends a two-step code for signing devices out, by email (default) or
+// WhatsApp (body.channel). Needs the password first, so a token alone cannot
+// overwrite a pending sign-in code. Same code rules as every other code
+// (otpStore.js, purpose 'confirm').
+const CONFIRM_CHANNELS = { email: emailOtp, whatsapp: whatsappOtp };
 router.post('/confirm-code', writeLimit, confirmLimit, async (req, res) => {
   try {
+    const channel = req.body?.channel === 'whatsapp' ? 'whatsapp' : 'email';
     const user = await loadUser(req.user.id);
-    if (!methodsOf(user).includes('email')) return res.status(400).json({ error: 'Email codes are not turned on for this account' });
+    if (!methodsOf(user).includes(channel)) {
+      return res.status(400).json({ error: channel === 'whatsapp' ? 'WhatsApp codes are not turned on for this account' : 'Email codes are not turned on for this account' });
+    }
     const refused = await confirmPassword(user, req.body || {}, req);
     if (refused) return res.status(refused.status).json(refused.body);
-    return res.json(await emailOtp.sendCode(user, 'confirm'));
+    return res.json(await CONFIRM_CHANNELS[channel].sendCode(user, 'confirm'));
   } catch (error) {
-    if (error instanceof emailOtp.EmailOtpError) return res.status(error.status).json({ error: error.message, code: error.code });
+    if (error instanceof emailOtp.EmailOtpError || error instanceof whatsappOtp.WhatsappOtpError) {
+      return res.status(error.status).json({ error: error.message, code: error.code });
+    }
     console.error('[account-sessions] code not sent:', error.message);
-    return res.status(502).json({ error: 'The code could not be emailed. Try again in a minute.' });
+    return res.status(502).json({ error: 'The code could not be sent. Try again in a minute.' });
   }
 });
 

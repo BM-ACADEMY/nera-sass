@@ -23,7 +23,7 @@ class UserAdminError extends Error {
   }
 }
 
-const PUBLIC_FIELDS = { _id: 0, id: 1, name: 1, email: 1, phone: 1, role: 1, is_active: 1, last_login: 1, created_at: 1, mfa_enabled: 1, mfa_email_enabled: 1, tenant_id: 1, is_platform_staff: 1, staff_role: 1, deactivated_at: 1 };
+const PUBLIC_FIELDS = { _id: 0, id: 1, name: 1, email: 1, phone: 1, role: 1, is_active: 1, last_login: 1, created_at: 1, mfa_enabled: 1, mfa_email_enabled: 1, mfa_whatsapp_enabled: 1, tenant_id: 1, is_platform_staff: 1, staff_role: 1, deactivated_at: 1 };
 
 function presentUser(user) {
   if (!user) return user;
@@ -38,7 +38,7 @@ function presentUser(user) {
     is_platform_staff: identity?.kind === 'staff',
     tenant_id: user.tenant_id ?? null,
     is_active: user.is_active !== false,
-    mfa_enabled: Boolean(user.mfa_enabled || user.mfa_email_enabled),
+    mfa_enabled: Boolean(user.mfa_enabled || user.mfa_email_enabled || user.mfa_whatsapp_enabled),
     last_login: user.last_login || null,
     deactivated_at: user.deactivated_at || null,
     created_at: user.created_at || null,
@@ -131,8 +131,11 @@ async function resetMfa({ userId, actor, req }) {
     throw new UserAdminError(403, 'Only the owner (founder) can reset two-step verification for a staff account');
   }
   await runAsSystem(() => Users.updateOne({ id: target.id }, {
-    $set: { mfa_enabled: false, mfa_email_enabled: false },
-    $unset: { mfa_secret_enc: '', mfa_pending_secret_enc: '', mfa_recovery_hashes: '', mfa_enrolled_at: '', mfa_email_code_hash: '', mfa_email_code_purpose: '', mfa_email_code_expires_at: '' },
+    $set: { mfa_enabled: false, mfa_email_enabled: false, mfa_whatsapp_enabled: false },
+    $unset: {
+      mfa_secret_enc: '', mfa_pending_secret_enc: '', mfa_recovery_hashes: '', mfa_enrolled_at: '', mfa_email_code_hash: '', mfa_email_code_purpose: '', mfa_email_code_expires_at: '',
+      mfa_whatsapp_number: '', mfa_whatsapp_pending_number: '', mfa_whatsapp_verified_at: '', mfa_wa_code_hash: '', mfa_wa_code_purpose: '', mfa_wa_code_expires_at: '', mfa_default_method: '',
+    },
     $inc: { token_version: 1 },
   }), 'user-admin');
   await audit.record(audit.EVENTS.MFA_RESET, { tenantId: target.tenant_id ?? null, req, targetType: 'user', targetId: target.id, meta: { email: target.email } });

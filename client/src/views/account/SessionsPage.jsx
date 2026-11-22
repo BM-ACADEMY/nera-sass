@@ -168,7 +168,7 @@ const SessionsPage = () => {
         onClose={() => setConfirm(null)}
         mfaMethods={data?.mfa_methods || []}
         submit={(body) => confirm.run(body)}
-        sendCode={(password) => api.post('/account/sessions/confirm-code', { password })}
+        sendCode={(password, channel) => api.post('/account/sessions/confirm-code', { password, channel })}
         messageOf={confirmError}
       />
     </div>

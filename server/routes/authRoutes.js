@@ -1,6 +1,6 @@
 const express = require('express');
 const authController = require('../controllers/authController');
-const { requireAuth } = require('../middleware/authMiddleware');
+const { requireAuth, verifyToken } = require('../middleware/authMiddleware');
 const { rateLimit } = require('../utils/rateLimit');
 
 const router = express.Router();
@@ -13,6 +13,7 @@ const tokenLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 60 });
 router.post('/login', loginLimit, authController.login);
 router.post('/mfa/verify', loginLimit, authController.verifyMfa);
 router.post('/mfa/email/send', loginLimit, authController.sendMfaEmail);
+
 router.post('/password/forgot', resetLimit, authController.forgotPassword);
 router.post('/password/reset', resetLimit, authController.resetPassword);
 router.get('/invitations/:token', tokenLimit, authController.previewInvitation);
@@ -21,10 +22,28 @@ router.post('/invitations/accept', tokenLimit, authController.acceptInvitation);
 // Password and code guesses on the re-authenticated endpoints, per account
 // (after authentication) so one stolen session cannot keep guessing from
 // many addresses.
+// On the sign-in step (mfa_token, no session yet) the key is the account in
+// the token, but only when the token verifies with our secret and is a
+// sign-in token; anything else falls back to the address. The sign-in step
+// has its own bucket (mfa:<id>), so nobody can use it to fill the bucket of
+// the account's real sessions (user:<id>).
+const SIGN_IN_TOKEN_TYPES = ['mfa', 'mfa_setup'];
+const accountKey = (req) => {
+  if (req.user?.id) return `user:${req.user.id}`;
+  if (typeof req.body?.mfa_token === 'string') {
+    try {
+      const payload = verifyToken(req.body.mfa_token);
+      if (payload?.id && SIGN_IN_TOKEN_TYPES.includes(payload.typ)) return `mfa:${payload.id}`;
+    } catch {
+      // invalid or expired: keyed by address below
+    }
+  }
+  return `ip:${req.ip}`;
+};
 const reauthLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: Number(process.env.REAUTH_RATE_LIMIT || 20),
-  key: (req) => (req.user?.id ? `user:${req.user.id}` : `ip:${req.ip}`),
+  key: accountKey,
 });
 
 // MFA enrolment: with the mfa_token from login (mandatory enrolment) or a
@@ -35,6 +54,9 @@ router.post('/mfa/setup', loginLimit, sessionOrMfaToken, reauthLimit, authContro
 router.post('/mfa/setup/confirm', loginLimit, sessionOrMfaToken, reauthLimit, authController.confirmMfaSetup);
 router.post('/mfa/email/setup', loginLimit, sessionOrMfaToken, reauthLimit, authController.startEmailSetup);
 router.post('/mfa/email/setup/confirm', loginLimit, sessionOrMfaToken, reauthLimit, authController.confirmEmailSetup);
+router.post('/mfa/whatsapp/send', loginLimit, reauthLimit, authController.sendMfaWhatsapp);
+router.post('/mfa/whatsapp/setup', loginLimit, sessionOrMfaToken, reauthLimit, authController.startWhatsappSetup);
+router.post('/mfa/whatsapp/setup/confirm', loginLimit, sessionOrMfaToken, reauthLimit, authController.confirmWhatsappSetup);
 
 // Signed in (customer users and platform staff)
 router.get('/me', requireAuth, authController.me);
@@ -44,9 +66,14 @@ router.post('/logout-all', requireAuth, authController.logoutAll);
 router.patch('/profile', requireAuth, authController.updateProfile);
 router.post('/mfa/disable', loginLimit, requireAuth, reauthLimit, authController.disableMfaMethod);
 router.post('/mfa/recovery-codes', loginLimit, requireAuth, reauthLimit, authController.regenerateRecoveryCodes);
-router.post('/mfa/reauth/email/send', loginLimit, requireAuth, reauthLimit, authController.sendReauthEmail);
+// Code for confirming a security change: /mfa/reauth/email/send or /mfa/reauth/whatsapp/send.
+router.post('/mfa/reauth/:channel/send', loginLimit, requireAuth, reauthLimit, authController.sendReauthCode);
+router.post('/mfa/default', requireAuth, authController.setDefaultMfaMethod);
 
 // Users are never created here: customer users join by invitation
 // (/api/team/invitations, /api/admin/users) and set their own password.
+
+// Tests reuse account ids after clearing the database; they start each case with empty counters.
+router.resetLimitsForTests = () => { loginLimit.reset(); reauthLimit.reset(); };
 
 module.exports = router;

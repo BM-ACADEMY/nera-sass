@@ -12,9 +12,11 @@ import {
  * a two-step code when that is on, before calling the server.
  *
  *   open          false, or { title, description, actionLabel }
- *   mfaMethods    ['totp'] / ['email'] / both / [] (from GET /account/sessions)
- *   submit(body)  the sign-out call with { password, method?, code? }; resolves on success
- *   sendCode(password)  POST /account/sessions/confirm-code; resolves with { sent_to }
+ *   mfaMethods    any of 'totp', 'email', 'whatsapp' (from GET /account/sessions)
+ *   submit(body)  the sign-out call with { password, method?, code? } or
+ *                 { password, recovery_code }; resolves on success
+ *   sendCode(password, channel)  POST /account/sessions/confirm-code for
+ *                 'email' or 'whatsapp'; resolves with { sent_to }
  *   messageOf(err, fallback)  plain-language text for an error
  */
 export default function ConfirmSignOutDialog({ open, onClose, mfaMethods = [], submit, sendCode, messageOf }) {
@@ -26,28 +28,31 @@ export default function ConfirmSignOutDialog({ open, onClose, mfaMethods = [], s
   const [sentTo, setSentTo] = useState(null);
   const [error, setError] = useState(null);
 
-  const hasTotp = mfaMethods.includes('totp');
-  const hasEmail = mfaMethods.includes('email');
-  const needsCode = hasTotp || hasEmail;
+  const methods = ['totp', 'email', 'whatsapp'].filter((m) => mfaMethods.includes(m));
+  const needsCode = methods.length > 0;
+  const choices = needsCode ? [...methods, 'recovery'] : [];
+  const sends = method === 'email' || method === 'whatsapp';
+  const LABELS = { totp: 'Code from your authenticator app', email: 'Code sent to your email', whatsapp: 'Code sent to your WhatsApp', recovery: 'One of your recovery codes' };
+  const SWITCH = { totp: 'authenticator app', email: 'email code', whatsapp: 'WhatsApp code', recovery: 'recovery code' };
 
   useEffect(() => {
     if (!open) return;
     setPassword('');
     setCode('');
-    setMethod(hasTotp ? 'totp' : hasEmail ? 'email' : null);
+    setMethod(methods[0] || null);
     setSentTo(null);
     setError(null);
-  }, [open, hasTotp, hasEmail]);
+  }, [open, mfaMethods.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const emailCode = async () => {
     if (!password) return setError('Enter your password first, then ask for a code.');
     setSending(true);
     setError(null);
     try {
-      const res = await sendCode(password);
-      setSentTo(res?.sent_to || 'your email');
+      const res = await sendCode(password, method);
+      setSentTo(res?.sent_to || (method === 'whatsapp' ? 'your WhatsApp' : 'your email'));
     } catch (err) {
-      setError(messageOf(err, 'The code could not be emailed. Try again in a minute.'));
+      setError(messageOf(err, 'The code could not be sent. Try again in a minute.'));
     } finally {
       setSending(false);
     }
@@ -60,7 +65,8 @@ export default function ConfirmSignOutDialog({ open, onClose, mfaMethods = [], s
     setBusy(true);
     setError(null);
     try {
-      await submit({ password, ...(needsCode ? { method, code: code.trim() } : {}) });
+      const proof = !needsCode ? {} : method === 'recovery' ? { recovery_code: code.trim() } : { method, code: code.trim() };
+      await submit({ password, ...proof });
       onClose();
     } catch (err) {
       setError(messageOf(err, 'Could not sign out. Try again.'));
@@ -88,25 +94,25 @@ export default function ConfirmSignOutDialog({ open, onClose, mfaMethods = [], s
 
           {needsCode && (
             <div className="grid gap-2">
-              <Label htmlFor="sign-out-code">
-                {method === 'totp' ? 'Code from your authenticator app' : 'Code sent to your email'}
-              </Label>
+              <Label htmlFor="sign-out-code">{LABELS[method]}</Label>
               <div className="flex gap-2">
-                <Input id="sign-out-code" inputMode="numeric" autoComplete="one-time-code" maxLength={11}
+                <Input id="sign-out-code" inputMode={method === 'recovery' ? 'text' : 'numeric'} autoComplete="one-time-code" maxLength={11}
                   value={code} onChange={(e) => setCode(e.target.value)} disabled={busy} />
-                {method === 'email' && (
+                {sends && (
                   <Button type="button" variant="outline" onClick={emailCode} disabled={sending || busy}>
-                    {sending ? 'Sending…' : sentTo ? 'Send again' : 'Email me a code'}
+                    {sending ? 'Sending…' : sentTo ? 'Send again' : method === 'whatsapp' ? 'Send me a code' : 'Email me a code'}
                   </Button>
                 )}
               </div>
-              {method === 'email' && sentTo && <p className="text-xs text-muted-foreground">Code sent to {sentTo}.</p>}
-              {hasTotp && hasEmail && (
-                <button type="button" className="w-fit text-xs font-semibold text-blue-600 underline"
-                  onClick={() => { setMethod(method === 'totp' ? 'email' : 'totp'); setCode(''); setError(null); }}>
-                  {method === 'totp' ? 'Use a code by email instead' : 'Use my authenticator app instead'}
-                </button>
-              )}
+              {sends && sentTo && <p className="text-xs text-muted-foreground">Code sent to {sentTo}.</p>}
+              <div className="flex flex-wrap gap-3">
+                {choices.filter((m) => m !== method).map((m) => (
+                  <button key={m} type="button" className="w-fit text-xs font-semibold text-blue-600 underline"
+                    onClick={() => { setMethod(m); setCode(''); setSentTo(null); setError(null); }}>
+                    Use {m === 'recovery' ? 'a' : 'my'} {SWITCH[m]} instead
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 

@@ -160,7 +160,7 @@ const SessionsSettings = () => {
         onClose={() => setConfirm(null)}
         mfaMethods={data?.mfa_methods || []}
         submit={(body) => confirm.run(body)}
-        sendCode={async (password) => (await axiosClient.post('/account/sessions/confirm-code', { password })).data}
+        sendCode={async (password, channel) => (await axiosClient.post('/account/sessions/confirm-code', { password, channel })).data}
         messageOf={confirmError}
       />
     </div>

@@ -643,6 +643,27 @@ async function sendBuiltTemplate({ phone, template, built, storedText, staff }) 
   return { contact_id: contact.id, message };
 }
 
+/**
+ * Sends a two-step verification code (an AUTHENTICATION template built by
+ * whatsappOtp.js) from the platform number. Same endpoint and token as
+ * deliver(), but nothing is stored in the inbox and nothing is logged: the
+ * payload carries the code. Throws with Meta's reason (never the code).
+ */
+async function sendAuthCode({ to, payload }) {
+  requireConfigured();
+  const waId = digits(to);
+  if (waId.length < 10 || waId.length > 15) throw new InboxError(400, 'Invalid WhatsApp number');
+  try {
+    const res = await axios.post(`${graphBase()}/${platformPhoneId()}/messages`, {
+      messaging_product: 'whatsapp', recipient_type: 'individual', to: waId, ...payload,
+    }, { headers: { Authorization: `Bearer ${platformToken()}` }, timeout: 20000 });
+    return { wa_message_id: res.data?.messages?.[0]?.id || null };
+  } catch (error) {
+    const reason = error.response?.data?.error?.error_user_msg || error.response?.data?.error?.message || error.message || 'Meta refused the message';
+    throw new InboxError(502, `Not sent: ${reason}`, 'SEND_FAILED');
+  }
+}
+
 const HEADER_MEDIA_LIMITS = { IMAGE: 5, VIDEO: 16, DOCUMENT: 100 }; // MB, Meta's limits
 
 /**
@@ -671,6 +692,7 @@ module.exports = {
   sendTemplate,
   startConversation,
   sendBuiltTemplate,
+  sendAuthCode,
   listTemplates,
   templateFields,
   buildTemplateMessage,

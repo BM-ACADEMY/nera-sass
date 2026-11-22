@@ -10,32 +10,54 @@ const { runAsSystem } = require('./tenantContext');
 const { decrypt } = require('../utils/crypto');
 const mfa = require('./mfa');
 const emailOtp = require('./emailOtp');
+const whatsappOtp = require('./whatsappOtp');
+const codeFailures = require('./codeFailures');
 const passwordAttempts = require('./passwordAttempts');
 
 const sys = (fn) => runAsSystem(fn, 'step-up');
 const { isLocked } = passwordAttempts;
 
 /**
- * An authenticator code, an emailed code (for `emailPurpose`) or a recovery
- * code (used up on success). Without `method`, an authenticator code is
- * assumed when the app is set up.
- * Returns { ok: true } or { ok: false, methodOff: true } for a method the user
- * has not turned on, else { ok: false }.
+ * The one second-step check (login, #43 step-up, My sessions): an
+ * authenticator code, an emailed or WhatsApp code (for `codePurpose`) or a
+ * recovery code (used up on success). Without `method`, an authenticator code
+ * is assumed when the app is on, else the first usable method.
+ * Wrong codes count toward the per-account code lock across all channels
+ * (codeFailures.js): app codes are counted before they are checked, email and
+ * WhatsApp codes in otpStore.js. While code checks are locked a recovery code
+ * is still tried.
+ * Returns { ok }, plus methodOff for a method the user has not turned on and
+ * locked when code checks are locked.
  */
-async function verifySecondStep(user, { method, code, recoveryCode } = {}, emailPurpose = 'login') {
+async function verifySecondStep(user, { method, code, recoveryCode } = {}, codePurpose = 'login') {
   const methods = mfa.methodsOf(user);
   let ok = false;
+  let locked = false;
   if (code) {
-    const use = method || (methods.includes('totp') ? 'totp' : 'email');
+    const use = method || (methods.includes('totp') ? 'totp' : methods[0]);
     if (!methods.includes(use)) return { ok: false, methodOff: true };
-    ok = use === 'totp' ? mfa.verifyTotp(decrypt(user.mfa_secret_enc), code) : await emailOtp.verifyCode(user, code, emailPurpose);
+    if (use === 'totp') {
+      if (await codeFailures.take(user.id)) {
+        ok = mfa.verifyTotp(decrypt(user.mfa_secret_enc), code);
+        await codeFailures.settle(user.id, ok);
+      } else {
+        locked = true;
+      }
+    } else {
+      try {
+        ok = use === 'whatsapp' ? await whatsappOtp.verifyCode(user, code, codePurpose) : await emailOtp.verifyCode(user, code, codePurpose);
+      } catch (error) {
+        if (error.code !== 'MFA_CODE_LOCKED') throw error;
+        locked = true;
+      }
+    }
   }
   if (!ok && recoveryCode) {
     const hash = mfa.hashRecoveryCode(recoveryCode);
     const updated = await sys(() => Users.updateOne({ id: user.id, mfa_recovery_hashes: hash }, { $pull: { mfa_recovery_hashes: hash } }));
     ok = updated.modifiedCount === 1;
   }
-  return { ok };
+  return { ok, locked: !ok && locked };
 }
 
 const LOCKED = { status: 423, body: { error: passwordAttempts.LOCKED_MESSAGE, code: 'ACCOUNT_LOCKED' } };
@@ -80,8 +102,10 @@ async function confirmIdentity(user, body = {}, emailPurpose = 'confirm', req = 
     return refused;
   }
   if (withMfa) {
-    const check = await verifySecondStep(user, { method: body.method, code, recoveryCode }, emailPurpose);
+    // code_method (as in the two-step settings) or method (My sessions UIs).
+    const check = await verifySecondStep(user, { method: body.code_method || body.method, code, recoveryCode }, emailPurpose);
     if (check.methodOff) return { status: 400, body: { error: 'This verification method is not turned on for this account' } };
+    if (check.locked) return { status: 429, body: { error: codeFailures.LOCKED_MESSAGE, code: 'MFA_CODE_LOCKED' } };
     if (!check.ok) {
       const { locked } = await passwordAttempts.recordPasswordFailure(user, { req });
       if (locked) return LOCKED;
