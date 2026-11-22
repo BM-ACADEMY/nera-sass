@@ -371,6 +371,24 @@ test('2FA changes need re-authentication; reset-mfa respects staff roles', async
     const fifth = await verify({ recovery_code: 'AAAAA-AAAAA' });
     assert.strictEqual(fifth.status, 423);
     assert.strictEqual(fifth.body.code, 'ACCOUNT_LOCKED');
+    // The same mfa token cannot finish the sign-in while the account is locked,
+    // even with a right authenticator code.
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_code_locked_until: null } }));
+    const right = await verify({ code: mfa.totp(secret) });
+    assert.strictEqual(right.status, 423, JSON.stringify(right.body));
+    assert.strictEqual(right.body.code, 'ACCOUNT_LOCKED');
+  });
+
+  await t.test('Review 7. A finished login second step clears failures counted during it', async () => {
+    const secret = mfa.generateSecret();
+    const user = await staff('ops', withApp(secret));
+    const login = await request(app).post('/api/auth/login').send({ email: user.email, password: PASSWORD });
+    assert.ok(login.body.mfa_token, JSON.stringify(login.body));
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { failed_login_count: 2 } }));
+    const ok = await request(app).post('/api/auth/mfa/verify').send({ mfa_token: login.body.mfa_token, code: mfa.totp(secret) });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const after = await sys(() => Users.findOne({ id: user.id }, { _id: 0, failed_login_count: 1 }).lean());
+    assert.strictEqual(after.failed_login_count || 0, 0);
   });
 
   await t.test('M3. /change-password has a per-account rate limit', async () => {

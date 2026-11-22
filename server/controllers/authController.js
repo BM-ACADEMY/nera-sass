@@ -203,8 +203,14 @@ exports.verifyMfa = async (req, res) => {
     const { mfa_token: mfaToken, method, code, recovery_code: recoveryCode } = req.body || {};
     const { user } = await resolveIdentity(mfaToken, { purpose: 'mfa' });
     if (!mfa.hasMfa(user)) return res.status(400).json({ error: 'MFA is not enabled for this account' });
+    // A lock set during this sign-in (wrong recovery codes count toward it)
+    // stops the second step too; the mfa token alone must not outlast it.
+    if (passwordAttempts.isLocked(user)) return res.status(423).json({ error: passwordAttempts.LOCKED_MESSAGE, code: 'ACCOUNT_LOCKED' });
     const ok = await secondFactorOk(user, { method, code, recoveryCode }, 'login', req);
     if (!ok) return res.status(401).json(INVALID_MFA_CODE);
+    // A finished sign-in clears failures counted during the second step, and
+    // refuses if a parallel request locked the account meanwhile.
+    if (!(await passwordAttempts.recordPasswordSuccess(user))) return res.status(423).json({ error: passwordAttempts.LOCKED_MESSAGE, code: 'ACCOUNT_LOCKED' });
     return res.json(await sessionPayload(user, { mfaPassed: true, req }));
   } catch (error) {
     return fail(res, error);
