@@ -598,6 +598,64 @@ test('My sessions', async (t) => {
     assert.strictEqual(fifth.body.code, 'ACCOUNT_LOCKED');
   });
 
+  await t.test('S27. While code checks are locked, the reply does not depend on the password', async () => {
+    await tenant(1);
+    const mfa = require('../services/mfa');
+    const { encrypt } = require('../utils/crypto');
+    const secret = mfa.generateSecret();
+    const user = await owner(1, { mfa_enabled: true, mfa_secret_enc: encrypt(secret), mfa_code_locked_until: new Date(Date.now() + 60 * 60000) });
+    const post = (body) => request(app).post('/api/account/sessions/revoke-others').set(as(makeToken(user, { mfa: true }))).send(body);
+    const right = await post({ password: PASSWORD, code: mfa.totp(secret) });
+    const wrong = await post({ password: 'not-my-password', code: mfa.totp(secret) });
+    assert.strictEqual(right.status, 429);
+    assert.strictEqual(right.body.code, 'MFA_CODE_LOCKED');
+    assert.strictEqual(wrong.status, right.status, 'same status for a wrong password');
+    assert.deepStrictEqual(wrong.body, right.body, 'same answer for a wrong password');
+    const fresh = await sys(() => Users.findOne({ id: user.id }).lean());
+    assert.ok(!fresh.failed_login_count, 'the password was not looked at');
+  });
+
+  await t.test('S28. While code checks are locked, wrong recovery codes count toward the lockout', async () => {
+    await tenant(1);
+    const mfa = require('../services/mfa');
+    const { encrypt } = require('../utils/crypto');
+    const secret = mfa.generateSecret();
+    const { codes, hashes } = mfa.generateRecoveryCodes();
+    const user = await owner(1, { mfa_enabled: true, mfa_secret_enc: encrypt(secret), mfa_recovery_hashes: hashes, mfa_code_locked_until: new Date(Date.now() + 60 * 60000) });
+    const post = (body) => request(app).post('/api/account/sessions/revoke-others').set(as(makeToken(user, { mfa: true }))).send(body);
+    const good = await post({ password: PASSWORD, recovery_code: codes[0] });
+    assert.strictEqual(good.status, 200, 'a right recovery code still works while locked');
+    const tok = good.body.token;
+    const post2 = (body) => request(app).post('/api/account/sessions/revoke-others').set(as(tok)).send(body);
+    const wrongPw = await post2({ password: 'not-my-password', recovery_code: 'AAAAA-AAAAA' });
+    assert.strictEqual(wrongPw.status, 403);
+    const replies = [];
+    for (let i = 0; i < 3; i += 1) replies.push(await post2({ password: PASSWORD, code: '123456', recovery_code: 'AAAAA-AAAAA' }));
+    for (const r of replies) {
+      assert.strictEqual(r.status, 403);
+      assert.deepStrictEqual(r.body, wrongPw.body, 'a wrong recovery code gets the same answer as a wrong password');
+    }
+    assert.strictEqual((await sys(() => Users.findOne({ id: user.id }).lean())).failed_login_count, 4, 'every wrong recovery code was counted');
+    const fifth = await post2({ password: PASSWORD, recovery_code: 'AAAAA-AAAAA' });
+    assert.strictEqual(fifth.status, 423);
+    assert.strictEqual(fifth.body.code, 'ACCOUNT_LOCKED');
+  });
+
+  await t.test('S29. A method that is not turned on gets the same answer whatever the password', async () => {
+    await tenant(1);
+    const mfa = require('../services/mfa');
+    const { encrypt } = require('../utils/crypto');
+    const secret = mfa.generateSecret();
+    const user = await owner(1, { mfa_enabled: true, mfa_secret_enc: encrypt(secret) });
+    const post = (body) => request(app).post('/api/account/sessions/revoke-others').set(as(makeToken(user, { mfa: true }))).send(body);
+    const right = await post({ password: PASSWORD, method: 'whatsapp', code: '123456' });
+    const wrong = await post({ password: 'not-my-password', method: 'whatsapp', code: '123456' });
+    assert.strictEqual(right.status, 400);
+    assert.strictEqual(wrong.status, right.status);
+    assert.deepStrictEqual(wrong.body, right.body);
+    assert.ok(!(await sys(() => Users.findOne({ id: user.id }).lean())).failed_login_count, 'the password was not looked at');
+  });
+
   await t.test('S23. Tenant data export leaves signed-in sessions out', async () => {
     await tenant(1);
     const user = await owner(1);
