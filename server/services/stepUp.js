@@ -26,16 +26,24 @@ const { isLocked } = passwordAttempts;
  * (codeFailures.js): app codes are counted before they are checked, email and
  * WhatsApp codes in otpStore.js. While code checks are locked a recovery code
  * is still tried.
- * Returns { ok }, plus methodOff for a method the user has not turned on and
- * locked when code checks are locked.
+ * Returns { ok }, plus methodOff for a method the user has not turned on,
+ * locked when a code was refused because code checks are locked, and
+ * recoveryFailedWhileLocked for a wrong recovery code while they are locked.
  */
-async function verifySecondStep(user, { method, code, recoveryCode } = {}, codePurpose = 'login') {
+// Which method a code is checked with: `method`, else the app when it is on,
+// else the first usable method. Null when that method is not turned on.
+function codeMethod(user, method) {
   const methods = mfa.methodsOf(user);
+  const use = method || (methods.includes('totp') ? 'totp' : methods[0]);
+  return methods.includes(use) ? use : null;
+}
+
+async function verifySecondStep(user, { method, code, recoveryCode } = {}, codePurpose = 'login') {
   let ok = false;
   let locked = false;
   if (code) {
-    const use = method || (methods.includes('totp') ? 'totp' : methods[0]);
-    if (!methods.includes(use)) return { ok: false, methodOff: true };
+    const use = codeMethod(user, method);
+    if (!use) return { ok: false, methodOff: true };
     if (use === 'totp') {
       if (await codeFailures.take(user.id)) {
         ok = mfa.verifyTotp(decrypt(user.mfa_secret_enc), code);
@@ -56,6 +64,9 @@ async function verifySecondStep(user, { method, code, recoveryCode } = {}, codeP
     const hash = mfa.hashRecoveryCode(recoveryCode);
     const updated = await sys(() => Users.updateOne({ id: user.id, mfa_recovery_hashes: hash }, { $pull: { mfa_recovery_hashes: hash } }));
     ok = updated.modifiedCount === 1;
+    // A wrong recovery code while code checks are locked: the caller counts it
+    // toward the account lock, so guessing them still moves toward a lockout.
+    if (!ok && (locked || await codeFailures.isLocked(user.id))) return { ok, locked, recoveryFailedWhileLocked: true };
   }
   return { ok, locked: !ok && locked };
 }
@@ -96,16 +107,26 @@ async function confirmIdentity(user, body = {}, emailPurpose = 'confirm', req = 
   if (withMfa && !code && !recoveryCode) {
     return { status: 403, body: { error: 'Enter your password and your two-step verification code to continue.', code: 'MFA_CODE_REQUIRED', mfa_methods: mfa.methodsOf(user) } };
   }
+  // code_method (as in the two-step settings) or method (My sessions UIs).
+  const method = body.code_method || body.method;
+  if (withMfa) {
+    // Answered before the password is looked at, so neither reply tells
+    // whether the password was right: a method that is not turned on, and
+    // locked code checks when no recovery code was sent.
+    if (code && !codeMethod(user, method)) return { status: 400, body: { error: 'This verification method is not turned on for this account' } };
+    if (!recoveryCode && await codeFailures.isLocked(user.id)) return { status: 429, body: { error: codeFailures.LOCKED_MESSAGE, code: 'MFA_CODE_LOCKED' } };
+  }
   const refused = await confirmPassword(user, body, req);
   if (refused) {
     if (withMfa && refused.body.code === 'CONFIRM_FAILED') return { status: 403, body: { error: 'The password or the code is not correct.', code: 'CONFIRM_FAILED' } };
     return refused;
   }
   if (withMfa) {
-    // code_method (as in the two-step settings) or method (My sessions UIs).
-    const check = await verifySecondStep(user, { method: body.code_method || body.method, code, recoveryCode }, emailPurpose);
+    const check = await verifySecondStep(user, { method, code, recoveryCode }, emailPurpose);
     if (check.methodOff) return { status: 400, body: { error: 'This verification method is not turned on for this account' } };
-    if (check.locked) return { status: 429, body: { error: codeFailures.LOCKED_MESSAGE, code: 'MFA_CODE_LOCKED' } };
+    // Locked since the check above (a parallel request). With a recovery code
+    // sent, a wrong one is counted below like a wrong password instead.
+    if (check.locked && !recoveryCode) return { status: 429, body: { error: codeFailures.LOCKED_MESSAGE, code: 'MFA_CODE_LOCKED' } };
     if (!check.ok) {
       const { locked } = await passwordAttempts.recordPasswordFailure(user, { req });
       if (locked) return LOCKED;
@@ -117,4 +138,4 @@ async function confirmIdentity(user, body = {}, emailPurpose = 'confirm', req = 
   return null;
 }
 
-module.exports = { verifySecondStep, confirmIdentity, confirmPassword, isLocked };
+module.exports = { codeMethod, verifySecondStep, confirmIdentity, confirmPassword, isLocked };

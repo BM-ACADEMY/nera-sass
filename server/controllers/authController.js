@@ -113,9 +113,16 @@ const INVALID_MFA_CODE = Object.freeze({ error: 'Invalid verification code', cod
 // code (with the given purpose) or a recovery code (used up when it matches). Without
 // `method`, an authenticator code is assumed when the app is set up (older
 // clients send only `code`).
-async function secondFactorOk(user, { method, code, recoveryCode }, emailPurpose) {
-  const { ok, methodOff, locked } = await verifySecondStep(user, { method, code, recoveryCode }, emailPurpose);
+// While code checks are locked only recovery codes are tried: a wrong one then
+// counts toward the account lock (passwordAttempts.js), so guessing them
+// moves toward a lockout.
+async function secondFactorOk(user, { method, code, recoveryCode }, emailPurpose, req = null) {
+  const { ok, methodOff, locked, recoveryFailedWhileLocked } = await verifySecondStep(user, { method, code, recoveryCode }, emailPurpose);
   if (methodOff) throw new AuthError(400, 'This verification method is not turned on for this account', 'MFA_METHOD_OFF');
+  if (recoveryFailedWhileLocked) {
+    const failure = await passwordAttempts.recordPasswordFailure(user, { req });
+    if (failure.locked) throw new AuthError(423, passwordAttempts.LOCKED_MESSAGE, 'ACCOUNT_LOCKED');
+  }
   if (!ok && locked) throw new AuthError(429, codeFailures.LOCKED_MESSAGE, 'MFA_CODE_LOCKED');
   return ok;
 }
@@ -134,12 +141,15 @@ async function requireReauth(user, req, { withCode = true } = {}) {
   if (typeof password !== 'string' || !password) {
     throw new AuthError(403, 'Enter your current password to continue.', 'PASSWORD_REQUIRED');
   }
-  const check = await passwordAttempts.checkPassword(user, password, { req });
+  // With a code still to check, the counter is reset only once it passed, so
+  // a right password does not wipe out counted recovery-code guesses.
+  const needCode = withCode && mfa.hasMfa(user);
+  const check = await passwordAttempts.checkPassword(user, password, { req, resetOnSuccess: !needCode });
   if (check.result === 'locked' || check.lockedNow) throw new AuthError(423, passwordAttempts.LOCKED_MESSAGE, 'ACCOUNT_LOCKED');
   if (check.result !== 'ok') {
     throw new AuthError(403, 'That password is not correct.', 'PASSWORD_INCORRECT');
   }
-  if (!withCode || !mfa.hasMfa(user)) return;
+  if (!needCode) return;
   // code_method: which method the code is from ('totp' | 'email'); without
   // it an app code is assumed when the app is on. (`method` on /mfa/disable
   // is the method being turned off, so it is not read here.)
@@ -147,9 +157,10 @@ async function requireReauth(user, req, { withCode = true } = {}) {
   if (!code && !recoveryCode) {
     throw new AuthError(403, 'Two-step verification is on. Enter a current code (app, email or WhatsApp) or a recovery code.', 'MFA_CODE_REQUIRED');
   }
-  if (!(await secondFactorOk(user, { method, code, recoveryCode }, 'reauth'))) {
+  if (!(await secondFactorOk(user, { method, code, recoveryCode }, 'reauth', req))) {
     throw new AuthError(403, 'That verification code is not correct or has expired.', 'MFA_CODE_INCORRECT');
   }
+  if (!(await passwordAttempts.recordPasswordSuccess(user))) throw new AuthError(423, passwordAttempts.LOCKED_MESSAGE, 'ACCOUNT_LOCKED');
 }
 
 exports.login = async (req, res) => {
@@ -192,7 +203,7 @@ exports.verifyMfa = async (req, res) => {
     const { mfa_token: mfaToken, method, code, recovery_code: recoveryCode } = req.body || {};
     const { user } = await resolveIdentity(mfaToken, { purpose: 'mfa' });
     if (!mfa.hasMfa(user)) return res.status(400).json({ error: 'MFA is not enabled for this account' });
-    const ok = await secondFactorOk(user, { method, code, recoveryCode }, 'login');
+    const ok = await secondFactorOk(user, { method, code, recoveryCode }, 'login', req);
     if (!ok) return res.status(401).json(INVALID_MFA_CODE);
     return res.json(await sessionPayload(user, { mfaPassed: true, req }));
   } catch (error) {

@@ -2203,7 +2203,7 @@ return (
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
                   <span style={{ color: C.muted, fontSize: 13 }}>Lead Score</span>
-                  <span style={{ color: C.text, fontSize: 13, fontWeight: 600, color: (activeObj?.score > 50) ? '#10b981' : C.text }}>{activeObj?.score || 0}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: (activeObj?.score > 50) ? '#10b981' : C.text }}>{activeObj?.score || 0}</span>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
