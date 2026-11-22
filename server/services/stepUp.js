@@ -26,8 +26,9 @@ const { isLocked } = passwordAttempts;
  * (codeFailures.js): app codes are counted before they are checked, email and
  * WhatsApp codes in otpStore.js. While code checks are locked a recovery code
  * is still tried.
- * Returns { ok }, plus methodOff for a method the user has not turned on and
- * locked when code checks are locked.
+ * Returns { ok }, plus methodOff for a method the user has not turned on,
+ * locked when a code was refused because code checks are locked, and
+ * recoveryFailedWhileLocked for a wrong recovery code while they are locked.
  */
 // Which method a code is checked with: `method`, else the app when it is on,
 // else the first usable method. Null when that method is not turned on.
@@ -63,6 +64,9 @@ async function verifySecondStep(user, { method, code, recoveryCode } = {}, codeP
     const hash = mfa.hashRecoveryCode(recoveryCode);
     const updated = await sys(() => Users.updateOne({ id: user.id, mfa_recovery_hashes: hash }, { $pull: { mfa_recovery_hashes: hash } }));
     ok = updated.modifiedCount === 1;
+    // A wrong recovery code while code checks are locked: the caller counts it
+    // toward the account lock, so guessing them still moves toward a lockout.
+    if (!ok && (locked || await codeFailures.isLocked(user.id))) return { ok, locked, recoveryFailedWhileLocked: true };
   }
   return { ok, locked: !ok && locked };
 }

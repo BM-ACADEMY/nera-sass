@@ -117,15 +117,13 @@ const INVALID_MFA_CODE = Object.freeze({ error: 'Invalid verification code', cod
 // counts toward the account lock (passwordAttempts.js), so guessing them
 // moves toward a lockout.
 async function secondFactorOk(user, { method, code, recoveryCode }, emailPurpose, req = null) {
-  const { ok, methodOff, locked } = await verifySecondStep(user, { method, code, recoveryCode }, emailPurpose);
+  const { ok, methodOff, locked, recoveryFailedWhileLocked } = await verifySecondStep(user, { method, code, recoveryCode }, emailPurpose);
   if (methodOff) throw new AuthError(400, 'This verification method is not turned on for this account', 'MFA_METHOD_OFF');
-  if (!ok && locked) {
-    if (recoveryCode) {
-      const failure = await passwordAttempts.recordPasswordFailure(user, { req });
-      if (failure.locked) throw new AuthError(423, passwordAttempts.LOCKED_MESSAGE, 'ACCOUNT_LOCKED');
-    }
-    throw new AuthError(429, codeFailures.LOCKED_MESSAGE, 'MFA_CODE_LOCKED');
+  if (recoveryFailedWhileLocked) {
+    const failure = await passwordAttempts.recordPasswordFailure(user, { req });
+    if (failure.locked) throw new AuthError(423, passwordAttempts.LOCKED_MESSAGE, 'ACCOUNT_LOCKED');
   }
+  if (!ok && locked) throw new AuthError(429, codeFailures.LOCKED_MESSAGE, 'MFA_CODE_LOCKED');
   return ok;
 }
 

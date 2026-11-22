@@ -340,8 +340,8 @@ test('2FA changes need re-authentication; reset-mfa respects staff roles', async
     assert.strictEqual(appCode.body.code, 'MFA_CODE_LOCKED');
     assert.ok(!(await fresh(user.id)).failed_login_count, 'a locked app code is not a password failure');
     for (let i = 0; i < 4; i += 1) {
-      const r = await post({ recovery_code: 'AAAAA-AAAAA' });
-      assert.strictEqual(r.status, 429, JSON.stringify(r.body));
+      const r = await post(i % 2 ? { recovery_code: 'AAAAA-AAAAA' } : { code_method: 'totp', code: '123456', recovery_code: 'AAAAA-AAAAA' });
+      assert.strictEqual(r.status, i % 2 ? 403 : 429, JSON.stringify(r.body));
     }
     assert.strictEqual((await fresh(user.id)).failed_login_count, 4, 'counted although each request had the right password');
     const fifth = await post({ recovery_code: 'AAAAA-AAAAA' });
