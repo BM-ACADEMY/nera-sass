@@ -72,15 +72,25 @@ function actorFrom(req) {
   if (identity?.kind === 'staff') actorType = 'staff';
   else if (identity?.kind === 'tenant') actorType = 'user';
   else if (identity?.kind === 'service') actorType = 'service';
-  return { actor_type: actorType, actor_user_id: req.user?.id ?? null, ip: req.ip || null };
+  return {
+    actor_type: actorType,
+    actor_user_id: req.user?.id ?? null,
+    // Name and role at the time of the action, so the activity log still
+    // reads right after the person is renamed or removed.
+    actor_name: req.user?.name || null,
+    actor_role: identity?.kind === 'staff' ? (identity.staffRole || 'staff') : (identity?.role || null),
+    ip: req.ip || null,
+  };
 }
 
 /**
- * record(event, { tenantId, req, targetType, targetId, meta })
+ * record(event, { tenantId, req, targetType, targetId, summary, meta })
+ * `summary` is a short plain-English line for the activity log (no secrets,
+ * passwords, codes or message text).
  * Never throws: a failed audit write is logged, the caller continues, unless
  * `strict: true` (exports and deletions refuse to proceed without their log).
  */
-async function record(event, { tenantId = null, req = null, actor = null, targetType = null, targetId = null, meta = {}, strict = false } = {}) {
+async function record(event, { tenantId = null, req = null, actor = null, targetType = null, targetId = null, summary = null, meta = {}, strict = false } = {}) {
   const who = actor || actorFrom(req);
   try {
     await runAsSystem(() => AuditEvents.create({
@@ -88,9 +98,12 @@ async function record(event, { tenantId = null, req = null, actor = null, target
       event,
       actor_type: who.actor_type,
       actor_user_id: who.actor_user_id ?? null,
+      actor_name: who.actor_name ?? null,
+      actor_role: who.actor_role ?? null,
       target_type: targetType,
       target_id: targetId == null ? null : String(targetId),
       ip: who.ip ?? null,
+      summary: summary ? String(summary).slice(0, 300) : null,
       meta: stripSecrets(meta),
       created_at: new Date(),
     }), 'audit');

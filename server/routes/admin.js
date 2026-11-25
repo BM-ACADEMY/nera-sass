@@ -19,6 +19,7 @@ const userAdmin = require('../services/userAdmin');
 const tenantData = require('../services/tenantData');
 const appealEvidence = require('../services/appealEvidence');
 const audit = require('../services/audit');
+const activity = require('../services/activity');
 const authController = require('../controllers/authController');
 const { assertPhoneNumberAvailable } = require('../services/whatsappIdentity');
 const createMetaInventoryRouter = require('./adminMetaInventory');
@@ -170,6 +171,18 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
         invitations: pending.map(invitations.publicInvitation),
         audit: events.map((e) => ({ ...e, actor_name: nameOf.get(e.actor_user_id) || null })),
       });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
+  // Workspace activity log: who in the workspace did what (same filters as
+  // the customer's Settings > Activity: user_id, group, from, to, page, limit).
+  router.get('/tenants/:id/activity', permit('platform.tenants.view'), async (req, res) => {
+    try {
+      const tenant = await loadTenant(tenantIdParam(req));
+      if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
+      return res.json(await activity.list(tenant.id, req.query, { audience: 'admin' }));
     } catch (error) {
       return fail(res, error);
     }

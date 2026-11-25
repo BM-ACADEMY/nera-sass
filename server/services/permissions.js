@@ -32,6 +32,8 @@ const TENANT_PERMISSIONS = {
   'billing.manage': ['owner', 'admin'],
   // The whole-workspace data export (every contact and message).
   'workspace.export': ['owner', 'admin'],
+  // Settings > Activity: who in the workspace did what, and when.
+  'activity.view': ['owner', 'admin'],
 };
 
 const STAFF_PERMISSIONS = {
