@@ -331,6 +331,66 @@ test('2FA changes need re-authentication; reset-mfa respects staff roles', async
     assert.match(notify.outbox().at(-1).subject, /New recovery codes/);
   });
 
+  await t.test('Review 6. Re-auth while code checks are locked: wrong recovery codes count, a right password does not reset them', async () => {
+    const secret = mfa.generateSecret();
+    const user = await staff('ops', withApp(secret, { mfa_code_locked_until: new Date(Date.now() + 60 * 60000) }));
+    const post = (body) => request(app).post('/api/auth/mfa/recovery-codes').set(auth(user)).send({ password: PASSWORD, ...body });
+    const appCode = await post({ code_method: 'totp', code: mfa.totp(secret) });
+    assert.strictEqual(appCode.status, 429);
+    assert.strictEqual(appCode.body.code, 'MFA_CODE_LOCKED');
+    assert.ok(!(await fresh(user.id)).failed_login_count, 'a locked app code is not a password failure');
+    for (let i = 0; i < 4; i += 1) {
+      const r = await post(i % 2 ? { recovery_code: 'AAAAA-AAAAA' } : { code_method: 'totp', code: '123456', recovery_code: 'AAAAA-AAAAA' });
+      assert.strictEqual(r.status, i % 2 ? 403 : 429, JSON.stringify(r.body));
+    }
+    assert.strictEqual((await fresh(user.id)).failed_login_count, 4, 'counted although each request had the right password');
+    const fifth = await post({ recovery_code: 'AAAAA-AAAAA' });
+    assert.strictEqual(fifth.status, 423);
+    assert.strictEqual(fifth.body.code, 'ACCOUNT_LOCKED');
+  });
+
+  await t.test('Review 6. Re-auth resets the password counter only after the code passed', async () => {
+    const secret = mfa.generateSecret();
+    const user = await staff('ops', withApp(secret, { failed_login_count: 2 }));
+    const wrong = await request(app).post('/api/auth/mfa/recovery-codes').set(auth(user)).send({ password: PASSWORD, code_method: 'totp', code: mfa.totp(secret) === '123456' ? '654321' : '123456' });
+    assert.strictEqual(wrong.body.code, 'MFA_CODE_INCORRECT');
+    assert.strictEqual((await fresh(user.id)).failed_login_count, 2, 'a right password with a wrong code does not reset');
+    const ok = await request(app).post('/api/auth/mfa/recovery-codes').set(auth(user)).send({ password: PASSWORD, code_method: 'totp', code: mfa.totp(secret) });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual((await fresh(user.id)).failed_login_count, 0);
+  });
+
+  await t.test('Review 6. Login second step while code checks are locked: wrong recovery codes lock the account', async () => {
+    const secret = mfa.generateSecret();
+    const user = await staff('ops', withApp(secret));
+    const login = await request(app).post('/api/auth/login').send({ email: user.email, password: PASSWORD });
+    assert.ok(login.body.mfa_token, JSON.stringify(login.body));
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_code_locked_until: new Date(Date.now() + 60 * 60000) } }));
+    const verify = (body) => request(app).post('/api/auth/mfa/verify').send({ mfa_token: login.body.mfa_token, ...body });
+    for (let i = 0; i < 4; i += 1) assert.strictEqual((await verify({ code: '123456', recovery_code: 'AAAAA-AAAAA' })).status, 429);
+    const fifth = await verify({ recovery_code: 'AAAAA-AAAAA' });
+    assert.strictEqual(fifth.status, 423);
+    assert.strictEqual(fifth.body.code, 'ACCOUNT_LOCKED');
+    // The same mfa token cannot finish the sign-in while the account is locked,
+    // even with a right authenticator code.
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_code_locked_until: null } }));
+    const right = await verify({ code: mfa.totp(secret) });
+    assert.strictEqual(right.status, 423, JSON.stringify(right.body));
+    assert.strictEqual(right.body.code, 'ACCOUNT_LOCKED');
+  });
+
+  await t.test('Review 7. A finished login second step clears failures counted during it', async () => {
+    const secret = mfa.generateSecret();
+    const user = await staff('ops', withApp(secret));
+    const login = await request(app).post('/api/auth/login').send({ email: user.email, password: PASSWORD });
+    assert.ok(login.body.mfa_token, JSON.stringify(login.body));
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { failed_login_count: 2 } }));
+    const ok = await request(app).post('/api/auth/mfa/verify').send({ mfa_token: login.body.mfa_token, code: mfa.totp(secret) });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const after = await sys(() => Users.findOne({ id: user.id }, { _id: 0, failed_login_count: 1 }).lean());
+    assert.strictEqual(after.failed_login_count || 0, 0);
+  });
+
   await t.test('M3. /change-password has a per-account rate limit', async () => {
     const user = await tenantUser();
     process.env.AUTH_RATE_LIMIT = 'on';
