@@ -16,11 +16,16 @@ export const SETTINGS_SECTIONS = [
   { key: 'password', title: 'Password & sessions', text: 'Change your password or sign out of every device.' },
 ];
 
-export function settingsSections() {
-  return SETTINGS_SECTIONS;
+// Activity log: who in the workspace did what. Owners and admins only (the
+// server checks again: GET /api/activity answers 403 to other roles).
+export const ACTIVITY_SECTION = { key: 'activity', title: 'Activity', text: 'See who in your team changed what, and when.' };
+export const canViewActivity = (role) => role === 'owner' || role === 'admin';
+
+export function settingsSections({ role } = {}) {
+  return canViewActivity(role) ? [...SETTINGS_SECTIONS, ACTIVITY_SECTION] : SETTINGS_SECTIONS;
 }
 
-export const findSection = (key) => SETTINGS_SECTIONS.find((s) => s.key === key) || null;
+export const findSection = (key) => [...SETTINGS_SECTIONS, ACTIVITY_SECTION].find((s) => s.key === key) || null;
 
 // Languages for automatic WhatsApp follow-ups (tenant.language; a template
 // language code). An unknown stored value is kept as an extra option.

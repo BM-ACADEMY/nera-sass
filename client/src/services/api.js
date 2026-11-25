@@ -298,6 +298,12 @@ class LeadOSAPI {
     });
   }
 
+  // Settings > Activity (owner/admin): { user_id, group, from, to, page, limit }.
+  async getActivity(filters = {}) {
+    const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined && value !== null && value !== '')).toString();
+    return this.request(`/api/activity${query ? `?${query}` : ''}`);
+  }
+
   // ─── BILLING (plan, wallet, Razorpay; tenant from the session) ───
   async getBillingPlans() {
     return this.request('/api/billing/plans');

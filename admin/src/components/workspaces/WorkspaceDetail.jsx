@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   FiArrowLeft, FiBriefcase, FiUser, FiShield, FiLogOut, FiKey, FiSlash, FiCheckCircle, FiRefreshCw,
-  FiActivity, FiGlobe, FiMail, FiMapPin, FiTag, FiAlertTriangle, FiSend,
+  FiGlobe, FiMail, FiMapPin, FiTag, FiAlertTriangle, FiSend,
 } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import axiosClient from '../../api/axiosClient';
@@ -12,6 +12,7 @@ import EditBrandDialog from './EditBrandDialog';
 import WhatsAppProfileDialog from './WhatsAppProfileDialog';
 import BusinessProfileCard from './BusinessProfileCard';
 import BillingCard from './BillingCard';
+import WorkspaceActivity from './WorkspaceActivity';
 import { Spinner } from '@/components/ui/spinner';
 import UserAvatar from '../UserAvatar';
 import { Badge } from '@/components/ui/badge';
@@ -22,12 +23,6 @@ import { cn } from '@/lib/utils';
 import { relativeTime, shortDate, fullDateTime } from '../../utils/time';
 
 const apiError = (err, fallback) => err.response?.data?.error || fallback;
-
-// "META_PHONE_LINKED" -> "Meta phone linked"
-const eventLabel = (event) => {
-  const text = String(event || '').toLowerCase().replace(/_/g, ' ');
-  return text.charAt(0).toUpperCase() + text.slice(1);
-};
 
 const Field = ({ label, children, mono = false }) => (
   <div className="min-w-0">
@@ -111,7 +106,7 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, onSendToClient, ref
   }
   if (!data) return <DetailSkeleton />;
 
-  const { tenant, summary, brand, whatsapp, usage = {}, users = [], invitations = [], audit = [] } = data;
+  const { tenant, summary, brand, whatsapp, usage = {}, users = [], invitations = [] } = data;
   const owner = users.find((u) => u.role === 'owner') || users[0] || null;
   const suspended = tenant.status === 'suspended';
   const connected = Boolean(brand?.phone_number_id);
@@ -356,32 +351,8 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, onSendToClient, ref
       {/* Plan and AI replies (staff with billing access) */}
       <BillingCard tenantId={tenant.id} />
 
-      {/* Activity */}
-      <Section icon={FiActivity} title="Activity" description="What happened in this workspace and who did it (latest 50).">
-        {audit.length === 0 ? (
-          <div className="py-6 text-center text-xs text-muted-foreground">No activity recorded yet.</div>
-        ) : (
-          <ol className="flex flex-col">
-            {audit.map((e, i) => (
-              <li key={`${e.created_at}-${i}`} className="flex gap-3 border-b border-border py-3 last:border-b-0">
-                <span className="mt-1.5 size-2 shrink-0 rounded-full bg-primary/60" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                    <span className="text-[13.5px] font-semibold">{eventLabel(e.event)}</span>
-                    <span className="text-xs text-muted-foreground" title={fullDateTime(e.created_at)}>{relativeTime(e.created_at)}</span>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {e.actor_name ? `By ${e.actor_name}` : e.actor_type === 'system' ? 'By the system' : e.actor_type === 'user' ? 'By the workspace' : 'By staff'}
-                    {e.meta?.email ? ` · ${e.meta.email}` : ''}
-                    {e.event === 'WORKSPACE_LOGIN_LINK_SENT' && e.meta?.to ? ` · WhatsApp ${e.meta.to}${e.meta.status === 'failed' ? ' (not delivered)' : ''}` : ''}
-                    {e.meta?.reason ? ` · Reason: ${e.meta.reason}` : ''}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ol>
-        )}
-      </Section>
+      {/* Activity: who did what, with filters and paging */}
+      <WorkspaceActivity tenantId={tenant.id} refreshKey={refreshKey} />
 
       <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />
       <EditBrandDialog open={editBrandOpen} onOpenChange={setEditBrandOpen} tenantId={tenant.id} brand={brand} onSaved={load} />

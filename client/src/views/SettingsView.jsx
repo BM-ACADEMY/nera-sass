@@ -10,6 +10,7 @@ import { ProfileSection } from './settings/ProfileSection.jsx';
 import { BrandProfileSection } from './settings/BrandProfileSection.jsx';
 import { TwoStepSection } from './settings/TwoStepSection.jsx';
 import { PasswordSection } from './settings/PasswordSection.jsx';
+import { ActivitySection } from './settings/ActivitySection.jsx';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -97,6 +98,7 @@ export const SettingsView = () => {
         {section === 'brand' && <BrandProfileSection key={version} {...props} />}
         {section === 'two-step' && <TwoStepSection key={version} {...props} />}
         {section === 'password' && <PasswordSection key={version} {...props} onSignedOutEverywhere={signedOutEverywhere} />}
+        {section === 'activity' && <ActivitySection {...props} />}
       </div>
     );
   }
@@ -134,7 +136,7 @@ export const SettingsView = () => {
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {settingsSections().map((s) => (
+        {settingsSections({ role: me?.role }).map((s) => (
           <button
             key={s.key}
             type="button"
