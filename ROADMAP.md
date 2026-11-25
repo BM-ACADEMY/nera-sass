@@ -98,6 +98,22 @@ Items from the 20 Nov draft. Owners and dates were guesses there; correct them a
 - Owner: Aakash · Due: 2026-12-11 · Priority: Normal
 - [ ] Greeting that mirrors the customer, staying on the same brand and topic, saving the customer's name and phone from the chat. docs/n2-ai-booking.md covers greeting and booking for clinics and education; confirm what is left and run a sandbox set of real-style chats.
 
+### AI Brain for every kind of business, with booking
+- Owner: Aakash · Priority: Normal
+Today the AI Brain mainly answers questions (FAQ and business info); booking works only for clinics and education (docs/n2-ai-booking.md).
+- [ ] Business types: let the owner pick their type (shop, restaurant, salon, clinic, education, real estate, services, other) and give the AI the right questions, words and reply style for that type.
+- [ ] Booking for any business: the owner sets what can be booked (appointment, table, visit, demo, service slot), the hours and the slot length; the AI offers free slots, books, confirms on WhatsApp and sends reminders.
+- [ ] Owner control: the owner sees and edits each booking, and the AI hands over to a person when the customer asks for one or the AI is unsure.
+- [ ] Test with real-style chats for each business type before turning it on for a customer.
+
+### Show when customers report or block the WhatsApp number
+- Owner: Aakash · Priority: High
+Meta does not tell us "this customer reported you". It shows the effect: the number's quality rating drops, templates get paused, and the daily messaging limit can go down. Too many reports can get the number restricted.
+- [ ] Listen to Meta's webhooks for quality rating changes, template pauses and messaging limit changes, and save each change.
+- [ ] Customer app: a clear banner on WhatsApp Chat and Campaigns when quality is Medium or Low, or a template is paused, with what it means and what to do (send fewer marketing messages, only to people who opted in).
+- [ ] Admin panel: the same warning per workspace, plus a list of workspaces at risk, so staff can pause sending before Meta restricts the number.
+- [ ] Mark a contact who stopped replying after a marketing message, or who sent STOP, so they are not messaged again.
+
 ### Campaign cost preview
 - Owner: Aakash · Due: 2027-01-15 · Priority: Low
 - [ ] Show recipients × Meta's per-category price for India on the campaign screen, with the plan's remaining campaign allowance. No rate card exists in the code yet.
@@ -121,3 +137,4 @@ Items from the 20 Nov draft. Owners and dates were guesses there; correct them a
 ## History
 - 2026-11-20: first draft written from docs/launch-gap.md, docs/pilot-onboarding.md, docs/claude-pr-log.md and the code.
 - 2026-11-21: updated with the production and staging deploys of 21 Nov; old draft items kept above with their owners and dates.
+- 2026-11-23: added "AI Brain for every kind of business, with booking" and "Show when customers report or block the WhatsApp number".
