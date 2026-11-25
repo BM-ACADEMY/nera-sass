@@ -101,6 +101,7 @@ module.exports = function registerWhatsappProfileRoutes(app, ctx) {
 
       await audit.record(audit.EVENTS.BRAND_UPDATED, {
         tenantId: req.identity.tenantId, req, targetType: 'client', targetId: brand.id,
+        summary: `Changed the WhatsApp business profile: ${Object.keys(input).join(', ') || 'no fields'}`,
         meta: { whatsapp_profile: true, by_customer: true, fields: Object.keys(input) },
       });
       return res.json({ success: true, profile: profile ? publicProfile(profile) : null });
@@ -139,6 +140,7 @@ module.exports = function registerWhatsappProfileRoutes(app, ctx) {
       if (profile) await profileMeta.cacheProfile(phoneNumberId, profile);
       await audit.record(audit.EVENTS.BRAND_UPDATED, {
         tenantId: req.identity.tenantId, req, targetType: 'client', targetId: brand.id,
+        summary: 'Changed the WhatsApp profile photo',
         meta: { whatsapp_profile: true, by_customer: true, fields: ['profile_picture'] },
       });
       return res.json({ success: true, picture_url: profile?.profile_picture_url || null });

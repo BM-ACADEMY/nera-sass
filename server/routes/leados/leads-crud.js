@@ -7,6 +7,51 @@ const { currentTenantId } = require('../../services/tenantContext');
 const { postToN8n } = require('../../services/n8n');
 const aiAutomation = require('../../services/aiAutomation');
 const consent = require('../../services/consent');
+const activity = require('../../services/activity');
+
+// Lead fields whose old and new values are shown in the activity log; other
+// edited fields (name, phone, email, notes...) are listed by name only.
+const LOGGED_VALUES = ['status', 'assigned_to', 'score'];
+
+async function staffName(id) {
+  if (id == null || id === '') return null;
+  const user = await require('../../models').Users.findOne({ id: Number(id) }, { _id: 0, name: 1, email: 1 }).lean().catch(() => null);
+  return user ? (user.name || user.email) : `user #${id}`;
+}
+
+// One activity entry per kind of change: status, assignment, other fields.
+async function logLeadEdit(req, before, after, updates) {
+  const name = activity.leadName(after);
+  const changed = (field) => updates[field] !== undefined && String(before[field] ?? '') !== String(after[field] ?? '');
+  const values = (fields) => ({
+    before: Object.fromEntries(fields.map((f) => [f, before[f] ?? null])),
+    after: Object.fromEntries(fields.map((f) => [f, after[f] ?? null])),
+  });
+  if (changed('status')) {
+    await activity.log(req, activity.EVENTS.LEAD_STATUS_CHANGED, {
+      targetType: 'lead', targetId: after.id,
+      summary: `Changed status of lead ${name} from "${before.status || 'none'}" to "${after.status || 'none'}"`,
+      meta: { fields: ['status'], ...values(['status']) },
+    });
+  }
+  if (changed('assigned_to')) {
+    const to = await staffName(after.assigned_to);
+    await activity.log(req, activity.EVENTS.LEAD_ASSIGNED, {
+      targetType: 'lead', targetId: after.id,
+      summary: to ? `Assigned lead ${name} to ${to}` : `Unassigned lead ${name}`,
+      meta: { fields: ['assigned_to'], ...values(['assigned_to']) },
+    });
+  }
+  const others = Object.keys(updates).filter((f) => f !== 'status' && f !== 'assigned_to' && (f !== 'score' || changed('score')));
+  if (others.length) {
+    const shown = others.filter((f) => LOGGED_VALUES.includes(f));
+    await activity.log(req, activity.EVENTS.LEAD_UPDATED, {
+      targetType: 'lead', targetId: after.id,
+      summary: `Edited lead ${name}: ${others.join(', ')}`,
+      meta: { fields: others, ...(shown.length ? values(shown) : {}) },
+    });
+  }
+}
 module.exports = function registerLeadsCrudRoutes(app, ctx) {
 const {
   Clients,
@@ -66,6 +111,7 @@ app.post('/api/leads', auth, async (req, res) => {
 
     evaluateLeadBrandAndSchedule(rows[0].id).catch(console.error);
 
+    await activity.log(req, activity.EVENTS.LEAD_CREATED, { targetType: 'lead', targetId: rows[0].id, summary: `Added lead ${activity.leadName(rows[0])} (source: ${rows[0].source})`, meta: { source: rows[0].source, opt_in: wantsOptIn } });
     res.status(201).json({ lead: rows[0] });
   } catch (err) {
     console.error(err);
@@ -90,7 +136,9 @@ app.patch('/api/leads/:id', auth, async (req, res) => {
 
     if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
 
+    const before = await Leads.findOne({ id: req.params.id }, { _id: 0, id: 1, name: 1, status: 1, assigned_to: 1, score: 1 }).lean();
     const lead = await Leads.findOneAndUpdate({ id: req.params.id }, { $set: { ...updates, updated_at: new Date() } }, { new: true, projection: NO_ID }).lean();
+    if (lead && before) await logLeadEdit(req, before, lead, updates);
     res.json({ lead: lead || undefined });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -105,6 +153,11 @@ app.post('/api/leads/:id/ai', auth, async (req, res) => {
     if (typeof req.body?.paused !== 'boolean') return res.status(400).json({ error: 'paused must be true or false' });
     const found = await aiAutomation.setAiPaused(req.params.id, req.body.paused);
     if (!found) return res.status(404).json({ error: 'Lead not found' });
+    const aiLead = await Leads.findOne({ id: req.params.id }, { _id: 0, id: 1, name: 1 }).lean();
+    await activity.log(req, req.body.paused ? activity.EVENTS.CHAT_AI_PAUSED : activity.EVENTS.CHAT_AI_RESUMED, {
+      targetType: 'lead', targetId: req.params.id,
+      summary: req.body.paused ? `Took over the chat with ${activity.leadName(aiLead)} (AI paused)` : `Handed the chat with ${activity.leadName(aiLead)} back to the AI`,
+    });
     res.json({ success: true, ai_paused: req.body.paused });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -115,6 +168,7 @@ app.post('/api/leads/:id/ai', auth, async (req, res) => {
 app.delete('/api/leads/:id', auth, async (req, res) => {
   try {
     const { id } = req.params;
+    const doomedLead = await Leads.findOne({ id }, { _id: 0, id: 1, name: 1 }).lean();
     await Messages.deleteMany({ conversation_id: { $in: await Conversations.distinct('id', { lead_id: id }) } });
     await Conversations.deleteMany({ lead_id: id });
     await Payments.deleteMany({ lead_id: id });
@@ -125,6 +179,7 @@ app.delete('/api/leads/:id', auth, async (req, res) => {
     const deleted = await deleteCascade('leads', { id });
     if (deleted.length === 0) return res.status(404).json({ error: 'Lead not found' });
 
+    await activity.log(req, activity.EVENTS.LEAD_DELETED, { targetType: 'lead', targetId: id, summary: `Deleted lead ${activity.leadName(doomedLead || { id })} and its chat history` });
     res.json({ success: true, message: 'Lead deleted successfully' });
   } catch (err) {
     console.error('Delete lead error:', err);

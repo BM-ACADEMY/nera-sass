@@ -4,6 +4,7 @@ const express = require('express');
 // service key or founder/ops platform staff only, never a customer token.
 const { internalAuth, internalPlatformAuth, staffAuth, hasInternalKey } = require('../middleware/authMiddleware');
 const audit = require('../services/audit');
+const activity = require('../services/activity');
 const erasure = require('../services/erasure');
 const { recordTenantWorkflowLog, recordPlatformWorkflowLog, WorkflowLogError } = require('../services/workflowLog');
 const fs = require('fs');
@@ -2848,6 +2849,13 @@ router.get('/sales-tasks', internalAuth, async (req, res) => {
   }
 });
 
+// Activity log wording for a sales task (type and lead name, nothing else).
+const TASK_TYPE_NAMES = { hot_lead: 'hot lead', call: 'scheduled call', followup: 'follow-up' };
+async function salesTaskLabel(task) {
+  const lead = task?.lead_id != null ? await Leads.findOne({ id: task.lead_id }, { _id: 0, id: 1, name: 1 }).lean().catch(() => null) : null;
+  return `${TASK_TYPE_NAMES[task?.task_type] || task?.task_type || 'sales'} task for lead ${activity.leadName(lead || { id: task?.lead_id })}`;
+}
+
 router.post('/sales-tasks/export', internalAuth, async (req, res) => {
   try {
     const ids = Array.isArray(req.body.ids)
@@ -2888,6 +2896,7 @@ router.post('/sales-tasks/export', internalAuth, async (req, res) => {
     const workbook = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(workbook, worksheet, 'Sales Tasks');
     const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    await activity.log(req, activity.EVENTS.SALES_TASKS_EXPORTED, { targetType: 'sales_task', summary: `Exported ${exportData.length} sales task${exportData.length === 1 ? '' : 's'}`, meta: { count: exportData.length } });
 
     res.setHeader('Content-Disposition', 'attachment; filename="Sales_Tasks_Export.xlsx"');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -2905,11 +2914,19 @@ router.put('/sales-tasks/:id/status', internalAuth, async (req, res) => {
     if (!['pending', 'processing', 'completed'].includes(status)) {
       return res.status(400).json({ error: 'Invalid task status' });
     }
+    const taskBefore = await SalesTasks.findOne({ id: req.params.id }, { _id: 0, status: 1 }).lean();
     const task = await SalesTasks.findOneAndUpdate(
       { id: req.params.id },
       { $set: { status, updated_at: new Date(), completed_at: status === 'completed' ? new Date() : null } },
       { new: true, projection: NO_ID }
     ).lean();
+    if (task && taskBefore?.status !== status) {
+      await activity.log(req, status === 'completed' ? activity.EVENTS.SALES_TASK_COMPLETED : activity.EVENTS.SALES_TASK_UPDATED, {
+        targetType: 'sales_task', targetId: task.id,
+        summary: status === 'completed' ? `Completed the ${await salesTaskLabel(task)}` : `Moved the ${await salesTaskLabel(task)} from "${taskBefore?.status || 'none'}" to "${status}"`,
+        meta: { fields: ['status'], before: { status: taskBefore?.status ?? null }, after: { status } },
+      });
+    }
     await emitSalesTaskUpdate(req, 'status_changed', task || undefined);
     res.json({ success: true, task: task || undefined });
   } catch (err) {
@@ -2940,6 +2957,7 @@ router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, async (req, r
     const allowed = ['new', 'contacted', 'processing', 'follow_up', 'converted', 'not_interested', 'closed'];
     const status = String(req.body.status || '').toLowerCase();
     if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid sales status' });
+    const salesBefore = await Leads.findOne({ id: req.params.leadId }, { _id: 0, id: 1, name: 1, sales_status: 1 }).lean();
     const shouldStop = ['converted', 'not_interested', 'closed'].includes(status);
     const statusLead = await Leads.findOneAndUpdate(
       { id: req.params.leadId },
@@ -2954,6 +2972,13 @@ router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, async (req, r
     const result = { rows: statusLead ? [statusLead] : [] };
     if (!result.rows.length) return res.status(404).json({ error: 'Lead not found' });
     await emitSalesTaskUpdate(req, 'lead_status_changed', { lead_id: Number(req.params.leadId), ...result.rows[0] });
+    if ((salesBefore?.sales_status || 'new') !== status) {
+      await activity.log(req, activity.EVENTS.SALES_STATUS_CHANGED, {
+        targetType: 'lead', targetId: req.params.leadId,
+        summary: `Changed sales status of lead ${activity.leadName(salesBefore || { id: req.params.leadId })} from "${salesBefore?.sales_status || 'new'}" to "${status}"`,
+        meta: { fields: ['sales_status'], before: { sales_status: salesBefore?.sales_status ?? null }, after: { sales_status: status } },
+      });
+    }
     res.json({ success: true, lead: result.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -2997,6 +3022,9 @@ Return only JSON: {"stop_followups":boolean,"followup_at":string|null}. Set stop
     ).lean();
     const leadResult = { rows: notedLead ? [notedLead] : [] };
     await emitSalesTaskUpdate(req, 'note_added', { lead_id: Number(req.params.leadId), note: noteResult.rows[0], ...leadResult.rows[0] });
+    // The note text stays out of the log.
+    const notedName = await Leads.findOne({ id: req.params.leadId }, { _id: 0, id: 1, name: 1 }).lean();
+    await activity.log(req, activity.EVENTS.SALES_NOTE_ADDED, { targetType: 'lead', targetId: req.params.leadId, summary: `Added a sales note to lead ${activity.leadName(notedName || { id: req.params.leadId })}${shouldStop ? ' (follow-ups stopped)' : ''}` });
     res.json({ success: true, note: noteResult.rows[0], lead: leadResult.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -3048,6 +3076,13 @@ router.post('/sales-tasks/bulk-delete', internalAuth, async (req, res) => {
     }
 
     for (const task of result.rows) await emitSalesTaskUpdate(req, 'deleted', task);
+    if (result.rowCount) {
+      await activity.log(req, activity.EVENTS.SALES_TASK_DELETED, {
+        targetType: 'sales_task', targetId: result.rowCount === 1 ? result.rows[0].id : null,
+        summary: result.rowCount === 1 ? `Deleted the ${await salesTaskLabel(result.rows[0])}` : `Deleted ${result.rowCount} sales tasks${ids.length ? '' : ` created ${from} to ${to}`}`,
+        meta: { count: result.rowCount, ids: result.rows.map((t) => t.id).slice(0, 100) },
+      });
+    }
     res.json({ success: true, deletedCount: result.rowCount, deletedIds: result.rows.map(task => task.id) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3058,6 +3093,7 @@ router.delete('/sales-tasks/:id', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     const deletedTask = await SalesTasks.findOneAndDelete({ id: req.params.id }, { projection: { _id: 0, id: 1, lead_id: 1, task_type: 1 } }).lean();
+    if (deletedTask) await activity.log(req, activity.EVENTS.SALES_TASK_DELETED, { targetType: 'sales_task', targetId: deletedTask.id, summary: `Deleted the ${await salesTaskLabel(deletedTask)}` });
     await emitSalesTaskUpdate(req, 'deleted', deletedTask || null);
     res.json({ success: true });
   } catch (err) {

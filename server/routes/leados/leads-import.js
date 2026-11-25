@@ -6,6 +6,7 @@
 const { currentTenantId } = require('../../services/tenantContext');
 const { postToN8n } = require('../../services/n8n');
 const consent = require('../../services/consent');
+const activity = require('../../services/activity');
 const OPT_IN_YES = new Set(['yes', 'y', 'true', '1', 'opted in', 'opted_in', 'opt in', 'opt-in', 'ஆம்']);
 module.exports = function registerLeadsImportRoutes(app, ctx) {
 const {
@@ -275,6 +276,11 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
         errors: importErrors,
       });
     }
+    await activity.log(req, activity.EVENTS.LEADS_IMPORTED, {
+      targetType: 'lead_import',
+      summary: `Imported ${imported} lead${imported === 1 ? '' : 's'} from a file (${inserted} new, ${existing} already there, ${failed} failed)`,
+      meta: { imported, inserted, existing, failed, duplicate_rows: duplicateRows },
+    });
     res.json({
       success: true,
       imported,

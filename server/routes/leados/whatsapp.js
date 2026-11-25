@@ -27,6 +27,7 @@ const tenantUploads = require('../../services/tenantUploads');
 const { currentTenantId } = require('../../services/tenantContext');
 const sendPolicy = require('../../services/sendPolicy');
 const numberHealth = require('../../services/numberHealth');
+const activity = require('../../services/activity');
 const WAKEUP_TEMPLATE = process.env.WA_WAKEUP_TEMPLATE || 'common_welcome_message';
 const erasure = require('../../services/erasure');
 // ══════════════════════════════════════════════════════════
@@ -113,6 +114,7 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
           );
           const waMsgId = templateRes.data?.messages?.[0]?.id;
           console.log(`[Template Wakeup] Sent ${WAKEUP_TEMPLATE} for lead ${lead_id}`);
+          await activity.log(req, activity.EVENTS.TEMPLATE_SENT, { targetType: 'lead', targetId: sendLead.id, summary: `Sent template "${WAKEUP_TEMPLATE}" to lead ${activity.leadName(sendLead)} to reopen the chat`, meta: { template: WAKEUP_TEMPLATE, wakeup: true } });
 
           // Save template message to DB so it appears in inbox
           const convCheck = await Conversations.findOne({ lead_id }, { id: 1 }).lean();
@@ -273,6 +275,8 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
     // Emit real-time event to all CRM clients
     io.emit('outgoing_message', { lead_id: Number(lead_id), message: savedRows[0] });
 
+    // Lead and message type only: never the message text.
+    await activity.log(req, activity.EVENTS.MESSAGE_SENT, { targetType: 'lead', targetId: sendLead.id, summary: `Sent a WhatsApp ${type === 'text' ? 'message' : type} to lead ${activity.leadName(sendLead)}`, meta: { msg_type: type } });
     res.json({ success: true, message: savedRows[0] });
   } catch (err) {
     if (err instanceof tenantUploads.TenantUploadError) return res.status(err.status).json({ error: err.message, code: err.code });

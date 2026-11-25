@@ -16,6 +16,7 @@ const whatsappOtp = require('../services/whatsappOtp');
 const codeFailures = require('../services/codeFailures');
 const notify = require('../services/notify');
 const audit = require('../services/audit');
+const activity = require('../services/activity');
 const invitations = require('../services/invitations');
 const sessions = require('../services/sessions');
 const passwordAttempts = require('../services/passwordAttempts');
@@ -178,7 +179,10 @@ exports.login = async (req, res) => {
     if (check.result === 'locked') {
       return res.status(423).json({ error: passwordAttempts.LOCKED_MESSAGE, code: 'ACCOUNT_LOCKED' });
     }
-    if (check.result !== 'ok') return res.status(401).json({ error: 'Invalid credentials' });
+    if (check.result !== 'ok') {
+      await activity.log(req, activity.EVENTS.LOGIN_FAILED, { tenantId: user.tenant_id ?? null, actor: activity.actorForUser(user, req), targetType: 'user', targetId: user.id, summary: 'Wrong password' });
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
     const identity = describeUser(user);
     if (identity.kind === 'none') return res.status(403).json({ error: 'This account is not assigned to a workspace' });
@@ -196,7 +200,10 @@ exports.login = async (req, res) => {
       $set: { last_login: new Date() },
       $unset: { reset_token_hash: '', reset_token_expires_at: '' },
     }));
-    return res.json(await afterPassword(user, req));
+    const result = await afterPassword(user, req);
+    // Signed straight in (no second step): the second step logs its own success.
+    if (result.token) await activity.log(req, activity.EVENTS.LOGIN_SUCCEEDED, { tenantId: user.tenant_id ?? null, actor: activity.actorForUser(user, req), targetType: 'user', targetId: user.id, summary: 'Signed in with password' });
+    return res.json(result);
   } catch (error) {
     return fail(res, error);
   }
@@ -214,11 +221,16 @@ exports.verifyMfa = async (req, res) => {
     // stops the second step too; the mfa token alone must not outlast it.
     if (passwordAttempts.isLocked(user)) return res.status(423).json({ error: passwordAttempts.LOCKED_MESSAGE, code: 'ACCOUNT_LOCKED' });
     const ok = await secondFactorOk(user, { method, code, recoveryCode }, 'login', req);
-    if (!ok) return res.status(401).json(INVALID_MFA_CODE);
+    if (!ok) {
+      await activity.log(req, activity.EVENTS.LOGIN_FAILED, { tenantId: user.tenant_id ?? null, actor: activity.actorForUser(user, req), targetType: 'user', targetId: user.id, summary: 'Wrong two-step verification code' });
+      return res.status(401).json(INVALID_MFA_CODE);
+    }
     // A finished sign-in clears failures counted during the second step, and
     // refuses if a parallel request locked the account meanwhile.
     if (!(await passwordAttempts.recordPasswordSuccess(user))) return res.status(423).json({ error: passwordAttempts.LOCKED_MESSAGE, code: 'ACCOUNT_LOCKED' });
-    return res.json(await sessionPayload(user, { mfaPassed: true, req }));
+    const session = await sessionPayload(user, { mfaPassed: true, req });
+    await activity.log(req, activity.EVENTS.LOGIN_SUCCEEDED, { tenantId: user.tenant_id ?? null, actor: activity.actorForUser(user, req), targetType: 'user', targetId: user.id, summary: `Signed in with two-step verification (${recoveryCode ? 'recovery code' : ({ totp: 'authenticator app', email: 'email code', whatsapp: 'WhatsApp code' }[method] || 'code')})` });
+    return res.json(session);
   } catch (error) {
     return fail(res, error);
   }
@@ -336,7 +348,7 @@ exports.confirmMfaSetup = async (req, res) => {
       $set: { mfa_enabled: true, mfa_secret_enc: encrypt(secret), mfa_enrolled_at: user.mfa_enrolled_at || new Date(), ...(recovery ? { mfa_recovery_hashes: recovery.hashes } : {}) },
       $unset: { mfa_pending_secret_enc: '', mfa_stepup_until: '' },
     }));
-    await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'totp' } });
+    await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, summary: 'Turned on two-step verification (authenticator app)', meta: { method: 'totp' } });
     await mailTwoStepChange(user, 'totp', 'added');
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
     // Enrolling while signed in does not extend the session.
@@ -353,7 +365,8 @@ function newRecoveryCodes(user) {
   return mfa.generateRecoveryCodes();
 }
 
-const actorOf = (user) => ({ actor_type: user.tenant_id ? 'user' : 'staff', actor_user_id: user.id });
+const actorOf = (user) => ({ actor_type: user.tenant_id ? 'user' : 'staff', actor_user_id: user.id, actor_name: user.name || user.email || null, actor_role: user.tenant_id ? (user.role || null) : (user.staff_role || null) });
+const MFA_METHOD_NAMES = { totp: 'authenticator app', email: 'email codes', whatsapp: 'WhatsApp codes' };
 
 // Emails the owner whenever a two-step method is added or removed, so a change
 // they did not make is noticed. A mail failure never fails the change.
@@ -389,7 +402,7 @@ exports.confirmEmailSetup = async (req, res) => {
       $set: { mfa_email_enabled: true, mfa_enrolled_at: user.mfa_enrolled_at || new Date(), ...(recovery ? { mfa_recovery_hashes: recovery.hashes } : {}) },
       $unset: { mfa_stepup_until: '' },
     }));
-    await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'email' } });
+    await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, summary: 'Turned on two-step verification (email codes)', meta: { method: 'email' } });
     await mailTwoStepChange(user, 'email', 'added');
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
     return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true, req, keepExpiry: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
@@ -459,7 +472,7 @@ exports.confirmWhatsappSetup = async (req, res) => {
       },
       $unset: { mfa_whatsapp_pending_number: '', mfa_stepup_until: '' },
     }));
-    await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, meta: { method: 'whatsapp' } });
+    await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, summary: 'Turned on two-step verification (WhatsApp codes)', meta: { method: 'whatsapp' } });
     await mailTwoStepChange(user, 'whatsapp', 'added');
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
     return res.json({ ...(await sessionPayload(fresh, { mfaPassed: true, req, keepExpiry: true })), ...(recovery ? { recovery_codes: recovery.codes } : {}) });
@@ -512,7 +525,7 @@ exports.disableMfaMethod = async (req, res) => {
     if (!remaining.length) update.$unset = { ...update.$unset, mfa_recovery_hashes: '', mfa_enrolled_at: '' };
     if (!remaining.length || user.mfa_default_method === method) update.$unset = { ...update.$unset, mfa_default_method: '' };
     await sys(() => Users.updateOne({ id: user.id }, update));
-    await audit.record(audit.EVENTS.MFA_METHOD_DISABLED, { tenantId: user.tenant_id ?? null, req, targetType: 'user', targetId: user.id, meta: { method } });
+    await audit.record(audit.EVENTS.MFA_METHOD_DISABLED, { tenantId: user.tenant_id ?? null, req, targetType: 'user', targetId: user.id, summary: `Turned off two-step verification method: ${MFA_METHOD_NAMES[method] || method}`, meta: { method } });
     await mailTwoStepChange(user, method, 'removed');
     const after = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
     return res.json({ success: true, mfa_methods: mfa.methodsOf(after), mfa_default_method: mfa.defaultMethodOf(after) });

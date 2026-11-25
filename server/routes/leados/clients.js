@@ -222,6 +222,7 @@ app.patch('/api/clients/:id', auth, requirePermission('tenant.settings'), async 
     const changedFields = entries.map(([field]) => field).filter((field) => field !== 'wa_access_token');
     await audit.record(clientChanges.wa_access_token !== undefined ? audit.EVENTS.TOKEN_UPDATED : audit.EVENTS.BRAND_UPDATED, {
       tenantId: req.identity.tenantId, req, targetType: 'client', targetId: existing.id,
+      summary: [changedFields.length ? `Changed brand settings: ${changedFields.join(', ')}` : null, clientChanges.wa_access_token !== undefined ? 'Updated the WhatsApp access token' : null].filter(Boolean).join('; ') || 'Saved brand settings',
       meta: { fields: changedFields, token_updated: clientChanges.wa_access_token !== undefined, meta_profile_synced: Boolean(metaProfile) },
     });
     res.json({
