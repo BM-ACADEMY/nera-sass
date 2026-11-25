@@ -64,11 +64,14 @@ async function leadMessages(leadId, filter = {}, { sort = { sent_at: -1 }, limit
 }
 const hasText = { content: { $ne: null, $not: /^\s*$/ } };
 
-// Sales task rows shaped like the former SQL join (task + lead + brand + assignee + tags)
+// Sales task rows shaped like the former SQL join (task + lead + brand + assignee + tags).
+// A task added by hand may have no lead; a task whose lead no longer exists is left out.
 async function loadSalesTaskRows(tasks, { includeLatestNote = false } = {}) {
-  const leads = new Map((await Leads.find({ id: { $in: tasks.map((t) => t.lead_id) } }, NO_ID).lean()).map((l) => [l.id, l]));
+  const leads = new Map((await Leads.find({ id: { $in: tasks.map((t) => t.lead_id).filter((id) => id != null) } }, NO_ID).lean()).map((l) => [l.id, l]));
   const clients = new Map((await Clients.find({ id: { $in: [...leads.values()].map((l) => l.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c]));
-  const users = new Map((await Users.find({ id: { $in: [...leads.values()].map((l) => l.assigned_to).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((u) => [u.id, u]));
+  const userIds = [...tasks.flatMap((t) => [t.assigned_to, t.created_by]), ...[...leads.values()].map((l) => l.assigned_to)].filter((id) => id != null);
+  const users = new Map((await Users.find({ id: { $in: userIds } }, { id: 1, name: 1, email: 1 }).lean()).map((u) => [u.id, u]));
+  const userName = (id) => (id == null ? null : users.get(id)?.name || users.get(id)?.email || null);
   const leadIds = [...leads.keys()];
   const lastContact = new Map((await Conversations.aggregate([
     { $match: { lead_id: { $in: leadIds } } },
@@ -81,26 +84,34 @@ async function loadSalesTaskRows(tasks, { includeLatestNote = false } = {}) {
     const notes = await SalesLeadNotes.find({ lead_id: { $in: leadIds } }, { id: 1, lead_id: 1, note: 1, created_at: 1 }).sort({ created_at: -1 }).lean();
     for (const note of notes) if (!latestNotes.has(note.lead_id)) latestNotes.set(note.lead_id, note);
   }
-  return tasks.filter((task) => leads.has(task.lead_id)).map((task) => {
-    const l = leads.get(task.lead_id);
-    const note = latestNotes.get(l.id);
+  return tasks.filter((task) => task.lead_id == null || leads.has(task.lead_id)).map((task) => {
+    const l = task.lead_id == null ? null : leads.get(task.lead_id);
+    const note = l ? latestNotes.get(l.id) : null;
+    // The task's own assignee wins; automatic tasks fall back to the lead owner.
+    const assignedTo = task.assigned_to ?? l?.assigned_to ?? null;
+    // Automatic tasks are due at the lead's demo call or next follow-up.
+    const derivedDue = task.task_type === 'call' ? l?.call_booked_at
+      : ['followup', 'overdue'].includes(task.task_type) ? l?.next_followup_due : null;
     return {
       ...task,
-      lead_id: l.id, name: l.name, phone: l.phone, email: l.email,
-      lead_status: l.status, stage: l.stage, source: l.source, interest: l.interest, score: l.score,
-      sales_status: l.sales_status ?? 'new',
-      sales_followup_stopped: l.sales_followup_stopped, sales_followup_at: l.sales_followup_at,
+      lead_id: l?.id ?? null, name: l?.name ?? null, phone: l?.phone ?? null, email: l?.email ?? null,
+      lead_status: l?.status ?? null, stage: l?.stage ?? null, source: l?.source ?? null, interest: l?.interest ?? null, score: l?.score ?? null,
+      sales_status: l ? (l.sales_status ?? 'new') : null,
+      sales_followup_stopped: l?.sales_followup_stopped ?? null, sales_followup_at: l?.sales_followup_at ?? null,
       ...(includeLatestNote ? {
         latest_sales_note_id: note?.id ?? null, latest_sales_note: note?.note ?? null, latest_sales_note_at: note?.created_at ?? null,
       } : {}),
-      call_booked_at: l.call_booked_at, next_followup_due: l.next_followup_due, booking_status: l.booking_status,
-      calendar_event_url: l.calendar_event_url, google_meet_link: l.google_meet_link,
-      last_contact: lastContact.get(l.id) ?? null,
-      lead_created_at: l.created_at,
-      brand_name: clients.get(l.client_id)?.name ?? null,
-      assigned_name: users.get(l.assigned_to)?.name ?? null,
-      tags: tagLinks.filter((link) => link.lead_id === l.id && tags.has(link.tag_id))
-        .map((link) => ({ id: tags.get(link.tag_id).id, name: tags.get(link.tag_id).name, color: tags.get(link.tag_id).color })),
+      call_booked_at: l?.call_booked_at ?? null, next_followup_due: l?.next_followup_due ?? null, booking_status: l?.booking_status ?? null,
+      calendar_event_url: l?.calendar_event_url ?? null, google_meet_link: l?.google_meet_link ?? null,
+      last_contact: l ? lastContact.get(l.id) ?? null : null,
+      lead_created_at: l?.created_at ?? null,
+      brand_name: l ? clients.get(l.client_id)?.name ?? null : null,
+      due_at: task.due_at ?? derivedDue ?? null,
+      assigned_to: assignedTo,
+      assigned_name: userName(assignedTo),
+      created_by_name: userName(task.created_by),
+      tags: l ? tagLinks.filter((link) => link.lead_id === l.id && tags.has(link.tag_id))
+        .map((link) => ({ id: tags.get(link.tag_id).id, name: tags.get(link.tag_id).name, color: tags.get(link.tag_id).color })) : [],
     };
   });
 }
@@ -149,7 +160,7 @@ const salesTasksReady = Promise.resolve();
 const salesTrackingReady = Promise.resolve();
 
 async function emitSalesTaskUpdate(req, event, task = null) {
-  const unreadCount = await SalesTasks.countDocuments({ unread: true, status: { $ne: 'completed' } });
+  const unreadCount = await SalesTasks.countDocuments({ unread: true, status: { $ne: 'completed' }, deleted_at: null });
   req.app.get('io')?.emit('sales_task_update', { event, task, unread_count: unreadCount });
 }
 
@@ -2804,14 +2815,113 @@ router.post('/communication/notify-staff', internalAuth, async (req, res) => {
 // ==========================================
 // Sales Person Tasks API
 // ==========================================
+// Every query below runs in the caller's tenant context (internalAuth), so the
+// tenant scope plugin limits reads and writes to that workspace. Lead and
+// assignee ids sent by the client are checked against the same workspace.
+const TASK_STATUSES = ['pending', 'processing', 'completed'];
+const MANUAL_TASK = 'manual';
+const DEFAULT_TASK_TIME_ZONE = 'Asia/Kolkata';
+const LIVE = { deleted_at: null };
+
+class TaskInputError extends Error {
+  constructor(message, status = 400) { super(message); this.status = status; }
+}
+
+function taskFail(res, err) {
+  if (err instanceof TaskInputError) return res.status(err.status).json({ error: err.message });
+  console.error('[sales-tasks]', err.message);
+  return res.status(500).json({ error: err.message });
+}
+
+function taskTimeZone(req) {
+  const zone = req.tenant?.timezone || DEFAULT_TASK_TIME_ZONE;
+  try { new Intl.DateTimeFormat('en-US', { timeZone: zone }); return zone; } catch { return DEFAULT_TASK_TIME_ZONE; }
+}
+
+// Milliseconds the zone is ahead of UTC at `date`.
+function zoneOffsetMs(date, timeZone) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(date).map((p) => [p.type, p.value]));
+  const asUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second));
+  return asUtc - Math.floor(date.getTime() / 1000) * 1000;
+}
+
+// 'YYYY-MM-DD' + 'HH:mm' on the workspace clock -> UTC Date.
+function zonedTimeToUtc(day, time, timeZone) {
+  const [y, m, d] = day.split('-').map(Number);
+  const [hh, mm] = time.split(':').map(Number);
+  const wall = Date.UTC(y, m - 1, d, hh, mm);
+  let utc = wall - zoneOffsetMs(new Date(wall), timeZone);
+  const second = wall - zoneOffsetMs(new Date(utc), timeZone);
+  if (second !== utc) utc = second; // across a daylight-saving change
+  return new Date(utc);
+}
+
+// Due time from the request: undefined = not sent, null = clear it.
+// Accepts due_date ('YYYY-MM-DD') + optional due_time ('HH:mm', workspace
+// time; a date alone means the end of that day) or an ISO due_at.
+function parseDue(body, timeZone) {
+  if (body.due_date !== undefined) {
+    if (body.due_date === null || body.due_date === '') return null;
+    const day = String(body.due_date);
+    const time = body.due_time ? String(body.due_time) : '23:59';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(`${day}T00:00:00Z`))) throw new TaskInputError('Choose a valid due date');
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new TaskInputError('Choose a valid due time');
+    return zonedTimeToUtc(day, time, timeZone);
+  }
+  if (body.due_at !== undefined) {
+    if (body.due_at === null || body.due_at === '') return null;
+    const due = new Date(body.due_at);
+    if (Number.isNaN(due.getTime())) throw new TaskInputError('Choose a valid due date');
+    return due;
+  }
+  return undefined;
+}
+
+const toId = (value, label) => {
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) throw new TaskInputError(`${label} not found`, 404);
+  return id;
+};
+
+// Only an active member of this workspace can own a task.
+async function checkAssignee(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const id = toId(value, 'Team member');
+  const user = await Users.findOne({ id, is_platform_staff: { $ne: true }, is_active: { $ne: false }, active: { $ne: false } }, { _id: 0, id: 1 }).lean();
+  if (!user) throw new TaskInputError('Choose a team member of this workspace', 400);
+  return id;
+}
+
+async function checkLead(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const id = toId(value, 'Lead');
+  if (!(await Leads.exists({ id }))) throw new TaskInputError('Lead not found in this workspace', 400);
+  return id;
+}
+
+function cleanText(value, label, max) {
+  if (value === undefined) return undefined;
+  const text = String(value ?? '').trim();
+  if (text.length > max) throw new TaskInputError(`${label} can be at most ${max} characters`);
+  return text;
+}
+
+const findLiveTask = (id) => SalesTasks.findOne({ id: toId(id, 'Task'), ...LIVE }, NO_ID).lean();
+const statusChange = (status) => ({ status, completed_at: status === 'completed' ? new Date() : null });
+const AUTO_TASK_TYPES = ['call', 'hot_lead', 'followup', 'overdue'];
+
 router.get('/sales-tasks', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     await salesTrackingReady;
     // Keep one persistent task for every lead that currently needs sales action.
-    // Completed tasks are intentionally not recreated for the same lead/type.
+    // Completed and removed tasks are intentionally not recreated for the same lead/type.
     const allLeads = await Leads.find({}, { id: 1, status: 1, call_booked_at: 1, next_followup_due: 1 }).lean();
-    const existingTasks = new Set((await SalesTasks.find({}, { lead_id: 1, task_type: 1 }).lean()).map((t) => `${t.lead_id}:${t.task_type}`));
+    const existingTasks = new Set((await SalesTasks.find({ lead_id: { $ne: null } }, { lead_id: 1, task_type: 1 }).lean()).map((t) => `${t.lead_id}:${t.task_type}`));
     for (const l of allLeads) {
       const status = lower(l.status);
       const wanted = [
@@ -2830,10 +2940,12 @@ router.get('/sales-tasks', internalAuth, async (req, res) => {
     }
 
     const taskRows = await loadSalesTaskRows(
-      await SalesTasks.find({}, NO_ID).sort({ created_at: -1, id: -1 }).lean(),
+      await SalesTasks.find(LIVE, NO_ID).sort({ created_at: -1, id: -1 }).lean(),
       { includeLatestNote: true }
     );
     const tasks = taskRows.filter((t) => {
+      // Tasks the team added stay until someone removes them.
+      if (!AUTO_TASK_TYPES.includes(t.task_type)) return true;
       if (t.status === 'completed') return true;
       if (t.sales_followup_stopped === true) return false;
       if (['converted', 'closed', 'not_interested'].includes(lower(t.sales_status))) return false;
@@ -2842,10 +2954,85 @@ router.get('/sales-tasks', internalAuth, async (req, res) => {
         || (t.task_type === 'hot_lead' && leadStatus === 'hot')
         || (['followup', 'overdue'].includes(t.task_type) && t.next_followup_due != null && !['converted', 'booked', 'lost', 'opt-out'].includes(leadStatus));
     });
-    res.json({ success: true, tasks });
+    res.json({ success: true, tasks, time_zone: taskTimeZone(req), me: req.user?.id ?? null });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    taskFail(res, err);
   }
+});
+
+// Team members a task can be given to: active users of this workspace only.
+// Every member may read this short list (the full /team/users page needs team.view).
+router.get('/sales-tasks/assignees', internalAuth, async (req, res) => {
+  try {
+    const users = await Users.find(
+      { is_platform_staff: { $ne: true }, is_active: { $ne: false }, active: { $ne: false } },
+      { _id: 0, id: 1, name: 1, email: 1, role: 1 }
+    ).sort({ name: 1, id: 1 }).lean();
+    res.json({ success: true, users: users.map((u) => ({ id: u.id, name: u.name || u.email || `User ${u.id}`, email: u.email || null, role: u.role || null })) });
+  } catch (err) { taskFail(res, err); }
+});
+
+// Add a task by hand.
+router.post('/sales-tasks', internalAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const title = cleanText(body.title, 'Title', 200);
+    if (!title) throw new TaskInputError('Enter what needs to be done');
+    const description = cleanText(body.description, 'Details', 2000) || '';
+    const [leadId, assignedTo] = await Promise.all([checkLead(body.lead_id), checkAssignee(body.assigned_to)]);
+    const dueAt = parseDue(body, taskTimeZone(req));
+    const status = body.status === undefined ? 'pending' : String(body.status).toLowerCase();
+    if (!TASK_STATUSES.includes(status)) throw new TaskInputError('Invalid task status');
+
+    const created = await SalesTasks.create({
+      task_type: MANUAL_TASK, title, description,
+      lead_id: leadId ?? null, assigned_to: assignedTo ?? null, due_at: dueAt ?? null,
+      created_by: req.user?.id ?? null, ...statusChange(status),
+      // The person who adds the task has seen it; someone else's new task is unread.
+      unread: assignedTo != null && assignedTo !== req.user?.id,
+    });
+    const [task] = await loadSalesTaskRows([created.toObject()], { includeLatestNote: true });
+    await emitSalesTaskUpdate(req, 'created', { id: created.id, lead_id: created.lead_id, task_type: MANUAL_TASK, title, assigned_to: created.assigned_to });
+    res.status(201).json({ success: true, task });
+  } catch (err) { taskFail(res, err); }
+});
+
+// Edit a task: title, details, lead, assignee, due time, status.
+router.patch('/sales-tasks/:id', internalAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const existing = await findLiveTask(req.params.id);
+    if (!existing) throw new TaskInputError('Task not found', 404);
+    const changes = {};
+    const title = cleanText(body.title, 'Title', 200);
+    if (title !== undefined) {
+      if (!title && existing.task_type === MANUAL_TASK) throw new TaskInputError('Enter what needs to be done');
+      changes.title = title || null;
+    }
+    const description = cleanText(body.description, 'Details', 2000);
+    if (description !== undefined) changes.description = description;
+    const [leadId, assignedTo] = await Promise.all([checkLead(body.lead_id), checkAssignee(body.assigned_to)]);
+    if (leadId !== undefined) {
+      // Automatic tasks belong to their lead.
+      if (existing.task_type !== MANUAL_TASK && leadId !== existing.lead_id) throw new TaskInputError('This task was created for its lead and cannot be moved to another lead');
+      changes.lead_id = leadId;
+    }
+    if (assignedTo !== undefined) changes.assigned_to = assignedTo;
+    const dueAt = parseDue(body, taskTimeZone(req));
+    if (dueAt !== undefined) changes.due_at = dueAt;
+    if (body.status !== undefined) {
+      const status = String(body.status).toLowerCase();
+      if (!TASK_STATUSES.includes(status)) throw new TaskInputError('Invalid task status');
+      if (status !== existing.status) Object.assign(changes, statusChange(status));
+    }
+    if (!Object.keys(changes).length) throw new TaskInputError('Nothing to update');
+
+    const updated = await SalesTasks.findOneAndUpdate({ id: existing.id, ...LIVE }, { $set: { ...changes, updated_at: new Date() } }, { new: true, projection: NO_ID }).lean();
+    if (!updated) throw new TaskInputError('Task not found', 404);
+    const [task] = await loadSalesTaskRows([updated], { includeLatestNote: true });
+    await emitSalesTaskUpdate(req, 'updated', { id: updated.id, lead_id: updated.lead_id, task_type: updated.task_type });
+    res.json({ success: true, task: task || updated });
+  } catch (err) { taskFail(res, err); }
 });
 
 router.post('/sales-tasks/export', internalAuth, async (req, res) => {
@@ -2853,36 +3040,39 @@ router.post('/sales-tasks/export', internalAuth, async (req, res) => {
     const ids = Array.isArray(req.body.ids)
       ? [...new Set(req.body.ids.map(Number).filter(Number.isInteger))]
       : [];
-      
+
     if (ids.length === 0) {
       return res.status(400).json({ error: 'No task IDs provided for export' });
     }
 
     const result = { rows: await loadSalesTaskRows(
-      await SalesTasks.find({ id: { $in: ids } }, NO_ID).sort({ created_at: -1, id: -1 }).lean()
+      await SalesTasks.find({ id: { $in: ids }, ...LIVE }, NO_ID).sort({ created_at: -1, id: -1 }).lean()
     ) };
 
     const xlsx = require('xlsx');
-    const exportData = result.rows.map(t => {
-      const formatDateTime = (value) => value ? new Date(value).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : '';
-      return {
-        'Task Type': t.task_type === 'hot_lead' ? 'Hot Lead' : t.task_type === 'call' ? 'Scheduled Call' : t.task_type === 'followup' ? 'Follow-up' : t.task_type,
-        'Task Status': t.status,
-        'Lead Name': t.name || 'Unknown',
-        'Brand': t.brand_name || '',
-        'Phone': t.phone || '',
-        'Email': t.email || '',
-        'Tags': (t.tags || []).map(tag => tag.name).join(', '),
-        'Lead Stage': t.lead_status || 'New',
-        'Sales Status': t.sales_status,
-        'Assigned To': t.assigned_name || 'Unassigned',
-        'Lead Score': t.score || 0,
-        'Interest': t.interest || '',
-        'Task Created At': formatDateTime(t.created_at),
-        'Lead Created At': formatDateTime(t.lead_created_at),
-        'Last Contact': formatDateTime(t.last_contact)
-      };
-    });
+    const timeZone = taskTimeZone(req);
+    const formatDateTime = (value) => value ? new Date(value).toLocaleString('en-IN', { timeZone, dateStyle: 'medium', timeStyle: 'short' }) : '';
+    const typeLabels = { hot_lead: 'Hot lead', call: 'Demo call', followup: 'Follow-up', overdue: 'Overdue follow-up', manual: 'Task' };
+    const exportData = result.rows.map(t => ({
+      'Task': t.title || typeLabels[t.task_type] || t.task_type,
+      'Task Type': typeLabels[t.task_type] || t.task_type,
+      'Task Status': t.status,
+      'Due': formatDateTime(t.due_at),
+      'Assigned To': t.assigned_name || 'Unassigned',
+      'Details': t.description || '',
+      'Lead Name': t.name || '',
+      'Brand': t.brand_name || '',
+      'Phone': t.phone || '',
+      'Email': t.email || '',
+      'Tags': (t.tags || []).map(tag => tag.name).join(', '),
+      'Lead Stage': t.lead_id ? (t.lead_status || 'New') : '',
+      'Sales Status': t.lead_id ? t.sales_status : '',
+      'Lead Score': t.lead_id ? (t.score || 0) : '',
+      'Interest': t.interest || '',
+      'Task Created At': formatDateTime(t.created_at),
+      'Lead Created At': formatDateTime(t.lead_created_at),
+      'Last Contact': formatDateTime(t.last_contact)
+    }));
 
     const worksheet = xlsx.utils.json_to_sheet(exportData);
     const workbook = xlsx.utils.book_new();
@@ -2893,45 +3083,57 @@ router.post('/sales-tasks/export', internalAuth, async (req, res) => {
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buffer);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    taskFail(res, err);
   }
 });
 
+// Complete / reopen. Kept for existing callers; PATCH /sales-tasks/:id does the same.
 router.put('/sales-tasks/:id/status', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
     const status = String(req.body.status || '').toLowerCase();
-    if (!['pending', 'processing', 'completed'].includes(status)) {
+    if (!TASK_STATUSES.includes(status)) {
       return res.status(400).json({ error: 'Invalid task status' });
     }
     const task = await SalesTasks.findOneAndUpdate(
-      { id: req.params.id },
-      { $set: { status, updated_at: new Date(), completed_at: status === 'completed' ? new Date() : null } },
+      { id: toId(req.params.id, 'Task'), ...LIVE },
+      { $set: { ...statusChange(status), updated_at: new Date() } },
       { new: true, projection: NO_ID }
     ).lean();
-    await emitSalesTaskUpdate(req, 'status_changed', task || undefined);
-    res.json({ success: true, task: task || undefined });
+    if (!task) throw new TaskInputError('Task not found', 404);
+    await emitSalesTaskUpdate(req, 'status_changed', task);
+    res.json({ success: true, task });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    taskFail(res, err);
   }
 });
 
 router.get('/sales-tasks/unread-count', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
-    const count = await SalesTasks.countDocuments({ unread: true, status: { $ne: 'completed' } });
+    const count = await SalesTasks.countDocuments({ unread: true, status: { $ne: 'completed' }, ...LIVE });
     res.json({ success: true, count });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { taskFail(res, err); }
 });
 
 router.put('/sales-tasks/lead/:leadId/read', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
-    await SalesTasks.updateMany({ lead_id: req.params.leadId, unread: true }, { $set: { unread: false, updated_at: new Date() } });
-    await emitSalesTaskUpdate(req, 'read', { lead_id: Number(req.params.leadId) });
+    const leadId = toId(req.params.leadId, 'Lead');
+    await SalesTasks.updateMany({ lead_id: leadId, unread: true }, { $set: { unread: false, updated_at: new Date() } });
+    await emitSalesTaskUpdate(req, 'read', { lead_id: leadId });
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { taskFail(res, err); }
+});
+
+// A task without a lead is marked read on its own.
+router.put('/sales-tasks/:id/read', internalAuth, async (req, res) => {
+  try {
+    const task = await SalesTasks.findOneAndUpdate({ id: toId(req.params.id, 'Task'), ...LIVE }, { $set: { unread: false, updated_at: new Date() } }, { new: true, projection: { _id: 0, id: 1, lead_id: 1 } }).lean();
+    if (!task) throw new TaskInputError('Task not found', 404);
+    await emitSalesTaskUpdate(req, 'read', task);
+    res.json({ success: true });
+  } catch (err) { taskFail(res, err); }
 });
 
 router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, async (req, res) => {
@@ -2940,9 +3142,10 @@ router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, async (req, r
     const allowed = ['new', 'contacted', 'processing', 'follow_up', 'converted', 'not_interested', 'closed'];
     const status = String(req.body.status || '').toLowerCase();
     if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid sales status' });
+    const leadId = toId(req.params.leadId, 'Lead');
     const shouldStop = ['converted', 'not_interested', 'closed'].includes(status);
     const statusLead = await Leads.findOneAndUpdate(
-      { id: req.params.leadId },
+      { id: leadId },
       { $set: {
         sales_status: status,
         sales_followup_stopped: shouldStop,
@@ -2951,11 +3154,10 @@ router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, async (req, r
       } },
       { new: true, projection: { _id: 0, id: 1, sales_status: 1, sales_followup_stopped: 1, sales_followup_at: 1 } }
     ).lean();
-    const result = { rows: statusLead ? [statusLead] : [] };
-    if (!result.rows.length) return res.status(404).json({ error: 'Lead not found' });
-    await emitSalesTaskUpdate(req, 'lead_status_changed', { lead_id: Number(req.params.leadId), ...result.rows[0] });
-    res.json({ success: true, lead: result.rows[0] });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    if (!statusLead) return res.status(404).json({ error: 'Lead not found' });
+    await emitSalesTaskUpdate(req, 'lead_status_changed', { lead_id: leadId, ...statusLead });
+    res.json({ success: true, lead: statusLead });
+  } catch (err) { taskFail(res, err); }
 });
 
 router.post('/sales-tasks/lead/:leadId/notes', internalAuth, async (req, res) => {
@@ -2963,13 +3165,16 @@ router.post('/sales-tasks/lead/:leadId/notes', internalAuth, async (req, res) =>
     await salesTrackingReady;
     const note = String(req.body.note || '').trim();
     if (!note) return res.status(400).json({ error: 'Note is required' });
+    const leadId = toId(req.params.leadId, 'Lead');
+    // The lead must belong to this workspace before a note is stored for it.
+    if (!(await Leads.exists({ id: leadId }))) return res.status(404).json({ error: 'Lead not found' });
 
     const stopPattern = /(already\s+(enrolled|joined|purchased)|not\s+interested|do\s+not\s+contact|don['’]?t\s+contact|stop\s+(all\s+)?follow[- ]?ups?|no\s+more\s+(calls|messages))/i;
     let shouldStop = stopPattern.test(note);
     let followupAt = null;
     if (ai) {
       try {
-        const analysis = await generateOpenRouterContent(`Analyze this sales representative note. Current time is ${new Date().toISOString()} (Asia/Kolkata business timezone).
+        const analysis = await generateOpenRouterContent(`Analyze this sales representative note. Current time is ${new Date().toISOString()} (${taskTimeZone(req)} business timezone).
 Note: ${JSON.stringify(note)}
 Return only JSON: {"stop_followups":boolean,"followup_at":string|null}. Set stop_followups true for enrolled/converted/not interested/do-not-contact intent. Convert an explicit future callback time such as tomorrow at 5 PM to an ISO timestamp. Do not invent a time.`);
         const parsed = JSON.parse(analysis.replace(/```json|```/gi, '').trim());
@@ -2982,10 +3187,11 @@ Return only JSON: {"stop_followups":boolean,"followup_at":string|null}. Set stop
       }
     }
 
-    const noteResult = { rows: [(await SalesLeadNotes.create({ lead_id: req.params.leadId, note })).toObject()] };
+    const savedNote = (await SalesLeadNotes.create({ lead_id: leadId, note })).toObject();
+    delete savedNote._id;
     const followupDate = followupAt ? new Date(followupAt) : null;
     const notedLead = await Leads.findOneAndUpdate(
-      { id: req.params.leadId },
+      { id: leadId },
       { $set: {
         sales_followup_stopped: shouldStop,
         sales_followup_at: followupDate,
@@ -2995,31 +3201,41 @@ Return only JSON: {"stop_followups":boolean,"followup_at":string|null}. Set stop
       } },
       { new: true, projection: { _id: 0, id: 1, sales_status: 1, sales_followup_stopped: 1, sales_followup_at: 1, next_followup_due: 1 } }
     ).lean();
-    const leadResult = { rows: notedLead ? [notedLead] : [] };
-    await emitSalesTaskUpdate(req, 'note_added', { lead_id: Number(req.params.leadId), note: noteResult.rows[0], ...leadResult.rows[0] });
-    res.json({ success: true, note: noteResult.rows[0], lead: leadResult.rows[0] });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    await emitSalesTaskUpdate(req, 'note_added', { lead_id: leadId, note: savedNote, ...notedLead });
+    res.json({ success: true, note: savedNote, lead: notedLead });
+  } catch (err) { taskFail(res, err); }
 });
 
 router.put('/sales-tasks/notes/:noteId', internalAuth, async (req, res) => {
   try {
     const note = String(req.body.note || '').trim();
     if (!note) return res.status(400).json({ error: 'Note is required' });
-    const updatedNote = await SalesLeadNotes.findOneAndUpdate({ id: req.params.noteId }, { $set: { note } }, { new: true, projection: NO_ID }).lean();
+    const updatedNote = await SalesLeadNotes.findOneAndUpdate({ id: toId(req.params.noteId, 'Note') }, { $set: { note } }, { new: true, projection: NO_ID }).lean();
     if (!updatedNote) return res.status(404).json({ error: 'Note not found' });
     res.json({ success: true, note: updatedNote });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { taskFail(res, err); }
 });
 
 router.delete('/sales-tasks/notes/:noteId', internalAuth, async (req, res) => {
   try {
-    const deletedNote = await SalesLeadNotes.findOneAndDelete({ id: req.params.noteId }, { projection: { lead_id: 1 } }).lean();
+    const deletedNote = await SalesLeadNotes.findOneAndDelete({ id: toId(req.params.noteId, 'Note') }, { projection: { lead_id: 1 } }).lean();
     if (!deletedNote) return res.status(404).json({ error: 'Note not found' });
     const leadId = deletedNote.lead_id;
     const latestNote = await SalesLeadNotes.findOne({ lead_id: leadId }, { _id: 0, id: 1, note: 1, created_at: 1 }).sort({ created_at: -1 }).lean();
     res.json({ success: true, latest_note: latestNote || null });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { taskFail(res, err); }
 });
+
+// Removes tasks. Tasks the team added are deleted; automatic ones are hidden
+// (deleted_at) so the next page load does not create them again.
+async function removeTasks(filter) {
+  const doomed = await SalesTasks.find({ ...filter, ...LIVE }, { _id: 0, id: 1, lead_id: 1, task_type: 1 }).lean();
+  const manualIds = doomed.filter((t) => !AUTO_TASK_TYPES.includes(t.task_type)).map((t) => t.id);
+  const autoIds = doomed.filter((t) => AUTO_TASK_TYPES.includes(t.task_type)).map((t) => t.id);
+  if (manualIds.length) await SalesTasks.deleteMany({ id: { $in: manualIds } });
+  if (autoIds.length) await SalesTasks.updateMany({ id: { $in: autoIds } }, { $set: { deleted_at: new Date(), unread: false, updated_at: new Date() } });
+  return doomed;
+}
 
 router.post('/sales-tasks/bulk-delete', internalAuth, async (req, res) => {
   try {
@@ -3030,38 +3246,38 @@ router.post('/sales-tasks/bulk-delete', internalAuth, async (req, res) => {
     const from = String(req.body.from || '');
     const to = String(req.body.to || '');
     const validDate = /^\d{4}-\d{2}-\d{2}$/;
-    let result;
+    let doomed;
 
     if (ids.length) {
-      const doomed = await SalesTasks.find({ id: { $in: ids } }, { _id: 0, id: 1, lead_id: 1, task_type: 1 }).lean();
-      await SalesTasks.deleteMany({ id: { $in: doomed.map((t) => t.id) } });
-      result = { rows: doomed, rowCount: doomed.length };
+      doomed = await removeTasks({ id: { $in: ids } });
     } else {
       if (!validDate.test(from) || !validDate.test(to) || from > to) {
         return res.status(400).json({ error: 'A valid inclusive from/to date range is required' });
       }
-      const rangeStart = new Date(`${from}T00:00:00.000Z`);
-      const rangeEnd = new Date(new Date(`${to}T00:00:00.000Z`).getTime() + DAY_MS);
-      const doomed = await SalesTasks.find({ created_at: { $gte: rangeStart, $lt: rangeEnd } }, { _id: 0, id: 1, lead_id: 1, task_type: 1 }).lean();
-      await SalesTasks.deleteMany({ id: { $in: doomed.map((t) => t.id) } });
-      result = { rows: doomed, rowCount: doomed.length };
+      // Days on the workspace clock (Asia/Kolkata by default), not UTC days.
+      const timeZone = taskTimeZone(req);
+      const rangeStart = zonedTimeToUtc(from, '00:00', timeZone);
+      const nextDay = new Date(Date.parse(`${to}T00:00:00Z`) + DAY_MS).toISOString().slice(0, 10);
+      const rangeEnd = zonedTimeToUtc(nextDay, '00:00', timeZone);
+      doomed = await removeTasks({ created_at: { $gte: rangeStart, $lt: rangeEnd } });
     }
 
-    for (const task of result.rows) await emitSalesTaskUpdate(req, 'deleted', task);
-    res.json({ success: true, deletedCount: result.rowCount, deletedIds: result.rows.map(task => task.id) });
+    for (const task of doomed) await emitSalesTaskUpdate(req, 'deleted', task);
+    res.json({ success: true, deletedCount: doomed.length, deletedIds: doomed.map(task => task.id) });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    taskFail(res, err);
   }
 });
 
 router.delete('/sales-tasks/:id', internalAuth, async (req, res) => {
   try {
     await salesTasksReady;
-    const deletedTask = await SalesTasks.findOneAndDelete({ id: req.params.id }, { projection: { _id: 0, id: 1, lead_id: 1, task_type: 1 } }).lean();
-    await emitSalesTaskUpdate(req, 'deleted', deletedTask || null);
+    const [deletedTask] = await removeTasks({ id: toId(req.params.id, 'Task') });
+    if (!deletedTask) throw new TaskInputError('Task not found', 404);
+    await emitSalesTaskUpdate(req, 'deleted', deletedTask);
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    taskFail(res, err);
   }
 });
 
@@ -3135,6 +3351,8 @@ router.post('/leads/book-call', internalAuth, async (req, res) => {
     }
 
     await salesTasksReady;
+    // A new booking brings back a demo-call task that was removed from the page.
+    await SalesTasks.updateOne({ lead_id, task_type: 'call', deleted_at: { $ne: null } }, { $set: { deleted_at: null, status: 'pending', completed_at: null, unread: true, updated_at: new Date() } });
     if (!(await SalesTasks.exists({ lead_id, task_type: 'call' }))) {
       const callTask = await SalesTasks.create({ lead_id, task_type: 'call', unread: true });
       await emitSalesTaskUpdate(req, 'created', {
