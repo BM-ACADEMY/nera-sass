@@ -56,7 +56,7 @@ export const useLeads = (filters = {}) => {
 
   useEffect(() => {
     fetchLeads();
-  }, [filters.status, filters.brand, filters.source, filters.campaignName, filters.adName, filters.metaPageId, filters.search, filters.tagId, filters.limit, filters.offset]);
+  }, [filters.status, filters.brand, filters.source, filters.assignedTo, filters.campaignName, filters.adName, filters.metaPageId, filters.search, filters.tagId, filters.from, filters.to, filters.limit, filters.offset]);
 
   return { leads, total, loading, loadingMore, hasMore, error, refetch: fetchLeads, loadMoreLeads };
 };

@@ -195,8 +195,14 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
           if (!isCampaignImport) {
             // Normal CRM imports may refresh an existing lead. A campaign list
             // only references it and must not alter its CRM fields.
+            // The source is kept: a WhatsApp contact found again in a sheet
+            // stays a WhatsApp lead.
             const importChanges = { updated_at: new Date() };
-            for (const [field, value] of Object.entries({ name, phone, email, status, client_id: rowClientId, source, score, interest, assigned_to: assignedTo })) {
+            // Status and score only when the sheet has them: a missing cell must
+            // not reset a hot lead to "new" with score 0.
+            const sheetStatus = req.body.force_status || String(row.status || row.Status || '').trim().toLowerCase() || null;
+            const sheetScore = String(row.score ?? row.Score ?? '').trim() !== '' ? score : null;
+            for (const [field, value] of Object.entries({ name: name === 'Unknown' ? null : name, phone, email, status: sheetStatus, client_id: rowClientId, score: sheetScore, interest, assigned_to: assignedTo })) {
               if (value != null) importChanges[field] = value;
             }
             await Leads.updateOne({ id: existingLead.id }, { $set: importChanges });
