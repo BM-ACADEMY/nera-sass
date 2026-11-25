@@ -616,6 +616,7 @@ app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api', require('./routes/team'));
 // Plans, subscription and wallet of the signed-in workspace (customer login).
 app.use('/api/billing', require('./routes/billing'));
+app.use('/api/shop', require('./routes/shop'));
 // Razorpay webhook for plan payments and wallet top-ups. Signed with
 // RAZORPAY_WEBHOOK_SECRET (503 until it is set); the tenant comes from the
 // order the server created, never from the payload. Wallet credits happen only
@@ -1324,6 +1325,14 @@ if (jobsEnabled()) scheduleJob('45 0 * * *', () => {
   require('./services/billing/orders').expireLapsed()
     .then((result) => { if (result.expired) console.log(`[Billing] ${result.expired} subscription(s) expired`); })
     .catch((error) => console.error('[Billing] Expiry sweep failed:', error.message));
+});
+
+// Billing: every fulfilled plan payment gets its GST invoice. fulfil() issues it
+// at once; this retries any that a crash or an error left behind.
+if (jobsEnabled()) scheduleJob('*/15 * * * *', () => {
+  require('./services/billing/invoices').issueMissing()
+    .then((result) => { if (result.issued || result.failed) console.log(`[Billing] Invoices issued late: ${result.issued}, failed: ${result.failed}`); })
+    .catch((error) => console.error('[Billing] Invoice sweep failed:', error.message));
 });
 
 // Tenant lifecycle (plan U6): stores each workspace's state daily and archives

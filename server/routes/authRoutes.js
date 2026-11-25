@@ -18,20 +18,32 @@ router.post('/password/reset', resetLimit, authController.resetPassword);
 router.get('/invitations/:token', tokenLimit, authController.previewInvitation);
 router.post('/invitations/accept', tokenLimit, authController.acceptInvitation);
 
-// MFA enrolment: with the mfa_token from login (mandatory enrolment) or a session.
+// Password and code guesses on the re-authenticated endpoints, per account
+// (after authentication) so one stolen session cannot keep guessing from
+// many addresses.
+const reauthLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.REAUTH_RATE_LIMIT || 20),
+  key: (req) => (req.user?.id ? `user:${req.user.id}` : `ip:${req.ip}`),
+});
+
+// MFA enrolment: with the mfa_token from login (mandatory enrolment) or a
+// session, which must also send the current password (and a current code when
+// two-step verification is already on).
 const sessionOrMfaToken = (req, res, next) => (req.body?.mfa_token ? next() : requireAuth(req, res, next));
-router.post('/mfa/setup', loginLimit, sessionOrMfaToken, authController.startMfaSetup);
-router.post('/mfa/setup/confirm', loginLimit, sessionOrMfaToken, authController.confirmMfaSetup);
-router.post('/mfa/email/setup', loginLimit, sessionOrMfaToken, authController.startEmailSetup);
-router.post('/mfa/email/setup/confirm', loginLimit, sessionOrMfaToken, authController.confirmEmailSetup);
+router.post('/mfa/setup', loginLimit, sessionOrMfaToken, reauthLimit, authController.startMfaSetup);
+router.post('/mfa/setup/confirm', loginLimit, sessionOrMfaToken, reauthLimit, authController.confirmMfaSetup);
+router.post('/mfa/email/setup', loginLimit, sessionOrMfaToken, reauthLimit, authController.startEmailSetup);
+router.post('/mfa/email/setup/confirm', loginLimit, sessionOrMfaToken, reauthLimit, authController.confirmEmailSetup);
 
 // Signed in (customer users and platform staff)
 router.get('/me', requireAuth, authController.me);
-router.post('/change-password', requireAuth, authController.changePassword);
+router.post('/change-password', requireAuth, reauthLimit, authController.changePassword);
 router.post('/logout-all', requireAuth, authController.logoutAll);
 router.patch('/profile', requireAuth, authController.updateProfile);
-router.post('/mfa/disable', loginLimit, requireAuth, authController.disableMfaMethod);
-router.post('/mfa/recovery-codes', loginLimit, requireAuth, authController.regenerateRecoveryCodes);
+router.post('/mfa/disable', loginLimit, requireAuth, reauthLimit, authController.disableMfaMethod);
+router.post('/mfa/recovery-codes', loginLimit, requireAuth, reauthLimit, authController.regenerateRecoveryCodes);
+router.post('/mfa/reauth/email/send', loginLimit, requireAuth, reauthLimit, authController.sendReauthEmail);
 
 // Users are never created here: customer users join by invitation
 // (/api/team/invitations, /api/admin/users) and set their own password.

@@ -135,7 +135,7 @@ app.post('/api/communication/send-template', auth, async (req, res) => {
     // template sent by hand too.
     const templateName = String(template_name || '').trim();
     if (!/^[a-z0-9_]{1,512}$/.test(templateName)) return res.status(400).json({ error: 'Choose an approved template' });
-    const templateCheck = await sendPolicy.checkSend({ lead, kind: await sendPolicy.templateKind(templateName), messageType: 'template', phoneNumberId: phoneId });
+    const templateCheck = await sendPolicy.checkSend({ lead, kind: await sendPolicy.templateKind(templateName, { phoneNumberId: phoneId, clientId: lead.client_id, language: 'en' }), messageType: 'template', phoneNumberId: phoneId });
     if (!templateCheck.ok) return sendPolicy.respondBlocked(res, templateCheck);
     const slot = await numberHealth.reserveSlot(phoneId, { countsTowardDailyCap: true });
     if (!slot.ok) return res.status(429).json({ error: slot.message, code: slot.reason === 'daily_cap' ? 'DAILY_CAP_REACHED' : 'RATE_LIMITED', retry_at: slot.retryAt });

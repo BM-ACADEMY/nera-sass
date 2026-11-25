@@ -14,6 +14,7 @@ const { Users } = require('../models');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
 const { TENANT_ROLES, STAFF_ROLES, canAssignRole, normalizeTenantRole, describeUser } = require('./permissions');
 const audit = require('./audit');
+const notify = require('./notify');
 
 class UserAdminError extends Error {
   constructor(status, message) {
@@ -115,15 +116,28 @@ async function revokeSessions({ tenantId, userId, actor, req }) {
 }
 
 // Staff only: clears MFA so the user enrols again at next login (lost device).
-async function resetMfa({ userId, req }) {
+// Platform-staff reset of someone's two-step verification. Staff (ops) may
+// reset customer users only; a staff account (or one that is not a customer
+// user) needs the founder; nobody resets their own here (they turn methods
+// off in their settings, with password and code).
+async function resetMfa({ userId, actor, req }) {
+  if (!actor || actor.kind !== 'staff') throw new UserAdminError(403, 'Only platform staff can reset two-step verification');
+  if (Number(actor.id) === Number(userId)) {
+    throw new UserAdminError(403, 'You cannot reset your own two-step verification here. Change it in your own security settings.');
+  }
   const target = await runAsSystem(() => Users.findOne({ id: Number(userId) }, { _id: 0 }).lean(), 'user-admin');
   if (!target) throw new UserAdminError(404, 'User not found');
+  if (describeUser(target)?.kind !== 'tenant' && actor.role !== 'founder') {
+    throw new UserAdminError(403, 'Only the owner (founder) can reset two-step verification for a staff account');
+  }
   await runAsSystem(() => Users.updateOne({ id: target.id }, {
     $set: { mfa_enabled: false, mfa_email_enabled: false },
     $unset: { mfa_secret_enc: '', mfa_pending_secret_enc: '', mfa_recovery_hashes: '', mfa_enrolled_at: '', mfa_email_code_hash: '', mfa_email_code_purpose: '', mfa_email_code_expires_at: '' },
     $inc: { token_version: 1 },
   }), 'user-admin');
   await audit.record(audit.EVENTS.MFA_RESET, { tenantId: target.tenant_id ?? null, req, targetType: 'user', targetId: target.id, meta: { email: target.email } });
+  await notify.twoStepChangedEmail({ to: target.email, name: target.name, method: 'all', action: 'removed', byStaff: true, staff: describeUser(target)?.kind === 'staff' })
+    .catch((error) => console.error('[user-admin] 2FA reset email not sent:', error.message));
   return { success: true };
 }
 

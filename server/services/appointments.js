@@ -109,7 +109,7 @@ async function scheduleReminder(appointment, { lead, settings, now = new Date() 
     leadId: lead.id,
     phone: lead.phone,
     phoneNumberId: brand?.phone_number_id || null,
-    kind: await sendPolicy.templateKind(template),
+    kind: await sendPolicy.templateKind(template, { phoneNumberId: brand?.phone_number_id, clientId: lead.client_id, language: lang }),
     payload: { type: 'template', template: { name: template, language: { code: lang }, components: [{ type: 'body', parameters: params.map((text) => ({ type: 'text', text: String(text).slice(0, 1024) })) }] } },
     content: `[Reminder] ${appointment.service} on ${when}`,
     msgType: 'template',

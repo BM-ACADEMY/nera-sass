@@ -13,7 +13,7 @@
  * The 24-hour window: free text and media only while the customer wrote in
  * the last 24 hours; outside it only an approved template may be sent.
  */
-const { Messages, Conversations, Templates, MetaWhatsappTemplates } = require('../models');
+const { Messages, Conversations, Templates, MetaWhatsappTemplates, MetaWhatsappPhoneNumbers } = require('../models');
 const { phoneTailRegex } = require('../db/mongo');
 const { tenantCanSend } = require('./lifecycle');
 const { currentTenantId, runAsSystem } = require('./tenantContext');
@@ -48,22 +48,76 @@ function kindForCategory(category) {
   return null;
 }
 
+// Rows of the language the send uses: the exact code first, then the same
+// base language (en for en_US). No language given: every row.
+function rowsForLanguage(rows, language) {
+  if (!language) return rows;
+  const exact = rows.filter((row) => row.language === language);
+  if (exact.length) return exact;
+  const base = String(language).split('_')[0].toLowerCase();
+  return rows.filter((row) => String(row.language || '').split('_')[0].toLowerCase() === base);
+}
+
+// One kind for the matching rows; when they disagree, marketing wins.
+function kindOfRows(rows) {
+  const kinds = rows.map((row) => kindForCategory(row.category)).filter(Boolean);
+  if (!kinds.length) return null;
+  return kinds.includes('marketing') ? 'marketing' : kinds[0];
+}
+
+// The WABA that sends: the one the sender number belongs to. The number id
+// comes from the sending brand's own row, so looking it up across tenants is
+// safe (and finds numbers still on the platform inventory). A caller-supplied
+// WABA id is deliberately not accepted: it would let a caller read any WABA's
+// template categories.
+async function senderWaba({ phoneNumberId }) {
+  if (!phoneNumberId) return null;
+  const row = await runAsSystem(
+    () => MetaWhatsappPhoneNumbers.findOne({ phone_number_id: String(phoneNumberId) }, { _id: 0, waba_id: 1 }).lean(),
+    'send-policy-template',
+  );
+  return row?.waba_id || null;
+}
+
 /**
- * The kind a named template counts as: from the tenant's own template row,
- * then from the Meta inventory cache, else the configured default.
+ * The kind a named template counts as for THIS send. Only the sending
+ * workspace's own template is used, never another workspace's template with
+ * the same name:
+ *   1. Meta's category for the template in the sender's WABA (and language);
+ *      with no WABA on record, the workspace's own Meta rows
+ *   2. the workspace's own template row, once Meta has it (for the brand)
+ *   3. else WA_UNKNOWN_TEMPLATE_KIND, marketing by default: consent required
+ * scope = { phoneNumberId, clientId, language }
  */
-async function templateKind(templateName) {
+async function templateKind(templateName, scope = {}) {
   const name = String(templateName || '').trim();
   if (!name) return unknownTemplateKind();
+  const { phoneNumberId = null, clientId = null, language = null } = scope || {};
+  const tenantId = currentTenantId();
+  const fields = { _id: 0, language: 1, category: 1 };
+
+  const waba = await senderWaba({ phoneNumberId });
+  let meta = [];
+  if (waba) {
+    meta = await runAsSystem(() => MetaWhatsappTemplates.find({ name, waba_id: waba }, fields).lean(), 'send-policy-template');
+  } else if (tenantId) {
+    meta = await MetaWhatsappTemplates.find({ name }, fields).lean();
+  }
+  const fromMeta = kindOfRows(rowsForLanguage(meta, language));
+  if (fromMeta) return fromMeta;
+
   // Templates created in LeadOS default to UTILITY in the schema; only trust
-  // a category once Meta has the template (meta_template_id set), else the
-  // Meta inventory cache.
-  const own = await Templates.findOne({ name, meta_template_id: { $nin: [null, ''] } }, { _id: 0, category: 1 }).lean();
-  const fromOwn = kindForCategory(own?.category);
-  if (fromOwn) return fromOwn;
-  const cached = await runAsSystem(() => MetaWhatsappTemplates.findOne({ name }, { _id: 0, category: 1 }).lean(), 'send-policy-template');
-  const fromCache = kindForCategory(cached?.category);
-  if (fromCache) return fromCache;
+  // a category once Meta has the template (meta_template_id set). Only inside
+  // a workspace: the query is then limited to its own rows.
+  if (tenantId) {
+    const own = await Templates.find({
+      name,
+      meta_template_id: { $nin: [null, ''] },
+      ...(clientId != null ? { $or: [{ client_id: clientId }, { client_id: null }] } : {}),
+    }, fields).lean();
+    const fromOwn = kindOfRows(rowsForLanguage(own, language));
+    if (fromOwn) return fromOwn;
+  }
   return unknownTemplateKind();
 }
 
