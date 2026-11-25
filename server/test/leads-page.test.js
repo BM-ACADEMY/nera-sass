@@ -7,7 +7,14 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
-const request = require('supertest');
+const supertest = require('supertest');
+// Every request gets a deadline, so a stuck call fails the test instead of
+// hanging the run.
+const request = (target) => new Proxy(supertest(target), {
+  get: (agent, method) => (...args) => {
+    return agent[method](...args).timeout({ deadline: 60000 });
+  },
+});
 const { startTestDb, stopTestDb, clearCollections, makeToken } = require('./setup');
 
 let app, models, runAsSystem, runAsTenant, leadSources;
