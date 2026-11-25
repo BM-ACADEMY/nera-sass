@@ -22,6 +22,8 @@ const TENANT_PERMISSIONS = {
   'tenant.settings': ['owner', 'admin'],
   'whatsapp.manage': ['owner', 'admin'],
   'calendar.manage': ['owner', 'admin'],
+  // Settings > Integrations: connect Facebook Pages for Lead Ads.
+  'integrations.manage': ['owner', 'admin'],
   'templates.manage': ['owner', 'admin', 'manager'],
   'campaigns.manage': ['owner', 'admin', 'manager'],
   'ai_brain.manage': ['owner', 'admin', 'manager'],

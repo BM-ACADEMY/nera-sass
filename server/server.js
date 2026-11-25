@@ -1582,6 +1582,10 @@ const leadosRouteContext = {
   'notices',
 ].forEach((name) => require(`./routes/leados/${name}`)(app, leadosRouteContext));
 
+// Facebook Lead Ads per workspace (Settings > Integrations and the leadgen
+// webhook). Every route answers 404 unless FACEBOOK_LEADS_ENABLED=true.
+require('./routes/facebookLeads')(app, { auth, metaGraphVersion: META_GRAPH_VERSION });
+
 // ── ERRORS ────────────────────────────────────────────────
 // A query outside its tenant is refused by the tenant-scope plugin. Route
 // handlers usually catch their own errors; this covers the ones that do not.

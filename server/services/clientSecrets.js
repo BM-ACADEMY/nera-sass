@@ -43,7 +43,7 @@ function sanitizeClient(client) {
 function stripSecrets(record) {
   if (!record || typeof record !== 'object') return record;
   const out = { ...record };
-  for (const field of [...SECRET_FIELDS, 'password_hash', 'reset_token_hash', 'token_hash', 'mfa_pending_secret_enc', 'mfa_recovery_hashes', 'client_wa_token', 'wa_token']) {
+  for (const field of [...SECRET_FIELDS, 'password_hash', 'reset_token_hash', 'token_hash', 'mfa_pending_secret_enc', 'mfa_recovery_hashes', 'client_wa_token', 'wa_token', 'page_token_enc', 'user_token_enc']) {
     delete out[field];
   }
   return out;
