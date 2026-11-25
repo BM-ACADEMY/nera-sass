@@ -1,891 +1,460 @@
-import { useState, useEffect, useRef } from 'react';
-import { Search, Upload, Download, Plus, Eye, Phone, Trash, FileSpreadsheet, X, CreditCard, Copy, CheckCheck, RefreshCw, Info } from 'lucide-react';
-import toast from 'react-hot-toast';
-import { C } from '../constants/theme.js';
-import { Badge, ScoreBar } from '../components/ui.jsx';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { toast } from 'react-hot-toast';
+import { FiPlus, FiUpload, FiDownload, FiSearch, FiUsers, FiMoreVertical, FiMessageCircle, FiTrash2, FiX, FiChevronLeft, FiChevronRight, FiRefreshCw } from 'react-icons/fi';
 import { useLeads } from '../hooks/useLeads.js';
-import { api, allianceInboxApi } from '../services/api.js';
+import { api } from '../services/api.js';
+import { USER_KEY } from '../services/session.js';
+import ConfirmDialog from '../components/templates/ConfirmDialog';
+import { AddLeadDialog, ImportLeadsDialog, ExportLeadsDialog } from './leads/LeadDialogs.jsx';
+import {
+  PAGE_SIZE, SOURCE_LABELS, SOURCE_VARIANT, STATUS_OPTIONS, sourceFilters, leadSourceKind, statusInfo, pageInfo,
+  lastMessageText, timeAgo, shortDate, toggleAll, toggleOne, uniqueLeads, leadPermissions,
+} from './leads/leadsPolicy.js';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Spinner } from '@/components/ui/spinner';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { cn } from '@/lib/utils';
 
+// Leads: everyone who wrote to the workspace's WhatsApp number, clicked a
+// WhatsApp ad, was imported from a sheet or added by hand. Same look as the
+// Templates and Settings pages (shadcn kit, light theme).
 
-
-const inp = {
-  width: '100%', background: '#0d1117', border: '1px solid #2a2a3a',
-  borderRadius: 8, color: '#e2e8f0', fontSize: 13, padding: '9px 12px',
-  outline: 'none', boxSizing: 'border-box', transition: 'border-color .2s',
+const readRole = () => {
+  try { return JSON.parse(localStorage.getItem(USER_KEY) || '{}')?.role || null; } catch { return null; }
 };
 
-const SOURCE_FILTERS = [
-  { value: 'facebook', label: 'Facebook' },
-  { value: 'whatsapp', label: 'WhatsApp' },
-  { value: 'website', label: 'Website' },
-  { value: 'xls_sheet', label: 'XLS Sheet' },
-];
+const SourceBadge = ({ lead }) => {
+  const kind = leadSourceKind(lead);
+  return <Badge variant={SOURCE_VARIANT[kind]}>{SOURCE_LABELS[kind]}</Badge>;
+};
 
-function AddLeadModal({ open, onClose, onSaved, clients, users }) {
-  const [form, setForm] = useState({ name: '', phone: '', source: '', interest: '', assigned_to: '' });
-  const [saving, setSaving] = useState(false);
+const StatusBadge = ({ status }) => {
+  const info = statusInfo(status);
+  return <Badge variant={info.variant}>{info.label}</Badge>;
+};
 
-  useEffect(() => {
-    if (open) setForm({ name: '', phone: '', source: '', interest: '', assigned_to: '' });
-  }, [open]);
+const Avatar = ({ name }) => (
+  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-50 text-[13px] font-bold text-blue-700">
+    {String(name || '?').trim().charAt(0).toUpperCase() || '?'}
+  </span>
+);
 
-  if (!open) return null;
-
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!form.name.trim()) return toast.error('Name is required');
-    if (!form.phone.trim()) return toast.error('Phone is required');
-    setSaving(true);
-    try {
-      await api.createLead({
-        name: form.name.trim(),
-        phone: form.phone.trim(),
-        source: form.source || 'Manual',
-        interest: form.interest.trim() || null,
-        assigned_to: form.assigned_to || null,
-      });
-      toast.success('Lead added successfully!');
-      onSaved();
-      onClose();
-    } catch (err) {
-      toast.error('Failed to add lead: ' + err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const labelStyle = { fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 5, display: 'block', letterSpacing: 0.4 };
-  const fieldStyle = { marginBottom: 16 };
-
+const LastActivity = ({ lead }) => {
+  const text = lastMessageText(lead);
+  const when = timeAgo(lead.last_contact);
+  if (!text && !when) return <span className="text-[13px] text-muted-foreground">No messages yet</span>;
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16,
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: 'linear-gradient(145deg,#13151f,#0d0f18)',
-          border: '1px solid #2a2a3a', borderRadius: 16, padding: 28, width: '100%', maxWidth: 480,
-          boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
-          animation: 'slideUp .22s ease',
-        }}
-      >
-        {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
-          <div>
-            <h2 style={{ fontSize: 17, fontWeight: 700, color: '#f1f5f9', margin: 0 }}>Add New Lead</h2>
-            <p style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>Fill in the details to create a lead</p>
-          </div>
-          <button
-            onClick={onClose}
-            style={{ background: '#1e2030', border: '1px solid #2a2a3a', borderRadius: 8, width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
-          >
-            <X size={14} color="#94a3b8" />
-          </button>
-        </div>
+    <div className="min-w-0 max-w-[260px]">
+      {text && <div className="truncate text-[13px]">{text}</div>}
+      {when && <div className="text-xs text-muted-foreground">{when}</div>}
+    </div>
+  );
+};
 
-        <form onSubmit={handleSubmit}>
-          {/* Row: Name + Phone */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-            <div>
-              <label style={labelStyle}>Full Name <span style={{ color: '#f87171' }}>*</span></label>
-              <input
-                style={inp}
-                placeholder="e.g. Rahul Sharma"
-                value={form.name}
-                onChange={e => set('name', e.target.value)}
-                onFocus={e => e.target.style.borderColor = C.accent}
-                onBlur={e => e.target.style.borderColor = '#2a2a3a'}
-                required
-              />
-            </div>
-            <div>
-              <label style={labelStyle}>Phone <span style={{ color: '#f87171' }}>*</span></label>
-              <input
-                style={inp}
-                placeholder="e.g. 9876543210"
-                value={form.phone}
-                onChange={e => set('phone', e.target.value)}
-                onFocus={e => e.target.style.borderColor = C.accent}
-                onBlur={e => e.target.style.borderColor = '#2a2a3a'}
-                required
-              />
-            </div>
-          </div>
+const Checkbox = ({ checked, indeterminate = false, onChange, label }) => (
+  <input
+    type="checkbox"
+    aria-label={label}
+    className="size-4 cursor-pointer accent-primary"
+    checked={checked}
+    ref={(node) => { if (node) node.indeterminate = indeterminate && !checked; }}
+    onChange={onChange}
+    onClick={(e) => e.stopPropagation()}
+  />
+);
 
-          {/* Interest */}
-          <div style={fieldStyle}>
-            <label style={labelStyle}>Interest / Course</label>
-            <input
-              style={inp}
-              placeholder="e.g. Web Development, MBA, Digital Marketing"
-              value={form.interest}
-              onChange={e => set('interest', e.target.value)}
-              onFocus={e => e.target.style.borderColor = C.accent}
-              onBlur={e => e.target.style.borderColor = '#2a2a3a'}
-            />
-          </div>
+// Row actions: open the chat, delete (owners, admins and managers).
+const RowMenu = ({ lead, onOpen, onDelete }) => (
+  <DropdownMenu>
+    <DropdownMenuTrigger asChild>
+      <Button variant="ghost" size="icon" className="size-8" aria-label={`Actions for ${lead.name || 'lead'}`} onClick={(e) => e.stopPropagation()}><FiMoreVertical /></Button>
+    </DropdownMenuTrigger>
+    <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+      <DropdownMenuItem onSelect={() => onOpen(lead)}><FiMessageCircle /> Open chat</DropdownMenuItem>
+      {onDelete && <DropdownMenuSeparator />}
+      {onDelete && <DropdownMenuItem variant="destructive" onSelect={() => onDelete(lead)}><FiTrash2 /> Delete lead</DropdownMenuItem>}
+    </DropdownMenuContent>
+  </DropdownMenu>
+);
 
-          {/* Row: Source + Brand */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-            <div>
-              <label style={labelStyle}>Source</label>
-              <select
-                style={{ ...inp, cursor: 'pointer' }}
-                value={form.source}
-                onChange={e => set('source', e.target.value)}
-                onFocus={e => e.target.style.borderColor = C.accent}
-                onBlur={e => e.target.style.borderColor = '#2a2a3a'}
-              >
-                <option value="">— Select Source —</option>
-                {SOURCE_FILTERS.map(source => <option key={source.value} value={source.value}>{source.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={labelStyle}>LeadOS Brand (locked)</label>
-              <select
-                style={{ ...inp, cursor: 'pointer' }}
-                value={clients.find(c => c.name?.replace(/[^a-z0-9]/gi, '').toLowerCase() === 'abmgroups')?.id || ''}
-                disabled
-                onFocus={e => e.target.style.borderColor = C.accent}
-                onBlur={e => e.target.style.borderColor = '#2a2a3a'}
-              >
-                <option value="">— None —</option>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
-          </div>
-
-          {/* Assigned To */}
-          <div style={fieldStyle}>
-            <label style={labelStyle}>Assign To</label>
-            <select
-              style={{ ...inp, cursor: 'pointer' }}
-              value={form.assigned_to}
-              onChange={e => set('assigned_to', e.target.value)}
-              onFocus={e => e.target.style.borderColor = C.accent}
-              onBlur={e => e.target.style.borderColor = '#2a2a3a'}
-            >
-              <option value="">— Unassigned —</option>
-              {users.map(u => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}
-            </select>
-          </div>
-
-          {/* Actions */}
-          <div style={{ display: 'flex', gap: 10, marginTop: 6 }}>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{ flex: 1, background: '#1e2030', border: '1px solid #2a2a3a', color: '#94a3b8', padding: '10px', borderRadius: 9, fontSize: 13, cursor: 'pointer', fontWeight: 500 }}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              style={{
-                flex: 2, background: saving ? '#3a3a50' : `linear-gradient(135deg, ${C.accent}, #c2410c)`,
-                border: 'none', color: '#fff', padding: '10px', borderRadius: 9, fontSize: 13,
-                fontWeight: 700, cursor: saving ? 'not-allowed' : 'pointer', display: 'flex',
-                alignItems: 'center', justifyContent: 'center', gap: 6, transition: 'opacity .2s',
-              }}
-            >
-              <Plus size={14} />{saving ? 'Saving...' : 'Add Lead'}
-            </button>
-          </div>
-        </form>
+const Empty = ({ filtered, onAdd, onImport, onClear }) => (
+  <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
+    <span className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground"><FiUsers className="size-5" /></span>
+    <div className="font-semibold">{filtered ? 'No lead matches' : 'No leads yet'}</div>
+    <p className="max-w-md text-sm text-muted-foreground">
+      {filtered ? 'Try another search or filter.' : 'Leads appear here when someone writes to your WhatsApp number. You can also add them by hand or import a sheet.'}
+    </p>
+    {filtered ? <Button variant="outline" className="mt-1" onClick={onClear}>Clear filters</Button> : (
+      <div className="mt-1 flex flex-wrap justify-center gap-2">
+        <Button variant="outline" onClick={onImport}><FiUpload /> Import</Button>
+        <Button onClick={onAdd}><FiPlus /> Add lead</Button>
       </div>
+    )}
+  </div>
+);
 
-      <style>{`@keyframes slideUp { from { opacity:0; transform:translateY(18px); } to { opacity:1; transform:translateY(0); } }`}</style>
-    </div>
-  );
-}
-
-// ─── Payment Link Modal ───────────────────────────────────────
-function PaymentLinkModal({ lead, onClose }) {
-  const [amount, setAmount] = useState('');
-  const [desc, setDesc] = useState('');
-  const [generating, setGenerating] = useState(false);
-  const [generatedLink, setGeneratedLink] = useState('');
-  const [copied, setCopied] = useState(false);
-
-  if (!lead) return null;
-
-  const handleGenerate = async (e) => {
-    e.preventDefault();
-    if (!amount || isNaN(amount) || parseFloat(amount) <= 0) return toast.error('Enter a valid amount');
-    setGenerating(true);
-    try {
-      const res = await api.createPaymentLink(lead.id, parseFloat(amount), desc || 'Service Fee');
-      const link = res.payment_link || res.link;
-      if (link) {
-        setGeneratedLink(link);
-        toast.success('Payment link generated!');
-      } else {
-        throw new Error('No link returned');
-      }
-    } catch (err) {
-      toast.error('Failed to generate link: ' + err.message);
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(generatedLink);
-    setCopied(true);
-    toast.success('Copied to clipboard!');
-    setTimeout(() => setCopied(false), 2500);
-  };
-
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-        backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', zIndex: 2000, padding: 16,
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          background: 'linear-gradient(145deg,#13151f,#0d0f18)',
-          border: '1px solid #2a2a3a', borderRadius: 18, padding: 28,
-          width: '100%', maxWidth: 440,
-          boxShadow: '0 24px 64px rgba(0,0,0,0.7)',
-          animation: 'slideUp .22s ease',
-        }}
-      >
-        {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(249,115,22,0.12)', border: '1px solid rgba(249,115,22,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <CreditCard size={16} color="#f97316" />
-            </div>
-            <div>
-              <h3 style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9', margin: 0 }}>Generate Payment Link</h3>
-              <p style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>For: <strong style={{ color: '#94a3b8' }}>{lead.name}</strong></p>
-            </div>
-          </div>
-          <button onClick={onClose} style={{ background: '#1e2030', border: '1px solid #2a2a3a', borderRadius: 8, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-            <X size={13} color="#94a3b8" />
-          </button>
-        </div>
-
-        {generatedLink ? (
-          <div style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: 12, padding: 16 }}>
-            <p style={{ fontSize: 11, color: '#4ade80', fontWeight: 600, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
-              <CheckCheck size={13} /> Link ready — share with {lead.name}
-            </p>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                readOnly
-                value={generatedLink}
-                style={{ flex: 1, background: '#0d1117', border: '1px solid #2a2a3a', color: '#e2e8f0', padding: '8px 10px', borderRadius: 8, fontSize: 11, outline: 'none' }}
-              />
-              <button
-                onClick={handleCopy}
-                style={{ background: copied ? 'rgba(34,197,94,0.15)' : 'rgba(249,115,22,0.12)', border: `1px solid ${copied ? 'rgba(34,197,94,0.4)' : 'rgba(249,115,22,0.3)'}`, color: copied ? '#4ade80' : '#f97316', padding: '8px 12px', borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}
-              >
-                {copied ? <CheckCheck size={12} /> : <Copy size={12} />}
-                {copied ? 'Copied!' : 'Copy'}
-              </button>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 14 }}>
-              <button onClick={() => window.open(generatedLink, '_blank')} style={{ background: 'transparent', border: 'none', color: '#64748b', fontSize: 10, cursor: 'pointer', textDecoration: 'underline' }}>Open link ↗</button>
-              <button onClick={() => { setGeneratedLink(''); setAmount(''); setDesc(''); }} style={{ background: 'transparent', border: 'none', color: '#f97316', fontSize: 10, fontWeight: 600, cursor: 'pointer' }}>+ Generate New</button>
-            </div>
-          </div>
-        ) : (
-          <form onSubmit={handleGenerate} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.6fr', gap: 10 }}>
-              <div>
-                <label style={{ fontSize: 10, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 }}>Amount (₹) *</label>
-                <input
-                  type="number" min="1" step="0.01" required
-                  placeholder="e.g. 4999"
-                  value={amount}
-                  onChange={e => setAmount(e.target.value)}
-                  style={{ width: '100%', background: '#0d1117', border: '1px solid #2a2a3a', borderRadius: 8, color: '#e2e8f0', fontSize: 13, padding: '9px 12px', outline: 'none', boxSizing: 'border-box' }}
-                  onFocus={e => e.target.style.borderColor = '#f97316'}
-                  onBlur={e => e.target.style.borderColor = '#2a2a3a'}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize: 10, fontWeight: 600, color: '#64748b', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 }}>Description</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Admission Fee, Course Payment"
-                  value={desc}
-                  onChange={e => setDesc(e.target.value)}
-                  style={{ width: '100%', background: '#0d1117', border: '1px solid #2a2a3a', borderRadius: 8, color: '#e2e8f0', fontSize: 13, padding: '9px 12px', outline: 'none', boxSizing: 'border-box' }}
-                  onFocus={e => e.target.style.borderColor = '#f97316'}
-                  onBlur={e => e.target.style.borderColor = '#2a2a3a'}
-                />
-              </div>
-            </div>
-            <div style={{ background: 'rgba(249,115,22,0.06)', border: '1px solid rgba(249,115,22,0.15)', borderRadius: 9, padding: '9px 12px', fontSize: 10, color: '#94a3b8' }}>
-              📱 Link will be pre-filled with <strong style={{ color: '#e2e8f0' }}>{lead.name}</strong>'s phone (<strong style={{ color: '#e2e8f0' }}>{lead.phone}</strong>) and linked to lead ID <strong style={{ color: '#f97316' }}>#{lead.id}</strong>. WF04 triggers automatically on payment.
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-              <button type="button" onClick={onClose} style={{ flex: 1, background: '#1e2030', border: '1px solid #2a2a3a', color: '#94a3b8', padding: '10px', borderRadius: 9, fontSize: 12, cursor: 'pointer' }}>Cancel</button>
-              <button
-                type="submit" disabled={generating}
-                style={{ flex: 2, background: generating ? '#3a3a50' : 'linear-gradient(135deg,#f97316,#c2410c)', border: 'none', color: '#fff', padding: '10px', borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: generating ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-              >
-                <CreditCard size={13} />{generating ? 'Generating...' : 'Create Payment Link'}
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── Meta Details Modal ──────────────────────────────────────────────────────────
-function MetaLeadDetailsModal({ lead, onClose }) {
-  if (!lead) return null;
-
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: C.card, padding: 24, borderRadius: 12, width: 440, maxWidth: '100%', border: '1px solid ' + C.border, boxShadow: '0 8px 32px rgba(0,0,0,0.2)', position: 'relative' }}>
-        <button onClick={onClose} style={{ position: 'absolute', top: 16, right: 16, background: 'transparent', border: 'none', cursor: 'pointer' }}><X size={18} color={C.muted} /></button>
-        <h3 style={{ margin: '0 0 16px 0', fontSize: 18, fontWeight: 600, color: C.text }}>Campaign Details</h3>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid ' + C.border }}>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>Source Platform</div>
-            <div style={{ fontSize: 14, color: C.text, fontWeight: 500, textTransform: 'capitalize' }}>{lead.source}</div>
-          </div>
-
-          <div style={{ padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid ' + C.border }}>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>Campaign Name</div>
-            <div style={{ fontSize: 14, color: C.text, fontWeight: 500 }}>{lead.campaign_name || 'N/A'}</div>
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>ID: {lead.campaign_id || 'N/A'}</div>
-          </div>
-
-          <div style={{ padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid ' + C.border }}>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>Ad Name</div>
-            <div style={{ fontSize: 14, color: C.text, fontWeight: 500 }}>{lead.ad_name || 'N/A'}</div>
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>ID: {lead.ad_id || 'N/A'}</div>
-          </div>
-
-          <div style={{ padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid ' + C.border }}>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>Form ID</div>
-            <div style={{ fontSize: 14, color: C.text, fontWeight: 500 }}>{lead.lead_ad_form_id || 'N/A'}</div>
-          </div>
-
-          <div style={{ padding: 12, background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid ' + C.border }}>
-            <div style={{ fontSize: 11, color: C.muted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>Meta Lead ID</div>
-            <div style={{ fontSize: 14, color: C.text, fontWeight: 500 }}>{lead.meta_lead_id || 'N/A'}</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ExportLeadsModal({ open, onClose, onExport, exporting, exportProgress }) {
-  const [mode, setMode] = useState('all');
-  const [source, setSource] = useState('facebook');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  const [selectedCount, setSelectedCount] = useState(null);
-  const [counting, setCounting] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setMode('all');
-      setSource('facebook');
-      setFrom('');
-      setTo('');
-    }
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    if (mode === 'date' && (!from || !to || new Date(from) > new Date(to))) {
-      setSelectedCount(null);
-      setCounting(false);
-      return undefined;
-    }
-
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      setCounting(true);
-      try {
-        const filters = { limit: 1, offset: 0 };
-        if (mode === 'source') filters.source = source;
-        if (mode === 'date') {
-          filters.from = new Date(from).toISOString();
-          filters.to = new Date(to).toISOString();
-        }
-        const data = await api.getLeads(filters);
-        if (!cancelled) setSelectedCount(data.total || 0);
-      } catch {
-        if (!cancelled) setSelectedCount(null);
-      } finally {
-        if (!cancelled) setCounting(false);
-      }
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [open, mode, source, from, to]);
-
-  if (!open) return null;
-
-  const optionStyle = (active) => ({
-    padding: 12, borderRadius: 9, cursor: 'pointer', display: 'flex', gap: 9, alignItems: 'center',
-    background: active ? `${C.accent}18` : C.surface,
-    border: `1px solid ${active ? C.accent : C.border}`, color: active ? C.text : C.muted,
-  });
-
-  const submit = (e) => {
-    e.preventDefault();
-    if (mode === 'date' && (!from || !to)) return toast.error('Select both From and To date/time');
-    if (mode === 'date' && new Date(from) > new Date(to)) return toast.error('From date must be before To date');
-    onExport({ mode, source, from, to });
-  };
-
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.68)', backdropFilter: 'blur(4px)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-      <form onSubmit={submit} onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 460, background: C.card, border: `1px solid ${C.border}`, borderRadius: 15, padding: 24, boxShadow: '0 24px 64px rgba(0,0,0,.6)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-          <div><h2 style={{ margin: 0, color: C.text, fontSize: 17 }}>Export Leads</h2><p style={{ margin: '3px 0 0', color: C.muted, fontSize: 11 }}>Choose which records to download</p></div>
-          <button type="button" onClick={onClose} style={{ background: 'transparent', border: 0, cursor: 'pointer' }}><X size={17} color={C.muted} /></button>
-        </div>
-        <div style={{ display: 'grid', gap: 9 }}>
-          <label style={optionStyle(mode === 'all')}><input type="radio" name="exportMode" checked={mode === 'all'} onChange={() => setMode('all')} /> <span><strong>Export All</strong><small style={{ display: 'block', marginTop: 2 }}>Every lead across all pages</small></span></label>
-          <label style={optionStyle(mode === 'source')}><input type="radio" name="exportMode" checked={mode === 'source'} onChange={() => setMode('source')} /> <span><strong>Export by Source</strong><small style={{ display: 'block', marginTop: 2 }}>Only leads from one selected source</small></span></label>
-          {mode === 'source' && <select value={source} onChange={e => setSource(e.target.value)} style={{ ...inp, marginTop: -3 }}>
-            {SOURCE_FILTERS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
-          </select>}
-          <label style={optionStyle(mode === 'date')}><input type="radio" name="exportMode" checked={mode === 'date'} onChange={() => setMode('date')} /> <span><strong>Export by Custom Date Range</strong><small style={{ display: 'block', marginTop: 2 }}>Leads created within a date/time period</small></span></label>
-          {mode === 'date' && <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <label style={{ color: C.muted, fontSize: 11 }}>From<input type="datetime-local" value={from} onChange={e => setFrom(e.target.value)} style={{ ...inp, marginTop: 5 }} /></label>
-            <label style={{ color: C.muted, fontSize: 11 }}>To<input type="datetime-local" value={to} onChange={e => setTo(e.target.value)} style={{ ...inp, marginTop: 5 }} /></label>
-          </div>}
-        </div>
-        <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 8, background: `${C.accent}10`, border: `1px solid ${C.accent}35`, color: C.text, fontSize: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ color: C.muted }}>{exporting ? 'Export progress' : 'Selected leads'}</span>
-          <strong style={{ color: C.accent, fontSize: 15 }}>{exporting
-            ? `${(exportProgress.processed || 0).toLocaleString()} / ${(exportProgress.total || selectedCount || 0).toLocaleString()} (${exportProgress.percent || 0}%)`
-            : counting ? 'Counting...' : selectedCount === null ? '—' : selectedCount.toLocaleString()}</strong>
-        </div>
-        {exporting && <div style={{ height: 5, marginTop: 7, background: C.surface, borderRadius: 5, overflow: 'hidden' }}><div style={{ width: `${exportProgress.percent || 0}%`, height: '100%', background: C.accent, transition: 'width .3s' }} /></div>}
-        <div style={{ display: 'flex', gap: 9, marginTop: 20 }}>
-          <button type="button" onClick={onClose} style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, color: C.muted, borderRadius: 8, padding: 10, cursor: 'pointer' }}>{exporting ? 'Close' : 'Cancel'}</button>
-          <button type="submit" disabled={exporting} style={{ flex: 2, background: C.accent, border: 0, color: '#fff', borderRadius: 8, padding: 10, fontWeight: 700, cursor: exporting ? 'wait' : 'pointer', opacity: exporting ? .7 : 1 }}>{exporting ? 'Preparing export...' : 'Download CSV'}</button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-// ─── Main View ─────────────────────────────────────────────
 export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
-  const [filter, setFilter] = useState('all');
+  const [source, setSource] = useState('all');
+  const [status, setStatus] = useState('all');
+  const [assignedTo, setAssignedTo] = useState('all');
+  const [campaign, setCampaign] = useState('all');
+  const [ad, setAd] = useState('all');
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
-  const [sourceFilter, setSourceFilter] = useState('all');
-  const [campaignFilter, setCampaignFilter] = useState('');
-  const [adFilter, setAdFilter] = useState('');
-  const [metaPageFilter, setMetaPageFilter] = useState('');
-  const [tagFilter, setTagFilter] = useState('');
-  const [availableTags, setAvailableTags] = useState([]);
-  const [facebookFilterOptions, setFacebookFilterOptions] = useState([]);
-  const [metaPageOptions, setMetaPageOptions] = useState([]);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [syncingFB, setSyncingFB] = useState(false);
-  const [showExportModal, setShowExportModal] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [exportProgress, setExportProgress] = useState({ processed: 0, total: 0, percent: 0 });
-  const itemsPerPage = 10;
+  const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState(() => new Set());
+  const [users, setUsers] = useState([]);
+  const [sourceCounts, setSourceCounts] = useState({});
+  const [fbOptions, setFbOptions] = useState([]);
+  const [dialog, setDialog] = useState(null); // 'add' | 'import' | 'export'
+  const [confirm, setConfirm] = useState(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkKey, setBulkKey] = useState(0);
+  const { canExport, canDelete } = leadPermissions(readRole());
 
-  const { leads: apiLeads, total, loading, error, refetch } = useLeads({
-    status: filter !== 'all' ? filter : undefined,
-    search,
-    source: sourceFilter !== 'all' ? sourceFilter : undefined,
-    campaignName: campaignFilter || undefined,
-    adName: adFilter || undefined,
-    metaPageId: metaPageFilter || undefined,
-    tagId: tagFilter || undefined,
-    limit: itemsPerPage,
-    offset: (currentPage - 1) * itemsPerPage
+  // A different filter starts again at page 1 with nothing selected.
+  const resetView = () => { setPage(1); setSelected(new Set()); };
+  const filterSetter = (setter) => (value) => { setter(value); resetView(); };
+
+  // Search runs 300 ms after typing stops.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const next = searchInput.trim();
+      setSearch((current) => {
+        if (current !== next) { setPage(1); setSelected(new Set()); }
+        return next;
+      });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
+
+  // The page shown, kept within the last page of the latest total: after a
+  // delete or bulk change the last page can be gone.
+  const [lastTotal, setLastTotal] = useState(null);
+  const shownPage = lastTotal == null ? page : pageInfo(lastTotal, page).page;
+  const { leads: rawLeads, total, loading, error, refetch } = useLeads({
+    status: status !== 'all' ? status : undefined,
+    source: source !== 'all' ? source : undefined,
+    assignedTo: assignedTo !== 'all' ? assignedTo : undefined,
+    campaignName: source === 'facebook' && campaign !== 'all' ? campaign : undefined,
+    adName: source === 'facebook' && ad !== 'all' ? ad : undefined,
+    search: search || undefined,
+    limit: PAGE_SIZE,
+    offset: (shownPage - 1) * PAGE_SIZE,
   });
+  const leads = useMemo(() => uniqueLeads(rawLeads), [rawLeads]);
+  const pager = pageInfo(total, shownPage);
+  const hasFacebook = Number(sourceCounts.facebook) > 0;
 
-  useEffect(() => {
-    if (refetch) refetch();
-  }, [refreshTrigger]);
-
-  const tabs = ['all', 'new', 'hot', 'warm', 'cold', 'converted'];
-  // Deduplicate by id (safeguard against API returning duplicate rows)
-  const leads = Array.from(new Map((apiLeads || []).map(l => [l.id, l])).values());
-  const filtered = leads;
-  const paginatedLeads = leads;
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [filter, search, sourceFilter, campaignFilter, adFilter, metaPageFilter, tagFilter]);
-
-  const totalPages = Math.ceil((total || 0) / itemsPerPage);
-
-  const fileInputRef = useRef(null);
-  const [importing, setImporting] = useState(false);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [paymentLead, setPaymentLead] = useState(null);
-  const [metaLeadDetails, setMetaLeadDetails] = useState(null);
-  const [modalClients, setModalClients] = useState([]);
-  const [modalUsers, setModalUsers] = useState([]);
-
-  useEffect(() => {
-    api.getClients().then(d => setModalClients(Array.from(new Map((d.clients || []).map(c => [c.id, c])).values()))).catch(() => { });
-    api.getUsers().then(d => setModalUsers(Array.from(new Map((d.users || []).map(u => [u.id, u])).values()))).catch(() => { });
-    api.get('/leads/facebook-filter-options').then(d => {
-      setFacebookFilterOptions(d.options || []);
-      setMetaPageOptions(d.pages || []);
-    }).catch(() => { });
-    allianceInboxApi.getTags().then(setAvailableTags).catch(console.error);
+  const loadSummary = useCallback(() => {
+    api.getLeadSourceSummary().then((data) => setSourceCounts(data.counts || {})).catch(() => {});
   }, []);
 
-  const campaignNames = [...new Set(facebookFilterOptions.map(option => option.campaign_name).filter(Boolean))];
-  const adNames = [...new Set(facebookFilterOptions
-    .filter(option => !campaignFilter || option.campaign_name === campaignFilter)
-    .map(option => option.ad_name)
-    .filter(Boolean))];
+  useEffect(() => {
+    loadSummary();
+    api.getUsers()
+      .then((data) => setUsers(uniqueLeads(data.users || []).filter((user) => user.is_active !== false)))
+      .catch(() => {});
+  }, [loadSummary]);
 
-  const handleExport = async ({ mode, source, from, to }) => {
-    setExporting(true);
-    setExportProgress({ processed: 0, total: 0, percent: 0 });
+  // Facebook campaign / ad names: asked for only when this workspace has
+  // lead form leads.
+  useEffect(() => {
+    if (!hasFacebook) return;
+    api.getFacebookLeadFilterOptions().then((data) => setFbOptions(data.options || [])).catch(() => setFbOptions([]));
+  }, [hasFacebook]);
+
+  if (!loading && !error && total !== lastTotal) setLastTotal(total);
+
+  const refreshAll = useCallback(() => {
+    refetch();
+    loadSummary();
+  }, [loadSummary, refetch]);
+
+  useEffect(() => {
+    if (refreshTrigger) refreshAll();
+    // Only when the app asks for a refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshTrigger]);
+
+  const filters = sourceFilters(sourceCounts);
+  const campaignNames = [...new Set(fbOptions.map((option) => option.campaign_name).filter(Boolean))];
+  const adNames = [...new Set(fbOptions.filter((option) => campaign === 'all' || option.campaign_name === campaign).map((option) => option.ad_name).filter(Boolean))];
+  const filtered = source !== 'all' || status !== 'all' || assignedTo !== 'all' || Boolean(search);
+  const pageIds = leads.map((lead) => lead.id);
+  const allOnPage = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const someOnPage = pageIds.some((id) => selected.has(id));
+  const selectedIds = [...selected];
+
+  const clearFilters = () => {
+    setSource('all'); setStatus('all'); setAssignedTo('all'); setCampaign('all'); setAd('all'); setSearchInput(''); setSearch('');
+    resetView();
+  };
+
+  const bulkUpdate = async (body, done) => {
+    setBulkBusy(true);
     try {
-      const job = await api.createLeadExport({ mode, source, from, to });
-      if (!job.total_records) throw new Error('No leads found for this export.');
-      setExportProgress({ processed: 0, total: job.total_records, percent: 0 });
-      toast.success(`Export scheduled for ${Number(job.total_records).toLocaleString()} leads`);
+      const res = await api.bulkUpdateLeads({ ids: selectedIds, ...body });
+      toast.success(done(res.updated ?? selectedIds.length));
+      setSelected(new Set());
+      refreshAll();
+    } catch (err) {
+      toast.error(err.message || 'Could not update the leads. Please try again.');
+    } finally {
+      setBulkBusy(false);
+      setBulkKey((key) => key + 1);
+    }
+  };
 
-      let status = job;
-      while (!['completed', 'failed'].includes(status.status)) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        status = await api.getLeadExport(job.id);
-        const processed = Number(status.processed_records || 0);
-        const total = Number(status.total_records || job.total_records);
-        setExportProgress({ processed, total, percent: total ? Math.min(100, Math.round((processed / total) * 100)) : 0 });
+  const bulkAssign = (value) => {
+    const user = users.find((u) => String(u.id) === value);
+    bulkUpdate(
+      { action: 'assign', assigned_to: value === 'none' ? null : Number(value) },
+      (n) => (value === 'none' ? `${n} leads unassigned` : `${n} leads assigned to ${user?.name || 'the team member'}`),
+    );
+  };
+
+  const bulkStatus = (value) => bulkUpdate({ action: 'status', status: value }, (n) => `${n} leads set to ${statusInfo(value).label}`);
+
+  const askDelete = (lead) => setConfirm({
+    title: `Delete ${lead.name || 'this lead'}?`,
+    description: 'Their chat history, payments and tasks are deleted too. This cannot be undone.',
+    actionLabel: 'Delete lead',
+    destructive: true,
+    run: async () => {
+      try {
+        await api.deleteLead(lead.id);
+        toast.success('Lead deleted');
+        setSelected((current) => { const next = new Set(current); next.delete(lead.id); return next; });
+        refreshAll();
+      } catch (err) {
+        toast.error(err.message || 'Could not delete the lead.');
       }
-      if (status.status === 'failed') throw new Error(status.error_message || 'Background export failed');
+    },
+  });
 
-      const blob = await api.downloadLeadExport(job.id);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `leads_export_${mode}_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      setShowExportModal(false);
-      toast.success(`Exported ${Number(status.processed_records).toLocaleString()} leads`);
-    } catch (err) {
-      toast.error('Export failed: ' + err.message);
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const handleDownloadTemplate = () => {
-    // Columns must match exactly what the server import handler reads
-    const headers = ['Name', 'Phone', 'Country Code', 'Source', 'Brand', 'Status', 'Score', 'Interest', 'Assigned', 'Last Contact'];
-    const dummy = ['Rahul Sharma', '9876543210', '91', 'WhatsApp', 'BM Academy', 'new', '75', 'Web Development', 'Admin', new Date().toISOString().split('T')[0]];
-    const csvContent = [headers.join(','), dummy.join(',')].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', 'leads_import_template.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    toast.success('Template downloaded! Fill in your leads and import.');
-  };
-
-  const handleImport = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImporting(true);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('force_source', 'XLS Sheet');
-      const res = await api.importLeads(formData);
-      toast.success(`Successfully imported ${res.imported} leads!`);
-      if (refetch) refetch();
-    } catch (err) {
-      toast.error('Error importing leads: ' + err.message);
-    } finally {
-      setImporting(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
-
-  const handleDelete = (id) => {
-    toast((t) => (
-      <div>
-        <p style={{ fontSize: 13, color: C.text, marginBottom: 10, fontWeight: 500 }}>Are you sure you want to delete this lead?</p>
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button onClick={() => toast.dismiss(t.id)} style={{ background: C.card, border: '1px solid ' + C.border, color: C.muted, padding: '5px 12px', borderRadius: 6, fontSize: 11, cursor: 'pointer' }}>Cancel</button>
-          <button onClick={async () => {
-            toast.dismiss(t.id);
-            try {
-              await api.deleteLead(id);
-              toast.success('Lead deleted successfully');
-              if (refetch) refetch();
-            } catch (err) {
-              toast.error('Error deleting lead: ' + err.message);
-            }
-          }} style={{ background: '#ef4444', border: 'none', color: '#fff', padding: '5px 12px', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>Delete</button>
-        </div>
-      </div>
-    ), { duration: 5000, style: { background: C.surface, border: '1px solid ' + C.border } });
-  };
+  const showSkeleton = loading && leads.length === 0;
 
   return (
-    <div className="p-mobile" style={{ padding: 26, overflowY: 'auto', height: '100%' }}>
-      <AddLeadModal
-        open={showAddModal}
-        onClose={() => setShowAddModal(false)}
-        onSaved={() => { if (refetch) refetch(); }}
-        clients={modalClients}
-        users={modalUsers}
-      />
-      <PaymentLinkModal lead={paymentLead} onClose={() => setPaymentLead(null)} />
-      <MetaLeadDetailsModal lead={metaLeadDetails} onClose={() => setMetaLeadDetails(null)} />
-      <ExportLeadsModal open={showExportModal} onClose={() => setShowExportModal(false)} onExport={handleExport} exporting={exporting} exportProgress={exportProgress} />
-
-      <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 22 }}>
-        <div>
-          <h1 style={{ fontFamily: "'Inter',sans-serif", fontSize: 21, fontWeight: 800, color: C.text }}>Lead Management</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>{total || 0} total leads {loading && '(loading...)'}</p>
+    <div className="flex flex-col gap-5 p-4 md:p-8">
+      {/* Header */}
+      <Card className="flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center">
+        <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600"><FiUsers size={20} /></span>
+        <div className="min-w-0 flex-1">
+          <div className="font-bold">Leads</div>
+          <p className="text-[13px] text-muted-foreground">
+            Everyone who wrote to your WhatsApp number, clicked your WhatsApp ad, or was imported or added by hand.
+          </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <input type="file" accept=".csv,.xlsx,.xls" ref={fileInputRef} onChange={handleImport} style={{ display: 'none' }} />
-          <button
-            onClick={handleDownloadTemplate}
-            title="Download CSV template with sample data"
-            style={{ background: 'linear-gradient(135deg,#1a3a1a,#0d2b0d)', border: '1px solid #2d6a2d', color: '#4ade80', padding: '7px 12px', borderRadius: 7, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontWeight: 600, transition: 'opacity .2s' }}
-            onMouseEnter={e => e.currentTarget.style.opacity = '0.8'}
-            onMouseLeave={e => e.currentTarget.style.opacity = '1'}
-          >
-            <FileSpreadsheet size={12} /> Template
-          </button>
-          <button onClick={() => fileInputRef.current?.click()} disabled={importing} style={{ background: C.card, border: '1px solid ' + C.border, color: C.muted, padding: '7px 12px', borderRadius: 7, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', opacity: importing ? 0.6 : 1 }}><Upload size={12} />{importing ? 'Importing...' : 'Import CSV'}</button>
-          <button onClick={() => setShowExportModal(true)} style={{ background: C.card, border: '1px solid ' + C.border, color: C.muted, padding: '7px 12px', borderRadius: 7, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}><Download size={12} />Export</button>
-          <button
-            onClick={async () => {
-              if (syncingFB) return;
-              setSyncingFB(true);
-              try {
-                const res = await api.post('/api/integrations/meta/sync-all-leads');
-                if (res.success) {
-                  toast.success(res.message || 'Syncing started in the background!');
-                  if (refetch) refetch();
-                } else {
-                  toast.error('Sync failed: ' + res.error);
-                }
-              } catch (err) {
-                toast.error('Sync error: ' + err.message);
-              } finally {
-                setSyncingFB(false);
-              }
-            }}
-            title="Sync all historical Facebook Leads"
-            disabled={syncingFB}
-            style={{ background: 'linear-gradient(135deg,#3b5998,#1e2e50)', border: '1px solid #4c70ba', color: '#fff', padding: '7px 12px', borderRadius: 7, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, cursor: syncingFB ? 'default' : 'pointer', fontWeight: 600, transition: 'opacity .2s', opacity: syncingFB ? 0.7 : 1 }}
-            onMouseEnter={e => !syncingFB && (e.currentTarget.style.opacity = '0.8')}
-            onMouseLeave={e => !syncingFB && (e.currentTarget.style.opacity = '1')}
-          >
-            <RefreshCw size={12} className={syncingFB ? "spin-animation" : ""} /> {syncingFB ? 'Syncing...' : 'Sync FB Leads'}
-          </button>
-          <button
-            onClick={() => setShowAddModal(true)}
-            style={{ background: C.accent, border: 'none', color: '#fff', padding: '7px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}
-          >
-            <Plus size={12} />Add Lead
-          </button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setDialog('import')}><FiUpload /> Import</Button>
+          {canExport && <Button variant="outline" onClick={() => setDialog('export')}><FiDownload /> Export</Button>}
+          <Button onClick={() => setDialog('add')}><FiPlus /> Add lead</Button>
         </div>
-      </div>
+      </Card>
 
-      {error && (
-        <div style={{ background: '#2d1010', border: '1px solid #7c2d12', borderRadius: 7, padding: 12, marginBottom: 18, color: '#ef4444', fontSize: 12 }}>
-          Error loading leads: {error}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18, alignItems: 'stretch' }}>
-        <div className="w-full-mobile table-responsive" style={{ display: 'flex', background: C.card, border: '1px solid ' + C.border, borderRadius: 9, overflow: 'hidden', alignSelf: 'flex-start' }}>
-          {tabs.map((t) => (
-            <button key={t} onClick={() => setFilter(t)} style={{ padding: '7px 13px', fontSize: 11, fontWeight: 600, border: 'none', background: filter === t ? C.accent : 'transparent', color: filter === t ? '#fff' : C.muted, textTransform: 'capitalize' }}>
-              {t === 'all' ? 'All' : t.charAt(0).toUpperCase() + t.slice(1)}
+      <Card className="gap-4 px-4 py-4 sm:px-5">
+        {/* Source */}
+        <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5" role="tablist" aria-label="Source">
+          {filters.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              role="tab"
+              aria-selected={source === item.value}
+              onClick={() => { setSource(item.value); setCampaign('all'); setAd('all'); resetView(); }}
+              className={cn(
+                'inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-[13px] font-medium whitespace-nowrap transition-colors',
+                source === item.value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-slate-600 hover:bg-muted',
+              )}
+            >
+              {item.label}
+              {item.count != null && <span className={cn('rounded-full px-1.5 text-[11px] font-semibold', source === item.value ? 'bg-white/20' : 'bg-muted text-muted-foreground')}>{item.count.toLocaleString('en-IN')}</span>}
             </button>
           ))}
         </div>
-        <div className="w-full-mobile" style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, background: C.card, border: '1px solid ' + C.border, borderRadius: 9, padding: '0 12px', height: 36, flex: 1 }}>
-            <Search size={12} color={C.muted} />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name or phone..." style={{ background: 'transparent', border: 'none', color: C.text, fontSize: 12, outline: 'none', width: '100%' }} />
+
+        {/* Search and filters */}
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+          <div className="relative flex-1">
+            <FiSearch className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground" />
+            <Input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search by name or phone" className="h-9 pl-9" aria-label="Search leads" />
           </div>
-          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 9, padding: '0 12px', height: 36, display: 'flex', alignItems: 'center' }}>
-            <select value={sourceFilter} onChange={(e) => { const source = e.target.value; setSourceFilter(source); if (source !== 'facebook') { setCampaignFilter(''); setAdFilter(''); setMetaPageFilter(''); } }} style={{ background: 'transparent', border: 'none', color: C.text, fontSize: 12, outline: 'none', cursor: 'pointer', textTransform: 'capitalize' }}>
-              <option value="all" style={{ background: C.card, color: C.text }}>All Sources</option>
-              {SOURCE_FILTERS.map(source => (
-                <option key={source.value} value={source.value} style={{ background: C.card, color: C.text }}>{source.label}</option>
-              ))}
-            </select>
-          </div>
-          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 9, padding: '0 10px', height: 36, display: 'flex', alignItems: 'center', minWidth: 190 }}>
-            <select aria-label="Campaign Name" value={campaignFilter} onChange={(e) => { setCampaignFilter(e.target.value); setAdFilter(''); if (e.target.value) setSourceFilter('facebook'); }} style={{ width: '100%', background: 'transparent', border: 'none', color: C.text, fontSize: 11, outline: 'none', cursor: 'pointer' }}>
-              <option value="" style={{ background: C.card, color: C.text }}>All Facebook Campaigns</option>
-              {campaignNames.length === 0 && <option disabled style={{ background: C.card, color: C.muted }}>No campaign names found</option>}
-              {campaignNames.map(name => <option key={name} value={name} style={{ background: C.card, color: C.text }}>{name}</option>)}
-            </select>
-          </div>
-          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 9, padding: '0 10px', height: 36, display: 'flex', alignItems: 'center', minWidth: 170 }}>
-            <select aria-label="Ad Name" value={adFilter} onChange={(e) => { setAdFilter(e.target.value); if (e.target.value) setSourceFilter('facebook'); }} style={{ width: '100%', background: 'transparent', border: 'none', color: C.text, fontSize: 11, outline: 'none', cursor: 'pointer' }}>
-              <option value="" style={{ background: C.card, color: C.text }}>All Facebook Ads</option>
-              {adNames.length === 0 && <option disabled style={{ background: C.card, color: C.muted }}>No ad names found</option>}
-              {adNames.map(name => <option key={name} value={name} style={{ background: C.card, color: C.text }}>{name}</option>)}
-            </select>
-          </div>
-          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 9, padding: '0 10px', height: 36, display: 'flex', alignItems: 'center', minWidth: 190 }}>
-            <select aria-label="Facebook or Instagram Page" value={metaPageFilter} onChange={(e) => { setMetaPageFilter(e.target.value); if (e.target.value) setSourceFilter('facebook'); }} style={{ width: '100%', background: 'transparent', border: 'none', color: C.text, fontSize: 11, outline: 'none', cursor: 'pointer' }}>
-              <option value="" style={{ background: C.card, color: C.text }}>All Facebook & Instagram Pages</option>
-              {metaPageOptions.length === 0 && <option disabled style={{ background: C.card, color: C.muted }}>No connected pages found</option>}
-              {metaPageOptions.map(page => (
-                <option key={`${page.platform}-${page.page_id}-${page.brand_name}`} value={page.page_id} style={{ background: C.card, color: C.text }}>
-                  [{page.platform === 'instagram' ? 'Instagram' : 'Facebook'}] {page.page_name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 9, padding: '0 10px', height: 36, display: 'flex', alignItems: 'center', minWidth: 150 }}>
-            <select aria-label="Tag Filter" value={tagFilter} onChange={(e) => setTagFilter(e.target.value)} style={{ width: '100%', background: 'transparent', border: 'none', color: C.text, fontSize: 11, outline: 'none', cursor: 'pointer' }}>
-              <option value="" style={{ background: C.card, color: C.text }}>All Tags</option>
-              {availableTags.map(tag => (
-                <option key={tag.id} value={tag.id} style={{ background: C.card, color: C.text }}>{tag.name}</option>
-              ))}
-            </select>
+          <div className="grid grid-cols-2 gap-2 sm:flex">
+            <Select value={status} onValueChange={filterSetter(setStatus)}>
+              <SelectTrigger className="h-9 w-full sm:w-40" aria-label="Status"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                {STATUS_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={assignedTo} onValueChange={filterSetter(setAssignedTo)}>
+              <SelectTrigger className="h-9 w-full sm:w-44" aria-label="Assigned to"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Anyone</SelectItem>
+                <SelectItem value="unassigned">Not assigned</SelectItem>
+                {users.map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.name || user.email}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
         </div>
-      </div>
 
-      <div className="table-responsive" style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 14, overflow: 'hidden' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid ' + C.border }}>
-              {['Lead', 'Phone', 'Tags', 'Source', 'Brand', 'Status', 'Score', 'Assigned', 'Date', ''].map((h) => (
-                <th key={h} style={{ padding: '11px 14px', fontSize: 9, color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.8, textAlign: 'left' }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {paginatedLeads.map((l, i) => (
-              <tr key={l.id} onClick={() => onLeadClick(l)} style={{ borderBottom: '1px solid ' + C.border, cursor: 'pointer', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
-                <td style={{ padding: '13px 14px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                    <div style={{ width: 30, height: 30, borderRadius: '50%', background: C.accent + '22', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{l.name[0]}</div>
-                    <div>
-                      <p style={{ fontSize: 12, fontWeight: 600, color: C.text }}>{l.name}</p>
-                      <p style={{ fontSize: 10, color: C.muted }}>{l.interest || 'N/A'}</p>
-                    </div>
-                  </div>
-                </td>
-                <td style={{ padding: '13px 14px', fontSize: 11, color: C.muted }}>{l.phone}</td>
-                <td style={{ padding: '13px 14px' }}>
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', maxWidth: 120 }}>
-                    {l.tags && l.tags.length > 0 ? l.tags.map(tag => (
-                      <span key={tag.id} style={{ fontSize: 9, fontWeight: 700, background: tag.color + '22', color: tag.color, border: `1px solid ${tag.color}44`, padding: '2px 6px', borderRadius: 10, whiteSpace: 'nowrap' }}>
-                        {tag.name}
-                      </span>
-                    )) : <span style={{ fontSize: 10, color: C.dim }}>-</span>}
-                  </div>
-                </td>
-                <td style={{ padding: '13px 14px' }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 10, color: C.blue, background: '#0f1e38', padding: '2px 7px', borderRadius: 10 }}>{l.source || 'Manual'}</span>
-                      {(l.source?.toLowerCase().includes('facebook') || l.source?.toLowerCase().includes('meta ads') || l.source?.toLowerCase().includes('meta_ads')) && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setMetaLeadDetails(l); }}
-                          title="View Campaign Details"
-                          style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}
-                        >
-                          <Info size={12} />
-                        </button>
-                      )}
-                    </div>
-                    {(l.source?.toLowerCase().includes('facebook') || l.source?.toLowerCase().includes('meta ads') || l.source?.toLowerCase().includes('meta_ads')) && l.campaign_name && (
-                      <span title={l.campaign_name} style={{ maxWidth: 190, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.muted, fontSize: 9 }}>Campaign: {l.campaign_name}</span>
-                    )}
-                    {(l.source?.toLowerCase().includes('facebook') || l.source?.toLowerCase().includes('meta ads') || l.source?.toLowerCase().includes('meta_ads')) && l.facebook_page_name && (
-                      <span title={l.facebook_page_name} style={{ maxWidth: 190, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.blue, fontSize: 9 }}>Page: {l.facebook_page_name}</span>
-                    )}
-                  </div>
-                </td>
-                <td style={{ padding: '13px 14px', fontSize: 11, color: C.muted }}>{l.brand_name || 'N/A'}</td>
-                <td style={{ padding: '13px 14px' }}><Badge status={l.status} /></td>
-                <td style={{ padding: '13px 14px' }}><ScoreBar score={l.score || 0} /></td>
-                <td style={{ padding: '13px 14px', fontSize: 11, color: C.muted }}>{l.assigned_name || 'Unassigned'}</td>
-                <td style={{ padding: '13px 14px', fontSize: 10, color: C.dim }}>
-                  {l.created_at ? new Date(l.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : (l.last_contact || 'N/A')}
-                </td>
-                <td style={{ padding: '13px 14px' }}>
-                  <div style={{ display: 'flex', gap: 5 }}>
-                    <button title="View lead" style={{ width: 26, height: 26, borderRadius: 6, background: 'transparent', border: '1px solid ' + C.border, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { e.stopPropagation(); onLeadClick(l); }}><Eye size={11} color={C.muted} /></button>
-                    <button title="Call" style={{ width: 26, height: 26, borderRadius: 6, background: 'transparent', border: '1px solid ' + C.border, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { e.stopPropagation(); window.open(`tel:${l.phone}`, '_self'); }}><Phone size={11} color={C.muted} /></button>
-                    <button title="Generate Payment Link" style={{ width: 26, height: 26, borderRadius: 6, background: 'rgba(249,115,22,0.08)', border: '1px solid rgba(249,115,22,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { e.stopPropagation(); setPaymentLead(l); }}><CreditCard size={11} color="#f97316" /></button>
-                    <button title="Delete" style={{ width: 26, height: 26, borderRadius: 6, background: 'transparent', border: '1px solid ' + C.border, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => { e.stopPropagation(); handleDelete(l.id); }}><Trash size={11} color="#ef4444" /></button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {filtered.length === 0 && !loading && <div style={{ textAlign: 'center', padding: 32, color: C.muted }}>No leads match this filter</div>}
-        {loading && <div style={{ textAlign: 'center', padding: 32, color: C.muted }}>Loading leads...</div>}
-        {filtered.length > 0 && (
-          <div style={{ padding: '12px 14px', borderTop: '1px solid ' + C.border, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: C.muted }}>Showing {total > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0} to {Math.min(currentPage * itemsPerPage, total || 0)} of {total || 0} entries</span>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button
-                disabled={currentPage === 1}
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                style={{ background: 'transparent', border: '1px solid ' + C.border, color: currentPage === 1 ? C.dim : C.text, padding: '5px 10px', borderRadius: 6, fontSize: 11, cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
-              >
-                Previous
-              </button>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 8px', fontSize: 11, fontWeight: 600, color: C.text }}>
-                Page {currentPage} of {totalPages > 0 ? totalPages : 1}
-              </div>
-              <button
-                disabled={currentPage === totalPages || totalPages === 0}
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                style={{ background: 'transparent', border: '1px solid ' + C.border, color: currentPage === totalPages || totalPages === 0 ? C.dim : C.text, padding: '5px 10px', borderRadius: 6, fontSize: 11, cursor: currentPage === totalPages || totalPages === 0 ? 'not-allowed' : 'pointer' }}
-              >
-                Next
-              </button>
+        {source === 'facebook' && (campaignNames.length > 0 || adNames.length > 0) && (
+          <div className="grid grid-cols-1 gap-2 sm:flex">
+            <Select value={campaign} onValueChange={(value) => { setCampaign(value); setAd('all'); resetView(); }}>
+              <SelectTrigger className="h-9 w-full sm:w-60" aria-label="Campaign"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All campaigns</SelectItem>
+                {campaignNames.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={ad} onValueChange={filterSetter(setAd)}>
+              <SelectTrigger className="h-9 w-full sm:w-60" aria-label="Ad"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All ads</SelectItem>
+                {adNames.map((name) => <SelectItem key={name} value={name}>{name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {/* Bulk actions */}
+        {selected.size > 0 && (
+          <div className="flex flex-col gap-2 rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2.5 sm:flex-row sm:items-center">
+            <div className="flex items-center gap-2 text-[13px] font-semibold text-blue-800">
+              {bulkBusy && <Spinner />} {selected.size} selected
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-blue-700" onClick={() => setSelected(new Set())}><FiX /> Clear</Button>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:ml-auto sm:flex">
+              <Select key={`assign-${bulkKey}`} onValueChange={bulkAssign} disabled={bulkBusy}>
+                <SelectTrigger className="h-8 w-full bg-white sm:w-44" size="sm" aria-label="Assign selected leads"><SelectValue placeholder="Assign to…" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Nobody (unassign)</SelectItem>
+                  {users.map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.name || user.email}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select key={`status-${bulkKey}`} onValueChange={bulkStatus} disabled={bulkBusy}>
+                <SelectTrigger className="h-8 w-full bg-white sm:w-40" size="sm" aria-label="Change status of selected leads"><SelectValue placeholder="Change status…" /></SelectTrigger>
+                <SelectContent>{STATUS_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
+              </Select>
+              {canExport && <Button variant="outline" size="sm" className="col-span-2 bg-white sm:col-span-1" onClick={() => setDialog('export')} disabled={bulkBusy}><FiDownload /> Export</Button>}
             </div>
           </div>
         )}
-      </div>
+
+        {error && (
+          <div className="flex flex-col gap-2 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-[13px] text-red-800 sm:flex-row sm:items-center sm:justify-between">
+            <span>Could not load your leads. {error}</span>
+            <Button variant="outline" size="sm" className="bg-white" onClick={refreshAll}><FiRefreshCw /> Try again</Button>
+          </div>
+        )}
+
+        {showSkeleton ? (
+          <div className="flex flex-col gap-2">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-12" />)}</div>
+        ) : leads.length === 0 ? (
+          !error && <Empty filtered={filtered} onAdd={() => setDialog('add')} onImport={() => setDialog('import')} onClear={clearFilters} />
+        ) : (
+          <div className={cn('transition-opacity', loading && 'opacity-60')}>
+            {/* Phones: cards */}
+            <div className="flex flex-col gap-2 md:hidden">
+              <label className="flex items-center gap-2 px-1 text-[13px] text-muted-foreground">
+                <Checkbox checked={allOnPage} indeterminate={someOnPage} onChange={() => setSelected((current) => toggleAll(current, pageIds))} label="Select all on this page" />
+                Select all on this page
+              </label>
+              {leads.map((lead) => (
+                <div
+                  key={lead.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onLeadClick(lead)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') onLeadClick(lead); }}
+                  className={cn('flex cursor-pointer gap-3 rounded-lg border px-3 py-3 text-left hover:bg-muted/50', selected.has(lead.id) ? 'border-blue-300 bg-blue-50/50' : 'border-border')}
+                >
+                  <div className="pt-2.5"><Checkbox checked={selected.has(lead.id)} onChange={() => setSelected((current) => toggleOne(current, lead.id))} label={`Select ${lead.name || 'lead'}`} /></div>
+                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold">{lead.name || 'No name'}</div>
+                        <div className="text-[13px] text-muted-foreground">{lead.phone || '—'}</div>
+                      </div>
+                      <RowMenu lead={lead} onOpen={onLeadClick} onDelete={canDelete ? askDelete : null} />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5"><SourceBadge lead={lead} /><StatusBadge status={lead.status} /></div>
+                    <LastActivity lead={lead} />
+                    <div className="text-xs text-muted-foreground">{lead.assigned_name ? `Assigned to ${lead.assigned_name}` : 'Not assigned'} · Added {shortDate(lead.created_at)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Larger screens: table */}
+            <div className="hidden overflow-hidden rounded-lg border border-border md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/50">
+                    <TableHead className="w-10 pr-0"><Checkbox checked={allOnPage} indeterminate={someOnPage} onChange={() => setSelected((current) => toggleAll(current, pageIds))} label="Select all on this page" /></TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Phone</TableHead>
+                    <TableHead>Source</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Assigned to</TableHead>
+                    <TableHead>Last message</TableHead>
+                    <TableHead>Added</TableHead>
+                    <TableHead className="w-12"><span className="sr-only">Actions</span></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {leads.map((lead) => (
+                    <TableRow key={lead.id} onClick={() => onLeadClick(lead)} className={cn('cursor-pointer', selected.has(lead.id) && 'bg-blue-50/50 hover:bg-blue-50')}>
+                      <TableCell className="pr-0"><Checkbox checked={selected.has(lead.id)} onChange={() => setSelected((current) => toggleOne(current, lead.id))} label={`Select ${lead.name || 'lead'}`} /></TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-3">
+                          <Avatar name={lead.name} />
+                          <div className="min-w-0">
+                            <div className="max-w-[220px] truncate font-semibold">{lead.name || 'No name'}</div>
+                            {lead.interest && <div className="max-w-[220px] truncate text-xs text-muted-foreground">{lead.interest}</div>}
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-[13px] whitespace-nowrap text-slate-600">{lead.phone || '—'}</TableCell>
+                      <TableCell><SourceBadge lead={lead} /></TableCell>
+                      <TableCell><StatusBadge status={lead.status} /></TableCell>
+                      <TableCell className="text-[13px] whitespace-nowrap">{lead.assigned_name || <span className="text-muted-foreground">Not assigned</span>}</TableCell>
+                      <TableCell><LastActivity lead={lead} /></TableCell>
+                      <TableCell className="text-[13px] whitespace-nowrap text-muted-foreground">{shortDate(lead.created_at)}</TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}><RowMenu lead={lead} onOpen={onLeadClick} onDelete={canDelete ? askDelete : null} /></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+
+            {/* Pager: numbers from the server's total */}
+            <div className="mt-3 flex flex-col items-center justify-between gap-2 sm:flex-row">
+              <span className="text-[13px] text-muted-foreground">
+                Showing {pager.from.toLocaleString('en-IN')}–{pager.to.toLocaleString('en-IN')} of {pager.total.toLocaleString('en-IN')} leads
+              </span>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" disabled={!pager.hasPrev || loading} onClick={() => setPage(pager.page - 1)}><FiChevronLeft /> Previous</Button>
+                <span className="px-1 text-[13px] font-medium">Page {pager.page} of {pager.pages}</span>
+                <Button variant="outline" size="sm" disabled={!pager.hasNext || loading} onClick={() => setPage(pager.page + 1)}>Next <FiChevronRight /></Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Mounted only while open, so each opens with a fresh form. */}
+      {dialog === 'add' && <AddLeadDialog open onOpenChange={(open) => !open && setDialog(null)} users={users} onSaved={refreshAll} />}
+      {dialog === 'import' && <ImportLeadsDialog open onOpenChange={(open) => !open && setDialog(null)} onImported={refreshAll} />}
+      {dialog === 'export' && <ExportLeadsDialog open onOpenChange={(open) => !open && setDialog(null)} selectedIds={selectedIds} showFacebook={hasFacebook} />}
+      <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 };

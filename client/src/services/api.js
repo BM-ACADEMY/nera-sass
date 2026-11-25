@@ -337,6 +337,7 @@ class LeadOSAPI {
       ...(filters.brand && { brand: filters.brand }),
       ...(filters.search && { search: filters.search }),
       ...(filters.source && { source: filters.source }),
+      ...(filters.assignedTo && { assigned_to: filters.assignedTo }),
       ...(filters.campaignName && { campaign_name: filters.campaignName }),
       ...(filters.adName && { ad_name: filters.adName }),
       ...(filters.metaPageId && { meta_page_id: filters.metaPageId }),
@@ -345,6 +346,20 @@ class LeadOSAPI {
       ...(filters.tagId && { tag_id: filters.tagId }),
     });
     return this.request(`/api/leads?${params}`);
+  }
+
+  // Leads page: lead counts per source (whatsapp, whatsapp_ad, import, manual, facebook).
+  async getLeadSourceSummary() {
+    return this.request('/api/leads/source-summary');
+  }
+
+  async getFacebookLeadFilterOptions() {
+    return this.request('/api/leads/facebook-filter-options');
+  }
+
+  // { ids, action: 'assign', assigned_to } or { ids, action: 'status', status }
+  async bulkUpdateLeads(body) {
+    return this.request('/api/leads/bulk', { method: 'POST', body: JSON.stringify(body) });
   }
 
   async assignTag(leadId, tagId) {
