@@ -143,8 +143,19 @@ function publicUser(user, identity, tenant) {
     mfa_enabled: hasMfa(user),
     mfa_methods: methodsOf(user),
     mfa_default_method: defaultMethodOf(user),
+    // A temporary password set by an Owner/Admin or staff: the apps show the
+    // "choose your own password" screen until it is changed.
+    must_change_password: Boolean(user.must_change_password),
   };
 }
+
+// While an account is on a temporary password (Settings > Team), the only
+// things it may do are read its own profile, change the password and sign out.
+// 403, not 401: the apps sign the user out on 401.
+const PASSWORD_CHANGE_PATHS = ['/api/auth/me', '/api/auth/change-password', '/api/auth/logout', '/api/auth/logout-all'];
+const passwordChangeBlock = (user, req) => (user.must_change_password && !(req && PASSWORD_CHANGE_PATHS.includes(req.originalUrl.split('?')[0]))
+  ? new AuthError(403, 'Choose a new password before you continue.', 'PASSWORD_CHANGE_REQUIRED')
+  : null);
 
 function attach(req, resolved) {
   const { user, identity, lifecycle, sessionMfa, session, sid, tokenExp } = resolved;
@@ -202,7 +213,7 @@ const auth = async (req, res, next) => {
   if (resolved.identity.kind !== 'tenant') {
     return res.status(403).json({ error: 'Platform staff accounts cannot open customer workspaces. Use the admin panel.', code: 'STAFF_NOT_ALLOWED' });
   }
-  const blocked = lifecycleBlock(req, resolved.lifecycle);
+  const blocked = lifecycleBlock(req, resolved.lifecycle) || passwordChangeBlock(resolved.user, null);
   if (blocked) return sendAuthError(res, blocked);
   attach(req, resolved);
   return runAsTenant(resolved.identity.tenantId, next, { userId: resolved.user.id });
@@ -217,7 +228,7 @@ const requireAuth = async (req, res, next) => {
   } catch (error) {
     return sendAuthError(res, error);
   }
-  const blocked = lifecycleBlock(req, resolved.lifecycle, { accountRoute: true });
+  const blocked = lifecycleBlock(req, resolved.lifecycle, { accountRoute: true }) || passwordChangeBlock(resolved.user, req);
   if (blocked) return sendAuthError(res, blocked);
   attach(req, resolved);
   if (resolved.identity.kind === 'tenant') return runAsTenant(resolved.identity.tenantId, next, { userId: resolved.user.id });
@@ -244,6 +255,8 @@ function staffAuth(permission, { allowOAuthRedirects = false } = {}) {
     if (resolved.identity.kind !== 'staff') {
       return res.status(403).json({ error: 'Platform staff only', code: 'STAFF_ONLY' });
     }
+    const mustChange = passwordChangeBlock(resolved.user, null);
+    if (mustChange) return sendAuthError(res, mustChange);
     attach(req, resolved);
     if (permission && !can(resolved.identity, permission)) {
       return res.status(403).json({ error: 'You do not have permission to do this', permission });
@@ -297,6 +310,7 @@ const socketAuth = async (socket, next) => {
     const resolved = await resolveIdentity(socket.handshake.auth?.token);
     const blocked = resolved.lifecycle && resolved.lifecycle.access === 'none';
     if (blocked) return next(new Error('Workspace suspended'));
+    if (resolved.user.must_change_password) return next(new Error('Password change required'));
     socket.data.user = publicUser(resolved.user, resolved.identity, resolved.lifecycle?.tenant);
     socket.join(resolved.identity.kind === 'tenant' ? `tenant:${resolved.identity.tenantId}` : 'platform');
     // Signing this session out disconnects the socket (services/sessions.js).

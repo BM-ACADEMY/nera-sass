@@ -12,6 +12,7 @@ import EditBrandDialog from './EditBrandDialog';
 import WhatsAppProfileDialog from './WhatsAppProfileDialog';
 import BusinessProfileCard from './BusinessProfileCard';
 import BillingCard from './BillingCard';
+import TeamCard from './TeamCard';
 import { Spinner } from '@/components/ui/spinner';
 import UserAvatar from '../UserAvatar';
 import { Badge } from '@/components/ui/badge';
@@ -352,6 +353,9 @@ const WorkspaceDetail = ({ tenantId, onSuspend, onReinstate, onSendToClient, ref
           <Section icon={FiTag} title="Brand profile"><div className="text-sm text-muted-foreground">No brand profile.</div></Section>
         )}
       </div>
+
+      {/* Everyone with a login: add, disable/enable, reset password */}
+      <TeamCard tenantId={tenant.id} users={users} invitations={invitations} seats={data.seats} onChanged={load} />
 
       {/* Plan and AI replies (staff with billing access) */}
       <BillingCard tenantId={tenant.id} />

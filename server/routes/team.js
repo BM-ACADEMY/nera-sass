@@ -16,6 +16,7 @@ const billingLimits = require('../services/billing/limits');
 const billingSubscriptions = require('../services/billing/subscriptions');
 const invitations = require('../services/invitations');
 const userAdmin = require('../services/userAdmin');
+const teamMembers = require('../services/teamMembers');
 const audit = require('../services/audit');
 
 const router = express.Router();
@@ -30,7 +31,7 @@ function fail(res, error) {
   return res.status(500).json({ error: 'Server error' });
 }
 
-const actorOf = (req) => ({ id: req.user.id, kind: 'tenant', role: req.identity.role });
+const actorOf = (req) => ({ id: req.user.id, kind: 'tenant', role: req.identity.role, name: req.user.name });
 
 // Workspace summary for any signed-in member.
 router.get('/tenant', async (req, res) => {
@@ -50,6 +51,7 @@ router.get('/tenant', async (req, res) => {
       usage: { users: seats.activeUsers, pending_invitations: seats.pendingInvitations, max_users: limits.seats },
       subscription: billingSubscriptions.publicSubscription(subscription),
       permissions: {
+        view_team: can(req.identity, 'team.view'),
         manage_team: can(req.identity, 'team.manage'),
         manage_settings: can(req.identity, 'tenant.settings'),
         manage_whatsapp: can(req.identity, 'whatsapp.manage'),
@@ -91,16 +93,42 @@ router.patch('/tenant/settings', requirePermission('tenant.settings'), async (re
 router.get('/team/users', requirePermission('team.view'), async (req, res) => {
   try {
     const tenantId = req.identity.tenantId;
-    const [users, pending, seats] = await Promise.all([
+    const [users, pending, seats, limit] = await Promise.all([
       userAdmin.listTenantUsers(tenantId),
       Invitations.find({ accepted_at: null, revoked_at: null }, { _id: 0 }).sort({ created_at: -1 }).lean(),
       seatUsage(tenantId),
+      billingLimits.seatLimit(null),
     ]);
     return res.json({
+      // status: active | disabled; must_change_password: still on a temporary password.
       users,
       invitations: pending.map(invitations.publicInvitation),
-      seats: { max_users: await billingLimits.seatLimit(null), used: seats.used, active_users: seats.activeUsers, pending_invitations: seats.pendingInvitations },
+      seats: { used: seats.used, limit, max_users: limit, active_users: seats.activeUsers, pending_invitations: seats.pendingInvitations },
+      can_manage: can(req.identity, 'team.manage'),
     });
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+// Adds a person: method 'password' creates the login now with a temporary
+// password (they choose their own at first sign-in); method 'invite' emails
+// an invitation link. The password is never returned or logged.
+router.post('/team/users', requirePermission('team.manage'), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await teamMembers.createMember({
+      tenantId: req.identity.tenantId,
+      actor: actorOf(req),
+      name: body.name,
+      email: body.email,
+      phone: body.phone,
+      role: body.role,
+      method: body.method,
+      password: body.password,
+      req,
+    });
+    return res.status(201).json(result);
   } catch (error) {
     return fail(res, error);
   }
@@ -109,11 +137,12 @@ router.get('/team/users', requirePermission('team.view'), async (req, res) => {
 router.post('/team/invitations', requirePermission('team.manage'), async (req, res) => {
   try {
     const role = String(req.body?.role || 'agent').toLowerCase();
-    if (role === 'owner' && req.identity.role !== 'owner') return res.status(403).json({ error: 'Only an Owner can invite another Owner' });
+    if (['owner', 'admin'].includes(role) && req.identity.role !== 'owner') return res.status(403).json({ error: 'Only an Owner can invite an Owner or Admin' });
     const result = await invitations.createInvitation({
       tenantId: req.identity.tenantId,
       email: req.body?.email,
       name: req.body?.name,
+      phone: typeof req.body?.phone === 'string' ? req.body.phone : null,
       role,
       invitedBy: { id: req.user.id, name: req.user.name },
       req,
@@ -140,9 +169,39 @@ router.delete('/team/invitations/:id', requirePermission('team.manage'), async (
   }
 });
 
+// Name, phone and role (any of them).
+router.patch('/team/users/:id', requirePermission('team.manage'), async (req, res) => {
+  try {
+    const { name, phone, role } = req.body || {};
+    return res.json({ user: await teamMembers.updateMember({ tenantId: req.identity.tenantId, userId: req.params.id, actor: actorOf(req), changes: { name, phone, role }, req }) });
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
 router.patch('/team/users/:id/role', requirePermission('team.manage'), async (req, res) => {
   try {
-    return res.json({ user: await userAdmin.changeRole({ tenantId: req.identity.tenantId, userId: req.params.id, newRole: req.body?.role, actor: actorOf(req), req }) });
+    return res.json({ user: await teamMembers.updateMember({ tenantId: req.identity.tenantId, userId: req.params.id, actor: actorOf(req), changes: { role: req.body?.role ?? '' }, req }) });
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+// A new temporary password: they must choose their own at the next sign-in,
+// and every session they have ends now.
+router.post('/team/users/:id/reset-password', requirePermission('team.manage'), async (req, res) => {
+  try {
+    return res.json({ user: await teamMembers.resetPassword({ tenantId: req.identity.tenantId, userId: req.params.id, actor: actorOf(req), password: req.body?.password, req }) });
+  } catch (error) {
+    return fail(res, error);
+  }
+});
+
+// Removes a person from the workspace (soft: the login is switched off and
+// hidden; the record stays for the history).
+router.delete('/team/users/:id', requirePermission('team.manage'), async (req, res) => {
+  try {
+    return res.json(await teamMembers.removeMember({ tenantId: req.identity.tenantId, userId: req.params.id, actor: actorOf(req), req }));
   } catch (error) {
     return fail(res, error);
   }
@@ -150,7 +209,7 @@ router.patch('/team/users/:id/role', requirePermission('team.manage'), async (re
 
 router.post('/team/users/:id/deactivate', requirePermission('team.manage'), async (req, res) => {
   try {
-    return res.json({ user: await userAdmin.setActive({ tenantId: req.identity.tenantId, userId: req.params.id, active: false, actor: actorOf(req), req }) });
+    return res.json({ user: await teamMembers.setActive({ tenantId: req.identity.tenantId, userId: req.params.id, active: false, actor: actorOf(req), req }) });
   } catch (error) {
     return fail(res, error);
   }
@@ -158,7 +217,7 @@ router.post('/team/users/:id/deactivate', requirePermission('team.manage'), asyn
 
 router.post('/team/users/:id/reactivate', requirePermission('team.manage'), async (req, res) => {
   try {
-    return res.json({ user: await userAdmin.setActive({ tenantId: req.identity.tenantId, userId: req.params.id, active: true, actor: actorOf(req), req }) });
+    return res.json({ user: await teamMembers.setActive({ tenantId: req.identity.tenantId, userId: req.params.id, active: true, actor: actorOf(req), req }) });
   } catch (error) {
     return fail(res, error);
   }

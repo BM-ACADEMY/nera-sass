@@ -16,6 +16,7 @@ const provisioning = require('../services/provisioning');
 const alerts = require('../services/alerts');
 const invitations = require('../services/invitations');
 const userAdmin = require('../services/userAdmin');
+const teamMembers = require('../services/teamMembers');
 const tenantData = require('../services/tenantData');
 const appealEvidence = require('../services/appealEvidence');
 const audit = require('../services/audit');
@@ -46,7 +47,7 @@ const permit = (permission) => (req, res, next) => (can(req.identity, permission
   ? next()
   : res.status(403).json({ error: 'You do not have permission to do this', permission }));
 
-const staffActor = (req) => ({ id: req.user.id, kind: 'staff', role: req.identity.staffRole });
+const staffActor = (req) => ({ id: req.user.id, kind: 'staff', role: req.identity.staffRole, name: req.user.name });
 const tenantIdParam = (req) => Number(req.params.id);
 
 async function loadTenant(id) {
@@ -134,11 +135,12 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
     try {
       const tenant = await loadTenant(tenantIdParam(req));
       if (!tenant) return res.status(404).json({ error: 'Tenant not found' });
-      const [summary, users, pending, events] = await Promise.all([
+      const [summary, users, pending, events, seatLimit] = await Promise.all([
         tenantSummary(tenant),
         userAdmin.listTenantUsers(tenant.id),
         runAsTenant(tenant.id, () => Invitations.find({ accepted_at: null, revoked_at: null }, { _id: 0 }).sort({ created_at: -1 }).lean()),
         AuditEvents.find({ tenant_id: tenant.id }, { _id: 0 }).sort({ created_at: -1 }).limit(50).lean(),
+        billing.seatLimit(tenant.id).catch(() => null),
       ]);
       const brand = await runAsTenant(tenant.id, () => Clients.findOne({}, { _id: 0 }).lean());
       const count = (model) => runAsTenant(tenant.id, () => model.countDocuments({})).catch(() => null);
@@ -168,6 +170,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
         usage: { leads, conversations, messages, campaigns },
         users,
         invitations: pending.map(invitations.publicInvitation),
+        seats: { used: (summary?.users?.active ?? 0) + (summary?.users?.pending_invitations ?? 0), limit: seatLimit },
         audit: events.map((e) => ({ ...e, actor_name: nameOf.get(e.actor_user_id) || null })),
       });
     } catch (error) {
@@ -388,6 +391,22 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
     }
   });
 
+  // Adds a person to a workspace: method 'invite' emails a link, method
+  // 'password' creates the login with a temporary password that they must
+  // change at first sign-in. Same rules and seat check as Settings > Team.
+  router.post('/tenants/:id/users', permit('platform.users.manage'), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await teamMembers.createMember({
+        tenantId: tenantIdParam(req), actor: staffActor(req),
+        name: body.name, email: body.email, phone: body.phone, role: body.role, method: body.method, password: body.password, req,
+      });
+      return res.status(201).json(result); // never the password or an invitation token
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
+
   router.post('/tenants/:id/invitations/:invitationId/resend', permit('platform.users.manage'), async (req, res) => {
     try {
       return res.json(await invitations.resendInvitation({ invitationId: req.params.invitationId, tenantId: tenantIdParam(req), invitedBy: { id: req.user.id, name: req.user.name }, req }));
@@ -506,6 +525,17 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       }
     });
   }
+
+  // A new temporary password for a workspace user: they must choose their own
+  // at the next sign-in, and every session they have ends now.
+  router.post('/users/:userId/reset-password', permit('platform.users.manage'), async (req, res) => {
+    try {
+      const tenantId = await tenantOfUser(req.params.userId);
+      return res.json({ user: await teamMembers.resetPassword({ tenantId, userId: req.params.userId, actor: staffActor(req), password: req.body?.password, req }) });
+    } catch (error) {
+      return fail(res, error);
+    }
+  });
 
   router.post('/users/:userId/revoke-sessions', permit('platform.users.manage'), async (req, res) => {
     try {

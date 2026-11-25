@@ -3,7 +3,7 @@
  * Base URL from environment: VITE_API_URL
  */
 
-import { isInvalidMfaCode, NOTICE_KEY, NOTICES, USER_KEY } from './session.js';
+import { isInvalidMfaCode, NOTICE_KEY, NOTICES, USER_KEY, USER_UPDATED_EVENT, PASSWORD_CHANGE_REQUIRED } from './session.js';
 import { toApiError } from '../utils/friendlyError.js';
 import { collectClientHints } from './sessionFormat.js';
 
@@ -41,6 +41,16 @@ async function errorFromResponse(response, where) {
   return data === null
     ? toApiError({ status: response.status, kind: 'invalid', raw: text })
     : toApiError({ status: response.status, data });
+}
+
+// Sets must_change_password on the stored user and tells useAuth.
+export function markPasswordChange(required) {
+  try {
+    const user = JSON.parse(localStorage.getItem(USER_KEY) || 'null');
+    if (!user || Boolean(user.must_change_password) === required) return;
+    localStorage.setItem(USER_KEY, JSON.stringify({ ...user, must_change_password: required }));
+    window.dispatchEvent(new Event(USER_UPDATED_EVENT));
+  } catch { /* storage unavailable: the server still refuses */ }
 }
 
 class LeadOSAPI {
@@ -98,6 +108,10 @@ class LeadOSAPI {
         window.location.href = '/login';
       }
     }
+
+    // On a temporary password: flag the stored user so the app shows the
+    // "choose your own password" screen.
+    if (response.status === 403 && data?.code === PASSWORD_CHANGE_REQUIRED) markPasswordChange(true);
 
     if (data === null) {
       // An HTML error page from the proxy, or a broken reply.
@@ -276,6 +290,7 @@ class LeadOSAPI {
       body: JSON.stringify({ current, newPassword }),
     });
     if (data.token) this.setToken(data.token);
+    markPasswordChange(false);
     return data;
   }
 
@@ -289,6 +304,45 @@ class LeadOSAPI {
   // ─── WORKSPACE (tenant from the session, never from the browser) ───
   async getTenant() {
     return this.request('/api/tenant');
+  }
+
+  // ─── TEAM (Settings > Team; the workspace comes from the session) ───
+  // { users, invitations, seats: { used, limit }, can_manage }
+  async getTeam() {
+    return this.request('/api/team/users');
+  }
+
+  // { name, email, phone, role, method: 'password' | 'invite', password? }
+  async addTeamMember(body) {
+    return this.request('/api/team/users', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async updateTeamMember(id, changes) {
+    return this.request(`/api/team/users/${id}`, { method: 'PATCH', body: JSON.stringify(changes) });
+  }
+
+  async resetTeamMemberPassword(id, password) {
+    return this.request(`/api/team/users/${id}/reset-password`, { method: 'POST', body: JSON.stringify({ password }) });
+  }
+
+  async setTeamMemberActive(id, active) {
+    return this.request(`/api/team/users/${id}/${active ? 'reactivate' : 'deactivate'}`, { method: 'POST' });
+  }
+
+  async signOutTeamMember(id) {
+    return this.request(`/api/team/users/${id}/revoke-sessions`, { method: 'POST' });
+  }
+
+  async removeTeamMember(id) {
+    return this.request(`/api/team/users/${id}`, { method: 'DELETE' });
+  }
+
+  async resendInvitation(id) {
+    return this.request(`/api/team/invitations/${id}/resend`, { method: 'POST' });
+  }
+
+  async cancelInvitation(id) {
+    return this.request(`/api/team/invitations/${id}`, { method: 'DELETE' });
   }
 
   async updateTenantSettings(settings) {

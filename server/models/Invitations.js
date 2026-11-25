@@ -6,6 +6,8 @@ module.exports = defineModel('invitations', {
   id: { type: Number },
   email: { type: String, lowercase: true, trim: true },
   name: { type: String },
+  // Optional phone given by whoever invited the person; used when they accept.
+  phone: { type: String },
   role: { type: String },
   is_platform_staff: { type: Boolean, default: false },
   staff_role: { type: String, default: null },
