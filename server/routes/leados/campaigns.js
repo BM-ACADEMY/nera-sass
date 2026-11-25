@@ -8,6 +8,9 @@ const campaignAudience = require('../../services/campaignAudience');
 const campaignStats = require('../../services/campaignStats');
 const campaignSchedule = require('../../services/campaignSchedule');
 const campaignUpload = require('../../services/campaignUpload');
+const activity = require('../../services/activity');
+
+const campaignTime = (at, timezone) => new Date(at).toLocaleString('en-IN', { timeZone: timezone || 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
 const multer = require('multer');
 
 const listUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
@@ -249,6 +252,14 @@ app.post('/api/campaigns', auth, manage, async (req, res) => {
       }, 500);
     }
 
+    const audienceSize = preview.audience?.will_send;
+    await activity.log(req, runAt ? activity.EVENTS.CAMPAIGN_SCHEDULED : activity.EVENTS.CAMPAIGN_SENT, {
+      targetType: 'campaign', targetId: campaign.id,
+      summary: runAt
+        ? `Scheduled campaign "${campaign.name}" (template "${selectedTemplate.name}") for ${campaignTime(runAt, timezone)}${audienceSize != null ? `, ${audienceSize} contacts` : ''}`
+        : `Created campaign "${campaign.name}" (template "${selectedTemplate.name}") and started sending${audienceSize != null ? ` to ${audienceSize} contacts` : ''}`,
+      meta: { template: selectedTemplate.name, audience: audienceSize ?? null, scheduled_at: runAt },
+    });
     res.status(201).json({ campaign });
   } catch (err) {
     console.error('Create campaign error:', err);
@@ -294,7 +305,9 @@ app.post('/api/campaigns/:id/cancel', auth, manage, async (req, res) => {
       if (!campaign) return res.status(404).json({ error: 'This campaign was not found.' });
       return res.status(409).json({ error: campaign.status === 'cancelled' ? 'This campaign is already cancelled.' : 'This campaign has already started, so it cannot be cancelled.', code: 'NOT_SCHEDULED' });
     }
-    res.json({ success: true, campaign: await Campaigns.findOne({ id }, NO_ID).lean() });
+    const cancelled = await Campaigns.findOne({ id }, NO_ID).lean();
+    await activity.log(req, activity.EVENTS.CAMPAIGN_CANCELLED, { targetType: 'campaign', targetId: id, summary: `Cancelled scheduled campaign "${cancelled?.name || `#${id}`}"` });
+    res.json({ success: true, campaign: cancelled });
   } catch (err) {
     res.status(500).json({ error: 'Could not cancel the campaign. Please try again.' });
   }
@@ -328,7 +341,16 @@ app.patch('/api/campaigns/:id', auth, manage, async (req, res) => {
     // Only while it is still waiting: the scheduler may have just started it.
     const result = await Campaigns.updateOne({ id, status: 'scheduled' }, { $set: set });
     if (!result.matchedCount) return res.status(409).json({ error: 'This campaign has just started, so it cannot be changed.', code: 'NOT_SCHEDULED' });
-    res.json({ campaign: await Campaigns.findOne({ id }, NO_ID).lean() });
+    const updated = await Campaigns.findOne({ id }, NO_ID).lean();
+    const edits = [];
+    if (set.name !== undefined && set.name !== campaign.name) edits.push(`renamed from "${campaign.name}"`);
+    if (set.scheduled_at) edits.push(`moved to ${campaignTime(set.scheduled_at, set.timezone)}`);
+    await activity.log(req, activity.EVENTS.CAMPAIGN_UPDATED, {
+      targetType: 'campaign', targetId: id,
+      summary: `Changed campaign "${updated?.name || campaign.name}"${edits.length ? `: ${edits.join(', ')}` : ''}`,
+      meta: { fields: Object.keys(set).filter((f) => f !== 'timezone'), before: { name: campaign.name, scheduled_at: campaign.scheduled_at }, after: { name: updated?.name, scheduled_at: updated?.scheduled_at } },
+    });
+    res.json({ campaign: updated });
   } catch (err) {
     res.status(500).json({ error: 'Could not update the campaign. Please try again.' });
   }
@@ -337,9 +359,11 @@ app.patch('/api/campaigns/:id', auth, manage, async (req, res) => {
 app.delete('/api/campaigns/:id', auth, manage, async (req, res) => {
   try {
     const { id } = req.params;
+    const doomedCampaign = await Campaigns.findOne({ id: Number(id) }, { _id: 0, name: 1, status: 1 }).lean();
     await deleteCascade('campaign_logs', { campaign_id: Number(id) });
     const deleted = await deleteCascade('campaigns', { id: Number(id) });
     if (deleted.length === 0) return res.status(404).json({ error: 'This campaign was not found.' });
+    await activity.log(req, activity.EVENTS.CAMPAIGN_DELETED, { targetType: 'campaign', targetId: id, summary: `Deleted campaign "${doomedCampaign?.name || `#${id}`}"${doomedCampaign?.status ? ` (was ${doomedCampaign.status})` : ''}` });
     res.json({ success: true, message: 'Campaign deleted successfully' });
   } catch (err) {
     res.status(500).json({ error: 'Could not delete the campaign. Please try again.' });
@@ -383,6 +407,7 @@ app.post('/api/campaigns/:id/retry', auth, manage, async (req, res) => {
     if (queuedCount > 0) {
       // Messages already in queue, just reset status to running
       await Campaigns.updateOne({ id }, { $set: { status: 'running' } });
+      await activity.log(req, activity.EVENTS.CAMPAIGN_RETRIED, { targetType: 'campaign', targetId: id, summary: `Restarted campaign "${campaign.name || `#${id}`}"` });
       return res.json({ success: true, message: 'Campaign already has messages in queue, status reset to running' });
     }
 
@@ -392,6 +417,7 @@ app.post('/api/campaigns/:id/retry', auth, manage, async (req, res) => {
     // Execute and wait for result
     try {
       await executeCampaign(id);
+      await activity.log(req, activity.EVENTS.CAMPAIGN_RETRIED, { targetType: 'campaign', targetId: id, summary: `Restarted campaign "${campaign.name || `#${id}`}"` });
       res.json({ success: true, message: 'Campaign retry initiated' });
     } catch (execErr) {
       console.error('Execute campaign error:', execErr);

@@ -11,6 +11,7 @@ import { BrandProfileSection } from './settings/BrandProfileSection.jsx';
 import { TwoStepSection } from './settings/TwoStepSection.jsx';
 import { PasswordSection } from './settings/PasswordSection.jsx';
 import { TeamSection } from './settings/TeamSection.jsx';
+import { ActivitySection } from './settings/ActivitySection.jsx';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -101,6 +102,7 @@ export const SettingsView = () => {
         {section === 'two-step' && <TwoStepSection key={version} {...props} />}
         {section === 'password' && <PasswordSection key={version} {...props} onSignedOutEverywhere={signedOutEverywhere} />}
         {section === 'team' && <TeamSection key={version} {...props} />}
+        {section === 'activity' && <ActivitySection {...props} />}
       </div>
     );
   }

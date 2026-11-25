@@ -4,6 +4,7 @@ const express = require('express');
 // service key or founder/ops platform staff only, never a customer token.
 const { internalAuth, internalPlatformAuth, staffAuth, hasInternalKey } = require('../middleware/authMiddleware');
 const audit = require('../services/audit');
+const activity = require('../services/activity');
 const erasure = require('../services/erasure');
 const { recordTenantWorkflowLog, recordPlatformWorkflowLog, WorkflowLogError } = require('../services/workflowLog');
 const fs = require('fs');
@@ -2960,6 +2961,50 @@ router.get('/sales-tasks', internalAuth, async (req, res) => {
   }
 });
 
+// Activity log wording for a sales task (type and lead name, nothing else).
+const TASK_TYPE_NAMES = { hot_lead: 'hot lead', call: 'scheduled call', followup: 'follow-up', [MANUAL_TASK]: 'manual' };
+async function salesTaskLabel(task) {
+  if (task?.lead_id == null) return `${TASK_TYPE_NAMES[task?.task_type] || task?.task_type || 'sales'} task #${task?.id ?? '?'}`;
+  const lead = task?.lead_id != null ? await Leads.findOne({ id: task.lead_id }, { _id: 0, id: 1, name: 1 }).lean().catch(() => null) : null;
+  return `${TASK_TYPE_NAMES[task?.task_type] || task?.task_type || 'sales'} task for lead ${activity.leadName(lead || { id: task?.lead_id })}`;
+}
+
+async function staffName(id) {
+  if (id == null) return null;
+  const user = await Users.findOne({ id: Number(id) }, { _id: 0, name: 1, email: 1 }).lean().catch(() => null);
+  return user ? (user.name || user.email) : `user #${id}`;
+}
+
+// One activity entry for an edited task: which fields changed, with old and
+// new values for status, assignee, lead and due time only (title and details
+// are free text and are listed by name only).
+const TASK_LOGGED_VALUES = ['status', 'assigned_to', 'lead_id', 'due_at'];
+const sameValue = (a, b) => String(a instanceof Date ? a.toISOString() : a ?? '') === String(b instanceof Date ? b.toISOString() : b ?? '');
+async function logTaskEdit(req, before, after, changes) {
+  const fields = Object.keys(changes)
+    .filter((f) => !['completed_at', 'updated_at'].includes(f))
+    .filter((f) => !sameValue(before[f], after[f]));
+  if (!fields.length) return;
+  const shown = fields.filter((f) => TASK_LOGGED_VALUES.includes(f));
+  const completed = fields.includes('status') && after.status === 'completed';
+  const parts = [];
+  if (fields.includes('status')) parts.push(`status "${before.status || 'none'}" to "${after.status}"`);
+  if (fields.includes('assigned_to')) parts.push(after.assigned_to != null ? `assigned to ${await staffName(after.assigned_to)}` : 'unassigned');
+  const others = fields.filter((f) => f !== 'status' && f !== 'assigned_to');
+  if (others.length) parts.push(others.join(', '));
+  await activity.log(req, completed ? activity.EVENTS.SALES_TASK_COMPLETED : activity.EVENTS.SALES_TASK_UPDATED, {
+    targetType: 'sales_task', targetId: after.id,
+    summary: `${completed ? 'Completed' : 'Edited'} the ${await salesTaskLabel(after)}: ${parts.join('; ')}`,
+    meta: {
+      fields,
+      ...(shown.length ? {
+        before: Object.fromEntries(shown.map((f) => [f, before[f] ?? null])),
+        after: Object.fromEntries(shown.map((f) => [f, after[f] ?? null])),
+      } : {}),
+    },
+  });
+}
+
 // Team members a task can be given to: active users of this workspace only.
 // Every member may read this short list (the full /team/users page needs team.view).
 router.get('/sales-tasks/assignees', internalAuth, async (req, res) => {
@@ -2993,6 +3038,12 @@ router.post('/sales-tasks', internalAuth, async (req, res) => {
     });
     const [task] = await loadSalesTaskRows([created.toObject()], { includeLatestNote: true });
     await emitSalesTaskUpdate(req, 'created', { id: created.id, lead_id: created.lead_id, task_type: MANUAL_TASK, title, assigned_to: created.assigned_to });
+    // The title and details are free text and stay out of the log.
+    await activity.log(req, activity.EVENTS.SALES_TASK_CREATED, {
+      targetType: 'sales_task', targetId: created.id,
+      summary: `Added a ${await salesTaskLabel(created)}${created.assigned_to != null ? ` for ${await staffName(created.assigned_to)}` : ''}`,
+      meta: { lead_id: created.lead_id ?? null, assigned_to: created.assigned_to ?? null, status: created.status || status, due_at: created.due_at ?? null },
+    });
     res.status(201).json({ success: true, task });
   } catch (err) { taskFail(res, err); }
 });
@@ -3031,6 +3082,7 @@ router.patch('/sales-tasks/:id', internalAuth, async (req, res) => {
     if (!updated) throw new TaskInputError('Task not found', 404);
     const [task] = await loadSalesTaskRows([updated], { includeLatestNote: true });
     await emitSalesTaskUpdate(req, 'updated', { id: updated.id, lead_id: updated.lead_id, task_type: updated.task_type });
+    await logTaskEdit(req, existing, updated, changes);
     res.json({ success: true, task: task || updated });
   } catch (err) { taskFail(res, err); }
 });
@@ -3078,6 +3130,7 @@ router.post('/sales-tasks/export', internalAuth, async (req, res) => {
     const workbook = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(workbook, worksheet, 'Sales Tasks');
     const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    await activity.log(req, activity.EVENTS.SALES_TASKS_EXPORTED, { targetType: 'sales_task', summary: `Exported ${exportData.length} sales task${exportData.length === 1 ? '' : 's'}`, meta: { count: exportData.length } });
 
     res.setHeader('Content-Disposition', 'attachment; filename="Sales_Tasks_Export.xlsx"');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -3095,12 +3148,20 @@ router.put('/sales-tasks/:id/status', internalAuth, async (req, res) => {
     if (!TASK_STATUSES.includes(status)) {
       return res.status(400).json({ error: 'Invalid task status' });
     }
+    const taskBefore = await SalesTasks.findOne({ id: toId(req.params.id, 'Task'), ...LIVE }, { _id: 0, status: 1 }).lean();
     const task = await SalesTasks.findOneAndUpdate(
       { id: toId(req.params.id, 'Task'), ...LIVE },
       { $set: { ...statusChange(status), updated_at: new Date() } },
       { new: true, projection: NO_ID }
     ).lean();
     if (!task) throw new TaskInputError('Task not found', 404);
+    if (taskBefore?.status !== status) {
+      await activity.log(req, status === 'completed' ? activity.EVENTS.SALES_TASK_COMPLETED : activity.EVENTS.SALES_TASK_UPDATED, {
+        targetType: 'sales_task', targetId: task.id,
+        summary: status === 'completed' ? `Completed the ${await salesTaskLabel(task)}` : `Moved the ${await salesTaskLabel(task)} from "${taskBefore?.status || 'none'}" to "${status}"`,
+        meta: { fields: ['status'], before: { status: taskBefore?.status ?? null }, after: { status } },
+      });
+    }
     await emitSalesTaskUpdate(req, 'status_changed', task);
     res.json({ success: true, task });
   } catch (err) {
@@ -3143,6 +3204,7 @@ router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, async (req, r
     const status = String(req.body.status || '').toLowerCase();
     if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid sales status' });
     const leadId = toId(req.params.leadId, 'Lead');
+    const salesBefore = await Leads.findOne({ id: leadId }, { _id: 0, id: 1, name: 1, sales_status: 1 }).lean();
     const shouldStop = ['converted', 'not_interested', 'closed'].includes(status);
     const statusLead = await Leads.findOneAndUpdate(
       { id: leadId },
@@ -3156,6 +3218,13 @@ router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, async (req, r
     ).lean();
     if (!statusLead) return res.status(404).json({ error: 'Lead not found' });
     await emitSalesTaskUpdate(req, 'lead_status_changed', { lead_id: leadId, ...statusLead });
+    if ((salesBefore?.sales_status || 'new') !== status) {
+      await activity.log(req, activity.EVENTS.SALES_STATUS_CHANGED, {
+        targetType: 'lead', targetId: leadId,
+        summary: `Changed sales status of lead ${activity.leadName(salesBefore || { id: leadId })} from "${salesBefore?.sales_status || 'new'}" to "${status}"`,
+        meta: { fields: ['sales_status'], before: { sales_status: salesBefore?.sales_status ?? null }, after: { sales_status: status } },
+      });
+    }
     res.json({ success: true, lead: statusLead });
   } catch (err) { taskFail(res, err); }
 });
@@ -3202,6 +3271,9 @@ Return only JSON: {"stop_followups":boolean,"followup_at":string|null}. Set stop
       { new: true, projection: { _id: 0, id: 1, sales_status: 1, sales_followup_stopped: 1, sales_followup_at: 1, next_followup_due: 1 } }
     ).lean();
     await emitSalesTaskUpdate(req, 'note_added', { lead_id: leadId, note: savedNote, ...notedLead });
+    // The note text stays out of the log.
+    const notedName = await Leads.findOne({ id: leadId }, { _id: 0, id: 1, name: 1 }).lean();
+    await activity.log(req, activity.EVENTS.SALES_NOTE_ADDED, { targetType: 'lead', targetId: leadId, summary: `Added a sales note to lead ${activity.leadName(notedName || { id: leadId })}${shouldStop ? ' (follow-ups stopped)' : ''}` });
     res.json({ success: true, note: savedNote, lead: notedLead });
   } catch (err) { taskFail(res, err); }
 });
@@ -3263,6 +3335,13 @@ router.post('/sales-tasks/bulk-delete', internalAuth, async (req, res) => {
     }
 
     for (const task of doomed) await emitSalesTaskUpdate(req, 'deleted', task);
+    if (doomed.length) {
+      await activity.log(req, activity.EVENTS.SALES_TASK_DELETED, {
+        targetType: 'sales_task', targetId: doomed.length === 1 ? doomed[0].id : null,
+        summary: doomed.length === 1 ? `Deleted the ${await salesTaskLabel(doomed[0])}` : `Deleted ${doomed.length} sales tasks${ids.length ? '' : ` created ${from} to ${to}`}`,
+        meta: { count: doomed.length, ids: doomed.map((t) => t.id).slice(0, 100) },
+      });
+    }
     res.json({ success: true, deletedCount: doomed.length, deletedIds: doomed.map(task => task.id) });
   } catch (err) {
     taskFail(res, err);
@@ -3274,6 +3353,7 @@ router.delete('/sales-tasks/:id', internalAuth, async (req, res) => {
     await salesTasksReady;
     const [deletedTask] = await removeTasks({ id: toId(req.params.id, 'Task') });
     if (!deletedTask) throw new TaskInputError('Task not found', 404);
+    await activity.log(req, activity.EVENTS.SALES_TASK_DELETED, { targetType: 'sales_task', targetId: deletedTask.id, summary: `Deleted the ${await salesTaskLabel(deletedTask)}` });
     await emitSalesTaskUpdate(req, 'deleted', deletedTask);
     res.json({ success: true });
   } catch (err) {

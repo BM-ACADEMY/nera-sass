@@ -7,6 +7,7 @@ const sendPolicy = require('../../services/sendPolicy');
 const numberHealth = require('../../services/numberHealth');
 const { SOURCE_KINDS, normalizeSourceKind, sourceFilter } = require('../../services/leadSources');
 const { requirePermission } = require('../../services/permissions');
+const activity = require('../../services/activity');
 module.exports = function registerFollowupsRoutes(app, ctx) {
 const {
   Clients,
@@ -168,6 +169,7 @@ app.post('/api/communication/send-template', auth, async (req, res) => {
       { headers: { Authorization: `Bearer ${waToken}`, 'Content-Type': 'application/json' }, timeout: 15000 }
     );
 
+    await activity.log(req, activity.EVENTS.TEMPLATE_SENT, { targetType: 'lead', targetId: leadRow.id, summary: `Sent template "${templateName}" to lead ${activity.leadName(leadRow)}`, meta: { template: templateName } });
     res.json({ success: true, message_id: response.data.messages?.[0]?.id });
   } catch (err) {
     const metaReason = err.response?.data?.error?.message;
@@ -340,6 +342,8 @@ app.post('/api/leads/exports', auth, requirePermission('leads.export'), async (r
     const createdJob = await LeadExportJobs.create({ user_id: userId, mode, filters, total_records: totalRecords });
     const job = { id: createdJob.id, status: createdJob.status, total_records: createdJob.total_records };
     setImmediate(() => processLeadExportJob(job.id));
+    const exportScope = mode === 'source' ? `leads from ${source}` : mode === 'date' ? `leads from ${String(from).slice(0, 10)} to ${String(to).slice(0, 10)}` : 'all leads';
+    await activity.log(req, activity.EVENTS.LEADS_EXPORTED, { targetType: 'lead_export', targetId: job.id, summary: `Exported ${exportScope} (${totalRecords} record${totalRecords === 1 ? '' : 's'})`, meta: { mode, filters, total_records: totalRecords } });
     res.status(202).json(job);
   } catch (err) {
     console.error('Create lead export error:', err);

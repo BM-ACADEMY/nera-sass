@@ -56,6 +56,7 @@ router.get('/tenant', async (req, res) => {
         manage_settings: can(req.identity, 'tenant.settings'),
         manage_whatsapp: can(req.identity, 'whatsapp.manage'),
         manage_billing: can(req.identity, 'billing.manage'),
+        view_activity: can(req.identity, 'activity.view'),
       },
     });
   } catch (error) {
@@ -83,7 +84,7 @@ router.patch('/tenant/settings', requirePermission('tenant.settings'), async (re
     if (!Object.keys(changes).length) return res.status(400).json({ error: 'Nothing to update' });
     const tenantId = req.identity.tenantId;
     const tenant = await runAsSystem(() => Tenants.findOneAndUpdate({ id: tenantId }, { $set: { ...changes, updated_at: new Date() } }, { new: true, projection: { _id: 0 } }).lean(), 'team');
-    await audit.record(audit.EVENTS.TENANT_UPDATED, { tenantId, req, targetType: 'tenant', targetId: tenantId, meta: { changes } });
+    await audit.record(audit.EVENTS.TENANT_UPDATED, { tenantId, req, targetType: 'tenant', targetId: tenantId, summary: `Changed workspace settings: ${Object.entries(changes).map(([field, value]) => `${field} to "${value}"`).join(', ')}`, meta: { changes } });
     return res.json({ tenant });
   } catch (error) {
     return fail(res, error);

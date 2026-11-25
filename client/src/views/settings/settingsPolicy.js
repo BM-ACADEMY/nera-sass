@@ -16,9 +16,16 @@ export const SETTINGS_SECTIONS = [
   { key: 'password', title: 'Password & sessions', text: 'Change your password or sign out of every device.' },
   // Only for people who may see the team (GET /api/tenant permissions.view_team).
   { key: 'team', title: 'Team', text: 'Add the people who work in this workspace and choose what they can do.', permission: 'view_team' },
+  // Activity log: who in the workspace did what. Owners and admins only
+  // (permissions.view_activity; GET /api/activity answers 403 to other roles).
+  { key: 'activity', title: 'Activity', text: 'See who in your team changed what, and when.', permission: 'view_activity' },
 ];
 
-// The sections this person may open; one with `permission` needs that flag.
+// Same rule as the server's 'activity.view' (owner and admin).
+export const canViewActivity = (role) => role === 'owner' || role === 'admin';
+
+// The sections this person may open; one with `permission` needs that flag
+// (GET /api/tenant permissions).
 export function settingsSections(permissions) {
   return SETTINGS_SECTIONS.filter((s) => !s.permission || Boolean(permissions?.[s.permission]));
 }

@@ -10,6 +10,13 @@ const { requirePermission } = require('../../services/permissions');
 const { runAsSystem } = require('../../services/tenantContext');
 const prompts = require('../../services/brainPrompt');
 const brainEngine = require('../../services/brainEngine');
+const activity = require('../../services/activity');
+
+const KIND_NAMES = { faq: 'FAQ', product: 'product', policy: 'policy', brochure: 'brochure', other: 'document' };
+const docLabel = (doc) => `${KIND_NAMES[String(doc?.doc_type || '').split(':')[0]] || 'document'}${doc?.title ? ` "${String(doc.title).slice(0, 80)}"` : ''}`;
+// Top-level profile fields that differ (names only, never their text).
+const changedProfileFields = (before, after) => [...new Set([...Object.keys(before || {}), ...Object.keys(after || {})])]
+  .filter((key) => JSON.stringify(before?.[key] ?? null) !== JSON.stringify(after?.[key] ?? null));
 
 const DOC_KINDS = ['faq', 'product', 'policy', 'brochure', 'other'];
 const MAX_DOC_CHARS = 10000;
@@ -88,6 +95,7 @@ app.post('/api/brain', auth, manageBrain, async (req, res) => {
       { $set: { content, updated_at: new Date() } },
       { client_id, doc_type, content, updated_at: new Date() }
     );
+    await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, { targetType: 'brain_doc', targetId: doc?.id, summary: `Changed AI Brain document "${String(doc_type || '').slice(0, 60)}"` });
     res.json({ doc });
   } catch (err) {
     console.error('Brain Doc Save Error:', err.message);
@@ -118,6 +126,12 @@ app.put('/api/brain/profile', auth, workspaceOnly, manageBrain, async (req, res)
     const brain = current
       ? await BrainProfiles.findOneAndUpdate({}, { $set: set, $inc: { brain_version: 1 } }, { new: true, projection: { _id: 0 } }).lean()
       : (await BrainProfiles.create({ ...set, version_type: 'client', brain_version: 1 })).toObject();
+    const fields = changedProfileFields(current?.profile, profile);
+    await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, {
+      targetType: 'brain_profile', targetId: brain?.id,
+      summary: fields.length ? `Changed the AI Brain profile: ${fields.slice(0, 8).join(', ')}${fields.length > 8 ? ` and ${fields.length - 8} more` : ''}` : 'Saved the AI Brain profile (no changes)',
+      meta: { fields },
+    });
     res.json(await brainResponse(req, brain));
   } catch (err) {
     console.error('[brain/profile]', err.message);
@@ -148,6 +162,7 @@ app.post('/api/brain/docs', auth, workspaceOnly, manageBrain, async (req, res) =
     if (!String(content || '').trim()) return res.status(400).json({ error: 'Content is required' });
     const doc = await createDoc({ kind, title, content });
     if (!doc) return res.status(409).json({ error: 'This workspace has no brand profile yet' });
+    await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, { targetType: 'brain_doc', targetId: doc.id, summary: `Added ${docLabel(doc)} to the AI Brain` });
     res.json({ doc: doc.toObject() });
   } catch (err) {
     console.error('[brain/docs]', err.message);
@@ -165,6 +180,7 @@ app.post('/api/brain/docs/upload', auth, workspaceOnly, manageBrain, docUpload.s
     if (content.length < 20) return res.status(400).json({ error: 'No readable text found. A scanned PDF cannot be read.' });
     const doc = await createDoc({ kind, title: req.body?.title || req.file.originalname, content });
     if (!doc) return res.status(409).json({ error: 'This workspace has no brand profile yet' });
+    await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, { targetType: 'brain_doc', targetId: doc.id, summary: `Uploaded ${docLabel(doc)} to the AI Brain` });
     res.json({ doc: doc.toObject(), truncated: content.length > MAX_DOC_CHARS });
   } catch (err) {
     console.error('[brain/docs/upload]', err.message);
@@ -183,6 +199,12 @@ app.patch('/api/brain/docs/:id', auth, workspaceOnly, manageBrain, async (req, r
     if (req.body?.is_active !== undefined) set.is_active = Boolean(req.body.is_active);
     const doc = await BrainDocs.findOneAndUpdate(itemFilter(req), { $set: set }, { new: true, projection: NO_DOC_ID }).lean();
     if (!doc) return res.status(404).json({ error: 'Document not found' });
+    const docFields = Object.keys(set).filter((f) => f !== 'updated_at');
+    await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, {
+      targetType: 'brain_doc', targetId: doc.id,
+      summary: set.is_active !== undefined && docFields.length === 1 ? `${set.is_active ? 'Turned on' : 'Turned off'} AI Brain ${docLabel(doc)}` : `Edited AI Brain ${docLabel(doc)}: ${docFields.join(', ')}`,
+      meta: { fields: docFields },
+    });
     res.json({ doc });
   } catch (err) {
     console.error('[brain/docs]', err.message);
@@ -192,8 +214,10 @@ app.patch('/api/brain/docs/:id', auth, workspaceOnly, manageBrain, async (req, r
 
 app.delete('/api/brain/docs/:id', auth, workspaceOnly, manageBrain, async (req, res) => {
   try {
+    const doomedDoc = await BrainDocs.findOne(itemFilter(req), { _id: 0, id: 1, doc_type: 1, title: 1 }).lean();
     const result = await BrainDocs.deleteOne(itemFilter(req));
     if (!result.deletedCount) return res.status(404).json({ error: 'Document not found' });
+    await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, { targetType: 'brain_doc', targetId: req.params.id, summary: `Removed ${docLabel(doomedDoc)} from the AI Brain` });
     res.json({ success: true });
   } catch (err) {
     console.error('[brain/docs]', err.message);
@@ -284,6 +308,11 @@ app.post('/api/brain/ai-toggle', auth, workspaceOnly, adminOnly, async (req, res
     }
     if (current) await BrainProfiles.updateOne({}, { $set: { ai_enabled: enabled, updated_by: req.user.id, updated_at: new Date() } });
     await runAsSystem(() => Tenants.updateOne({ id: tenantId }, { $set: { ai_enabled: enabled, updated_at: new Date() } }), 'ai-brain');
+    await activity.log(req, enabled ? activity.EVENTS.AI_TURNED_ON : activity.EVENTS.AI_TURNED_OFF, {
+      targetType: 'brain_profile', targetId: current?.id,
+      summary: enabled ? 'Turned AI replies on for the workspace' : 'Turned AI replies off for the workspace',
+      meta: { before: { ai_enabled: Boolean(current?.ai_enabled) }, after: { ai_enabled: enabled } },
+    });
     res.json(await brainResponse(req));
   } catch (err) {
     console.error('[brain/ai-toggle]', err.message);

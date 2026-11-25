@@ -6,6 +6,7 @@
 const { runAsTenant } = require('../../services/tenantContext');
 const { requirePermission, can } = require('../../services/permissions');
 const audit = require('../../services/audit');
+const activity = require('../../services/activity');
 const googleCalendar = require('../../services/googleCalendar');
 const { notifyWorkspace } = require('../../services/realtime');
 
@@ -58,7 +59,7 @@ module.exports = function registerCalendarRoutes(app, ctx) {
       const email = await runAsTenant(state.tenantId, async () => {
         const connected = await googleCalendar.exchangeAndStoreCode(String(req.query.code), { userId: state.userId });
         await audit.record(audit.EVENTS.CALENDAR_CONNECTED, {
-          tenantId: state.tenantId, actor: { actor_type: 'user', actor_user_id: state.userId, ip: req.ip || null }, targetType: 'google_calendar', meta: { email: connected },
+          tenantId: state.tenantId, actor: { actor_type: 'user', actor_user_id: state.userId, ip: req.ip || null }, targetType: 'google_calendar', summary: 'Connected Google Calendar for meeting bookings', meta: { email: connected },
         });
         return connected;
       });
@@ -73,7 +74,7 @@ module.exports = function registerCalendarRoutes(app, ctx) {
   app.delete('/api/calendar/google', auth, manage, async (req, res) => {
     try {
       await googleCalendar.disconnect();
-      await audit.record(audit.EVENTS.CALENDAR_DISCONNECTED, { tenantId: req.identity.tenantId, req, targetType: 'google_calendar' });
+      await audit.record(audit.EVENTS.CALENDAR_DISCONNECTED, { tenantId: req.identity.tenantId, req, targetType: 'google_calendar', summary: 'Disconnected Google Calendar' });
       res.json({ success: true, connected: false });
     } catch (error) {
       fail(res, error);
@@ -82,7 +83,10 @@ module.exports = function registerCalendarRoutes(app, ctx) {
 
   app.put('/api/calendar/settings', auth, manage, async (req, res) => {
     try {
-      res.json({ success: true, settings: await googleCalendar.updateSettings(req.body || {}) });
+      const settings = await googleCalendar.updateSettings(req.body || {});
+      const fields = Object.keys(req.body || {});
+      await activity.log(req, activity.EVENTS.CALENDAR_SETTINGS_CHANGED, { targetType: 'google_calendar', summary: `Changed booking settings: ${fields.join(', ') || 'no fields'}`, meta: { fields } });
+      res.json({ success: true, settings });
     } catch (error) {
       fail(res, error);
     }
