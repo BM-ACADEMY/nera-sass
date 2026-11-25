@@ -5,11 +5,12 @@
  */
 const sendPolicy = require('../../services/sendPolicy');
 const numberHealth = require('../../services/numberHealth');
+const { SOURCE_KINDS, normalizeSourceKind, sourceFilter } = require('../../services/leadSources');
+const { requirePermission } = require('../../services/permissions');
 module.exports = function registerFollowupsRoutes(app, ctx) {
 const {
   Clients,
   Conversations,
-  FACEBOOK_SOURCE,
   LeadExportJobs,
   LeadNotes,
   LeadTags,
@@ -313,17 +314,28 @@ app.post('/api/workflows/log', auth, async (req, res) => {
   }
 });
 
-app.post('/api/leads/exports', auth, async (req, res) => {
+// POST /api/leads/exports  { mode: all | source | date | selected, source, from, to, ids }
+const MAX_SELECTED_EXPORT = 5000;
+app.post('/api/leads/exports', auth, requirePermission('leads.export'), async (req, res) => {
   try {
     await leadExportReady;
-    const { mode = 'all', source, from, to } = req.body || {};
-    if (!['all', 'source', 'date'].includes(mode)) return res.status(400).json({ error: 'Invalid export mode' });
-    if (mode === 'source' && !['facebook', 'whatsapp', 'website', 'xls_sheet'].includes(source)) return res.status(400).json({ error: 'Invalid source' });
+    const { mode = 'all', source, from, to, ids } = req.body || {};
+    if (!['all', 'source', 'date', 'selected'].includes(mode)) return res.status(400).json({ error: 'Choose what to export.' });
+    const kind = mode === 'source' ? normalizeSourceKind(source) : null;
+    if (mode === 'source' && !kind) return res.status(400).json({ error: 'Choose a source to export.' });
     if (mode === 'date' && (!from || !to || Number.isNaN(new Date(from).getTime()) || Number.isNaN(new Date(to).getTime()) || new Date(from) > new Date(to))) {
-      return res.status(400).json({ error: 'Invalid date range' });
+      return res.status(400).json({ error: 'Choose a valid date range.' });
     }
-    const filters = mode === 'source' ? { source } : mode === 'date' ? { from: new Date(from).toISOString(), to: new Date(to).toISOString() } : {};
+    const pickedIds = mode === 'selected' && Array.isArray(ids)
+      ? [...new Set(ids.map(Number).filter((id) => Number.isInteger(id) && id > 0))]
+      : [];
+    if (mode === 'selected' && !pickedIds.length) return res.status(400).json({ error: 'Select at least one lead to export.' });
+    if (pickedIds.length > MAX_SELECTED_EXPORT) return res.status(400).json({ error: `Select up to ${MAX_SELECTED_EXPORT} leads at a time.` });
+    const filters = mode === 'source' ? { source: kind }
+      : mode === 'date' ? { from: new Date(from).toISOString(), to: new Date(to).toISOString() }
+        : mode === 'selected' ? { ids: pickedIds } : {};
     const totalRecords = await Leads.countDocuments(leadExportFilter(filters));
+    if (!totalRecords) return res.status(400).json({ error: 'No leads match this export.' });
     const userId = req.user.id || req.user.user_id || null;
     const createdJob = await LeadExportJobs.create({ user_id: userId, mode, filters, total_records: totalRecords });
     const job = { id: createdJob.id, status: createdJob.status, total_records: createdJob.total_records };
@@ -355,12 +367,25 @@ app.get('/api/leads/exports/:id/download', auth, async (req, res) => {
   res.download(job.file_path, `leads_export_${job.mode}_${new Date().toISOString().slice(0, 10)}.csv`);
 });
 
-// GET /api/leads
+// GET /api/leads/source-summary: how many leads of each source kind the
+// workspace has. The Leads page shows the Facebook lead form filter only
+// when there are any.
+app.get('/api/leads/source-summary', auth, async (req, res) => {
+  try {
+    const counts = await Promise.all(SOURCE_KINDS.map((kind) => Leads.countDocuments(sourceFilter(kind))));
+    res.json({ counts: Object.fromEntries(SOURCE_KINDS.map((kind, i) => [kind, counts[i]])) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/leads/facebook-filter-options
 app.get('/api/leads/facebook-filter-options', auth, async (req, res) => {
   try {
     const nullsLast = (a, b) => (a == null ? (b == null ? 0 : 1) : b == null ? -1 : String(a).localeCompare(String(b)));
     const blank = (value) => value == null || String(value).trim() === '';
-    const fbLeads = await Leads.find({ source: FACEBOOK_SOURCE }, { campaign_name: 1, ad_name: 1 }).lean();
+    const fbLeads = await Leads.find(sourceFilter('facebook'), { campaign_name: 1, ad_name: 1 }).lean();
     const optionKeys = new Map();
     for (const l of fbLeads) {
       if (blank(l.campaign_name) && blank(l.ad_name)) continue;
@@ -392,7 +417,7 @@ app.get('/api/leads/facebook-filter-options', auth, async (req, res) => {
 
 app.get('/api/leads', auth, async (req, res) => {
   try {
-    const { status, brand, search, source, campaign_name, ad_name, meta_page_id, from, to, tag_id, limit = 100, offset = 0 } = req.query;
+    const { status, brand, search, source, assigned_to, campaign_name, ad_name, meta_page_id, from, to, tag_id, limit = 100, offset = 0 } = req.query;
     const and = [];
 
     if (status && status !== 'all') {
@@ -409,20 +434,27 @@ app.get('/api/leads', auth, async (req, res) => {
       and.push({ client_id: { $in: brandIds } });
     }
     if (source && source !== 'all') {
-      const normalizedSource = String(source).toLowerCase();
-      if (['facebook', 'whatsapp', 'website', 'xls_sheet'].includes(normalizedSource)) {
-        and.push(leadExportFilter({ source: normalizedSource }));
+      // Source kinds: services/leadSources.js. Old "website" leads count as Manual.
+      const kind = normalizeSourceKind(source);
+      if (!kind) return res.status(400).json({ error: 'Unknown source filter' });
+      and.push(sourceFilter(kind));
+    }
+    if (assigned_to && assigned_to !== 'all') {
+      if (assigned_to === 'unassigned') {
+        and.push({ assigned_to: null });
       } else {
-        and.push({ source: new RegExp(`^\\s*${escapeRegex(String(source).trim())}\\s*$`, 'i') });
+        const assignee = Number(assigned_to);
+        if (!Number.isInteger(assignee)) return res.status(400).json({ error: 'Unknown team member' });
+        and.push({ assigned_to: assignee });
       }
     }
-    if (campaign_name) and.push({ source: FACEBOOK_SOURCE }, { campaign_name });
-    if (ad_name) and.push({ source: FACEBOOK_SOURCE }, { ad_name });
+    if (campaign_name) and.push(sourceFilter('facebook'), { campaign_name: String(campaign_name) });
+    if (ad_name) and.push(sourceFilter('facebook'), { ad_name: String(ad_name) });
     if (meta_page_id) {
       const pageAccounts = (await models.BrandSocialAccounts.find({ is_active: true }).lean())
         .filter((account) => socialPageId(account) === String(meta_page_id));
       const pageClientIds = await Clients.distinct('id', { name: { $in: pageAccounts.map((account) => account.brand_name) } });
-      and.push({ source: FACEBOOK_SOURCE }, { client_id: { $in: pageClientIds } });
+      and.push(sourceFilter('facebook'), { client_id: { $in: pageClientIds } });
     }
     if (from) {
       const fromDate = new Date(from);
@@ -435,7 +467,7 @@ app.get('/api/leads', auth, async (req, res) => {
       and.push({ created_at: { $lte: toDate } });
     }
     if (tag_id) {
-      and.push({ id: { $in: await LeadTags.distinct('lead_id', { tag_id }) } });
+      and.push({ id: { $in: await LeadTags.distinct('lead_id', { tag_id: Number(tag_id) }) } });
     }
 
     const candidates = await Leads.find(and.length ? { $and: and } : {}, { id: 1, name: 1, phone: 1, created_at: 1 }).lean();
@@ -458,9 +490,13 @@ app.get('/api/leads', auth, async (req, res) => {
       const activity = (lead) => new Date(lastMessageAt.get(lead.id) ?? lead.created_at ?? 0).getTime();
       ordered = [...candidates].sort((a, b) => activity(b) - activity(a));
     }
-    const pageIds = ordered.slice(Number(offset) || 0, (Number(offset) || 0) + (Number(limit) || 100)).map((lead) => lead.id);
+    const start = Math.max(0, parseInt(offset, 10) || 0);
+    const pageSize = Math.min(500, Math.max(1, parseInt(limit, 10) || 100));
+    const pageIds = ordered.slice(start, start + pageSize).map((lead) => lead.id);
     const pageLeads = new Map((await Leads.find({ id: { $in: pageIds } }, NO_ID).lean()).map((lead) => [lead.id, lead]));
-    const filteredTotal = pageIds.length ? ordered.length : 0;
+    // Every lead that matches, also when the page asked for is past the end
+    // (it was 0 then, which broke the pager).
+    const filteredTotal = ordered.length;
     const rows = (await enrichLeadRows(pageIds.map((id) => pageLeads.get(id)).filter(Boolean)))
       .map((row) => ({ ...row, filtered_total: filteredTotal }));
     res.json({ leads: rows, total: filteredTotal });

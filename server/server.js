@@ -811,26 +811,28 @@ whenDbConnected()
   .then(() => runAsSystem(() => require('./services/platformInbox').refreshPlatformNumber(), 'platform-number'))
   .catch((error) => console.error('[Platform WhatsApp] Could not load the admin number:', error.message));
 
-const FACEBOOK_SOURCE = /(facebook|instagram|meta[_ ]?ads)/i;
-// Mongo filter for a lead export (source / created_at range)
-function leadExportFilter(filter) {
-  const query = {};
-  const source = String(filter.source || '').toLowerCase();
-  if (source === 'facebook') {
-    query.source = FACEBOOK_SOURCE;
-  } else if (source === 'whatsapp') {
-    query.source = /whatsapp/i;
-  } else if (source === 'website') {
-    query.source = /(website|web site)/i;
-  } else if (source === 'xls_sheet') {
-    query.source = /^\s*((xls sheet|xlsx sheet|excel sheet|csv import)\s*$|csv_)/i;
+const { FACEBOOK_SOURCE, SOURCE_LABELS, leadSourceKind, normalizeSourceKind, sourceFilter } = require('./services/leadSources');
+// Mongo filter for a lead export: source kind (services/leadSources.js), a
+// created_at range, or the leads picked on the Leads page (ids). Old jobs may
+// carry "website" (now Manual) or "xls_sheet" (now Import).
+function leadExportFilter(filter = {}) {
+  const and = [];
+  if (filter.source) {
+    const kind = normalizeSourceKind(filter.source, { legacy: true });
+    // An unknown source must not widen the export to every lead.
+    and.push(kind ? sourceFilter(kind) : { _id: null });
+  }
+  if (Array.isArray(filter.ids)) {
+    and.push({ id: { $in: filter.ids.map(Number).filter(Number.isFinite) } });
   }
   if (filter.from || filter.to) {
-    query.created_at = {};
-    if (filter.from) query.created_at.$gte = new Date(filter.from);
-    if (filter.to) query.created_at.$lte = new Date(filter.to);
+    const created = {};
+    if (filter.from) created.$gte = new Date(filter.from);
+    if (filter.to) created.$lte = new Date(filter.to);
+    and.push({ created_at: created });
   }
-  return query;
+  if (!and.length) return {};
+  return and.length === 1 ? and[0] : { $and: and };
 }
 
 function csvCell(value) {
@@ -875,13 +877,14 @@ async function processLeadExportJob(jobId) {
     const batchSize = 2000;
     while (true) {
       const batchLeads = await Leads.find(
-        { ...leadExportFilter(filter), id: { $gt: lastId } },
-        { id: 1, name: 1, phone: 1, source: 1, client_id: 1, status: 1, score: 1, assigned_to: 1, interest: 1, created_at: 1 }
+        // $and, not a spread: an export of picked leads already filters on id.
+        { $and: [leadExportFilter(filter), { id: { $gt: lastId } }] },
+        { id: 1, name: 1, phone: 1, source: 1, ad_id: 1, leadgen_id: 1, meta_lead_id: 1, lead_ad_form_id: 1, client_id: 1, status: 1, score: 1, assigned_to: 1, interest: 1, created_at: 1 }
       ).sort({ id: 1 }).limit(batchSize).lean();
       const batchClients = new Map((await Clients.find({ id: { $in: batchLeads.map((l) => l.client_id).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c.name]));
       const batchUsers = new Map((await Users.find({ id: { $in: batchLeads.map((l) => l.assigned_to).filter((id) => id != null) } }, { id: 1, name: 1 }).lean()).map((u) => [u.id, u.name]));
       const batch = { rows: batchLeads.map((l) => ({
-        id: l.id, name: l.name, phone: l.phone, source: l.source, brand_name: batchClients.get(l.client_id) ?? null, status: l.status,
+        id: l.id, name: l.name, phone: l.phone, source: SOURCE_LABELS[leadSourceKind(l)], brand_name: batchClients.get(l.client_id) ?? null, status: l.status,
         score: l.score, assigned_name: batchUsers.get(l.assigned_to) ?? null, interest: l.interest, created_at: l.created_at,
       })) };
       if (!batch.rows.length) break;
@@ -1004,6 +1007,8 @@ async function enrichLeadRows(leads) {
     return {
       ...l,
       brand_name: brandName,
+      source_kind: leadSourceKind(l),
+      source_label: SOURCE_LABELS[leadSourceKind(l)],
       assigned_name: users.get(l.assigned_to) ?? null,
       facebook_page_name: facebookPages.find((page) => page.brand_name === brandName && String(page.account_name ?? '').trim() !== '')?.account_name ?? null,
       unread: own.reduce((sum, cv) => sum + (Number(cv.unread_count) || 0), 0),
