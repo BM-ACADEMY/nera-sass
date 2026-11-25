@@ -11,7 +11,7 @@ const FLAGS = {
   agent: { manage_team: false, manage_settings: false, manage_whatsapp: false },
 };
 test('Settings sections: no WhatsApp or Billing (they have their own pages)', () => {
-  assert.deepStrictEqual(settingsSections().map((s) => s.key), ['profile', 'brand', 'two-step', 'password']);
+  assert.deepStrictEqual(settingsSections().map((s) => s.key), ['profile', 'brand', 'two-step', 'password', 'integrations']);
   assert.strictEqual(findSection('whatsapp'), null);
   assert.strictEqual(findSection('billing'), null);
   assert.strictEqual(findSection('profile').title, 'Profile & workspace');

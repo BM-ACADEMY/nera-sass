@@ -10,6 +10,7 @@ import { ProfileSection } from './settings/ProfileSection.jsx';
 import { BrandProfileSection } from './settings/BrandProfileSection.jsx';
 import { TwoStepSection } from './settings/TwoStepSection.jsx';
 import { PasswordSection } from './settings/PasswordSection.jsx';
+import { IntegrationsSection } from './settings/IntegrationsSection.jsx';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -97,6 +98,7 @@ export const SettingsView = () => {
         {section === 'brand' && <BrandProfileSection key={version} {...props} />}
         {section === 'two-step' && <TwoStepSection key={version} {...props} />}
         {section === 'password' && <PasswordSection key={version} {...props} onSignedOutEverywhere={signedOutEverywhere} />}
+        {section === 'integrations' && <IntegrationsSection key={version} />}
       </div>
     );
   }

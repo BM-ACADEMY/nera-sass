@@ -14,6 +14,7 @@ export const SETTINGS_SECTIONS = [
   { key: 'brand', title: 'Brand profile', text: 'Business name, category and automated replies.' },
   { key: 'two-step', title: 'Two-step verification', text: 'Ask for a code from your phone when you sign in.' },
   { key: 'password', title: 'Password & sessions', text: 'Change your password or sign out of every device.' },
+  { key: 'integrations', title: 'Integrations', text: 'Connect your Facebook Page to receive Lead Form ad leads.' },
 ];
 
 export function settingsSections() {
