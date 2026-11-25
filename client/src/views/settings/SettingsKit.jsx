@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { FiUser, FiBriefcase, FiShield, FiLock, FiArrowLeft, FiUsers, FiActivity } from 'react-icons/fi';
+import { FiUser, FiBriefcase, FiShield, FiLock, FiArrowLeft, FiUsers, FiActivity, FiLink } from 'react-icons/fi';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
@@ -15,6 +15,7 @@ const SECTION_LOOK = {
   password: { icon: FiLock, tone: 'bg-amber-50 text-amber-600 ring-amber-100' },
   team: { icon: FiUsers, tone: 'bg-sky-50 text-sky-600 ring-sky-100' },
   activity: { icon: FiActivity, tone: 'bg-rose-50 text-rose-600 ring-rose-100' },
+  integrations: { icon: FiLink, tone: 'bg-indigo-50 text-indigo-600 ring-indigo-100' },
 };
 
 export const SectionIcon = ({ section, size = 20, className }) => {

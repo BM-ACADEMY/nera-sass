@@ -65,6 +65,8 @@ const TENANT_SCOPED = new Map([
   ['ai_decisions', {}],
   ['reports', {}],
   ['google_calendar_credentials', {}],
+  ['facebook_lead_pages', {}],
+  ['facebook_lead_connections', {}],
   ['contact_erasures', {}],
   ['reply_webhooks', {}],
   ['webhook_deliveries', {}],

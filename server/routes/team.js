@@ -57,6 +57,7 @@ router.get('/tenant', async (req, res) => {
         manage_whatsapp: can(req.identity, 'whatsapp.manage'),
         manage_billing: can(req.identity, 'billing.manage'),
         view_activity: can(req.identity, 'activity.view'),
+        manage_integrations: can(req.identity, 'integrations.manage'),
       },
     });
   } catch (error) {

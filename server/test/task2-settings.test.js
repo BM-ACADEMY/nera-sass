@@ -101,10 +101,10 @@ test('Task 2: customer Settings APIs', async (t) => {
   await t.test('W1. /api/tenant reports each role\'s permission flags; full access, one seat and no plan yet', async () => {
     const { users } = await workspace(10);
     const expected = {
-      owner: { view_team: true, manage_team: true, manage_settings: true, manage_whatsapp: true, manage_billing: true },
-      admin: { view_team: true, manage_team: true, manage_settings: true, manage_whatsapp: true, manage_billing: true },
-      manager: { view_team: true, manage_team: false, manage_settings: false, manage_whatsapp: false, manage_billing: false },
-      agent: { view_team: false, manage_team: false, manage_settings: false, manage_whatsapp: false, manage_billing: false },
+      owner: { view_team: true, manage_team: true, manage_settings: true, manage_whatsapp: true, manage_billing: true, view_activity: true, manage_integrations: true },
+      admin: { view_team: true, manage_team: true, manage_settings: true, manage_whatsapp: true, manage_billing: true, view_activity: true, manage_integrations: true },
+      manager: { view_team: true, manage_team: false, manage_settings: false, manage_whatsapp: false, manage_billing: false, view_activity: false, manage_integrations: false },
+      agent: { view_team: false, manage_team: false, manage_settings: false, manage_whatsapp: false, manage_billing: false, view_activity: false, manage_integrations: false },
     };
     for (const [role, flags] of Object.entries(expected)) {
       const res = await request(app).get('/api/tenant').set(bearer(users[role]));

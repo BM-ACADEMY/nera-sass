@@ -19,6 +19,9 @@ export const SETTINGS_SECTIONS = [
   // Activity log: who in the workspace did what. Owners and admins only
   // (permissions.view_activity; GET /api/activity answers 403 to other roles).
   { key: 'activity', title: 'Activity', text: 'See who in your team changed what, and when.', permission: 'view_activity' },
+  // Facebook Lead Ads: owners and admins (permissions.manage_integrations,
+  // the server's 'integrations.manage').
+  { key: 'integrations', title: 'Integrations', text: 'Connect your Facebook Page to receive Lead Form ad leads.', permission: 'manage_integrations' },
 ];
 
 // Same rule as the server's 'activity.view' (owner and admin).

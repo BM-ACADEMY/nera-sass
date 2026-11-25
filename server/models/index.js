@@ -82,6 +82,8 @@ module.exports = {
   DemoCallReminders: require('./DemoCallReminders'),
   Departments: require('./Departments'),
   DriveFolderMonitors: require('./DriveFolderMonitors'),
+  FacebookLeadConnections: require('./FacebookLeadConnections'),
+  FacebookLeadPages: require('./FacebookLeadPages'),
   FailedWebhooks: require('./FailedWebhooks'),
   ProcessedWebhookEvents: require('./ProcessedWebhookEvents'),
   FollowupRules: require('./FollowupRules'),

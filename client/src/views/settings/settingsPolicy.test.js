@@ -12,6 +12,10 @@ const FLAGS = {
 };
 test('Settings sections: no WhatsApp or Billing (they have their own pages)', () => {
   assert.deepStrictEqual(settingsSections().map((s) => s.key), ['profile', 'brand', 'two-step', 'password']);
+  assert.deepStrictEqual(
+    settingsSections({ view_team: true, view_activity: true, manage_integrations: true }).map((s) => s.key),
+    ['profile', 'brand', 'two-step', 'password', 'team', 'activity', 'integrations'],
+  );
   assert.strictEqual(findSection('whatsapp'), null);
   assert.strictEqual(findSection('billing'), null);
   assert.strictEqual(findSection('profile').title, 'Profile & workspace');
@@ -21,6 +25,12 @@ test('Team section: shown to people who may see the team, never to agents', () =
   assert.ok(settingsSections({ view_team: true }).some((s) => s.key === 'team'));
   assert.ok(!settingsSections({ view_team: false }).some((s) => s.key === 'team'));
   assert.strictEqual(findSection('team').title, 'Team');
+});
+
+test('Integrations section: only with the manage_integrations permission', () => {
+  assert.ok(settingsSections({ manage_integrations: true }).some((s) => s.key === 'integrations'));
+  assert.ok(!settingsSections({ manage_integrations: false }).some((s) => s.key === 'integrations'));
+  assert.strictEqual(findSection('integrations').title, 'Integrations');
 });
 
 test('workspace info is shown read-only with friendly labels', () => {
