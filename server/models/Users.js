@@ -29,6 +29,14 @@ module.exports = defineModel('users', {
   // passwords leave it empty. With last_login, this tells "Send to client"
   // that the owner has taken control of the login.
   password_claimed_at: { type: Date },
+  // Set when an Owner/Admin (or platform staff) chose a temporary password for
+  // this person (Settings > Team). Until they choose their own, every request
+  // except the password change itself is refused (PASSWORD_CHANGE_REQUIRED).
+  must_change_password: { type: Boolean, default: false },
+  // Removed from the workspace (Settings > Team): deactivated and hidden from
+  // the team list. The row stays for the audit trail.
+  removed_at: { type: Date },
+  removed_by: { type: Number },
   reset_token_hash: { type: String },
   reset_token_expires_at: { type: Date },
   mfa_enabled: { type: Boolean, default: false },

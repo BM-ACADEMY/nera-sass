@@ -54,10 +54,13 @@ async function emailTaken(email) {
 // Seats: a workspace without a plan has exactly one login (its owner); with
 // a plan it has the plan's seats plus any extra seats bought from the wallet
 // (services/billing/limits.js). Active users and pending invitations for
-// other people both take a seat.
-async function assertSingleLogin(tenantId, email) {
+// other people both take a seat. Disabled and removed users do not (the same
+// count as entitlements.seatUsage); enabling one again needs a free seat.
+// `email`: a pending invitation for this address is not counted (it is being
+// replaced or turned into the account).
+async function assertSingleLogin(tenantId, email = null) {
   const [users, pending] = await runAsTenant(tenantId, () => Promise.all([
-    Users.countDocuments({}),
+    Users.countDocuments({ is_active: { $ne: false } }),
     Invitations.countDocuments({ email: { $ne: email }, accepted_at: null, revoked_at: null, expires_at: { $gt: new Date() } }),
   ]));
   const limit = await require('./billing/limits').seatLimit(tenantId);
@@ -66,7 +69,7 @@ async function assertSingleLogin(tenantId, email) {
   throw new InvitationError(409, `This workspace has used all ${limit} of its seats. Buy an extra seat in Settings > Billing to invite more people.`);
 }
 
-async function createInvitation({ tenantId = null, email, name = null, role = null, staffRole = null, password = undefined, invitedBy = {}, req = null, skipSeatCheck = false }) {
+async function createInvitation({ tenantId = null, email, name = null, phone = null, role = null, staffRole = null, password = undefined, invitedBy = {}, req = null, skipSeatCheck = false }) {
   const normalized = normalizeEmail(email);
   if (!isEmail(normalized)) throw new InvitationError(400, 'A valid email address is required');
   const staff = tenantId == null;
@@ -97,6 +100,7 @@ async function createInvitation({ tenantId = null, email, name = null, role = nu
     tenant_id: staff ? null : Number(tenantId),
     email: normalized,
     name: name ? String(name).trim() : null,
+    phone: phone ? String(phone).trim() : null,
     role: staff ? null : role,
     is_platform_staff: staff,
     staff_role: staff ? staffRole : null,
@@ -238,7 +242,7 @@ async function acceptInvitation({ token, name, password, phone = null }) {
     const doc = {
       name: displayName,
       email: claimed.email,
-      phone: phone ? String(phone).trim() : null,
+      phone: phone ? String(phone).trim() : (claimed.phone || null),
       password_hash: passwordHash,
       role: staff ? null : claimed.role,
       is_platform_staff: staff,
@@ -283,6 +287,8 @@ async function acceptInvitation({ token, name, password, phone = null }) {
 
 module.exports = {
   InvitationError,
+  assertSingleLogin,
+  emailTaken,
   hashToken,
   publicInvitation,
   createInvitation,

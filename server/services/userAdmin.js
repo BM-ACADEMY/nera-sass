@@ -15,6 +15,7 @@ const { runAsSystem, runAsTenant } = require('./tenantContext');
 const { TENANT_ROLES, STAFF_ROLES, canAssignRole, normalizeTenantRole, describeUser } = require('./permissions');
 const audit = require('./audit');
 const notify = require('./notify');
+const sessions = require('./sessions');
 
 class UserAdminError extends Error {
   constructor(status, message) {
@@ -23,7 +24,7 @@ class UserAdminError extends Error {
   }
 }
 
-const PUBLIC_FIELDS = { _id: 0, id: 1, name: 1, email: 1, phone: 1, role: 1, is_active: 1, last_login: 1, created_at: 1, mfa_enabled: 1, mfa_email_enabled: 1, mfa_whatsapp_enabled: 1, tenant_id: 1, is_platform_staff: 1, staff_role: 1, deactivated_at: 1 };
+const PUBLIC_FIELDS = { _id: 0, id: 1, name: 1, email: 1, phone: 1, role: 1, is_active: 1, last_login: 1, created_at: 1, mfa_enabled: 1, mfa_email_enabled: 1, mfa_whatsapp_enabled: 1, tenant_id: 1, is_platform_staff: 1, staff_role: 1, deactivated_at: 1, must_change_password: 1, removed_at: 1 };
 
 function presentUser(user) {
   if (!user) return user;
@@ -41,12 +42,16 @@ function presentUser(user) {
     mfa_enabled: Boolean(user.mfa_enabled || user.mfa_email_enabled || user.mfa_whatsapp_enabled),
     last_login: user.last_login || null,
     deactivated_at: user.deactivated_at || null,
+    // A temporary password was set for them; they choose their own at next sign-in.
+    must_change_password: Boolean(user.must_change_password),
+    status: user.removed_at ? 'removed' : user.is_active === false ? 'disabled' : 'active',
     created_at: user.created_at || null,
   };
 }
 
+// Removed people (Settings > Team > Remove) are left out.
 async function listTenantUsers(tenantId) {
-  const users = await runAsTenant(tenantId, () => Users.find({}, PUBLIC_FIELDS).sort({ created_at: 1 }).lean());
+  const users = await runAsTenant(tenantId, () => Users.find({ removed_at: null }, PUBLIC_FIELDS).sort({ created_at: 1 }).lean());
   return users.map(presentUser);
 }
 
@@ -55,7 +60,7 @@ async function activeOwnerCount(tenantId) {
 }
 
 async function loadTarget(tenantId, userId) {
-  const target = await runAsTenant(tenantId, () => Users.findOne({ id: Number(userId) }, { _id: 0 }).lean());
+  const target = await runAsTenant(tenantId, () => Users.findOne({ id: Number(userId), removed_at: null }, { _id: 0 }).lean());
   if (!target) throw new UserAdminError(404, 'User not found in this workspace');
   return target;
 }
@@ -69,7 +74,7 @@ function assertCanManage(actor, target) {
   if (!['owner', 'admin'].includes(actor.role)) throw new UserAdminError(403, 'You do not have permission to manage users');
 }
 
-async function changeRole({ tenantId, userId, newRole, actor, req }) {
+async function changeRole({ tenantId, userId, newRole, actor, req, event = audit.EVENTS.USER_ROLE_CHANGED }) {
   const role = String(newRole || '').toLowerCase();
   if (!TENANT_ROLES.includes(role)) throw new UserAdminError(400, `Role must be one of: ${TENANT_ROLES.join(', ')}`);
   const target = await loadTarget(tenantId, userId);
@@ -87,11 +92,11 @@ async function changeRole({ tenantId, userId, newRole, actor, req }) {
     { $set: { role, updated_at: new Date() } },
     { new: true, projection: { _id: 0 } },
   ).lean());
-  await audit.record(audit.EVENTS.USER_ROLE_CHANGED, { tenantId, req, targetType: 'user', targetId: target.id, meta: { email: target.email, from: currentRole, to: role } });
+  await audit.record(event, { tenantId, req, targetType: 'user', targetId: target.id, meta: { email: target.email, from: currentRole, to: role } });
   return presentUser(updated);
 }
 
-async function setActive({ tenantId, userId, active, actor, req }) {
+async function setActive({ tenantId, userId, active, actor, req, events = { on: audit.EVENTS.USER_REACTIVATED, off: audit.EVENTS.USER_DEACTIVATED } }) {
   const target = await loadTarget(tenantId, userId);
   assertCanManage(actor, target);
   const isActive = target.is_active !== false;
@@ -99,11 +104,14 @@ async function setActive({ tenantId, userId, active, actor, req }) {
   if (!active && normalizeTenantRole(target.role) === 'owner' && (await activeOwnerCount(tenantId)) <= 1) {
     throw new UserAdminError(409, 'A workspace must keep at least one active Owner');
   }
+  // Enabling someone again takes a seat (invitations.assertSingleLogin).
+  if (active) await require('./invitations').assertSingleLogin(tenantId, target.email);
   const update = active
     ? { $set: { is_active: true, active: true, updated_at: new Date() }, $unset: { deactivated_at: '', deactivated_by: '' } }
     : { $set: { is_active: false, active: false, deactivated_at: new Date(), deactivated_by: actor.id ?? null, updated_at: new Date() }, $inc: { token_version: 1 } };
   const updated = await runAsTenant(tenantId, () => Users.findOneAndUpdate({ id: target.id }, update, { new: true, projection: { _id: 0 } }).lean());
-  await audit.record(active ? audit.EVENTS.USER_REACTIVATED : audit.EVENTS.USER_DEACTIVATED, { tenantId, req, targetType: 'user', targetId: target.id, meta: { email: target.email } });
+  if (!active) await sessions.revokeOthers(target.id, null, 'deactivated');
+  await audit.record(active ? events.on : events.off, { tenantId, req, targetType: 'user', targetId: target.id, meta: { email: target.email } });
   return presentUser(updated);
 }
 
@@ -111,6 +119,7 @@ async function revokeSessions({ tenantId, userId, actor, req }) {
   const target = await loadTarget(tenantId, userId);
   if (actor.kind !== 'staff') assertCanManage(actor, target);
   await runAsTenant(tenantId, () => Users.updateOne({ id: target.id }, { $inc: { token_version: 1 } }));
+  await sessions.revokeOthers(target.id, null, 'signed_out_by_admin');
   await audit.record(audit.EVENTS.SESSIONS_REVOKED, { tenantId, req, targetType: 'user', targetId: target.id, meta: { email: target.email } });
   return { success: true };
 }
@@ -183,6 +192,9 @@ module.exports = {
   UserAdminError,
   PUBLIC_FIELDS,
   presentUser,
+  loadTarget,
+  assertCanManage,
+  activeOwnerCount,
   listTenantUsers,
   changeRole,
   setActive,

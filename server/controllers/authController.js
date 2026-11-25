@@ -589,11 +589,15 @@ exports.changePassword = async (req, res) => {
     if (check.result !== 'ok') return res.status(400).json({ error: 'Current password incorrect', code: 'PASSWORD_INCORRECT' });
     const problem = passwordProblem(next, user.email);
     if (problem) return res.status(400).json({ error: problem });
+    // Leaving a temporary password (Settings > Team) needs a different one.
+    if (user.must_change_password && next === current) {
+      return res.status(400).json({ error: 'Choose a new password that is different from the temporary one.', code: 'PASSWORD_SAME_AS_TEMPORARY' });
+    }
     const password_hash = await bcrypt.hash(next, 12);
     const updated = await sys(() => Users.findOneAndUpdate(
       { id: user.id },
       {
-        $set: { password_hash, password_changed_at: new Date(), password_claimed_at: user.password_claimed_at || new Date() },
+        $set: { password_hash, password_changed_at: new Date(), password_claimed_at: user.password_claimed_at || new Date(), must_change_password: false },
         $unset: { reset_token_hash: '', reset_token_expires_at: '' },
         $inc: { token_version: 1 },
       },
@@ -672,7 +676,7 @@ exports.resetPassword = async (req, res) => {
     const result = await sys(() => Users.updateOne(
       { id: user.id, reset_token_hash: sha256(token), reset_token_expires_at: { $gt: new Date() } },
       {
-        $set: { password_hash, password_changed_at: new Date(), password_claimed_at: user.password_claimed_at || new Date(), failed_login_count: 0 },
+        $set: { password_hash, password_changed_at: new Date(), password_claimed_at: user.password_claimed_at || new Date(), failed_login_count: 0, must_change_password: false },
         $unset: { reset_token_hash: '', reset_token_expires_at: '', locked_until: '' },
         $inc: { token_version: 1 },
       },
