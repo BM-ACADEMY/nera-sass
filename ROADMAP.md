@@ -1,6 +1,6 @@
 # Getnera roadmap
 
-Updated 2026-11-21. Tick a box when done. Dates are targets.
+Updated 2026-11-25. Tick a box when done. Dates are targets.
 
 Getnera is the WhatsApp inbox, CRM and AI reply product. Pilots are free: each
 customer brings their own WhatsApp Business account and pays Meta directly.
@@ -52,6 +52,16 @@ Prices confirmed by Kamar (14 Nov): Desk ₹799, WhatsApp ₹1999, Complete ₹3
 - [ ] Brain details from Kamar, build, Kamar approves, then AI on
 - [ ] Invite the owner and the invitee list
 
+### Team page in the customer app (missing)
+- Owner: Aakash · Priority: High
+Found 25 Nov while adding staff to BM Academy & BM TechX: the customer app has no way for an owner to add staff. The server side is ready (invite, list staff, change role, deactivate, seat limit from the plan), but no screen calls it. The admin panel's "Invite staff" adds Getnera's own staff, not a workspace's. Today a workspace's staff can be added only by a script on the server.
+- [ ] Settings → Team: list of staff with role and status (active, invitation pending)
+- [ ] Invite button: email, name and role (Agent or Manager); the person sets their own password from the email link
+- [ ] Resend or cancel an invitation; deactivate and reactivate a staff member; sign them out everywhere
+- [ ] Show seats used of the plan's seats ("3 of 5"); when full, point to the plan upgrade
+- [ ] Admin panel: "Add user" on a workspace's page, so our team can add staff without a script
+- [ ] Tests for the screens; check on staging, then Kamar's OK to deploy
+
 ### Alerts
 - [ ] Add Kamar's 2 alert email addresses
 
@@ -92,7 +102,8 @@ Items from the 20 Nov draft. Owners and dates were guesses there; correct them a
 - Owner: Aakash · Due: 2026-12-18 · Priority: Normal
 - [x] Plans, subscriptions, wallet and plan grants are live (#22–#25)
 - [ ] Check seats, numbers, contacts and campaigns are enforced per plan
-- [ ] Replace the one-login-per-workspace rule with a plan seat limit (blocking for paid go-live)
+- [x] One-login rule replaced by the plan's seat limit in the server (no plan = 1 login)
+- [ ] Owners need the Team page to use those seats (see "Team page in the customer app")
 
 ### Check the AI reply polish with a sandbox test set
 - Owner: Aakash · Due: 2026-12-11 · Priority: Normal
@@ -138,3 +149,4 @@ Meta does not tell us "this customer reported you". It shows the effect: the num
 - 2026-11-20: first draft written from docs/launch-gap.md, docs/pilot-onboarding.md, docs/claude-pr-log.md and the code.
 - 2026-11-21: updated with the production and staging deploys of 21 Nov; old draft items kept above with their owners and dates.
 - 2026-11-23: added "AI Brain for every kind of business, with booking" and "Show when customers report or block the WhatsApp number".
+- 2026-11-25: added "Team page in the customer app (missing)", found while setting up BM Academy & BM TechX.
