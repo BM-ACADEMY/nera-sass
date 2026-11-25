@@ -65,11 +65,12 @@ function kindOfRows(rows) {
   return kinds.includes('marketing') ? 'marketing' : kinds[0];
 }
 
-// The WABA that sends: given, or the one the sender number belongs to. The
-// number id comes from the sending brand's own row, so looking it up across
-// tenants is safe (and finds numbers still on the platform inventory).
-async function senderWaba({ wabaId, phoneNumberId }) {
-  if (wabaId) return String(wabaId);
+// The WABA that sends: the one the sender number belongs to. The number id
+// comes from the sending brand's own row, so looking it up across tenants is
+// safe (and finds numbers still on the platform inventory). A caller-supplied
+// WABA id is deliberately not accepted: it would let a caller read any WABA's
+// template categories.
+async function senderWaba({ phoneNumberId }) {
   if (!phoneNumberId) return null;
   const row = await runAsSystem(
     () => MetaWhatsappPhoneNumbers.findOne({ phone_number_id: String(phoneNumberId) }, { _id: 0, waba_id: 1 }).lean(),
@@ -86,16 +87,16 @@ async function senderWaba({ wabaId, phoneNumberId }) {
  *      with no WABA on record, the workspace's own Meta rows
  *   2. the workspace's own template row, once Meta has it (for the brand)
  *   3. else WA_UNKNOWN_TEMPLATE_KIND, marketing by default: consent required
- * scope = { phoneNumberId, wabaId, clientId, language }
+ * scope = { phoneNumberId, clientId, language }
  */
 async function templateKind(templateName, scope = {}) {
   const name = String(templateName || '').trim();
   if (!name) return unknownTemplateKind();
-  const { phoneNumberId = null, wabaId = null, clientId = null, language = null } = scope || {};
+  const { phoneNumberId = null, clientId = null, language = null } = scope || {};
   const tenantId = currentTenantId();
   const fields = { _id: 0, language: 1, category: 1 };
 
-  const waba = await senderWaba({ wabaId, phoneNumberId });
+  const waba = await senderWaba({ phoneNumberId });
   let meta = [];
   if (waba) {
     meta = await runAsSystem(() => MetaWhatsappTemplates.find({ name, waba_id: waba }, fields).lean(), 'send-policy-template');

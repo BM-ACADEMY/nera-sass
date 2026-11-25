@@ -2260,6 +2260,7 @@ Naturally reference relevant details already discussed when useful. Do not inven
           const candidateTemplates = await Templates.find({
             status: /^approved$/i,
             category: /^utility$/i,
+            meta_template_id: { $nin: [null, ''] },
             client_id: { $in: [lead.client_id ?? null, null] },
             $or: [{ name: /demo|appointment|reminder|followup/i }, { body: /demo|appointment|reminder|call/i }],
           }, { _id: 0, name: 1, language: 1, body: 1, client_id: 1, approved_at: 1, created_at: 1 }).lean();
@@ -2284,7 +2285,13 @@ Naturally reference relevant details already discussed when useful. Do not inven
               },
             };
         }
-        await assertPolicy({ lead, kind: 'utility', messageType: messagePayload.type, phoneNumberId });
+        // A template's real category is Meta's (it can re-categorise a template
+        // as MARKETING), not the local row's, so ask sendPolicy like every other
+        // template send: marketing then needs the contact's opt-in.
+        const sendKind = messagePayload.type === 'template'
+          ? await sendPolicy.templateKind(messagePayload.template.name, { phoneNumberId, clientId: lead.client_id, language: messagePayload.template.language.code })
+          : 'utility';
+        await assertPolicy({ lead, kind: sendKind, messageType: messagePayload.type, phoneNumberId });
         const waRes = await axios.post(
           `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
           messagePayload,
