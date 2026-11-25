@@ -17,6 +17,12 @@ test('Settings sections: no WhatsApp or Billing (they have their own pages)', ()
   assert.strictEqual(findSection('profile').title, 'Profile & workspace');
 });
 
+test('Team section: shown to people who may see the team, never to agents', () => {
+  assert.ok(settingsSections({ view_team: true }).some((s) => s.key === 'team'));
+  assert.ok(!settingsSections({ view_team: false }).some((s) => s.key === 'team'));
+  assert.strictEqual(findSection('team').title, 'Team');
+});
+
 test('workspace info is shown read-only with friendly labels', () => {
   const info = workspaceInfo({ tenant: { id: 7, name: 'Dress Shop', currency: 'INR', timezone: 'Asia/Kolkata', tax_treatment: 'gst' }, lifecycle: { state: 'active' } });
   assert.deepStrictEqual(info.map((row) => [row.key, row.value]), [

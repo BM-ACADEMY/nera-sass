@@ -10,6 +10,7 @@ import { ProfileSection } from './settings/ProfileSection.jsx';
 import { BrandProfileSection } from './settings/BrandProfileSection.jsx';
 import { TwoStepSection } from './settings/TwoStepSection.jsx';
 import { PasswordSection } from './settings/PasswordSection.jsx';
+import { TeamSection } from './settings/TeamSection.jsx';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -89,6 +90,8 @@ export const SettingsView = () => {
   );
 
   const props = { tenantInfo, brand, me, onSaved: load };
+  // A section this person may not open (for example Team for an agent).
+  if (section && !settingsSections(tenantInfo?.permissions).some((s) => s.key === section)) return <Navigate to="/settings" replace />;
   if (section) {
     return (
       <div className="p-4 md:p-8">
@@ -97,6 +100,7 @@ export const SettingsView = () => {
         {section === 'brand' && <BrandProfileSection key={version} {...props} />}
         {section === 'two-step' && <TwoStepSection key={version} {...props} />}
         {section === 'password' && <PasswordSection key={version} {...props} onSignedOutEverywhere={signedOutEverywhere} />}
+        {section === 'team' && <TeamSection key={version} {...props} />}
       </div>
     );
   }
@@ -107,6 +111,9 @@ export const SettingsView = () => {
     brand: brand?.name || 'Not set up yet',
     'two-step': me?.mfa_enabled ? <Badge variant="success">On</Badge> : <Badge variant="danger">Off</Badge>,
     password: null,
+    team: tenantInfo?.usage?.max_users
+      ? `${(tenantInfo.usage.users || 0) + (tenantInfo.usage.pending_invitations || 0)} of ${tenantInfo.usage.max_users} seats used`
+      : null,
   };
 
   return (
@@ -134,7 +141,7 @@ export const SettingsView = () => {
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {settingsSections().map((s) => (
+        {settingsSections(tenantInfo?.permissions).map((s) => (
           <button
             key={s.key}
             type="button"

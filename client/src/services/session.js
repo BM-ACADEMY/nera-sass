@@ -26,7 +26,7 @@ export function readStoredSession(storage) {
   }
 }
 
-const PROFILE_FIELDS = ['name', 'email', 'phone', 'role', 'tenant_id', 'tenant_name', 'mfa_enabled'];
+const PROFILE_FIELDS = ['name', 'email', 'phone', 'role', 'tenant_id', 'tenant_name', 'mfa_enabled', 'must_change_password'];
 
 // Applies the current /api/auth/me answer to the stored user (display only).
 export function mergeProfile(stored, me) {
@@ -44,6 +44,10 @@ export function mergeProfile(stored, me) {
 
 // A wrong two-factor code keeps the session; any other 401 means the session
 // (or the sign-in step) has ended.
+// The account is on a temporary password: the app shows the "choose your own
+// password" screen (the server refuses everything else until then).
+export const PASSWORD_CHANGE_REQUIRED = 'PASSWORD_CHANGE_REQUIRED';
+
 export const isInvalidMfaCode = (status, body) => status === 401 && body?.code === 'INVALID_MFA_CODE';
 
 export function mfaErrorKind(error) {

@@ -26,6 +26,7 @@ import BillingPage from './views/billing/BillingPage.jsx';
 import SessionsPage from './views/account/SessionsPage.jsx';
 import { LoginScreen } from './views/auth/LoginScreen.jsx';
 import { SetPasswordPage } from './views/auth/SetPasswordPage.jsx';
+import { ChangePasswordRequired } from './views/auth/ChangePasswordRequired.jsx';
 import { api } from './services/api.js';
 
 
@@ -158,7 +159,10 @@ export default function App() {
           <Route
             path="*"
             element={
-              user ? (
+              // On a temporary password (Settings > Team): nothing else until it is changed.
+              user?.must_change_password ? (
+                <ChangePasswordRequired user={user} onSignOut={logout} />
+              ) : user ? (
                 <AppLayout
                   user={user}
                   logout={logout}

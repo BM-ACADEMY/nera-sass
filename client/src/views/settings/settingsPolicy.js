@@ -14,10 +14,13 @@ export const SETTINGS_SECTIONS = [
   { key: 'brand', title: 'Brand profile', text: 'Business name, category and automated replies.' },
   { key: 'two-step', title: 'Two-step verification', text: 'Ask for a code from your phone when you sign in.' },
   { key: 'password', title: 'Password & sessions', text: 'Change your password or sign out of every device.' },
+  // Only for people who may see the team (GET /api/tenant permissions.view_team).
+  { key: 'team', title: 'Team', text: 'Add the people who work in this workspace and choose what they can do.', permission: 'view_team' },
 ];
 
-export function settingsSections() {
-  return SETTINGS_SECTIONS;
+// The sections this person may open; one with `permission` needs that flag.
+export function settingsSections(permissions) {
+  return SETTINGS_SECTIONS.filter((s) => !s.permission || Boolean(permissions?.[s.permission]));
 }
 
 export const findSection = (key) => SETTINGS_SECTIONS.find((s) => s.key === key) || null;
