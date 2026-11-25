@@ -802,7 +802,12 @@ const mediaUpload = multer({
 
 const LEAD_EXPORT_DIR = path.join(__dirname, 'uploads', 'lead-exports');
 const activeLeadExports = new Set();
-const leadExportReady = whenDbConnected()
+// Export requests wait only for the connection, checked when they run. A
+// promise made once at startup could stay pending (it waited for the index
+// build and for a 'connected' event that may already have passed), leaving
+// POST /api/leads/exports without an answer. The index is built alongside.
+const leadExportReady = { then: (resolve, reject) => whenDbConnected().then(resolve, reject) };
+whenDbConnected()
   .then(() => LeadExportJobs.createIndexes())
   .catch((error) => console.error('[Lead Export] Index setup failed:', error.message));
 
