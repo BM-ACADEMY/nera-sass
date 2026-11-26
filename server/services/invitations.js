@@ -156,6 +156,13 @@ async function resendInvitation({ invitationId, tenantId = null, invitedBy = {},
   const token = crypto.randomBytes(32).toString('base64url');
   const filter = { id: Number(invitationId), accepted_at: null, revoked_at: null };
   if (staff) filter.tenant_id = null;
+  // An expired invitation no longer holds a seat (assertSingleLogin skips it),
+  // so bringing it back needs a free seat like a new invitation.
+  if (!staff) {
+    const pending = await run(() => Invitations.findOne(filter, { _id: 0, email: 1 }).lean());
+    if (!pending) throw new InvitationError(404, 'Pending invitation not found');
+    await assertSingleLogin(tenantId, pending.email);
+  }
   const invitation = await run(() => Invitations.findOneAndUpdate(
     filter,
     { $set: { token_hash: hashToken(token), expires_at: new Date(Date.now() + ttlHours() * 3600 * 1000) } },
@@ -173,6 +180,13 @@ async function revokeInvitation({ invitationId, tenantId = null, revokedBy = nul
   const run = (fn) => (staff ? runAsSystem(fn, 'invitations') : runAsTenant(tenantId, fn));
   const filter = { id: Number(invitationId), accepted_at: null, revoked_at: null };
   if (staff) filter.tenant_id = null;
+  // An expired invitation no longer holds a seat (assertSingleLogin skips it),
+  // so bringing it back needs a free seat like a new invitation.
+  if (!staff) {
+    const pending = await run(() => Invitations.findOne(filter, { _id: 0, email: 1 }).lean());
+    if (!pending) throw new InvitationError(404, 'Pending invitation not found');
+    await assertSingleLogin(tenantId, pending.email);
+  }
   const invitation = await run(() => Invitations.findOneAndUpdate(filter, { $set: { revoked_at: new Date(), revoked_by: revokedBy } }, { new: true, projection: { _id: 0 } }).lean());
   if (!invitation) throw new InvitationError(404, 'Pending invitation not found');
   await audit.record(audit.EVENTS.INVITATION_REVOKED, { tenantId, req, targetType: 'invitation', targetId: invitation.id, meta: { email: invitation.email } });

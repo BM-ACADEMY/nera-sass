@@ -342,7 +342,7 @@ app.post('/api/leads/exports', auth, requirePermission('leads.export'), async (r
     const createdJob = await LeadExportJobs.create({ user_id: userId, mode, filters, total_records: totalRecords });
     const job = { id: createdJob.id, status: createdJob.status, total_records: createdJob.total_records };
     setImmediate(() => processLeadExportJob(job.id));
-    const exportScope = mode === 'source' ? `leads from ${source}` : mode === 'date' ? `leads from ${String(from).slice(0, 10)} to ${String(to).slice(0, 10)}` : 'all leads';
+    const exportScope = mode === 'source' ? `leads from ${source}` : mode === 'date' ? `leads from ${String(from).slice(0, 10)} to ${String(to).slice(0, 10)}` : mode === 'selected' ? 'selected leads' : 'all leads';
     await activity.log(req, activity.EVENTS.LEADS_EXPORTED, { targetType: 'lead_export', targetId: job.id, summary: `Exported ${exportScope} (${totalRecords} record${totalRecords === 1 ? '' : 's'})`, meta: { mode, filters, total_records: totalRecords } });
     res.status(202).json(job);
   } catch (err) {
