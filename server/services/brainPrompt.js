@@ -86,6 +86,28 @@ const text = (value, max) => String(value ?? '').trim().slice(0, max);
 const list = (value, maxItems, maxLength) => (Array.isArray(value) ? value : [])
   .map((item) => text(item, maxLength)).filter(Boolean).slice(0, maxItems);
 
+const keywordList = (value) => list(Array.isArray(value) ? value : String(value ?? '').split(','), 30, 60)
+  .map((word) => word.toLowerCase());
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// A keyword matches at the start of a word, so "course" also finds "courses".
+const mentions = (textValue, words) => words.some((word) => new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegex(word)}`, 'iu').test(textValue));
+
+/**
+ * Shared numbers: a fixed check that runs before the AI. Returns 'skip' when
+ * the chat is for another brand (a skip word and no keep word), 'answer' when
+ * a keep word or an earlier AI reply settles it, or null to let the AI decide.
+ */
+function brandDecision(profile = {}, { message = '', earlierInbound = [], adText = '', aiRepliedBefore = false } = {}) {
+  const skip = profile.brand_skip_keywords || [];
+  const keep = profile.brand_keep_keywords || [];
+  if (!skip.length) return null;
+  if (aiRepliedBefore) return 'answer';
+  const all = [adText, ...earlierInbound, message].filter(Boolean).join('\n');
+  if (keep.length && mentions(all, keep)) return 'answer';
+  return mentions(all, skip) ? 'skip' : null;
+}
+
 /** Keeps only known fields of a submitted profile, trimmed to their limits. */
 function cleanProfile(input = {}) {
   const hours = input.business_hours && typeof input.business_hours === 'object' ? input.business_hours : {};
@@ -112,6 +134,9 @@ function cleanProfile(input = {}) {
     handoff_contacts: text(input.handoff_contacts, 300),
     // Shared numbers only: which chats this brain answers and which it leaves to people.
     brand_scope: text(input.brand_scope, 800),
+    // Fixed words checked before the AI runs (comma-separated or a list).
+    brand_keep_keywords: keywordList(input.brand_keep_keywords),
+    brand_skip_keywords: keywordList(input.brand_skip_keywords),
     industry: INDUSTRIES.includes(input.industry) ? input.industry : 'general',
     greeting_message: text(input.greeting_message, 300),
     booking_mode: input.booking_mode === 'appointments' ? 'appointments' : 'meetings',
@@ -366,6 +391,7 @@ module.exports = {
   PRICING_POLICIES,
   REQUIRED_FIELDS,
   cleanProfile,
+  brandDecision,
   missingRequired,
   isOpenNow,
   renderClientBrain,

@@ -195,6 +195,24 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
     return { sent: true, opt_out: true };
   }
 
+  // Shared number: a chat for another brand is left to people before any model call.
+  if (brain.profile?.brand_skip_keywords?.length) {
+    const [earlier, aiRepliedBefore] = await Promise.all([
+      Messages.find({ conversation_id: { $in: conversationIds }, direction: 'inbound', id: { $lt: message.id } }, { _id: 0, content: 1 }).sort({ id: -1 }).limit(10).lean(),
+      Messages.exists({ conversation_id: { $in: conversationIds }, direction: 'outbound', is_ai: true }),
+    ]);
+    const decision = prompts.brandDecision(brain.profile, {
+      message: message.content,
+      earlierInbound: earlier.map((m) => m.content || ''),
+      adText: [lead.campaign_name, lead.ad_name].filter(Boolean).join(' '),
+      aiRepliedBefore: Boolean(aiRepliedBefore),
+    });
+    if (decision === 'skip') {
+      await finish({ status: 'no_send', handoff: false, handoff_reason: 'Left alone: another brand on this number (keyword rule)', language: language.code, model: null, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost_usd: 0, cost_basis: 'none' });
+      return { sent: false, reason: 'This chat is for another brand on this number: left for the team', out_of_scope: true };
+    }
+  }
+
   const lastInbound = new Date(lead.last_inbound_at || message.sent_at || 0).getTime();
   if (now.getTime() - lastInbound >= WINDOW_MS) {
     return finishWithoutSend('Outside the WhatsApp 24-hour window: send an approved template');
@@ -369,6 +387,16 @@ const markOptedOut = (leadId, at) => Leads.updateOne({ id: leadId }, {
 
 /** Brain screen sandbox: drafts a reply and never sends or stores anything. */
 async function sandbox({ brain, clientId, message, history = [], now = new Date() }) {
+  if (brain.profile?.brand_skip_keywords?.length) {
+    const decision = prompts.brandDecision(brain.profile, {
+      message,
+      earlierInbound: history.filter((m) => m.direction !== 'outbound').map((m) => String(m.content || '')),
+      aiRepliedBefore: history.some((m) => m.direction === 'outbound'),
+    });
+    if (decision === 'skip') {
+      return { reply: '', handoff: false, handoff_reason: null, lead_updates: {}, opt_out: false, in_scope: false, left_alone: 'keyword rule', retrieved: [], latency_ms: 0 };
+    }
+  }
   const docs = prompts.selectDocs(await activeDocs(clientId), message);
   const { output, latency } = await draft({
     brain,

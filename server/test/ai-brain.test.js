@@ -389,4 +389,44 @@ test('AI Brain', async (t) => {
     assert.strictEqual(prompt.cleanProfile({ brand_scope: '  only BM TechX  ' }).brand_scope, 'only BM TechX');
     assert.strictEqual(prompt.cleanProfile({ brand_scope: 'x'.repeat(900) }).brand_scope.length, 800);
   });
+  await t.test('Keyword rule: a skip word leaves the chat alone with no model call; a keep word, the ad or an earlier AI reply wins', async () => {
+    const profile = { ...PROFILE, brand_skip_keywords: ['bm academy', 'course', 'placement'], brand_keep_keywords: ['bm techx', 'google maps'] };
+    const { lead, conversation } = await seed(1, { profile });
+    llmReturns({ reply: 'This is BM TechX. How can I help?' });
+    const academy = await inbound(1, conversation, 'Do you give placement guarantee for the Python courses?');
+    const skipped = await reply(1, lead.id, academy.id);
+    assert.strictEqual(skipped.body.sent, false, JSON.stringify(skipped.body));
+    assert.strictEqual(skipped.body.out_of_scope, true);
+    assert.strictEqual(prompts.length, 0, 'no model call for a skipped chat');
+    assert.strictEqual(sends.length, 0);
+    const saved = await leadOf(1, lead.id);
+    assert.ok(!saved.needs_human && !saved.ai_paused, 'no handover alert');
+    assert.strictEqual((await lastLog(1)).cost_usd, 0);
+
+    // Same chat now asks about BM TechX: the keep word wins.
+    const techx = await inbound(1, conversation, 'Actually, what about BM TechX Google Maps?');
+    assert.strictEqual((await reply(1, lead.id, techx.id)).body.sent, true);
+    assert.strictEqual(sends.length, 1);
+  });
+
+  await t.test('Keyword rule: a lead from a keep-word ad is answered even when it mentions a skip word', async () => {
+    const profile = { ...PROFILE, brand_skip_keywords: ['course'], brand_keep_keywords: ['bm techx'] };
+    const { lead, conversation } = await seed(1, { profile });
+    await runAsTenant(1, () => Leads.updateOne({ id: lead.id }, { $set: { ad_name: 'BM TechX Google Maps offer' } }));
+    llmReturns({ reply: 'This is BM TechX.' });
+    const msg = await inbound(1, conversation, 'Is there a course too?');
+    assert.strictEqual((await reply(1, lead.id, msg.id)).body.sent, true);
+  });
+
+  await t.test('Keyword rule: the sandbox shows a skipped chat without calling the model; no skip words means no rule', async () => {
+    const engine = require('../services/brainEngine');
+    const brain = { profile: { ...PROFILE, brand_skip_keywords: ['bm academy'] }, version_type: 'client' };
+    llmReturns({ reply: 'should not be called' });
+    const out = await runAsTenant(1, () => engine.sandbox({ brain, clientId: null, message: 'BM Academy Python course details' }));
+    assert.strictEqual(out.in_scope, false);
+    assert.strictEqual(prompts.length, 0);
+    const prompt = require('../services/brainPrompt');
+    assert.strictEqual(prompt.brandDecision({ ...PROFILE }, { message: 'BM Academy course' }), null);
+    assert.deepStrictEqual(prompt.cleanProfile({ brand_skip_keywords: ' BM Academy , Course ,, ' }).brand_skip_keywords, ['bm academy', 'course']);
+  });
 });
