@@ -381,10 +381,13 @@ export const TwoStepMethods = ({ me, onChanged }) => {
   const [flow, setFlow] = useState(null);
   const [codes, setCodes] = useState(null);
 
+  // The parent Settings page remounts this section on onChanged (key={version}),
+  // which would wipe freshly shown recovery codes. While codes are on screen,
+  // the refresh waits until the user closes them.
   const done = (data) => {
     setFlow(null);
-    if (data?.recovery_codes?.length) setCodes(data.recovery_codes);
     toast.success('Two-step verification updated');
+    if (data?.recovery_codes?.length) return setCodes(data.recovery_codes);
     onChanged?.();
   };
 
@@ -397,7 +400,7 @@ export const TwoStepMethods = ({ me, onChanged }) => {
     if (action === 'recovery') {
       const res = await api.regenerateRecoveryCodes(proof);
       setFlow(null);
-      setCodes(res.recovery_codes);
+      if (res?.recovery_codes?.length) return setCodes(res.recovery_codes);
       return onChanged?.();
     }
     if (method === 'totp') return setFlow({ ...flow, step: 'finish', password: proof.password, setup: await api.startMfaSetup(null, proof) });
@@ -415,7 +418,7 @@ export const TwoStepMethods = ({ me, onChanged }) => {
     }
   };
 
-  if (codes) return <RecoveryCodes codes={codes} onClose={() => setCodes(null)} />;
+  if (codes) return <RecoveryCodes codes={codes} onClose={() => { setCodes(null); onChanged?.(); }} />;
 
   return (
     <div>
