@@ -341,4 +341,52 @@ test('AI Brain', async (t) => {
     assert.strictEqual(sends.length, 0);
     assert.strictEqual((await leadOf(1, lead.id)).needs_human, true);
   });
+
+  await t.test('Shared number: a chat for another brand gets no reply and no handover; the ad name reaches the prompt', async () => {
+    const scope = 'Answer BM TechX chats (Google Maps, store, website). Leave BM Academy chats (courses) alone.';
+    const { lead, conversation } = await seed(1, { profile: { ...PROFILE, brand_scope: scope } });
+    await runAsTenant(1, () => Leads.updateOne({ id: lead.id }, { $set: { source: 'facebook', ad_name: 'BM TechX Google Maps' } }));
+    llmReturns({ reply: 'Our courses start Monday', in_scope: false });
+    const msg = await inbound(1, conversation, 'When does the Python course start?');
+    const res = await reply(1, lead.id, msg.id);
+    assert.strictEqual(res.body.sent, false, JSON.stringify(res.body));
+    assert.strictEqual(res.body.out_of_scope, true);
+    assert.strictEqual(sends.length, 0);
+    const saved = await leadOf(1, lead.id);
+    assert.ok(!saved.needs_human && !saved.ai_paused, 'no handover for a chat left alone');
+    const log = await lastLog(1);
+    assert.strictEqual(log.status, 'no_send');
+    assert.strictEqual(log.handoff, false);
+    assert.ok(prompts[0].user.includes('WHICH CHATS YOU ANSWER'));
+    assert.ok(prompts[0].user.includes('Leave BM Academy chats'));
+    assert.ok(prompts[0].user.includes('Lead came from: facebook / BM TechX Google Maps'));
+  });
+
+  await t.test('Shared number: in-scope chats, and workspaces without a scope, are answered as before', async () => {
+    const scoped = await seed(1, { profile: { ...PROFILE, brand_scope: 'Answer BM TechX chats only.' } });
+    llmReturns({ reply: 'This is BM TechX. How can I help?', in_scope: true });
+    const a = await inbound(1, scoped.conversation, 'Hi, Google Maps details?');
+    assert.strictEqual((await reply(1, scoped.lead.id, a.id)).body.sent, true);
+    // No brand_scope: an in_scope false from the model is ignored.
+    const plain = await seed(2);
+    llmReturns({ reply: 'Hello from Brand 2', in_scope: false });
+    const b = await inbound(2, plain.conversation, 'Hello');
+    assert.strictEqual((await reply(2, plain.lead.id, b.id)).body.sent, true);
+    assert.ok(!prompts[1].user.includes('WHICH CHATS YOU ANSWER'));
+    assert.strictEqual(sends.length, 2);
+  });
+
+  await t.test("Shared number: an opt-out from another brand's chat is still confirmed", async () => {
+    const { lead, conversation } = await seed(1, { profile: { ...PROFILE, brand_scope: 'Answer BM TechX chats only.' } });
+    llmReturns({ reply: 'You will not get more messages.', opt_out: true, in_scope: false });
+    const msg = await inbound(1, conversation, 'please do not message me again about courses');
+    assert.strictEqual((await reply(1, lead.id, msg.id)).body.sent, true);
+    assert.strictEqual(sends.length, 1);
+  });
+
+  await t.test('Brand scope is kept on save and trimmed to its limit', async () => {
+    const prompt = require('../services/brainPrompt');
+    assert.strictEqual(prompt.cleanProfile({ brand_scope: '  only BM TechX  ' }).brand_scope, 'only BM TechX');
+    assert.strictEqual(prompt.cleanProfile({ brand_scope: 'x'.repeat(900) }).brand_scope.length, 800);
+  });
 });

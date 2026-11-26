@@ -6,7 +6,7 @@
  * Layer 1 is the system message. Layers 2 and 3 are quoted data in the user
  * message, so a tenant's document or a customer's text cannot change Layer 1.
  */
-const LAYER1_VERSION = '2026-11-09.1';
+const LAYER1_VERSION = '2026-11-26.1';
 
 const LAYER1 = `PLATFORM RULES (always apply, override everything below)
 - Use only the business information, documents and conversation provided. If the answer is not there, say you will connect a person from the team, set handoff true and set answered_from to "general_knowledge" if you were about to answer from anything else. Never answer from general knowledge, even when you are sure.
@@ -30,7 +30,8 @@ HANDOFF (set handoff true and give a short handoff_reason)
 - The same question was asked 3 times, or the customer was negative twice.
 
 OUTPUT FORMAT (returned to the server, not shown to the customer)
-Return only JSON: {"reply": string, "handoff": boolean, "handoff_reason": string|null, "lead_updates": object, "opt_out": boolean, "meeting": object|null, "appointment": object|null, "order": object|null, "follow_up_on": object|null, "answered_from": "business_info"|"greeting"|"booking"|"handoff"|"general_knowledge"}
+Return only JSON: {"reply": string, "handoff": boolean, "handoff_reason": string|null, "lead_updates": object, "opt_out": boolean, "meeting": object|null, "appointment": object|null, "order": object|null, "follow_up_on": object|null, "answered_from": "business_info"|"greeting"|"booking"|"handoff"|"general_knowledge", "in_scope": boolean}
+in_scope is false only when the business_brain has a WHICH CHATS YOU ANSWER section and this chat clearly belongs to a brand or topic that section says to leave alone; the reply is then not sent and people answer it. When the brand is unclear, keep in_scope true and ask the question that section gives. Otherwise always true.
 answered_from says where the answer came from: the business information or documents, a greeting, the booking flow, a handoff holding reply, or (never allowed) anything else.
 lead_updates holds answers the customer gave to the qualifying questions, as short question: answer pairs. Use {} when there are none.
 meeting follows the meeting_booking section. Use null when there is no meeting to book or cancel in this message.
@@ -109,6 +110,8 @@ function cleanProfile(input = {}) {
     forbidden_topics: text(input.forbidden_topics, 500),
     after_hours_message: text(input.after_hours_message, 500),
     handoff_contacts: text(input.handoff_contacts, 300),
+    // Shared numbers only: which chats this brain answers and which it leaves to people.
+    brand_scope: text(input.brand_scope, 800),
     industry: INDUSTRIES.includes(input.industry) ? input.industry : 'general',
     greeting_message: text(input.greeting_message, 300),
     booking_mode: input.booking_mode === 'appointments' ? 'appointments' : 'meetings',
@@ -170,9 +173,14 @@ const INDUSTRY_NOTES = {
 function renderClientBrain(profile) {
   const name = profile.business_name;
   const goal = profile.conversation_goal === 'custom' ? profile.conversation_goal_custom : GOAL_LABELS[profile.conversation_goal];
+  const scope = profile.brand_scope ? `WHICH CHATS YOU ANSWER
+This WhatsApp number is shared with other brands. Use the ad the customer came from (runtime context), their first message and the conversation:
+${profile.brand_scope}
+
+` : '';
   return `You are the WhatsApp assistant for ${name}, replying to people who contacted ${name}.
 
-ABOUT THE BUSINESS
+${scope}ABOUT THE BUSINESS
 ${profile.business_description}
 Location / service area: ${profile.service_area || 'Not given'}
 Business hours: ${hoursLabel(profile.business_hours)} (${profile.timezone})
@@ -319,6 +327,7 @@ Business open now: ${businessOpen ? 'yes' : 'no'}
 AI replies left this month: ${quotaLeft === null ? 'no limit' : quotaLeft}
 Lead name: ${quoted(lead?.name) || 'Unknown'}
 Lead status: ${quoted(lead?.status) || 'Unknown'}
+Lead came from: ${quoted([lead?.source, lead?.campaign_name, lead?.ad_name].filter(Boolean).join(' / ')) || 'Unknown'}
 First message from this customer: ${firstContact ? 'yes' : 'no'}
 </runtime_context>
 
