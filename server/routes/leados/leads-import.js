@@ -80,7 +80,9 @@ app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
 
     const [importClients, importUsers] = await Promise.all([
       Clients.find({}, { _id: 0, id: 1, name: 1 }).lean(),
-      Users.find({}, { _id: 0, id: 1, name: 1, email: 1 }).lean(),
+      // Only people who can work the lead: disabled and removed staff are
+      // left out, so a sheet naming them leaves the lead unassigned.
+      Users.find({ is_active: { $ne: false }, removed_at: null }, { _id: 0, id: 1, name: 1, email: 1 }).lean(),
     ]);
     const clientsMap = Object.fromEntries(
       importClients.filter((client) => client.name).map((client) => [client.name.toLowerCase(), client.id])

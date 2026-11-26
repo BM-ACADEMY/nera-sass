@@ -476,4 +476,31 @@ test('Cross-customer security', async (t) => {
     assert.strictEqual((await runAsTenant(1, () => numberHealth.workspaceOwner())).owner, null);
   });
 
+  await t.test('C12. Lead import never assigns leads to disabled or removed people', async () => {
+    const { Users, Leads } = models;
+    const { owner, agent } = A.users;
+    // A.disabled has the same name as the active agent ("agent 1").
+    assert.strictEqual(A.disabled.name, agent.name);
+    await sys(() => Users.create({
+      tenant_id: 1, role: 'agent', email: 'gone@t1.test', name: 'Gone Person', password_hash: 'x',
+      is_active: false, active: false, removed_at: new Date(), token_version: 0,
+    }));
+    const csv = [
+      'name,phone,assigned',
+      `Import One,919811100001,${agent.name}`,
+      `Import Two,919811100002,${A.disabled.email}`,
+      'Import Three,919811100003,gone@t1.test',
+      'Import Four,919811100004,Gone Person',
+      `Import Five,919811100005,${agent.email}`,
+    ].join('\n');
+    const res = await request(app).post('/api/leads/import').set(bearer(owner)).attach('file', Buffer.from(csv), 'leads.csv');
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    const byName = Object.fromEntries((await runAsTenant(1, () => Leads.find({ name: /^Import / }).lean())).map((l) => [l.name, l.assigned_to ?? null]));
+    assert.strictEqual(byName['Import One'], agent.id, 'a shared name goes to the active person');
+    assert.strictEqual(byName['Import Two'], null, 'not to a disabled person');
+    assert.strictEqual(byName['Import Three'], null, 'not to a removed person (email)');
+    assert.strictEqual(byName['Import Four'], null, 'not to a removed person (name)');
+    assert.strictEqual(byName['Import Five'], agent.id);
+  });
+
 });
