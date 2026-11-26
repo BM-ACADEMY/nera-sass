@@ -141,6 +141,13 @@ test('Facebook lead forms', async (t) => {
     assert.strictEqual((await request(app).get('/api/facebook-leads/callback').query({ code: 'x', state: 'y' })).status, 404);
     assert.strictEqual((await leadsOf(1)).length, 0);
     assert.strictEqual(calls.length, 0);
+    // Unset (the production default) is off too.
+    delete process.env.FACEBOOK_LEADS_ENABLED;
+    assert.strictEqual((await request(app).get('/api/facebook-leads/status').set(bearer(owner))).status, 404);
+    assert.strictEqual((await request(app).post('/api/facebook-leads/connect').set(bearer(owner))).status, 404);
+    assert.strictEqual((await deliver(leadgenBody('PAGE_A', 'LG1'))).status, 404);
+    assert.strictEqual((await leadsOf(1)).length, 0);
+    assert.strictEqual(calls.length, 0);
   });
 
   await t.test('F2. Webhook verification uses the verify token from env', async () => {
