@@ -411,4 +411,31 @@ test('Cross-customer security', async (t) => {
     // Once a Manager, the Admin may manage them.
     assert.strictEqual((await request(app).post(`/api/team/users/${admin2.id}/deactivate`).set(ha)).status, 200);
   });
+  await t.test('C10. Accepting an invitation needs a free seat at that moment', async () => {
+    // Workspace 3 on the whatsapp plan (2 seats): its owner plus one invitation.
+    await sys(() => models.Tenants.create({ id: 3, name: 'Small', status: 'active', timezone: 'Asia/Kolkata' }));
+    const owner = (await sys(() => models.Users.create({ tenant_id: 3, role: 'owner', email: 'owner@t3.test', name: 'Owner Three', password_hash: bcrypt.hashSync('Original-Pass-1', 4), is_active: true, token_version: 0 }))).toObject();
+    await billing.subscriptions.activate({ tenantId: 3, plan: await billing.plans.planByCode('whatsapp') });
+    const invitations = require('../services/invitations');
+    const { token } = await invitations.createInvitation({ tenantId: 3, email: 'late@t3.test', role: 'agent', invitedBy: { id: owner.id, name: owner.name } });
+    assert.ok(token);
+    // The seat the invitation held is taken before it is accepted (another
+    // login created while the link sat in the inbox, e.g. by platform staff).
+    await sys(() => models.Users.create({ tenant_id: 3, role: 'agent', email: 'taker@t3.test', name: 'Seat Taker', password_hash: 'x', is_active: true, token_version: 0 }));
+    const res = await request(app).post('/api/auth/invitations/accept').send({ token, name: 'Late Joiner', password: 'Team-Member-2026' });
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
+    assert.strictEqual(res.body.error || res.body.message, 'This workspace has no free seat. Ask the owner to free one or add a seat.');
+    assert.strictEqual(await sys(() => models.Users.countDocuments({ email: 'late@t3.test' })), 0, 'no login was created');
+    const inv = await sys(() => models.Invitations.findOne({ email: 'late@t3.test' }).lean());
+    assert.strictEqual(inv.accepted_at ?? null, null, 'the invitation stays usable');
+    // A seat frees up: the same link now works.
+    await sys(() => models.Users.updateOne({ email: 'taker@t3.test' }, { $set: { is_active: false } }));
+    const ok = await request(app).post('/api/auth/invitations/accept').send({ token, name: 'Late Joiner', password: 'Team-Member-2026' });
+    assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
+    // Cancelling an invitation never needs a seat, even in a full workspace.
+    await sys(() => models.Users.updateOne({ email: 'taker@t3.test' }, { $set: { is_active: true } }));
+    const extra = await sys(() => models.Invitations.create({ tenant_id: 3, email: 'over@t3.test', role: 'agent', token_hash: 'x'.repeat(64), expires_at: new Date(Date.now() + 3600000), created_at: new Date() }));
+    const revoked = await request(app).delete(`/api/team/invitations/${extra.id}`).set(bearer(owner));
+    assert.strictEqual(revoked.status, 200, JSON.stringify(revoked.body));
+  });
 });

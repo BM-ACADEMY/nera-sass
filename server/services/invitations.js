@@ -69,7 +69,9 @@ async function assertSingleLogin(tenantId, email = null) {
   throw new InvitationError(409, `This workspace has used all ${limit} of its seats. Buy an extra seat in Settings > Billing to invite more people.`);
 }
 
-async function createInvitation({ tenantId = null, email, name = null, phone = null, role = null, staffRole = null, password = undefined, invitedBy = {}, req = null, skipSeatCheck = false }) {
+const NO_FREE_SEAT_MESSAGE = 'This workspace has no free seat. Ask the owner to free one or add a seat.';
+
+async function createInvitation({ tenantId = null, email, name = null, phone = null, role = null, staffRole = null, password = undefined, invitedBy = {}, req = null }) {
   const normalized = normalizeEmail(email);
   if (!isEmail(normalized)) throw new InvitationError(400, 'A valid email address is required');
   const staff = tenantId == null;
@@ -180,13 +182,7 @@ async function revokeInvitation({ invitationId, tenantId = null, revokedBy = nul
   const run = (fn) => (staff ? runAsSystem(fn, 'invitations') : runAsTenant(tenantId, fn));
   const filter = { id: Number(invitationId), accepted_at: null, revoked_at: null };
   if (staff) filter.tenant_id = null;
-  // An expired invitation no longer holds a seat (assertSingleLogin skips it),
-  // so bringing it back needs a free seat like a new invitation.
-  if (!staff) {
-    const pending = await run(() => Invitations.findOne(filter, { _id: 0, email: 1 }).lean());
-    if (!pending) throw new InvitationError(404, 'Pending invitation not found');
-    await assertSingleLogin(tenantId, pending.email);
-  }
+  // Cancelling frees a seat, so it never needs one (even over the limit).
   const invitation = await run(() => Invitations.findOneAndUpdate(filter, { $set: { revoked_at: new Date(), revoked_by: revokedBy } }, { new: true, projection: { _id: 0 } }).lean());
   if (!invitation) throw new InvitationError(404, 'Pending invitation not found');
   await audit.record(audit.EVENTS.INVITATION_REVOKED, { tenantId, req, targetType: 'invitation', targetId: invitation.id, meta: { email: invitation.email } });
@@ -241,6 +237,16 @@ async function acceptInvitation({ token, name, password, phone = null }) {
   const displayName = String(name || invitation.name || '').trim();
   if (!displayName) throw new InvitationError(400, 'Your name is required');
   if (await emailTaken(invitation.email)) throw new InvitationError(409, 'A user with this email already exists');
+  // The seat may have gone since the invitation was sent (a plan change, an
+  // extra seat that lapsed, someone added meanwhile): check it again now.
+  if (!invitation.is_platform_staff) {
+    try {
+      await assertSingleLogin(invitation.tenant_id, invitation.email);
+    } catch (error) {
+      if (error instanceof InvitationError && error.status === 409) throw new InvitationError(409, NO_FREE_SEAT_MESSAGE);
+      throw error;
+    }
+  }
 
   // Claim the invitation atomically: only one request can flip accepted_at.
   const claimed = await runAsSystem(() => Invitations.findOneAndUpdate(
