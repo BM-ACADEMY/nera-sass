@@ -28,6 +28,7 @@ test.before(async () => {
   process.env.AUTH_RATE_LIMIT = 'off';
   process.env.EMAIL_DELIVERY = 'memory';
   process.env.MFA_ENFORCED = 'true';
+  process.env.MFA_EXTRA_METHODS_ENABLED = 'true'; // these tests cover the email / WhatsApp methods
   await startTestDb();
   ({ app } = require('../server'));
 });

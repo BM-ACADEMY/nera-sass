@@ -101,7 +101,13 @@ async function afterPassword(user, req) {
     return out;
   }
   if (mfaEnforcedFor(user)) {
-    return { mfa_setup_required: true, mfa_token: issueMfaToken(user, 'mfa_setup'), email_hint: emailOtp.maskEmail(user.email), whatsapp_available: whatsappOtp.available() };
+    // Which methods the setup screen offers: the authenticator app always;
+    // email and WhatsApp codes only while MFA_EXTRA_METHODS_ENABLED is 'true'.
+    const extra = mfa.extraMethodsEnabled();
+    return {
+      mfa_setup_required: true, mfa_token: issueMfaToken(user, 'mfa_setup'), email_hint: emailOtp.maskEmail(user.email),
+      email_setup_available: extra, whatsapp_available: extra && whatsappOtp.available(),
+    };
   }
   return sessionPayload(user, { mfaPassed: false, req });
 }
@@ -378,6 +384,7 @@ function mailTwoStepChange(user, method, action) {
 // Email as a second step: a code is mailed, and entering it turns it on.
 exports.startEmailSetup = async (req, res) => {
   try {
+    if (!mfa.extraMethodsEnabled()) return res.status(403).json(mfa.EXTRA_METHOD_OFF);
     const { user, viaSession } = await enrolmentUser(req);
     if (user.mfa_email_enabled) return res.status(400).json({ error: 'Email codes are already turned on' });
     if (viaSession) await stepUpForStart(user, req);
@@ -393,6 +400,7 @@ exports.startEmailSetup = async (req, res) => {
 
 exports.confirmEmailSetup = async (req, res) => {
   try {
+    if (!mfa.extraMethodsEnabled()) return res.status(403).json(mfa.EXTRA_METHOD_OFF);
     const { user, viaSession } = await enrolmentUser(req);
     if (viaSession) await stepUpForConfirm(user, req);
     if (user.mfa_email_enabled) return res.status(400).json({ error: 'Email codes are already turned on' });
@@ -416,6 +424,7 @@ exports.confirmEmailSetup = async (req, res) => {
 // when WhatsApp codes are available (approved template, platform number).
 exports.startWhatsappSetup = async (req, res) => {
   try {
+    if (!mfa.extraMethodsEnabled()) return res.status(403).json(mfa.EXTRA_METHOD_OFF);
     const { user, viaSession } = await enrolmentUser(req);
     if (user.mfa_whatsapp_enabled) return res.status(400).json({ error: 'WhatsApp codes are already turned on' });
     if (!whatsappOtp.available()) return res.status(400).json({ error: 'WhatsApp codes are not available yet', code: 'WHATSAPP_NOT_AVAILABLE' });
@@ -458,6 +467,7 @@ exports.startWhatsappSetup = async (req, res) => {
 
 exports.confirmWhatsappSetup = async (req, res) => {
   try {
+    if (!mfa.extraMethodsEnabled()) return res.status(403).json(mfa.EXTRA_METHOD_OFF);
     const { user, viaSession } = await enrolmentUser(req);
     if (viaSession) await stepUpForConfirm(user, req);
     if (user.mfa_whatsapp_enabled) return res.status(400).json({ error: 'WhatsApp codes are already turned on' });
@@ -577,6 +587,9 @@ exports.me = async (req, res) => {
       mfa_methods_enrolled: mfa.enrolledMethodsOf(fresh),
       mfa_default_method: mfa.defaultMethodOf(fresh),
       whatsapp_otp_available: whatsappOtp.available(),
+      // false: only the authenticator app can be turned on (email / WhatsApp
+      // codes already on keep working and can be turned off).
+      mfa_extra_methods_enabled: mfa.extraMethodsEnabled(),
       mfa_whatsapp_number: fresh?.mfa_whatsapp_number ? whatsappOtp.maskNumber(fresh.mfa_whatsapp_number) : null,
       recovery_codes_left: fresh?.mfa_recovery_hashes?.length || 0,
       last_login: fresh?.last_login || null,

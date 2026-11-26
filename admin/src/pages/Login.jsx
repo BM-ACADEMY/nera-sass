@@ -61,6 +61,8 @@ const Login = () => {
   const [emailHint, setEmailHint] = useState('');
   const [whatsappHint, setWhatsappHint] = useState('');
   const [whatsappAvailable, setWhatsappAvailable] = useState(false);
+  // Email codes are offered at setup only when the server allows them (MFA_EXTRA_METHODS_ENABLED).
+  const [emailSetupAvailable, setEmailSetupAvailable] = useState(false);
   const [phone, setPhone] = useState('');
   const [setup, setSetup] = useState(null);
   const [code, setCode] = useState('');
@@ -162,6 +164,7 @@ const Login = () => {
         setMfaToken(data.mfa_token);
         setEmailHint(data.email_hint || '');
         setWhatsappAvailable(Boolean(data.whatsapp_available));
+        setEmailSetupAvailable(data.email_setup_available === true);
         setStep('setup-choose');
       } else {
         toast.error('Authentication response missing session token');
@@ -391,7 +394,7 @@ const Login = () => {
             {step === 'setup-choose' && (
               <div className="flex flex-col gap-3">
                 <MethodCard tile="totp" title="Authenticator app (recommended)" text="Google Authenticator, Microsoft Authenticator or Authy" onClick={() => startSetup('totp')} disabled={loading} />
-                <MethodCard tile="email" title="Email code" text={`Get a code at ${emailHint} each sign-in`} onClick={() => startSetup('email')} disabled={loading} />
+                {emailSetupAvailable && <MethodCard tile="email" title="Email code" text={`Get a code at ${emailHint} each sign-in`} onClick={() => startSetup('email')} disabled={loading} />}
                 {whatsappAvailable && <MethodCard tile="whatsapp" title="WhatsApp code" text="Get a code on WhatsApp each sign-in" onClick={() => startSetup('whatsapp')} disabled={loading} />}
                 <p className="mt-1 text-center text-xs text-slate-400">You can add other methods later in Settings → Two-step verification.</p>
                 <div className="flex justify-center">{back}</div>

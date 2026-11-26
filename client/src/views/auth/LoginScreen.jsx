@@ -82,6 +82,8 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
   const [emailHint, setEmailHint] = useState('');
   const [whatsappHint, setWhatsappHint] = useState('');
   const [whatsappAvailable, setWhatsappAvailable] = useState(false);
+  // Email codes are offered at setup only when the server allows them (MFA_EXTRA_METHODS_ENABLED).
+  const [emailSetupAvailable, setEmailSetupAvailable] = useState(false);
   const [phone, setPhone] = useState('');
   const [setup, setSetup] = useState(null);
   const [code, setCode] = useState('');
@@ -154,6 +156,7 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
     setEmailHint(info.email_hint || '');
     setWhatsappHint(info.whatsapp_hint || '');
     setWhatsappAvailable(Boolean(info.whatsapp_available));
+    setEmailSetupAvailable(info.email_setup_available === true);
     setCode('');
     if (result.mfa === 'setup') {
       setStep('setup-choose');
@@ -369,7 +372,7 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
             {step === 'setup-choose' && (
               <div className="flex flex-col gap-3">
                 <MethodCard tile="totp" title="Authenticator app (recommended)" text="Google Authenticator, Microsoft Authenticator or Authy" onClick={() => startSetup('totp')} disabled={busy} />
-                <MethodCard tile="email" title="Email code" text={`Get a code at ${emailHint || 'your email'} each sign-in`} onClick={() => startSetup('email')} disabled={busy} />
+                {emailSetupAvailable && <MethodCard tile="email" title="Email code" text={`Get a code at ${emailHint || 'your email'} each sign-in`} onClick={() => startSetup('email')} disabled={busy} />}
                 {whatsappAvailable && <MethodCard tile="whatsapp" title="WhatsApp code" text="Get a code on WhatsApp each sign-in" onClick={() => startSetup('whatsapp')} disabled={busy} />}
                 <p className="mt-1 text-center text-xs text-slate-400">You can change this later in Settings.</p>
                 <div className="flex justify-center">{back}</div>

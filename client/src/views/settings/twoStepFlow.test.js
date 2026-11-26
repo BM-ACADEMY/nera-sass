@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setupSteps, showsSteps, currentStep, firstCodeMethod, secondsLeft, shouldAutoSend, waitFromError, otherCodeMethods } from './twoStepFlow.js';
+import { shownMethods, setupSteps, showsSteps, currentStep, firstCodeMethod, secondsLeft, shouldAutoSend, waitFromError, otherCodeMethods } from './twoStepFlow.js';
 
 test('step labels follow the method', () => {
   assert.deepEqual(setupSteps('totp'), ["Confirm it's you", 'Scan the QR code', 'Enter the code']);
@@ -64,4 +64,14 @@ test('other code methods always offer a recovery code', () => {
   assert.deepEqual(otherCodeMethods(['totp', 'email'], 'email'), ['totp', 'recovery']);
   assert.deepEqual(otherCodeMethods(['email'], 'recovery'), ['email']);
   assert.deepEqual(otherCodeMethods(undefined, 'totp'), ['recovery']);
+});
+
+test('method cards: only the app while extra methods are off, unless already on', () => {
+  assert.deepStrictEqual(shownMethods({}), ['totp']);
+  assert.deepStrictEqual(shownMethods({ mfa_extra_methods_enabled: false }), ['totp']);
+  assert.deepStrictEqual(shownMethods({ mfa_extra_methods_enabled: 'true' }), ['totp'], 'only a real true');
+  assert.deepStrictEqual(shownMethods({ mfa_extra_methods_enabled: true }), ['totp', 'email', 'whatsapp']);
+  // Someone who already uses email codes keeps the card (to turn it off).
+  assert.deepStrictEqual(shownMethods({ mfa_extra_methods_enabled: false, mfa_methods_enrolled: ['email'] }), ['totp', 'email']);
+  assert.deepStrictEqual(shownMethods({ mfa_methods_enrolled: ['whatsapp', 'totp'] }), ['totp', 'whatsapp']);
 });

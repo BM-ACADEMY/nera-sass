@@ -6,6 +6,16 @@
 export const CODE_CHANNELS = ['email', 'whatsapp'];
 export const DEFAULT_RESEND_SECONDS = 45;
 
+// The method cards Settings shows. The authenticator app always; email and
+// WhatsApp codes only while the server allows new ones
+// (me.mfa_extra_methods_enabled, MFA_EXTRA_METHODS_ENABLED), or when this
+// person already has them on (so they can still turn them off).
+export function shownMethods(me) {
+  const extra = me?.mfa_extra_methods_enabled === true;
+  const enrolled = me?.mfa_methods_enrolled || me?.mfa_methods || [];
+  return ['totp', 'email', 'whatsapp'].filter((method) => method === 'totp' || extra || enrolled.includes(method));
+}
+
 // The three steps shown while turning a method on.
 export function setupSteps(method) {
   return ["Confirm it's you", method === 'totp' ? 'Scan the QR code' : 'Get a code', 'Enter the code'];

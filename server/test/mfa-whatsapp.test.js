@@ -23,6 +23,7 @@ test.before(async () => {
   process.env.LOGIN_RATE_LIMIT = '1000'; // the per-IP limiter is not what these tests measure
   process.env.EMAIL_DELIVERY = 'memory';
   process.env.MFA_ENFORCED = 'true';
+  process.env.MFA_EXTRA_METHODS_ENABLED = 'true'; // these tests cover the email / WhatsApp methods
   process.env.PLATFORM_WA_PHONE_NUMBER_ID = 'test-phone-id';
   process.env.PLATFORM_WA_ACCESS_TOKEN = 'test-token';
   await startTestDb();

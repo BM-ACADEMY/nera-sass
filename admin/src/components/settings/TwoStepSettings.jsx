@@ -359,6 +359,10 @@ const TwoStepSettings = ({ account, onChanged }) => {
   const hasMfa = Boolean(account?.mfa_enabled);
   const defaultMethod = account?.mfa_default_method || null;
   const waAvailable = Boolean(account?.whatsapp_otp_available);
+  // Email / WhatsApp cards only while the server allows new ones
+  // (MFA_EXTRA_METHODS_ENABLED), or when this account already has them on.
+  const extraMethods = account?.mfa_extra_methods_enabled === true;
+  const shown = (method) => method === 'totp' || extraMethods || enrolled.includes(method);
 
   const done = (recoveryCodes) => {
     setCodeStart(null);
@@ -474,7 +478,7 @@ const TwoStepSettings = ({ account, onChanged }) => {
             detail: account.mfa_whatsapp_number ? `Codes go to ${account.mfa_whatsapp_number}` : waAvailable ? 'Your number is verified with a code first.' : 'Coming soon: waiting for WhatsApp to approve the code message.',
             onEnable: turnOnWhatsapp,
           },
-        ].map((card) => (
+        ].filter((card) => shown(card.method)).map((card) => (
           <MethodCard
             key={card.method}
             method={card.method}

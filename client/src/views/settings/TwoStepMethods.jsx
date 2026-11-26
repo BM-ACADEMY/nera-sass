@@ -15,7 +15,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import {
   CODE_CHANNELS, DEFAULT_RESEND_SECONDS, setupSteps, showsSteps, currentStep, firstCodeMethod,
-  secondsLeft, shouldAutoSend, waitFromError, otherCodeMethods,
+  secondsLeft, shouldAutoSend, waitFromError, otherCodeMethods, shownMethods,
 } from './twoStepFlow.js';
 
 // Two-step verification in Settings: three methods (authenticator app, email
@@ -24,7 +24,6 @@ import {
 // when two-step verification is already on (the server refuses otherwise).
 // Turning a method on shows three steps: confirm it's you, scan the QR code
 // (or get a code), enter the code.
-const METHODS = ['totp', 'email', 'whatsapp'];
 const TEXT = {
   totp: 'A new code every 30 seconds in Google Authenticator, even offline.',
   email: 'A 6-digit code is emailed to you at each sign-in.',
@@ -423,7 +422,7 @@ export const TwoStepMethods = ({ me, onChanged }) => {
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-        {METHODS.map((method) => {
+        {shownMethods(me).map((method) => {
           const on = enrolled.includes(method);
           const unavailable = method === 'whatsapp' && !waAvailable;
           const isDefault = on && defaultMethod === method;

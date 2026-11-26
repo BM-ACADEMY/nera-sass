@@ -84,6 +84,16 @@ const whatsappOtpEnabled = () => String(process.env.WHATSAPP_OTP_TEMPLATE_APPROV
 
 const METHOD_ORDER = ['totp', 'email', 'whatsapp'];
 
+// Production switch for the newer two-step methods (email code, WhatsApp
+// code). Only the exact value 'true' lets people turn them ON; when off, only
+// the authenticator app can be set up. People who already have email or
+// WhatsApp codes keep signing in with them and can still turn them off.
+const extraMethodsEnabled = () => process.env.MFA_EXTRA_METHODS_ENABLED === 'true';
+const EXTRA_METHOD_OFF = Object.freeze({
+  error: 'This two-step method is not available yet. Use an authenticator app instead.',
+  code: 'MFA_METHOD_DISABLED',
+});
+
 // whatsappOtp.js registers the full check (flag + platform number configured).
 let whatsappUsable = whatsappOtpEnabled;
 const setWhatsappAvailability = (fn) => { whatsappUsable = fn; };
@@ -125,4 +135,5 @@ function defaultMethodOf(user) {
 module.exports = {
   generateSecret, totp, verifyTotp, otpauthUrl, generateRecoveryCodes, hashRecoveryCode, base32Encode, base32Decode,
   methodsOf, enrolledMethodsOf, hasMfa, defaultMethodOf, whatsappOtpEnabled, setWhatsappAvailability, METHOD_ORDER,
+  extraMethodsEnabled, EXTRA_METHOD_OFF,
 };
