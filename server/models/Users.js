@@ -76,7 +76,12 @@ module.exports = defineModel('users', {
   mfa_code_locked_until: { type: Date },
   // The method offered first at sign-in ('totp' | 'email' | 'whatsapp').
   mfa_default_method: { type: String },
-  // Until when a re-authenticated enrolment (password + current code) may be confirmed.
+  // A method added with the password alone cannot confirm sensitive changes
+  // until then (services/mfa.js).
+  mfa_totp_hold_until: { type: Date },
+  mfa_email_hold_until: { type: Date },
+  mfa_whatsapp_hold_until: { type: Date },
+  // Until when a re-authenticated enrolment may be confirmed.
   mfa_stepup_until: { type: Date },
   invited_by: { type: Number },
   last_login: { type: Date },

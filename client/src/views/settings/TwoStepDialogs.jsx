@@ -14,7 +14,7 @@ import { useSecondsUntil } from '../../hooks/useSecondsUntil.js';
 import { codeDeadline, formatClock } from '../../utils/otpTimer.js';
 import {
   CODE_CHANNELS, DEFAULT_RESEND_SECONDS, setupSteps, showsSteps, firstCodeMethod, secondsLeft, shouldAutoSend,
-  waitFromError, otherCodeMethods, confirmationProof, TITLES,
+  waitFromError, otherCodeMethods, confirmationProof, needsCodeFor, confirmMethods, TITLES,
 } from './twoStepFlow.js';
 
 // The pop-ups of Settings > Two-step verification (confirm it's you, pick a
@@ -28,7 +28,8 @@ const INSTEAD = {
   recovery: 'Use a recovery code instead',
 };
 const INTRO = {
-  enable: "For your safety, confirm it's you before adding a new sign-in method.",
+  enable: 'For your safety, enter your password before adding a new sign-in method.',
+  default: "For your safety, confirm it's you before changing your default sign-in method.",
   disable: "For your safety, confirm it's you before turning this sign-in method off.",
   disableAll: "For your safety, confirm it's you before turning two-step verification off.",
   recovery: "For your safety, confirm it's you. Your old recovery codes stop working once new ones are made.",
@@ -38,6 +39,7 @@ const OFF_ALL_TEXT ='Every method and your recovery codes are removed. Your pass
 const titleOf = ({ kind, method }) => {
   if (kind === 'disableAll') return 'Turn off two-step verification';
   if (kind === 'recovery') return 'Create new recovery codes';
+  if (kind === 'default') return 'Change your default sign-in method';
   return TITLES[kind][method];
 };
 
@@ -99,19 +101,20 @@ const PopupHeader = ({ method, icon, title }) => (
   </div>
 );
 
-// Password, plus a current code when two-step is already on. An email /
-// WhatsApp default code is sent as soon as the pop-up opens.
-// onSubmit(proof) does the check; errors stay in the pop-up.
+// The password. For anything but adding a method also a current code while
+// two-step is on; an email / WhatsApp default code is then sent as soon as the
+// pop-up opens. onSubmit(proof) does the check; errors stay in the pop-up.
 export const ConfirmIdentity = ({ me, action, notice, onSubmit, onCancel, busy, setBusy }) => {
-  const usable = me?.mfa_methods || [];
-  const hasMfa = Boolean(me?.mfa_enabled);
+  const usable = confirmMethods(me);
+  const needsCode = needsCodeFor(action, me);
+  const onHold = needsCode && usable.length < (me?.mfa_methods || []).length;
   const userKey = me?.id || me?.email || '';
   const remembered = (m) => lastSends.get(`${userKey}:${m}`) || null;
   const [method, setMethod] = useState(() => firstCodeMethod(me));
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [sent, setSent] = useState(() => remembered(firstCodeMethod(me)));
-  const [sending, setSending] = useState(() => shouldAutoSend({ hasMfa, method: firstCodeMethod(me), lastSent: remembered(firstCodeMethod(me)) }));
+  const [sending, setSending] = useState(() => shouldAutoSend({ hasMfa: needsCode, method: firstCodeMethod(me), lastSent: remembered(firstCodeMethod(me)) }));
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState('');
   const methodRef = useRef(method);
@@ -173,14 +176,14 @@ export const ConfirmIdentity = ({ me, action, notice, onSubmit, onCancel, busy, 
   const submit = async (event) => {
     event.preventDefault();
     if (!password) return setError('Enter your current password');
-    if (hasMfa && !code.trim()) return setError(method === 'recovery' ? 'Enter one of your recovery codes' : 'Enter the 6-digit code');
+    if (needsCode && !code.trim()) return setError(method === 'recovery' ? 'Enter one of your recovery codes' : 'Enter the 6-digit code');
     setBusy(true);
     setError('');
     try {
-      await onSubmit(confirmationProof({ hasMfa, password, method, code }));
+      await onSubmit(confirmationProof({ action, needsCode, password, method, code }));
       // That code is used up now; reopening the pop-up asks for a new one.
       const key = `${userKey}:${method}`;
-      if (hasMfa && lastSends.has(key)) lastSends.set(key, { ...lastSends.get(key), used: true, deadline: 0 });
+      if (needsCode && lastSends.has(key)) lastSends.set(key, { ...lastSends.get(key), used: true, deadline: 0 });
     } catch (err) {
       setError(err.message || 'Something went wrong');
       if (method !== 'recovery') setCode('');
@@ -216,10 +219,11 @@ export const ConfirmIdentity = ({ me, action, notice, onSubmit, onCancel, busy, 
       <FormRow label="Your password" htmlFor="twostep-password">
         <PasswordInput id="twostep-password" autoFocus autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
       </FormRow>
-      {hasMfa && (
+      {needsCode && (
         <div className="flex flex-col gap-2.5">
           <div className="text-[13px] font-semibold text-slate-700">{method === 'recovery' ? 'Recovery code' : 'Code from your current sign-in method'}</div>
           <p className="text-[13px] text-muted-foreground">{codeText}</p>
+          {onHold && <p className="text-xs text-amber-700">A method added in the last 24 hours cannot confirm this yet.</p>}
           {method === 'recovery'
             ? <Input autoComplete="off" aria-label="Recovery code" placeholder="XXXXX-XXXXX" value={code} onChange={(e) => setCode(e.target.value)} className="h-10 font-mono" />
             : <div className="py-1"><OtpInput value={code} onChange={setCode} disabled={busy} autoFocus={false} /></div>}
@@ -237,7 +241,7 @@ export const ConfirmIdentity = ({ me, action, notice, onSubmit, onCancel, busy, 
         </div>
       )}
       <PanelActions busy={busy} onCancel={onCancel} destructive={off}
-        label={kind === 'enable' ? 'Continue' : off ? 'Turn off' : 'Create new codes'} />
+        label={{ enable: 'Continue', default: 'Make default', recovery: 'Create new codes' }[kind] || 'Turn off'} />
     </form>
   );
 };

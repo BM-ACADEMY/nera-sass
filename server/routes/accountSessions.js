@@ -22,7 +22,7 @@ const express = require('express');
 const { Users } = require('../models');
 const { requireAuth, issueAccessToken } = require('../middleware/authMiddleware');
 const { runAsSystem } = require('../services/tenantContext');
-const { hasMfa, methodsOf } = require('../services/mfa');
+const { hasMfa, methodsOf, onHold } = require('../services/mfa');
 const emailOtp = require('../services/emailOtp');
 const whatsappOtp = require('../services/whatsappOtp');
 const { confirmIdentity, confirmPassword } = require('../services/stepUp');
@@ -54,8 +54,11 @@ router.get('/', async (req, res) => {
     const list = await sessions.listForUser(user, req.authSessionId);
     // A token from before sessions were tracked has no row: say so, so the page
     // can explain why "This device" is missing.
-    // mfa_methods: what signing a device out will ask for besides the password.
-    return res.json({ sessions: list, current_session_tracked: Boolean(req.authSessionId), mfa_methods: methodsOf(user) });
+    // mfa_methods: what signing a device out will ask for besides the password
+    // (a just-added method cannot confirm it while an older one can).
+    const methods = methodsOf(user);
+    const older = methods.filter((m) => !onHold(user, m));
+    return res.json({ sessions: list, current_session_tracked: Boolean(req.authSessionId), mfa_methods: older.length ? older : methods });
   } catch (error) {
     return fail(res, error);
   }

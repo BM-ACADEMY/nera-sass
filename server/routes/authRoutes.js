@@ -71,7 +71,7 @@ router.post('/mfa/disable-all', loginLimit, requireAuth, reauthLimit, authContro
 router.post('/mfa/recovery-codes', loginLimit, requireAuth, reauthLimit, authController.regenerateRecoveryCodes);
 // Code for confirming a security change: /mfa/reauth/email/send or /mfa/reauth/whatsapp/send.
 router.post('/mfa/reauth/:channel/send', loginLimit, requireAuth, reauthLimit, authController.sendReauthCode);
-router.post('/mfa/default', requireAuth, authController.setDefaultMfaMethod);
+router.post('/mfa/default', loginLimit, requireAuth, reauthLimit, authController.setDefaultMfaMethod);
 
 // Users are never created here: customer users join by invitation
 // (/api/team/invitations, /api/admin/users) and set their own password.

@@ -1,8 +1,8 @@
 // Pure rules for two-step verification in Settings (TwoStepMethods.jsx and
 // TwoStepDialogs.jsx): which methods are shown, what the switch at the top
-// does, which step the indicator shows, which current code is asked for first,
-// and whether that code is sent by itself. The server still checks the
-// password and the current code on every change.
+// does, which step the indicator shows, when a current code is asked for (not
+// for adding a method), which one first, and whether it is sent by itself. The
+// server checks every change again.
 
 export const CODE_CHANNELS = ['email', 'whatsapp'];
 export const DEFAULT_RESEND_SECONDS = 45;
@@ -83,22 +83,36 @@ export const currentStep = (step) => ({ confirm: 1, code: 3 }[step] || 2);
 // The server wants "confirm it's you" (again).
 export const needsConfirmation = (error) => ['PASSWORD_REQUIRED', 'MFA_CODE_REQUIRED'].includes(error?.code);
 
-// Whether the confirmation the server reported is still good for a request
-// (a few seconds of margin). The password itself is never kept.
-export const isConfirmed = (until, now = Date.now()) => Boolean(until) && until - now > 5000;
+// Adding a method takes the password only. Everything else asks for a current
+// code as well while two-step verification is on.
+export const needsCodeFor = (action, me) => action.kind !== 'enable' && Boolean(me?.mfa_enabled);
+
+// Whether the confirmation the server reported still covers `action` (a few
+// seconds of margin): { until, full }. One made with the password only covers
+// adding a method, nothing else. The password itself is never kept.
+export function isConfirmed(confirmation, action, now = Date.now()) {
+  if (!confirmation?.until || confirmation.until - now <= 5000) return false;
+  return action.kind === 'enable' || confirmation.full === true;
+}
 
 // What the confirm pop-up sends.
-export function confirmationProof({ hasMfa, password, method, code }) {
-  if (!hasMfa) return { password };
+export function confirmationProof({ action, needsCode, password, method, code }) {
+  if (action.kind === 'enable') return { password, purpose: 'add' };
+  if (!needsCode) return { password };
   return method === 'recovery' ? { password, recovery_code: code.trim() } : { password, code_method: method, code };
 }
+
+// Methods added in the last day: their codes cannot confirm changes yet.
+export const holdOf = (me, method) => (me?.mfa_methods_on_hold || []).find((h) => h.method === method) || null;
+// The methods whose current code confirms a change.
+export const confirmMethods = (me) => (me?.mfa_methods || []).filter((m) => !holdOf(me, m));
 
 // The current code asked for first: the default method when it can be used,
 // then the authenticator app, then any other method, then a recovery code.
 // null when two-step verification is off (only the password is needed).
 export function firstCodeMethod(me) {
   if (!me?.mfa_enabled) return null;
-  const usable = me.mfa_methods || [];
+  const usable = confirmMethods(me);
   if (usable.includes(me.mfa_default_method)) return me.mfa_default_method;
   if (usable.includes('totp')) return 'totp';
   return usable[0] || 'recovery';

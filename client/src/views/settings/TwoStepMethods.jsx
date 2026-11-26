@@ -17,17 +17,20 @@ import { useSecondsUntil } from '../../hooks/useSecondsUntil.js';
 import { codeDeadline } from '../../utils/otpTimer.js';
 import { ConfirmIdentity, ChooseMethod, ConfirmOff, Steps, PanelActions, CodeCountdown, LinkButton } from './TwoStepDialogs.jsx';
 import {
-  TITLES, DEFAULT_RESEND_SECONDS,currentStep, waitFromError, enrolledMethods, shownMethods, setupChoices, switchState,
-  setupBlocker, removeBlocker, whatsappOnly, needsConfirmation, isConfirmed,
+  TITLES, DEFAULT_RESEND_SECONDS, currentStep, waitFromError, enrolledMethods, shownMethods, setupChoices, switchState,
+  setupBlocker, removeBlocker, whatsappOnly, needsConfirmation, isConfirmed, holdOf,
 } from './twoStepFlow.js';
 
 // Two-step verification in Settings: a switch at the top and three methods
 // (authenticator app, email code, WhatsApp code) as cards. Changes ask
-// "confirm it's you" in a pop-up (password, plus a current code when two-step
-// is on). The server remembers that check for this session for a few minutes,
-// so it is asked once; the password is not kept in the browser. New recovery
-// codes always ask again. Turning a method on shows three steps: confirm it's
-// you (the pop-up), scan the QR code (or get a code), enter the code.
+// "confirm it's you" in a pop-up: the password only for adding a method; for
+// turning one off, changing the default or new recovery codes also a current
+// code while two-step is on. The server remembers the check for this session
+// for a few minutes (a password-only one covers adding only), so it is asked
+// once; the password is not kept in the browser. New recovery codes always ask
+// again. A method added to an account that already had two-step on cannot
+// confirm changes for 24 hours. Turning a method on shows three steps: confirm
+// it's you (the pop-up), scan the QR code (or get a code), enter the code.
 const TEXT = {
   totp: 'A new code every 30 seconds in Google Authenticator, even offline.',
   email: 'A 6-digit code is emailed to you at each sign-in.',
@@ -213,14 +216,16 @@ export const TwoStepMethods = ({ me, onChanged }) => {
   const waAvailable = Boolean(me?.whatsapp_otp_available);
   const state = switchState(me);
   // The open pop-up: { type: 'confirm' | 'choose' | 'off', action, notice }.
-  // action: { kind: 'enable' | 'disable' | 'disableAll' | 'recovery', method, phone, resume }.
+  // action: { kind: 'enable' | 'disable' | 'disableAll' | 'default' | 'recovery', method, phone, resume }.
   const [dialog, setDialog] = useState(null);
   // The setup panel: { method, step: 'starting' | 'scan' | 'phone' | 'code', setup, phone, info }.
   const [flow, setFlow] = useState(null);
   const [busy, setBusy] = useState(false);
   const [codes, setCodes] = useState(null);
-  // Until when the server accepts changes without the password again.
-  const [confirmedUntil, setConfirmedUntil] = useState(() => (me?.mfa_stepup_seconds ? Date.now() + me.mfa_stepup_seconds * 1000 : 0));
+  // Until when the server accepts changes without the password again, and
+  // whether that covers more than adding a method (it was made with a code).
+  const [confirmation, setConfirmation] = useState(() => (me?.mfa_stepup_seconds
+    ? { until: timeAfter(me.mfa_stepup_seconds), full: Boolean(me.mfa_stepup_full) } : null));
   const idle = !flow && !dialog;
 
   const closeAll = () => {
@@ -239,7 +244,7 @@ export const TwoStepMethods = ({ me, onChanged }) => {
   };
 
   const askAgain = (action) => {
-    setConfirmedUntil(0);
+    setConfirmation(null);
     setDialog({ type: 'confirm', action, notice: 'Please confirm it’s you again to continue.' });
   };
 
@@ -264,12 +269,18 @@ export const TwoStepMethods = ({ me, onChanged }) => {
     const { kind, method, phone } = action;
     if (kind === 'disableAll') {
       await api.disableAllMfa();
-      setConfirmedUntil(0);
+      setConfirmation(null);
       return done();
     }
     if (kind === 'disable') {
       await api.disableMfaMethod(method, {});
       return done();
+    }
+    if (kind === 'default') {
+      await api.setDefaultMfaMethod(method);
+      setDialog(null);
+      toast.success(`${METHOD_META[method].title} is now your default`);
+      return onChanged?.();
     }
     // The setup panel is still open: only the confirmation had run out.
     if (action.resume) return setDialog(null);
@@ -289,14 +300,14 @@ export const TwoStepMethods = ({ me, onChanged }) => {
 
   // A click: ask "confirm it's you" only when there is no live confirmation.
   const begin = async (action) => {
-    if (action.kind === 'recovery' || !isConfirmed(confirmedUntil)) return setDialog({ type: 'confirm', action });
-    if (action.kind !== 'enable') return setDialog({ type: 'off', action });
+    if (action.kind === 'recovery' || !isConfirmed(confirmation, action)) return setDialog({ type: 'confirm', action });
+    if (action.kind === 'disable' || action.kind === 'disableAll') return setDialog({ type: 'off', action });
     setDialog(null);
-    setFlow({ method: action.method, step: 'starting' });
+    if (action.kind === 'enable') setFlow({ method: action.method, step: 'starting' });
     try {
       await perform(action);
     } catch (err) {
-      setFlow(null);
+      if (action.kind === 'enable') setFlow(null);
       if (needsConfirmation(err)) return askAgain(action);
       toast.error(err.message || 'Something went wrong');
     }
@@ -310,7 +321,7 @@ export const TwoStepMethods = ({ me, onChanged }) => {
       return onChanged?.();
     }
     const res = await api.confirmStepUp(proof);
-    setConfirmedUntil(timeAfter(res.expires_in));
+    setConfirmation({ until: timeAfter(res.expires_in), full: res.strength === 'full' });
     if (startsSetup(action)) {
       setDialog(null);
       setFlow({ method: action.method, step: 'starting' });
@@ -347,16 +358,6 @@ export const TwoStepMethods = ({ me, onChanged }) => {
       if (!needsConfirmation(err)) throw err;
       // MFA_CODE_REQUIRED: the started setup is too old, so it starts again.
       askAgain({ kind: 'enable', method, phone, resume: err.code === 'PASSWORD_REQUIRED' });
-    }
-  };
-
-  const makeDefault = async (method) => {
-    try {
-      await api.setDefaultMfaMethod(method);
-      toast.success(`${METHOD_META[method].title} is now your default`);
-      onChanged?.();
-    } catch (err) {
-      toast.error(err.message || 'Could not change the default');
     }
   };
 
@@ -400,6 +401,7 @@ export const TwoStepMethods = ({ me, onChanged }) => {
           const isDefault = on && defaultMethod === method;
           const active = flow?.method === method;
           const blocker = on ? removeBlocker(me, method) : setupBlocker(me, method);
+          const hold = on ? holdOf(me, method) : null;
           return (
             <div key={method} style={{ border: '1px solid ' + (active ? C.accent : on ? C.green + '55' : C.border), borderRadius: 12, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -417,13 +419,14 @@ export const TwoStepMethods = ({ me, onChanged }) => {
                 {method === 'whatsapp' && on && me?.mfa_whatsapp_number ? ` Number: ${me.mfa_whatsapp_number}.` : ''}
               </p>
               <div style={{ marginTop: 'auto' }}>
+                {hold && <p className="mb-2 text-[11px] text-slate-500">Added recently: it signs you in, but cannot confirm changes until {new Date(hold.until).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}.</p>}
                 {blocker && !unavailable && <p className="mb-2 text-[11px] text-amber-700">{blocker}</p>}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {on ? (
                     <>
                       <Button type="button" size="sm" variant="outline" className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700" disabled={!idle || Boolean(blocker)}
                         aria-label={TITLES.disable[method]} onClick={() => begin({ kind: 'disable', method })}>Turn off</Button>
-                      {!isDefault && usable.includes(method) && <Button type="button" size="sm" variant="outline" disabled={!idle} onClick={() => makeDefault(method)}>Make default</Button>}
+                      {!isDefault && usable.includes(method) && <Button type="button" size="sm" variant="outline" disabled={!idle} onClick={() => begin({ kind: 'default', method })}>Make default</Button>}
                     </>
                   ) : (
                     <Button type="button" size="sm" disabled={!idle || Boolean(blocker)} aria-label={TITLES.enable[method]} onClick={() => begin({ kind: 'enable', method })}>Set up</Button>

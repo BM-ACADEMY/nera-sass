@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   shownMethods, setupSteps, showsSteps, currentStep, firstCodeMethod, secondsLeft, shouldAutoSend, waitFromError, otherCodeMethods,
   setupChoices, switchState, setupBlocker, removeBlocker, whatsappOnly, needsConfirmation, isConfirmed, confirmationProof,
+  needsCodeFor, holdOf, confirmMethods,
 } from './twoStepFlow.js';
 
 const me = (enrolled = [], extra = {}) => ({
@@ -113,17 +114,41 @@ test('WhatsApp is an extra method', () => {
   assert.equal(whatsappOnly(me(['whatsapp', 'totp'])), false);
 });
 
-test('confirmation: asked again only when it ran out or the server says so', () => {
-  assert.equal(isConfirmed(0, 1000), false);
-  assert.equal(isConfirmed(601000, 1000), true);
-  assert.equal(isConfirmed(5000, 1000), false);
+test('adding a method asks for the password only; other changes also for a code', () => {
+  const on = me(['email']);
+  assert.equal(needsCodeFor({ kind: 'enable' }, on), false);
+  for (const kind of ['disable', 'disableAll', 'default', 'recovery']) assert.equal(needsCodeFor({ kind }, on), true, kind);
+  assert.equal(needsCodeFor({ kind: 'disable' }, me()), false);
+});
+
+test('confirmation: a password-only one covers adding and nothing else', () => {
+  const add = { kind: 'enable' };
+  const off = { kind: 'disable' };
+  assert.equal(isConfirmed(null, add, 1000), false);
+  assert.equal(isConfirmed({ until: 601000, full: false }, add, 1000), true);
+  for (const kind of ['disable', 'disableAll', 'default']) assert.equal(isConfirmed({ until: 601000, full: false }, { kind }, 1000), false, kind);
+  assert.equal(isConfirmed({ until: 601000, full: true }, off, 1000), true);
+  assert.equal(isConfirmed({ until: 601000, full: true }, add, 1000), true);
+  assert.equal(isConfirmed({ until: 5000, full: true }, add, 1000), false);
   assert.equal(needsConfirmation({ code: 'PASSWORD_REQUIRED' }), true);
   assert.equal(needsConfirmation({ code: 'MFA_CODE_REQUIRED' }), true);
   assert.equal(needsConfirmation({ code: 'PASSWORD_INCORRECT' }), false);
 });
 
+test('a just-added method is not offered to confirm changes', () => {
+  const held = me(['email', 'totp'], { mfa_default_method: 'totp', mfa_methods_on_hold: [{ method: 'totp', until: '2026-11-27T10:00:00Z' }] });
+  assert.deepStrictEqual(confirmMethods(held), ['email']);
+  assert.equal(firstCodeMethod(held), 'email');
+  assert.equal(holdOf(held, 'totp').until, '2026-11-27T10:00:00Z');
+  assert.equal(holdOf(held, 'email'), null);
+  assert.equal(firstCodeMethod(me(['totp'], { mfa_methods_on_hold: [{ method: 'totp' }] })), 'recovery');
+});
+
 test('what the pop-up sends', () => {
-  assert.deepStrictEqual(confirmationProof({ hasMfa: false, password: 'p', method: null, code: '' }), { password: 'p' });
-  assert.deepStrictEqual(confirmationProof({ hasMfa: true, password: 'p', method: 'totp', code: '123456' }), { password: 'p', code_method: 'totp', code: '123456' });
-  assert.deepStrictEqual(confirmationProof({ hasMfa: true, password: 'p', method: 'recovery', code: ' AB-CD ' }), { password: 'p', recovery_code: 'AB-CD' });
+  const add = { kind: 'enable' };
+  const off = { kind: 'disable' };
+  assert.deepStrictEqual(confirmationProof({ action: add, needsCode: false, password: 'p', method: 'totp', code: '' }), { password: 'p', purpose: 'add' });
+  assert.deepStrictEqual(confirmationProof({ action: off, needsCode: false, password: 'p', method: null, code: '' }), { password: 'p' });
+  assert.deepStrictEqual(confirmationProof({ action: off, needsCode: true, password: 'p', method: 'totp', code: '123456' }), { password: 'p', code_method: 'totp', code: '123456' });
+  assert.deepStrictEqual(confirmationProof({ action: off, needsCode: true, password: 'p', method: 'recovery', code: ' AB-CD ' }), { password: 'p', recovery_code: 'AB-CD' });
 });

@@ -192,7 +192,7 @@ test('two-step confirmation, switch-off and WhatsApp sign-in limit', async (t) =
     assert.strictEqual((await post('/mfa/setup', changed.body.token)).status, 401);
   });
 
-  await t.test('G5. A confirmation made while two-step was off does not count once it is on', async () => {
+  await t.test('G5. A confirmation made while two-step was off covers only adding once it is on', async () => {
     const user = await customer();
     const token = await signIn(user);
     assert.strictEqual((await post('/mfa/step-up', token, { password: PASSWORD })).status, 200);
@@ -201,8 +201,9 @@ test('two-step confirmation, switch-off and WhatsApp sign-in limit', async (t) =
     await sys(() => Users.updateOne({ id: user.id }, { $set: appOn(secret) }));
     assert.strictEqual((await post('/mfa/disable', token, { method: 'totp' })).status, 403);
     assert.strictEqual((await post('/mfa/disable-all', token)).status, 403);
-    assert.strictEqual((await post('/mfa/email/setup', token)).status, 403);
-    assert.strictEqual((await me(token)).body.mfa_stepup_seconds, 0);
+    assert.strictEqual((await post('/mfa/default', token, { method: 'totp' })).status, 403);
+    assert.strictEqual((await me(token)).body.mfa_stepup_full, false);
+    assert.strictEqual((await post('/mfa/email/setup', token)).status, 200, 'adding takes the password only');
     assert.strictEqual((await fresh(user.id)).mfa_enabled, true);
   });
 
