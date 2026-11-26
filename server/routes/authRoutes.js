@@ -64,6 +64,10 @@ router.post('/change-password', requireAuth, reauthLimit, authController.changeP
 router.post('/logout', requireAuth, authController.logout);
 router.post('/logout-all', requireAuth, authController.logoutAll);
 router.patch('/profile', requireAuth, authController.updateProfile);
+// Reopening a started setup after a page reload. Its own limit: it sends
+// nothing and takes no password, so a reload does not use up the others.
+const resumeLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 120, key: accountKey });
+router.post('/mfa/setup/resume', requireAuth, resumeLimit, authController.resumeMfaSetup);
 // "Confirm it's you" once, remembered for this session for a few minutes.
 router.post('/mfa/step-up', loginLimit, requireAuth, reauthLimit, authController.confirmStepUp);
 router.post('/mfa/disable', loginLimit, requireAuth, reauthLimit, authController.disableMfaMethod);
@@ -77,6 +81,6 @@ router.post('/mfa/default', loginLimit, requireAuth, reauthLimit, authController
 // (/api/team/invitations, /api/admin/users) and set their own password.
 
 // Tests reuse account ids after clearing the database; they start each case with empty counters.
-router.resetLimitsForTests = () => { loginLimit.reset(); reauthLimit.reset(); };
+router.resetLimitsForTests = () => { loginLimit.reset(); reauthLimit.reset(); resumeLimit.reset(); };
 
 module.exports = router;

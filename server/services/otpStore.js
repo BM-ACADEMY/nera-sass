@@ -109,7 +109,20 @@ function createOtpStore({ prefix, deliver, describeTarget, scope, ErrorClass = O
     return false;
   }
 
-  return { sendCode, verifyCode, clearFields };
+  // The code that is still waiting for `purpose`, without sending anything:
+  // seconds it stays valid and until another may be asked for. Null when there
+  // is none (never the code or its hash).
+  async function pendingCode(userId, purpose) {
+    const user = await sys(() => Users.findOne({ id: userId }, { _id: 0 }).lean());
+    if (!user?.[f('hash')] || user[f('purpose')] !== purpose || Number(user[f('attempts')] || 0) >= MAX_ATTEMPTS) return null;
+    const seconds = (at) => Math.ceil((at - Date.now()) / 1000);
+    const left = seconds(new Date(user[f('expires_at')]).getTime());
+    if (!(left > 0)) return null;
+    const sentAt = user[f('sent_at')] ? new Date(user[f('sent_at')]).getTime() : 0;
+    return { expires_in: left, resend_after: Math.max(0, seconds(sentAt + RESEND_SECONDS * 1000)) };
+  }
+
+  return { sendCode, verifyCode, pendingCode, clearFields };
 }
 
 module.exports = { createOtpStore, OtpError, PURPOSES, TTL_MINUTES, RESEND_SECONDS, MAX_ATTEMPTS };

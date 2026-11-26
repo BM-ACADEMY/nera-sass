@@ -81,6 +81,14 @@ module.exports = defineModel('users', {
   mfa_totp_hold_until: { type: Date },
   mfa_email_hold_until: { type: Date },
   mfa_whatsapp_hold_until: { type: Date },
+  // Which signed-in session started the pending setup of a method, and when:
+  // only that session may reopen it (POST /api/auth/mfa/setup/resume).
+  mfa_totp_setup_session: { type: Number },
+  mfa_totp_setup_at: { type: Date },
+  mfa_email_setup_session: { type: Number },
+  mfa_email_setup_at: { type: Date },
+  mfa_whatsapp_setup_session: { type: Number },
+  mfa_whatsapp_setup_at: { type: Date },
   // Until when a re-authenticated enrolment may be confirmed.
   mfa_stepup_until: { type: Date },
   invited_by: { type: Number },

@@ -17,9 +17,9 @@ import {
   waitFromError, otherCodeMethods, confirmationProof, needsCodeFor, confirmMethods, TITLES,
 } from './twoStepFlow.js';
 
-// The pop-ups of Settings > Two-step verification (confirm it's you, pick a
-// method, confirm turning off) and the pieces they share with the setup panel
-// in TwoStepMethods.jsx (step indicator, buttons, countdown).
+// Pop-up contents of Settings > Two-step verification (confirm it's you, pick
+// a method, confirm turning off) and the pieces they share with the setup steps
+// in TwoStepWizard.jsx (heading, step indicator, buttons, countdown).
 const CHANNEL_WORD = { email: 'email', whatsapp: 'WhatsApp' };
 const INSTEAD = {
   totp: 'Use the authenticator app instead',
@@ -94,7 +94,7 @@ export const CodeCountdown = ({ deadline }) => {
   );
 };
 
-const PopupHeader = ({ method, icon, title }) => (
+export const PopupHeader = ({ method, icon, title }) => (
   <div className="flex items-center gap-3 pr-6">
     {method ? <MethodTile method={method} size={36} /> : <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">{icon || <FiKey />}</span>}
     <DialogTitle className="text-[15px] leading-snug font-bold text-slate-900">{title}</DialogTitle>
@@ -265,10 +265,12 @@ export const ChooseMethod = ({ choices, texts, onPick }) => (
   </div>
 );
 
-// Already confirmed a moment ago: turning off only asks "are you sure".
-export const ConfirmOff = ({ action, onConfirm, onCancel, busy, setBusy }) => {
-  const [error, setError] = useState('');
+// Already confirmed a moment ago: turning off only asks "are you sure". Also
+// where a change that failed after the confirmation is shown and tried again.
+export const ConfirmOff = ({ action, initialError = '', onConfirm, onCancel, busy, setBusy }) => {
+  const [error, setError] = useState(initialError);
   const all = action.kind === 'disableAll';
+  const isDefault = action.kind === 'default';
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
@@ -284,9 +286,11 @@ export const ConfirmOff = ({ action, onConfirm, onCancel, busy, setBusy }) => {
   return (
     <form onSubmit={submit} className="flex min-w-0 flex-col gap-4">
       <PopupHeader method={action.method} title={`${titleOf(action)}?`} />
-      <DialogDescription className="text-[13px]">{all ? OFF_ALL_TEXT : 'You will no longer get sign-in codes this way.'}</DialogDescription>
+      <DialogDescription className="text-[13px]">
+        {all ? OFF_ALL_TEXT : isDefault ? 'This method is offered first when you sign in.' : 'You will no longer get sign-in codes this way.'}
+      </DialogDescription>
       {error && <Callout tone="error">{error}</Callout>}
-      <PanelActions busy={busy} onCancel={onCancel} destructive label="Turn off" />
+      <PanelActions busy={busy} onCancel={onCancel} destructive={!isDefault} label={isDefault ? 'Make default' : 'Turn off'} />
     </form>
   );
 };

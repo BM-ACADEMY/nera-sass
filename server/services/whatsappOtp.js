@@ -239,8 +239,15 @@ async function verifyCode(user, code, purpose) {
   return store.verifyCode(user, code, purpose, { to });
 }
 
+// The setup code still waiting to be entered, for a reopened setup screen.
+async function pendingSetup(user) {
+  const to = destination(user, 'setup');
+  const pending = to && await store.pendingCode(user.id, 'setup');
+  return pending ? { ...pending, sent_to: maskNumber(to) } : null;
+}
+
 module.exports = {
-  sendCode, verifyCode, loginStatus, takeLoginSend, indiaDay, LOGIN_DAILY_LIMIT, enabled, available, normalizeNumber, maskNumber, authTemplatePayload, allowedCountryCodes, setupNumbersPerDay,
+  pendingSetup, sendCode, verifyCode, loginStatus, takeLoginSend, indiaDay, LOGIN_DAILY_LIMIT, enabled, available, normalizeNumber, maskNumber, authTemplatePayload, allowedCountryCodes, setupNumbersPerDay,
   resetSendCapForTests: () => { sendTimes = []; targetTimes = new Map(); },
   sendBucketsForTests: () => [...targetTimes.keys()],
   templateName, templateLanguage, TEMPLATE_DEFINITION, WhatsappOtpError, clearFields: store.clearFields,

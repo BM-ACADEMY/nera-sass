@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   shownMethods, setupSteps, showsSteps, currentStep, firstCodeMethod, secondsLeft, shouldAutoSend, waitFromError, otherCodeMethods,
   setupChoices, switchState, setupBlocker, removeBlocker, whatsappOnly, needsConfirmation, isConfirmed, confirmationProof,
-  needsCodeFor, holdOf, confirmMethods,
+  needsCodeFor, holdOf, confirmMethods, restoreWizard, resumedWizard,
 } from './twoStepFlow.js';
 
 const me = (enrolled = [], extra = {}) => ({
@@ -151,4 +151,40 @@ test('what the pop-up sends', () => {
   assert.deepStrictEqual(confirmationProof({ action: off, needsCode: false, password: 'p', method: null, code: '' }), { password: 'p' });
   assert.deepStrictEqual(confirmationProof({ action: off, needsCode: true, password: 'p', method: 'totp', code: '123456' }), { password: 'p', code_method: 'totp', code: '123456' });
   assert.deepStrictEqual(confirmationProof({ action: off, needsCode: true, password: 'p', method: 'recovery', code: ' AB-CD ' }), { password: 'p', recovery_code: 'AB-CD' });
+});
+
+test('after a reload: the same method and step, the password first when the confirmation ran out', () => {
+  assert.deepStrictEqual(restoreWizard(null, me(), true), { wizard: null, dialog: null, lost: false });
+  assert.deepStrictEqual(restoreWizard({ method: 'totp', step: 'confirm' }, me(), true).wizard, { method: 'totp', step: 'confirm' });
+  const live = restoreWizard({ method: 'totp', step: 'code' }, me(), true);
+  assert.deepStrictEqual(live.wizard, { method: 'totp', step: 'starting', target: 'code' });
+  assert.equal(live.dialog, null);
+  const expired = restoreWizard({ method: 'email', step: 'code' }, me(), false);
+  assert.deepStrictEqual(expired.wizard, { method: 'email', step: 'starting', target: 'code' });
+  assert.deepStrictEqual(expired.dialog.action, { kind: 'enable', method: 'email', resume: true });
+  assert.deepStrictEqual(restoreWizard({ method: 'whatsapp', step: 'phone' }, me(['email']), true).wizard, { method: 'whatsapp', step: 'phone' });
+});
+
+test('after a reload: nothing for a method that cannot be set up any more', () => {
+  const none = { wizard: null, dialog: null, lost: false };
+  assert.deepStrictEqual(restoreWizard({ method: 'email', step: 'code' }, me([], { mfa_extra_methods_enabled: false }), true), none);
+  assert.deepStrictEqual(restoreWizard({ method: 'whatsapp', step: 'phone' }, me(), true), none);
+  assert.deepStrictEqual(restoreWizard({ method: 'totp', step: 'scan' }, me(['totp']), true), none);
+  assert.deepStrictEqual(restoreWizard({ method: 'totp', step: 'code' }, me(['email', 'totp']), true), none, 'a further method has no new codes');
+});
+
+test('after a reload: recovery codes that cannot be shown again are said so', () => {
+  assert.equal(restoreWizard({ method: null, step: 'codes' }, me(['totp']), true).lost, true);
+  assert.equal(restoreWizard({ method: 'totp', step: 'code' }, me(['totp']), true).lost, true, 'turned on while reloading');
+  assert.equal(restoreWizard({ method: null, step: 'codes' }, me(), true).lost, false);
+});
+
+test('resume answers: the same key or code, or an offer to start again', () => {
+  const key = { pending: true, secret: 'S', otpauth_url: 'otpauth://x' };
+  assert.deepStrictEqual(resumedWizard({ method: 'totp' }, 'code', key), { method: 'totp', step: 'code', setup: { secret: 'S', otpauth_url: 'otpauth://x' } });
+  assert.equal(resumedWizard({ method: 'totp' }, 'scan', key).step, 'scan');
+  assert.deepStrictEqual(resumedWizard({ method: 'totp' }, 'code', { pending: false }), { method: 'totp', step: 'scan', missing: true });
+  const mail = resumedWizard({ method: 'email' }, 'code', { pending: true, sent_to: 'a**b@x.in', expires_in: 300, resend_after: 0 }, 1000);
+  assert.deepStrictEqual(mail.info, { sentTo: 'a**b@x.in', deadline: 301000, resendAt: 0 });
+  assert.equal(resumedWizard({ method: 'whatsapp' }, 'code', { pending: false }).info.missing, true);
 });

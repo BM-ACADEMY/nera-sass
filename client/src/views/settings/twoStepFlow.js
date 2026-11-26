@@ -4,6 +4,8 @@
 // for adding a method), which one first, and whether it is sent by itself. The
 // server checks every change again.
 
+import { codeDeadline } from '../../utils/otpTimer.js';
+
 export const CODE_CHANNELS = ['email', 'whatsapp'];
 export const DEFAULT_RESEND_SECONDS = 45;
 // The methods that can turn two-step verification on. WhatsApp codes are an
@@ -145,4 +147,39 @@ export function waitFromError(err) {
 // The small "Use ... instead" links under the current code.
 export function otherCodeMethods(usable = [], current) {
   return [...usable, 'recovery'].filter((m) => m !== current);
+}
+
+// What a reloaded page shows for the saved position (utils/twoStepWizard.js):
+// { wizard, dialog, lost }. `confirmed`: the server still holds a confirmation
+// for adding a method; without it the password is asked first, then the same
+// step carries on. `lost`: recovery codes were on screen (or about to be) and
+// cannot be shown again.
+export function restoreWizard(saved, me, confirmed) {
+  const none = { wizard: null, dialog: null, lost: false };
+  if (!saved) return none;
+  const { method, step } = saved;
+  if (step === 'codes') return { ...none, lost: Boolean(me?.mfa_enabled) };
+  const enrolled = enrolledMethods(me);
+  // Turned on while the page was reloading: with a first method the codes were never seen.
+  if (enrolled.includes(method)) return { ...none, lost: step === 'code' && enrolled.length === 1 };
+  if (!shownMethods(me).includes(method) || setupBlocker(me, method)) return none;
+  if (step === 'confirm') return { ...none, wizard: { method, step: 'confirm' } };
+  // 'starting' until the server answered what is still waiting.
+  const wizard = step === 'phone' ? { method, step: 'phone' } : { method, step: 'starting', target: step };
+  if (confirmed) return { ...none, wizard };
+  return { ...none, wizard, dialog: { type: 'confirm', action: { kind: 'enable', method, resume: true }, notice: 'Please confirm it’s you again to continue.' } };
+}
+
+// The step to show after the server's answer to "resume". With nothing waiting,
+// the screen says so and offers a new QR code or code; nothing is sent by itself.
+export function resumedWizard({ method, phone }, target, res, now = Date.now()) {
+  if (method === 'totp') {
+    return res.pending
+      ? { method, step: target === 'code' ? 'code' : 'scan', setup: { secret: res.secret, otpauth_url: res.otpauth_url } }
+      : { method, step: 'scan', missing: true };
+  }
+  const info = res.pending
+    ? { sentTo: res.sent_to, deadline: codeDeadline(res, now), resendAt: res.resend_after ? now + res.resend_after * 1000 : 0 }
+    : { sentTo: '', deadline: 0, resendAt: 0, missing: true };
+  return { method, step: 'code', phone, info };
 }

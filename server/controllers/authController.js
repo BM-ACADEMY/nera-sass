@@ -402,13 +402,59 @@ exports.confirmStepUp = async (req, res) => {
   }
 };
 
+// How long a started setup can be reopened.
+const RESUME_MINUTES = 60;
+// Remembers which session started the setup of `method`.
+const setupOwner = (method, req) => (req.authSession
+  ? { [`mfa_${method}_setup_session`]: req.authSession.id, [`mfa_${method}_setup_at`]: new Date() }
+  : {});
+
+// What a setup that this session started still waits for, so a reloaded page
+// can carry on: the same authenticator key, or how long the code that was
+// already sent still works. Nothing new is created or sent. Needs the same live
+// confirmation as starting it; { pending: false } when there is nothing to
+// reopen. Never the emailed or WhatsApp code.
+exports.resumeMfaSetup = async (req, res) => {
+  try {
+    const method = req.body?.method;
+    if (!Object.hasOwn(METHOD_FLAGS, method || '')) return res.status(400).json({ error: 'Unknown method' });
+    if (method !== 'totp' && !mfa.extraMethodsEnabled()) return res.status(403).json(mfa.EXTRA_METHOD_OFF);
+    const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
+    if (!user) throw new AuthError(401, 'Not signed in');
+    if (user[METHOD_FLAGS[method]]) return res.status(409).json({ error: 'This method is already turned on', code: 'MFA_ALREADY_ON' });
+    if (method === 'whatsapp') {
+      if (!whatsappOtp.available()) return res.status(400).json({ error: 'WhatsApp codes are not available yet', code: 'WHATSAPP_NOT_AVAILABLE' });
+      if (whatsappNeedsPrimary(user)) return res.status(400).json(WHATSAPP_NEEDS_PRIMARY);
+    }
+    if (!stepUpService.grantSecondsLeft(user, req, { full: addNeedsCode(user) })) {
+      throw new AuthError(403, 'Enter your current password to continue.', 'PASSWORD_REQUIRED');
+    }
+    res.set('Cache-Control', 'no-store');
+    const startedAt = new Date(user[`mfa_${method}_setup_at`] || 0).getTime();
+    const mine = user[`mfa_${method}_setup_session`] === req.authSession.id && Date.now() - startedAt < RESUME_MINUTES * 60000;
+    let pending = null;
+    if (mine && method === 'totp' && user.mfa_pending_secret_enc) {
+      const secret = decrypt(user.mfa_pending_secret_enc);
+      pending = { secret, otpauth_url: mfa.otpauthUrl(secret, user.email, notify.productName()) };
+    }
+    if (mine && method === 'email') pending = await emailOtp.pendingSetup(user);
+    if (mine && method === 'whatsapp') pending = await whatsappOtp.pendingSetup(user);
+    if (!pending) return res.json({ pending: false });
+    // The confirm step accepts it again, as after starting it with this confirmation.
+    await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_stepup_until: new Date(Date.now() + STEP_UP_MINUTES * 60000) } }));
+    return res.json({ pending: true, ...pending });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
 exports.startMfaSetup = async (req, res) => {
   try {
     const { user, viaSession } = await enrolmentUser(req);
     if (user.mfa_enabled) return res.status(400).json({ error: 'The authenticator app is already set up' });
     if (viaSession) await stepUpForStart(user, req);
     const secret = mfa.generateSecret();
-    await sys(() => Users.updateOne({ id: user.id, mfa_enabled: { $ne: true } }, { $set: { mfa_pending_secret_enc: encrypt(secret) } }));
+    await sys(() => Users.updateOne({ id: user.id, mfa_enabled: { $ne: true } }, { $set: { mfa_pending_secret_enc: encrypt(secret), ...setupOwner('totp', req) } }));
     return res.json({ secret, otpauth_url: mfa.otpauthUrl(secret, user.email, notify.productName()) });
   } catch (error) {
     return fail(res, error);
@@ -496,7 +542,9 @@ exports.startEmailSetup = async (req, res) => {
     const { user, viaSession } = await enrolmentUser(req);
     if (user.mfa_email_enabled) return res.status(400).json({ error: 'Email codes are already turned on' });
     if (viaSession) await stepUpForStart(user, req);
-    return res.json(await emailOtp.sendCode(user, 'setup'));
+    const sentCode = await emailOtp.sendCode(user, 'setup');
+    if (viaSession && req.authSession) await sys(() => Users.updateOne({ id: user.id }, { $set: setupOwner('email', req) }));
+    return res.json(sentCode);
   } catch (error) {
     if (!(error instanceof emailOtp.EmailOtpError) && !(error instanceof AuthError)) {
       console.error('[account] Setup code not sent:', error.message);
@@ -565,7 +613,9 @@ exports.startWhatsappSetup = async (req, res) => {
     await sys(() => Users.updateOne({ id: user.id, mfa_whatsapp_enabled: { $ne: true } }, { $set: { mfa_whatsapp_pending_number: number } }));
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
     try {
-      return res.json(await whatsappOtp.sendCode(fresh, 'setup'));
+      const sentCode = await whatsappOtp.sendCode(fresh, 'setup');
+      if (viaSession && req.authSession) await sys(() => Users.updateOne({ id: user.id }, { $set: setupOwner('whatsapp', req) }));
+      return res.json(sentCode);
     } catch (error) {
       // Nothing was sent: a number that took a new slot gives it back.
       if (added.modifiedCount === 1) await sys(() => Users.updateOne({ id: user.id }, { $pull: { mfa_whatsapp_setup_set: number } }));

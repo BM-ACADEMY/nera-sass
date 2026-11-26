@@ -3,17 +3,17 @@
 // puts one in a rounded square tile with a soft background, like the other
 // coloured icon tiles in Settings.
 
+// The Google Authenticator logo (since April 2023), shapes unchanged from
+// Wikimedia Commons "File:Google Authenticator (April 2023).svg" (marked
+// public domain there; the logo is a Google trademark, used here only to name
+// that app). Only the empty margin of the 512 x 512 canvas is cropped.
 export const AuthenticatorIcon = ({ size = 22 }) => (
-  <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
-    <circle cx="24" cy="24" r="22" fill="#fff" />
-    <path d="M24 2a22 22 0 0 1 19.05 11L33.5 18.5A11 11 0 0 0 24 13Z" fill="#EA4335" />
-    <path d="M43.05 13A22 22 0 0 1 43.05 35L33.5 29.5a11 11 0 0 0 0-11Z" fill="#FBBC04" />
-    <path d="M43.05 35A22 22 0 0 1 4.95 35L14.5 29.5a11 11 0 0 0 19 0Z" fill="#34A853" />
-    <path d="M4.95 35A22 22 0 0 1 24 2v11a11 11 0 0 0-9.5 16.5Z" fill="#4285F4" />
-    <circle cx="24" cy="24" r="10" fill="#fff" />
-    <g stroke="#5F6368" strokeWidth="3" strokeLinecap="round">
-      <path d="M24 18v12M18.8 21l10.4 6M18.8 27l10.4-6" />
-    </g>
+  <svg width={size} height={size} viewBox="48 48 416 416" aria-hidden="true">
+    <path fill="#1A73E8" d="M440,255.99997v0.00006C440,273.12085,426.12085,287,409.00003,287H302l-46-93.01001l49.6507-85.9951 c8.56021-14.82629,27.51834-19.9065,42.34518-11.34724l0.00586,0.0034c14.82776,8.55979,19.90875,27.51928,11.34857,42.34682 L309.70001,225h99.30002C426.12085,225,440,238.87917,440,255.99997z" />
+    <path fill="#EA4335" d="M348.00174,415.34897l-0.00586,0.00339c-14.82684,8.55927-33.78497,3.47903-42.34518-11.34723L256,318.01001 l-49.65065,85.99509c-8.5602,14.82629-27.51834,19.90652-42.34517,11.34729l-0.00591-0.00342 c-14.82777-8.55978-19.90875-27.51929-11.34859-42.34683L202.29999,287L256,285l53.70001,2l49.6503,86.00214 C367.91049,387.82968,362.8295,406.78918,348.00174,415.34897z" />
+    <path fill="#FBBC04" d="M256,193.98999L242,232l-39.70001-7l-49.6503-86.00212 c-8.56017-14.82755-3.47919-33.78705,11.34859-42.34684l0.00591-0.00341c14.82683-8.55925,33.78497-3.47903,42.34517,11.34726 L256,193.98999z" />
+    <path fill="#34A853" d="M248,225l-36,62H102.99997C85.87916,287,72,273.12085,72,256.00003v-0.00006 C72,238.87917,85.87916,225,102.99997,225H248z" />
+    <polygon fill="#185DB7" points="309.70001,287 202.29999,287 256,193.98999" />
   </svg>
 );
 

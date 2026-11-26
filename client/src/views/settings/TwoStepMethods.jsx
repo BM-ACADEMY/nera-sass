@@ -1,36 +1,36 @@
 import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { QRCodeSVG } from 'qrcode.react';
-import { FiCopy, FiShield } from 'react-icons/fi';
+import { FiShield } from 'react-icons/fi';
 import { api } from '../../services/api.js';
 import { C } from '../../constants/theme.js';
 import { MethodTile, METHOD_META } from '../../components/auth/MfaBrandIcons.jsx';
-import { EmailCodeArt } from '../../components/auth/Art.jsx';
-import OtpInput from '../../components/auth/OtpInput.jsx';
-import { FormRow, Callout } from './SettingsKit.jsx';
+import { Callout } from './SettingsKit.jsx';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Spinner } from '@/components/ui/spinner';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { useSecondsUntil } from '../../hooks/useSecondsUntil.js';
 import { codeDeadline } from '../../utils/otpTimer.js';
-import { ConfirmIdentity, ChooseMethod, ConfirmOff, Steps, PanelActions, CodeCountdown, LinkButton } from './TwoStepDialogs.jsx';
+import { readWizard, saveWizard, clearWizard } from '../../utils/twoStepWizard.js';
+import { ConfirmIdentity, ChooseMethod, ConfirmOff } from './TwoStepDialogs.jsx';
+import { SetupSteps, RecoveryCodes, LostCodes } from './TwoStepWizard.jsx';
 import {
-  TITLES, DEFAULT_RESEND_SECONDS, currentStep, waitFromError, enrolledMethods, shownMethods, setupChoices, switchState,
-  setupBlocker, removeBlocker, whatsappOnly, needsConfirmation, isConfirmed, holdOf,
+  TITLES, DEFAULT_RESEND_SECONDS, waitFromError, enrolledMethods, shownMethods, setupChoices, switchState,
+  setupBlocker, removeBlocker, whatsappOnly, needsConfirmation, isConfirmed, holdOf, restoreWizard, resumedWizard,
 } from './twoStepFlow.js';
 
 // Two-step verification in Settings: a switch at the top and three methods
-// (authenticator app, email code, WhatsApp code) as cards. Changes ask
-// "confirm it's you" in a pop-up: the password only for adding a method; for
-// turning one off, changing the default or new recovery codes also a current
-// code while two-step is on. The server remembers the check for this session
-// for a few minutes (a password-only one covers adding only), so it is asked
-// once; the password is not kept in the browser. New recovery codes always ask
-// again. A method added to an account that already had two-step on cannot
-// confirm changes for 24 hours. Turning a method on shows three steps: confirm
-// it's you (the pop-up), scan the QR code (or get a code), enter the code.
+// (authenticator app, email code, WhatsApp code) as cards. Everything else
+// happens in one pop-up. Turning a method on shows three steps in it: confirm
+// it's you, scan the QR code (or get a code), enter the code; then the recovery
+// codes. The pop-up closes only with Cancel (or the X) or when done, and comes
+// back on the same step after a reload (utils/twoStepWizard.js keeps the
+// position only; the server gives the rest again).
+// "Confirm it's you" is the password only for adding a method; for turning one
+// off, changing the default or new recovery codes also a current code while
+// two-step is on. The server remembers the check for this session for a few
+// minutes (a password-only one covers adding only), so it is asked once; the
+// password is not kept in the browser. New recovery codes always ask again. A
+// method added to an account that already had two-step on cannot confirm
+// changes for 24 hours.
 const TEXT = {
   totp: 'A new code every 30 seconds in Google Authenticator, even offline.',
   email: 'A 6-digit code is emailed to you at each sign-in.',
@@ -58,186 +58,53 @@ const Switch = ({ on, disabled, onClick, label }) => (
   </button>
 );
 
-// The box a setup step sits in, scrolled into view when it opens (on a phone
-// the cards stack above it).
-const Panel = ({ method, onSubmit, step, children }) => {
-  const ref = useRef(null);
-  useEffect(() => { ref.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' }); }, []);
-  return (
-    <form id="twostep-setup" ref={ref} onSubmit={onSubmit}className="flex flex-col gap-4 rounded-xl border border-border bg-white p-4 sm:p-5">
-      <div className="flex items-center gap-3">
-        <MethodTile method={method} size={36} />
-        <h3 className="text-[15px] font-bold text-slate-900">{TITLES.enable[method]}</h3>
-      </div>
-      <Steps method={method} current={currentStep(step)} />
-      {children}
-    </form>
-  );
-};
-
-// Steps 2 and 3 of turning a method on. 2: the app's QR code and key, or the
-// WhatsApp number to send a code to. 3: the 6-digit code, with how long a
-// code sent by email / WhatsApp still works. The on* requests throw to show an
-// error here.
-const SetupPanel = ({ flow, onSendCode, onNext, onConfirm, onResend, onBack, onCancel }) => {
-  const { method, step, info } = flow;
-  const isApp = method === 'totp';
-  const [code, setCode] = useState('');
-  const [phone, setPhone] = useState(flow.phone || '');
-  const [busy, setBusy] = useState(false);
-  const [resending, setResending] = useState(false);
-  const [error, setError] = useState('');
-  const left = useSecondsUntil(info?.deadline || 0);
-  const wait = useSecondsUntil(info?.resendAt || 0);
-  const expired = Boolean(info?.deadline) && left === 0;
-
-  const run = async (work) => {
-    setBusy(true);
-    setError('');
-    try {
-      await work();
-    } catch (err) {
-      setCode('');
-      setError(err.code === 'INVALID_MFA_CODE' ? 'That code is not valid. Try again.' : err.message || 'Something went wrong');
-    } finally {
-      setBusy(false);
-    }
-  };
-  const confirm = (value = code) => {
-    if (busy || expired) return;
-    if (value.length !== 6) return setError('Enter the 6-digit code');
-    return run(() => onConfirm(value));
-  };
-  const sendToNumber = () => {
-    if (phone.replace(/\D/g, '').length < 10) return setError('Enter your WhatsApp number with the country code');
-    return run(() => onSendCode(phone));
-  };
-  const resend = async () => {
-    setResending(true);
-    setError('');
-    try {
-      await onResend();
-      setCode('');
-    } catch (err) {
-      setError(err.message || 'The code could not be sent');
-    } finally {
-      setResending(false);
-    }
-  };
-  const copyKey = () => navigator.clipboard?.writeText(flow.setup.secret)
-    .then(() => toast.success('Key copied'))
-    .catch(() => toast.error('Could not copy. Select the key and copy it.'));
-  const submit = (event) => {
-    event.preventDefault();
-    if (step === 'scan') return onNext();
-    if (step === 'phone') return sendToNumber();
-    if (step === 'code') return confirm();
-    return null;
-  };
-
-  return (
-    <Panel method={method} step={step} onSubmit={submit}>
-      {error && <Callout tone="error">{error}</Callout>}
-      {step === 'starting' && <div className="flex justify-center py-6"><Spinner className="size-6" /></div>}
-      {step === 'scan' && (
-        <div className="flex flex-col items-center gap-4 text-center">
-          <p className="max-w-sm text-[13px] text-muted-foreground">
-            Open Google Authenticator (or Microsoft Authenticator, Authy), tap <b className="text-slate-900">+</b>, choose “Scan a QR code” and scan this one.
-          </p>
-          <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"><QRCodeSVG value={flow.setup.otpauth_url} size={184} /></div>
-          <div className="w-full max-w-sm text-left">
-            <div className="mb-1 text-xs text-muted-foreground">Can’t scan? Enter this key in the app:</div>
-            <div className="flex items-center gap-2 rounded-lg bg-slate-100 py-1.5 pr-1.5 pl-3">
-              <code className="min-w-0 flex-1 font-mono text-xs break-all text-slate-800">{flow.setup.secret}</code>
-              <Button type="button" variant="outline" size="sm" className="bg-white" onClick={copyKey}><FiCopy /> Copy</Button>
-            </div>
-          </div>
-        </div>
-      )}
-      {step === 'phone' && (
-        <FormRow label="WhatsApp number for codes" htmlFor="twostep-phone" hint="With the country code. Next we send a code to it to check it is yours.">
-          <Input id="twostep-phone" type="tel" autoComplete="tel" autoFocus placeholder="+91 98765 43210" value={phone} onChange={(e) => setPhone(e.target.value)} className="h-10" />
-        </FormRow>
-      )}
-      {step === 'code' && (
-        <div className="flex flex-col items-center gap-4 text-center">
-          {method === 'email' && <EmailCodeArt className="h-24 w-auto" />}
-          {method === 'whatsapp' && <MethodTile method="whatsapp" size={64} />}
-          {isApp ? <div className="text-[13px] font-semibold text-slate-700">Enter the 6-digit code the app shows</div> : (
-            <p className="max-w-sm text-[13px] text-muted-foreground">
-              {info?.sentTo
-                ? <>Enter the 6-digit code we sent to <b className="text-slate-900 [overflow-wrap:anywhere]">{info.sentTo}</b>.</>
-                : 'Enter the 6-digit code we sent a moment ago.'}
-              {' '}At each sign-in you’ll get a new one.
-            </p>
-          )}
-          <OtpInput value={code} onChange={setCode} onComplete={confirm} disabled={busy || expired} />
-          {!isApp && (
-            <>
-              <CodeCountdown deadline={info?.deadline} />
-              <LinkButton onClick={resend} disabled={busy || resending || wait > 0}>
-                {resending ? 'Sending…' : wait > 0 ? `Send again in ${wait}s` : 'Didn’t get it? Send again'}
-              </LinkButton>
-            </>
-          )}
-        </div>
-      )}
-      {step !== 'starting' && (
-        <PanelActions busy={busy} onCancel={onCancel} onBack={step === 'code' ? onBack : null}
-          label={{ scan: 'Next', phone: 'Send code', code: 'Turn on' }[step]}
-          disabled={step === 'code' && (code.length !== 6 || expired)} />
-      )}
-    </Panel>
-  );
-};
-
-const RecoveryCodes = ({ codes, onClose }) => {
-  const copy = () => navigator.clipboard?.writeText(codes.join('\n'))
-    .then(() => toast.success('Recovery codes copied'))
-    .catch(() => toast.error('Could not copy. Select the codes and copy them.'));
-  return (
-    <div className="flex flex-col gap-3">
-      <Callout tone="ok">Save these recovery codes somewhere safe. Each one signs you in once if you lose access to your methods. They will not be shown again.</Callout>
-      <div className="grid grid-cols-2 gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-center font-mono text-sm select-all">
-        {codes.map((c) => <span key={c}>{c}</span>)}
-      </div>
-      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-        <Button type="button" variant="outline" onClick={copy}><FiCopy /> Copy</Button>
-        <Button type="button" onClick={onClose}>I have saved my recovery codes</Button>
-      </div>
-    </div>
-  );
-};
-
 export const TwoStepMethods = ({ me, onChanged }) => {
   const usable = me?.mfa_methods || [];
   const enrolled = enrolledMethods(me);
   const defaultMethod = me?.mfa_default_method || null;
   const waAvailable = Boolean(me?.whatsapp_otp_available);
   const state = switchState(me);
-  // The open pop-up: { type: 'confirm' | 'choose' | 'off', action, notice }.
-  // action: { kind: 'enable' | 'disable' | 'disableAll' | 'default' | 'recovery', method, phone, resume }.
-  const [dialog, setDialog] = useState(null);
-  // The setup panel: { method, step: 'starting' | 'scan' | 'phone' | 'code', setup, phone, info }.
-  const [flow, setFlow] = useState(null);
-  const [busy, setBusy] = useState(false);
+  // Where the pop-up was before a reload, and the server's live confirmation.
+  const [initial] = useState(() => {
+    const live = me?.mfa_stepup_seconds ? { until: timeAfter(me.mfa_stepup_seconds), full: Boolean(me.mfa_stepup_full) } : null;
+    return { confirmation: live, ...restoreWizard(readWizard(me?.id), me, isConfirmed(live, { kind: 'enable' })) };
+  });
+  // A confirmation / choice shown in the pop-up: { type: 'confirm' | 'choose' |
+  // 'off', action, notice, error }. action: { kind: 'enable' | 'disable' |
+  // 'disableAll' | 'default' | 'recovery', method, phone, resume }.
+  const [dialog, setDialog] = useState(initial.dialog);
+  // The method being set up: { method, step: 'confirm' | 'starting' | 'failed' |
+  // 'scan' | 'phone' | 'code', target, setup, phone, info, missing, error }.
+  const [wizard, setWizard] = useState(initial.wizard);
+  // Recovery codes were on screen when the page was reloaded.
+  const [lost, setLost] = useState(initial.lost);
   const [codes, setCodes] = useState(null);
+  const [busy, setBusy] = useState(false);
   // Until when the server accepts changes without the password again, and
   // whether that covers more than adding a method (it was made with a code).
-  const [confirmation, setConfirmation] = useState(() => (me?.mfa_stepup_seconds
-    ? { until: timeAfter(me.mfa_stepup_seconds), full: Boolean(me.mfa_stepup_full) } : null));
-  const idle = !flow && !dialog;
+  const [confirmation, setConfirmation] = useState(initial.confirmation);
+  // Goes up on cancel and success: answers to older requests are then ignored.
+  const run = useRef(0);
+  const open = Boolean(codes || lost || dialog || wizard);
 
-  const closeAll = () => {
+  useEffect(() => {
+    if (codes || lost) saveWizard(me?.id, { method: null, step: 'codes' });
+    else if (wizard) saveWizard(me?.id, { method: wizard.method, step: ['starting', 'failed'].includes(wizard.step) ? wizard.target : wizard.step });
+    else clearWizard();
+  }, [me?.id, codes, lost, wizard]);
+
+  const cancel = () => {
+    run.current += 1;
+    setWizard(null);
     setDialog(null);
-    setFlow(null);
+    setLost(false);
   };
 
   // The parent Settings page remounts this section on onChanged (key={version}),
   // which would wipe freshly shown recovery codes. While codes are on screen,
   // the refresh waits until the user closes them.
   const done = (data) => {
-    closeAll();
+    cancel();
     toast.success('Two-step verification updated');
     if (data?.recovery_codes?.length) return setCodes(data.recovery_codes);
     onChanged?.();
@@ -250,6 +117,7 @@ export const TwoStepMethods = ({ me, onChanged }) => {
 
   // Sends the setup code by email / WhatsApp and shows the code step.
   const sendSetupCode = async (method, phone, { acceptWait = false } = {}) => {
+    const mine = run.current;
     let res = null;
     let wait;
     try {
@@ -260,13 +128,61 @@ export const TwoStepMethods = ({ me, onChanged }) => {
       wait = waitFromError(err);
       if (!(acceptWait && method === 'email' && wait != null)) throw err;
     }
+    if (mine !== run.current) return;
     setDialog(null);
-    setFlow({ method, step: 'code', phone, info: sentInfo(res, wait) });
+    setWizard({ method, step: 'code', phone, info: sentInfo(res, wait) });
   };
 
-  // Does a change the server will accept without a password (just confirmed).
-  const perform = async (action) => {
-    const { kind, method, phone } = action;
+  // Starts turning a method on (the confirmation is live).
+  const startSetup = async ({ method, phone }) => {
+    setDialog(null);
+    if (method === 'whatsapp' && !phone) return setWizard({ method, step: 'phone' });
+    const target = method === 'totp' ? 'scan' : 'code';
+    run.current += 1;
+    const mine = run.current;
+    setWizard({ method, step: 'starting', target, phone });
+    try {
+      if (method !== 'totp') return await sendSetupCode(method, phone, { acceptWait: true });
+      const setup = await api.startMfaSetup(null, {});
+      if (mine === run.current) setWizard({ method, step: 'scan', setup });
+    } catch (err) {
+      if (mine !== run.current) return;
+      if (needsConfirmation(err)) return askAgain({ kind: 'enable', method, phone });
+      setWizard({ method, step: 'failed', target, phone, retry: 'start', error: err.message || 'Something went wrong' });
+    }
+  };
+
+  // Carries a started setup on: asks the server for what is still waiting (after
+  // a reload, or after confirming again). Creates and sends nothing.
+  const restore = async (current) => {
+    const { method, phone } = current;
+    const target = ['starting', 'failed'].includes(current.step) ? current.target : current.step;
+    if (target === 'phone') return setWizard({ method, step: 'phone', phone });
+    const mine = run.current;
+    try {
+      const res = await api.resumeMfaSetup(method);
+      if (mine === run.current) setWizard(resumedWizard(current, target, res));
+    } catch (err) {
+      if (mine !== run.current) return;
+      if (needsConfirmation(err)) return askAgain({ kind: 'enable', method, resume: true });
+      if (err.code === 'MFA_ALREADY_ON') {
+        cancel();
+        return onChanged?.();
+      }
+      setWizard({ method, step: 'failed', target, phone, retry: 'resume', error: err.message || 'Something went wrong' });
+    }
+  };
+
+  // Once, for a pop-up reopened with a live confirmation.
+  useEffect(() => {
+    if (initial.wizard?.step !== 'starting' || initial.dialog) return undefined;
+    const timer = setTimeout(() => restore(initial.wizard), 0);
+    return () => clearTimeout(timer);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A change other than setting up, which the server will accept without a
+  // password (just confirmed).
+  const perform = async ({ kind, method }) => {
     if (kind === 'disableAll') {
       await api.disableAllMfa();
       setConfirmation(null);
@@ -276,38 +192,25 @@ export const TwoStepMethods = ({ me, onChanged }) => {
       await api.disableMfaMethod(method, {});
       return done();
     }
-    if (kind === 'default') {
-      await api.setDefaultMfaMethod(method);
-      setDialog(null);
-      toast.success(`${METHOD_META[method].title} is now your default`);
-      return onChanged?.();
-    }
-    // The setup panel is still open: only the confirmation had run out.
-    if (action.resume) return setDialog(null);
-    if (method === 'totp') {
-      const setup = await api.startMfaSetup(null, {});
-      setDialog(null);
-      return setFlow({ method, step: 'scan', setup });
-    }
-    if (method === 'whatsapp' && !phone) {
-      setDialog(null);
-      return setFlow({ method, step: 'phone' });
-    }
-    return sendSetupCode(method, phone, { acceptWait: true });
+    await api.setDefaultMfaMethod(method);
+    cancel();
+    toast.success(`${METHOD_META[method].title} is now your default`);
+    return onChanged?.();
   };
-
-  const startsSetup = (action) => action.kind === 'enable' && !action.resume;
 
   // A click: ask "confirm it's you" only when there is no live confirmation.
   const begin = async (action) => {
+    setLost(false);
+    if (action.kind === 'enable') {
+      if (isConfirmed(confirmation, action)) return startSetup(action);
+      setDialog(null);
+      return setWizard({ method: action.method, step: 'confirm' });
+    }
     if (action.kind === 'recovery' || !isConfirmed(confirmation, action)) return setDialog({ type: 'confirm', action });
-    if (action.kind === 'disable' || action.kind === 'disableAll') return setDialog({ type: 'off', action });
-    setDialog(null);
-    if (action.kind === 'enable') setFlow({ method: action.method, step: 'starting' });
+    if (action.kind !== 'default') return setDialog({ type: 'off', action });
     try {
       await perform(action);
     } catch (err) {
-      if (action.kind === 'enable') setFlow(null);
       if (needsConfirmation(err)) return askAgain(action);
       toast.error(err.message || 'Something went wrong');
     }
@@ -316,24 +219,23 @@ export const TwoStepMethods = ({ me, onChanged }) => {
   const submitConfirmation = async (action, proof) => {
     if (action.kind === 'recovery') {
       const res = await api.regenerateRecoveryCodes(proof);
-      closeAll();
+      cancel();
       if (res?.recovery_codes?.length) return setCodes(res.recovery_codes);
       return onChanged?.();
     }
     const res = await api.confirmStepUp(proof);
     setConfirmation({ until: timeAfter(res.expires_in), full: res.strength === 'full' });
-    if (startsSetup(action)) {
+    if (action.kind === 'enable') {
+      if (!action.resume) return startSetup(action);
       setDialog(null);
-      setFlow({ method: action.method, step: 'starting' });
+      return restore(wizard);
     }
-    // Confirmed: if the change itself fails, close (the next click goes
-    // straight to it) instead of asking for the password and code again.
+    // Confirmed: a change that fails stays in the pop-up, to try again
+    // without typing the password and code again.
     try {
       await perform(action);
     } catch (err) {
-      setDialog(null);
-      if (startsSetup(action)) setFlow(null);
-      toast.error(err.message || 'Something went wrong');
+      setDialog({ type: 'off', action, error: err.message || 'Something went wrong' });
     }
   };
 
@@ -348,7 +250,7 @@ export const TwoStepMethods = ({ me, onChanged }) => {
   };
 
   const confirmCode = async (value) => {
-    const { method, phone } = flow;
+    const { method } = wizard;
     try {
       const data = method === 'totp' ? await api.confirmMfaSetup(value, null, {})
         : method === 'email' ? await api.confirmEmailSetup(value, null, {})
@@ -356,9 +258,23 @@ export const TwoStepMethods = ({ me, onChanged }) => {
       done(data);
     } catch (err) {
       if (!needsConfirmation(err)) throw err;
-      // MFA_CODE_REQUIRED: the started setup is too old, so it starts again.
-      askAgain({ kind: 'enable', method, phone, resume: err.code === 'PASSWORD_REQUIRED' });
+      // The same key / code carries on after confirming again.
+      askAgain({ kind: 'enable', method, resume: true });
     }
+  };
+
+  const resend = () => {
+    const { method, phone } = wizard;
+    // The number is not kept across a reload: it is typed again.
+    if (method === 'whatsapp' && !phone) return setWizard({ method, step: 'phone' });
+    return guarded({ kind: 'enable', method, phone }, () => sendSetupCode(method, phone));
+  };
+
+  const retry = () => {
+    if (wizard.retry !== 'resume') return begin({ kind: 'enable', method: wizard.method, phone: wizard.phone });
+    const again = { ...wizard, step: 'starting' };
+    setWizard(again);
+    return restore(again);
   };
 
   const toggle = () => {
@@ -367,10 +283,6 @@ export const TwoStepMethods = ({ me, onChanged }) => {
     if (choices.length === 1) return begin({ kind: 'enable', method: choices[0] });
     return setDialog({ type: 'choose' });
   };
-
-  if (codes) return <RecoveryCodes codes={codes} onClose={() => { setCodes(null); onChanged?.(); }} />;
-
-  const closeDialog = () => setDialog(null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -385,7 +297,7 @@ export const TwoStepMethods = ({ me, onChanged }) => {
                 : 'Switch it on so a stolen password alone cannot open your workspace.'}
           </p>
         </div>
-        <Switch on={state.on} label="Two-step verification" disabled={!me || state.locked || !idle} onClick={toggle} />
+        <Switch on={state.on} label="Two-step verification" disabled={!me || state.locked || open} onClick={toggle} />
       </div>
 
       {whatsappOnly(me) && (
@@ -399,7 +311,7 @@ export const TwoStepMethods = ({ me, onChanged }) => {
           const on = enrolled.includes(method);
           const unavailable = method === 'whatsapp' && !waAvailable;
           const isDefault = on && defaultMethod === method;
-          const active = flow?.method === method;
+          const active = wizard?.method === method;
           const blocker = on ? removeBlocker(me, method) : setupBlocker(me, method);
           const hold = on ? holdOf(me, method) : null;
           return (
@@ -424,12 +336,12 @@ export const TwoStepMethods = ({ me, onChanged }) => {
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {on ? (
                     <>
-                      <Button type="button" size="sm" variant="outline" className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700" disabled={!idle || Boolean(blocker)}
+                      <Button type="button" size="sm" variant="outline" className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700" disabled={open || Boolean(blocker)}
                         aria-label={TITLES.disable[method]} onClick={() => begin({ kind: 'disable', method })}>Turn off</Button>
-                      {!isDefault && usable.includes(method) && <Button type="button" size="sm" variant="outline" disabled={!idle} onClick={() => begin({ kind: 'default', method })}>Make default</Button>}
+                      {!isDefault && usable.includes(method) && <Button type="button" size="sm" variant="outline" disabled={open} onClick={() => begin({ kind: 'default', method })}>Make default</Button>}
                     </>
                   ) : (
-                    <Button type="button" size="sm" disabled={!idle || Boolean(blocker)} aria-label={TITLES.enable[method]} onClick={() => begin({ kind: 'enable', method })}>Set up</Button>
+                    <Button type="button" size="sm" disabled={open || Boolean(blocker)} aria-label={TITLES.enable[method]} onClick={() => begin({ kind: 'enable', method })}>Set up</Button>
                   )}
                 </div>
               </div>
@@ -438,40 +350,47 @@ export const TwoStepMethods = ({ me, onChanged }) => {
         })}
       </div>
 
-      {flow && (
-        <SetupPanel key={`${flow.method}:${flow.step}`} flow={flow} onCancel={() => setFlow(null)} onConfirm={confirmCode}
-          onNext={() => setFlow({ ...flow, step: 'code' })}
-          onSendCode={(phone) => guarded({ kind: 'enable', method: flow.method, phone }, () => sendSetupCode(flow.method, phone))}
-          onResend={() => guarded({ kind: 'enable', method: flow.method, phone: flow.phone }, () => sendSetupCode(flow.method, flow.phone))}
-          onBack={flow.method === 'email' ? null : () => setFlow({ ...flow, step: flow.method === 'totp' ? 'scan' : 'phone' })} />
-      )}
-
-      {me?.mfa_enabled && !flow && (
+      {me?.mfa_enabled && (
         <div className="flex flex-wrap items-center justify-between gap-2.5">
           <span className="text-xs text-muted-foreground">Recovery codes left: {me?.recovery_codes_left || 0} of 10.</span>
-          <Button type="button" size="sm" variant="outline" disabled={Boolean(dialog)} onClick={() => begin({ kind: 'recovery' })}>Create new recovery codes</Button>
+          <Button type="button" size="sm" variant="outline" disabled={open} onClick={() => begin({ kind: 'recovery' })}>Create new recovery codes</Button>
         </div>
       )}
 
-      <Dialog open={Boolean(dialog)} onOpenChange={(open) => { if (!open && !busy) closeDialog(); }}>
-        {dialog && (
-          // A stray tap outside must not throw away a half-typed confirmation.
-          // With a setup panel opening, focus stays there instead of going back.
-          <DialogContent className="px-4 sm:max-w-md sm:px-6" onInteractOutside={(e) => e.preventDefault()}
-            onCloseAutoFocus={(e) => { if (document.getElementById('twostep-setup')) e.preventDefault(); }}>
-            <div className="min-w-0">
-              {dialog.type === 'confirm' && (
-                <ConfirmIdentity key={`${dialog.action.kind}:${dialog.action.method || ''}`} me={me} action={dialog.action} notice={dialog.notice}
-                  busy={busy} setBusy={setBusy} onCancel={closeDialog} onSubmit={(proof) => submitConfirmation(dialog.action, proof)} />
-              )}
-              {dialog.type === 'choose' && (
-                <ChooseMethod choices={setupChoices(me)} texts={TEXT} onPick={(method) => begin({ kind: 'enable', method })} />
-              )}
-              {dialog.type === 'off' && (
-                <ConfirmOff action={dialog.action} busy={busy} setBusy={setBusy} onCancel={closeDialog}
-                  onConfirm={() => guarded(dialog.action, () => perform(dialog.action))} />
-              )}
-            </div>
+      {/* Closed only by Cancel / X or by finishing: Escape and outside clicks do nothing. */}
+      <Dialog open={open} onOpenChange={(next) => { if (!next && !busy && !codes) cancel(); }}>
+        {open && (
+          <DialogContent showCloseButton={!codes} className="max-h-[calc(100dvh-1.5rem)] px-4 sm:max-w-lg sm:px-6"
+            onEscapeKeyDown={(e) => e.preventDefault()} onInteractOutside={(e) => e.preventDefault()}>
+            {codes && <RecoveryCodes codes={codes} onClose={() => { setCodes(null); onChanged?.(); }} />}
+            {!codes && lost && !dialog && <LostCodes onCancel={cancel} onNewCodes={() => begin({ kind: 'recovery' })} />}
+            {!codes && wizard && wizard.step !== 'confirm' && (
+              // Kept while "confirm it's you" is asked again, so nothing typed is lost.
+              <div className="min-w-0" hidden={Boolean(dialog)}>
+                <SetupSteps key={`${wizard.method}:${wizard.step}`} flow={wizard} busy={busy} setBusy={setBusy} onCancel={cancel}
+                  onConfirm={confirmCode} onResend={resend} onRetry={retry}
+                  onNext={() => setWizard({ ...wizard, step: 'code' })}
+                  onRestart={() => begin({ kind: 'enable', method: wizard.method })}
+                  onSendCode={(phone) => guarded({ kind: 'enable', method: wizard.method, phone }, () => sendSetupCode(wizard.method, phone))}
+                  onBack={wizard.method === 'email' || (wizard.method === 'totp' && !wizard.setup) ? null
+                    : () => setWizard({ ...wizard, step: wizard.method === 'totp' ? 'scan' : 'phone' })} />
+              </div>
+            )}
+            {!codes && wizard?.step === 'confirm' && !dialog && (
+              <ConfirmIdentity key={`enable:${wizard.method}`} me={me} action={{ kind: 'enable', method: wizard.method }}
+                busy={busy} setBusy={setBusy} onCancel={cancel} onSubmit={(proof) => submitConfirmation({ kind: 'enable', method: wizard.method }, proof)} />
+            )}
+            {!codes && dialog?.type === 'confirm' && (
+              <ConfirmIdentity key={`${dialog.action.kind}:${dialog.action.method || ''}`} me={me} action={dialog.action} notice={dialog.notice}
+                busy={busy} setBusy={setBusy} onCancel={cancel} onSubmit={(proof) => submitConfirmation(dialog.action, proof)} />
+            )}
+            {!codes && dialog?.type === 'choose' && (
+              <ChooseMethod choices={setupChoices(me)} texts={TEXT} onPick={(method) => begin({ kind: 'enable', method })} />
+            )}
+            {!codes && dialog?.type === 'off' && (
+              <ConfirmOff action={dialog.action} initialError={dialog.error} busy={busy} setBusy={setBusy} onCancel={cancel}
+                onConfirm={() => guarded(dialog.action, () => perform(dialog.action))} />
+            )}
           </DialogContent>
         )}
       </Dialog>
