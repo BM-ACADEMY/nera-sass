@@ -20,7 +20,8 @@ const activity = require('../services/activity');
 const invitations = require('../services/invitations');
 const sessions = require('../services/sessions');
 const passwordAttempts = require('../services/passwordAttempts');
-const { verifySecondStep } = require('../services/stepUp');
+const stepUpService = require('../services/stepUp');
+const { verifySecondStep } = stepUpService;
 const { passwordProblem, normalizeEmail } = require('../utils/passwordPolicy');
 const {
   issueAccessToken, issueMfaToken, resolveIdentity, publicUser, AuthError,
@@ -68,6 +69,18 @@ async function sessionPayload(user, { mfaPassed, req, keepExpiry = false }) {
 
 const mfaEnforcedFor = (user) => process.env.MFA_ENFORCED !== 'false' && mfaRequired(describeUser(user));
 
+// How long the sign-in step (mfa token, issueMfaToken) lasts.
+const MFA_STEP_SECONDS = 10 * 60;
+
+// For customer accounts WhatsApp codes are an extra method: the authenticator
+// app or email codes must be on, because only a few WhatsApp sign-in codes can
+// be sent each day. Platform staff are unchanged.
+const whatsappNeedsPrimary = (user) => describeUser(user).kind === 'tenant' && !user.mfa_enabled && !user.mfa_email_enabled;
+const WHATSAPP_NEEDS_PRIMARY = Object.freeze({
+  error: 'Turn on the authenticator app or email codes first. WhatsApp codes can then be added as an extra method.',
+  code: 'WHATSAPP_NEEDS_PRIMARY',
+});
+
 // Decides what happens after a correct password: a full session, an MFA
 // challenge (with the methods the user may pick from and the default one), or
 // mandatory enrolment. When the default method is email or WhatsApp its code
@@ -98,6 +111,7 @@ async function afterPassword(user, req) {
         if (!(error instanceof whatsappOtp.WhatsappOtpError)) console.error('[account] WhatsApp sign-in code not sent:', error.message);
       }
     }
+    if (methods.includes('whatsapp')) out.whatsapp_status = { ...(await whatsappOtp.loginStatus(user.id)), step_expires_in: MFA_STEP_SECONDS };
     return out;
   }
   if (mfaEnforcedFor(user)) {
@@ -207,6 +221,8 @@ exports.login = async (req, res) => {
       $unset: { reset_token_hash: '', reset_token_expires_at: '' },
     }));
     const result = await afterPassword(user, req);
+    // First-time setup at sign-in: WhatsApp cannot be a customer's first method.
+    if (result.mfa_setup_required && whatsappNeedsPrimary(user)) result.whatsapp_available = false;
     // Signed straight in (no second step): the second step logs its own success.
     if (result.token) await activity.log(req, activity.EVENTS.LOGIN_SUCCEEDED, { tenantId: user.tenant_id ?? null, actor: activity.actorForUser(user, req), targetType: 'user', targetId: user.id, summary: 'Signed in with password' });
     return res.json(result);
@@ -258,12 +274,21 @@ exports.sendMfaEmail = async (req, res) => {
 };
 
 // Sends (or resends) the sign-in code by WhatsApp during the second login step.
+// The answer, also a refusal, says how many codes are left today and how long
+// the current one and this sign-in step still last.
 exports.sendMfaWhatsapp = async (req, res) => {
+  let status = null;
   try {
-    const { user } = await resolveIdentity(req.body?.mfa_token, { purpose: 'mfa' });
+    const { user, tokenExp } = await resolveIdentity(req.body?.mfa_token, { purpose: 'mfa' });
     if (!mfa.methodsOf(user).includes('whatsapp')) return res.status(400).json({ error: 'WhatsApp codes are not turned on for this account' });
-    return res.json(await whatsappOtp.sendCode(user, 'login'));
+    status = async () => ({ ...(await whatsappOtp.loginStatus(user.id)), step_expires_in: Math.max(0, tokenExp - Math.floor(Date.now() / 1000)) });
+    const sent = await whatsappOtp.sendCode(user, 'login');
+    return res.json({ ...sent, whatsapp_status: await status() });
   } catch (error) {
+    if (status && error instanceof whatsappOtp.WhatsappOtpError) {
+      const current = await status().catch(() => undefined);
+      return res.status(error.status).json({ error: error.message, code: error.code, whatsapp_status: current });
+    }
     return fail(res, error);
   }
 };
@@ -312,22 +337,49 @@ async function enrolmentUser(req) {
   throw new AuthError(401, 'Not signed in');
 }
 
+// A password sent with the request is checked as usual. Without one, a live
+// confirmation of this session (POST /mfa/step-up) stands in for it.
+const confirmedEarlier = (user, req) => !(req.body?.password ?? req.body?.current_password) && stepUpService.grantSecondsLeft(user, req) > 0;
+
+// Password (and a current code when two-step is on) for adding or turning off a
+// method, now or by a live confirmation.
+async function stepUp(user, req) {
+  if (!confirmedEarlier(user, req)) await requireReauth(user, req);
+}
+
 // Starting enrolment from a session: password, plus a current code when
-// two-step verification is already on. The check is remembered for a few
-// minutes so the confirm step (which then needs only the password again)
-// cannot complete an enrolment that was not started this way.
+// two-step verification is already on (or a live confirmation). The check is
+// remembered for a few minutes so the confirm step (which then needs only the
+// password or the confirmation) cannot complete an enrolment that was not
+// started this way.
 async function stepUpForStart(user, req) {
-  await requireReauth(user, req);
+  await stepUp(user, req);
   await sys(() => Users.updateOne({ id: user.id }, { $set: { mfa_stepup_until: new Date(Date.now() + STEP_UP_MINUTES * 60000) } }));
 }
 
 async function stepUpForConfirm(user, req) {
-  await requireReauth(user, req, { withCode: false });
+  if (!confirmedEarlier(user, req)) await requireReauth(user, req, { withCode: false });
   const recent = user.mfa_stepup_until && new Date(user.mfa_stepup_until) > new Date();
   if (mfa.hasMfa(user) && !recent) {
     throw new AuthError(403, 'Confirm with your password and a current code first, then try again.', 'MFA_CODE_REQUIRED');
   }
 }
+
+// "Confirm it's you" once: password, plus a current code when two-step is on.
+// For the next few minutes this session can add or turn off methods without
+// sending the password again (services/stepUp.js).
+exports.confirmStepUp = async (req, res) => {
+  try {
+    const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
+    if (!user) throw new AuthError(401, 'Not signed in');
+    if (!req.authSession) throw new AuthError(403, 'Sign out and sign in again, then make this change.', 'SESSION_UNTRACKED');
+    await requireReauth(user, req);
+    if (!(await stepUpService.saveGrant(user, req))) throw new AuthError(403, 'Sign out and sign in again, then make this change.', 'SESSION_UNTRACKED');
+    return res.json({ success: true, expires_in: stepUpService.STEP_UP_GRANT_MINUTES * 60 });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
 
 exports.startMfaSetup = async (req, res) => {
   try {
@@ -354,6 +406,7 @@ exports.confirmMfaSetup = async (req, res) => {
       $set: { mfa_enabled: true, mfa_secret_enc: encrypt(secret), mfa_enrolled_at: user.mfa_enrolled_at || new Date(), ...(recovery ? { mfa_recovery_hashes: recovery.hashes } : {}) },
       $unset: { mfa_pending_secret_enc: '', mfa_stepup_until: '' },
     }));
+    if (viaSession) await stepUpService.upgradeGrant(user, req);
     await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, summary: 'Turned on two-step verification (authenticator app)', meta: { method: 'totp' } });
     await mailTwoStepChange(user, 'totp', 'added');
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
@@ -410,6 +463,7 @@ exports.confirmEmailSetup = async (req, res) => {
       $set: { mfa_email_enabled: true, mfa_enrolled_at: user.mfa_enrolled_at || new Date(), ...(recovery ? { mfa_recovery_hashes: recovery.hashes } : {}) },
       $unset: { mfa_stepup_until: '' },
     }));
+    if (viaSession) await stepUpService.upgradeGrant(user, req);
     await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, summary: 'Turned on two-step verification (email codes)', meta: { method: 'email' } });
     await mailTwoStepChange(user, 'email', 'added');
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
@@ -432,6 +486,7 @@ exports.startWhatsappSetup = async (req, res) => {
     if (!number) {
       return res.status(400).json({ error: `Enter your WhatsApp number with the country code. Allowed: +${whatsappOtp.allowedCountryCodes().join(', +')}.`, code: 'WHATSAPP_NUMBER_INVALID' });
     }
+    if (whatsappNeedsPrimary(user)) return res.status(400).json(WHATSAPP_NEEDS_PRIMARY);
     // Re-authenticate first, so a session without the password cannot use up
     // the daily number slots below.
     if (viaSession) await stepUpForStart(user, req);
@@ -473,15 +528,21 @@ exports.confirmWhatsappSetup = async (req, res) => {
     if (user.mfa_whatsapp_enabled) return res.status(400).json({ error: 'WhatsApp codes are already turned on' });
     if (!whatsappOtp.available()) return res.status(400).json({ error: 'WhatsApp codes are not available yet', code: 'WHATSAPP_NOT_AVAILABLE' });
     if (!user.mfa_whatsapp_pending_number) return res.status(400).json({ error: 'Enter your WhatsApp number first' });
+    if (whatsappNeedsPrimary(user)) return res.status(400).json(WHATSAPP_NEEDS_PRIMARY);
     if (!(await whatsappOtp.verifyCode(user, req.body?.code, 'setup'))) return res.status(401).json(INVALID_MFA_CODE);
     const recovery = newRecoveryCodes(user);
-    await sys(() => Users.updateOne({ id: user.id }, {
+    // Conditional for customers: a parallel request may have turned the primary
+    // method off since it was checked above.
+    const primaryStillOn = describeUser(user).kind === 'tenant' ? { $or: [{ mfa_enabled: true }, { mfa_email_enabled: true }] } : {};
+    const turnedOn = await sys(() => Users.updateOne({ id: user.id, ...primaryStillOn }, {
       $set: {
         mfa_whatsapp_enabled: true, mfa_whatsapp_number: user.mfa_whatsapp_pending_number, mfa_whatsapp_verified_at: new Date(),
         mfa_enrolled_at: user.mfa_enrolled_at || new Date(), ...(recovery ? { mfa_recovery_hashes: recovery.hashes } : {}),
       },
       $unset: { mfa_whatsapp_pending_number: '', mfa_stepup_until: '' },
     }));
+    if (turnedOn.matchedCount !== 1) return res.status(400).json(WHATSAPP_NEEDS_PRIMARY);
+    if (viaSession) await stepUpService.upgradeGrant(user, req);
     await audit.record(audit.EVENTS.MFA_ENROLLED, { tenantId: user.tenant_id ?? null, actor: actorOf(user), targetType: 'user', targetId: user.id, summary: 'Turned on two-step verification (WhatsApp codes)', meta: { method: 'whatsapp' } });
     await mailTwoStepChange(user, 'whatsapp', 'added');
     const fresh = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
@@ -505,14 +566,15 @@ exports.setDefaultMfaMethod = async (req, res) => {
   }
 };
 
-// Turns one method off (password and a current code required). Accounts that
-// must use two-step verification keep at least one method.
+// Turns one method off (password and a current code required, or a live
+// confirmation). Accounts that must use two-step verification keep at least
+// one method.
 exports.disableMfaMethod = async (req, res) => {
   try {
     const { method } = req.body || {};
     const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
     if (!user) throw new AuthError(401, 'Not signed in');
-    await requireReauth(user, req);
+    await stepUp(user, req);
     const methods = mfa.enrolledMethodsOf(user);
     if (!methods.includes(method)) return res.status(400).json({ error: 'This method is not turned on' });
     const remaining = methods.filter((m) => m !== method);
@@ -526,6 +588,10 @@ exports.disableMfaMethod = async (req, res) => {
     if (!remaining.length && mfaEnforcedFor(user)) {
       return res.status(400).json({ error: 'Admin accounts must keep one two-step method. Turn on the other method first.', code: 'MFA_LAST_METHOD' });
     }
+    // Customers are never left with WhatsApp codes alone.
+    const keepWhatsappBacked = describeUser(user).kind === 'tenant' && method !== 'whatsapp';
+    const WHATSAPP_ALONE = { error: 'WhatsApp codes cannot be your only method. Turn WhatsApp codes off first, or turn off two-step verification.', code: 'MFA_LAST_METHOD' };
+    if (keepWhatsappBacked && remaining.length === 1 && remaining[0] === 'whatsapp') return res.status(400).json(WHATSAPP_ALONE);
     const UPDATES = {
       totp: { $set: { mfa_enabled: false }, $unset: { mfa_secret_enc: '', mfa_pending_secret_enc: '' } },
       email: { $set: { mfa_email_enabled: false }, $unset: { mfa_email_code_hash: '', mfa_email_code_purpose: '', mfa_email_code_expires_at: '' } },
@@ -534,11 +600,47 @@ exports.disableMfaMethod = async (req, res) => {
     const update = UPDATES[method];
     if (!remaining.length) update.$unset = { ...update.$unset, mfa_recovery_hashes: '', mfa_enrolled_at: '' };
     if (!remaining.length || user.mfa_default_method === method) update.$unset = { ...update.$unset, mfa_default_method: '' };
-    await sys(() => Users.updateOne({ id: user.id }, update));
+    // Checked again in the update itself, against parallel requests.
+    const otherPrimary = method === 'totp' ? 'mfa_email_enabled' : 'mfa_enabled';
+    const backed = keepWhatsappBacked ? { $or: [{ [otherPrimary]: true }, { mfa_whatsapp_enabled: { $ne: true } }] } : {};
+    const turnedOff = await sys(() => Users.updateOne({ id: user.id, ...backed }, update));
+    if (turnedOff.matchedCount !== 1) return res.status(400).json(WHATSAPP_ALONE);
     await audit.record(audit.EVENTS.MFA_METHOD_DISABLED, { tenantId: user.tenant_id ?? null, req, targetType: 'user', targetId: user.id, summary: `Turned off two-step verification method: ${MFA_METHOD_NAMES[method] || method}`, meta: { method } });
     await mailTwoStepChange(user, method, 'removed');
     const after = await sys(() => Users.findOne({ id: user.id }, { _id: 0 }).lean());
     return res.json({ success: true, mfa_methods: mfa.methodsOf(after), mfa_default_method: mfa.defaultMethodOf(after) });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
+// Turns two-step verification off: every method and the recovery codes
+// (password and a current code required, or a live confirmation). Refused for
+// accounts that must use it.
+exports.disableAllMfa = async (req, res) => {
+  try {
+    const user = await sys(() => Users.findOne({ id: req.user.id }, { _id: 0 }).lean());
+    if (!user) throw new AuthError(401, 'Not signed in');
+    await stepUp(user, req);
+    const methods = mfa.enrolledMethodsOf(user);
+    if (!methods.length) return res.status(400).json({ error: 'Two-step verification is already off' });
+    if (mfaEnforcedFor(user)) {
+      return res.status(400).json({ error: 'Your account must keep two-step verification on, so it cannot be turned off.', code: 'MFA_REQUIRED_BY_POLICY' });
+    }
+    // Today's WhatsApp send count stays, so off-and-on cannot reset the limit.
+    await sys(() => Users.updateOne({ id: user.id }, {
+      $set: { mfa_enabled: false, mfa_email_enabled: false, mfa_whatsapp_enabled: false },
+      $unset: {
+        mfa_secret_enc: '', mfa_pending_secret_enc: '', mfa_recovery_hashes: '', mfa_enrolled_at: '', mfa_default_method: '', mfa_stepup_until: '',
+        mfa_email_code_hash: '', mfa_email_code_purpose: '', mfa_email_code_expires_at: '',
+        mfa_whatsapp_number: '', mfa_whatsapp_pending_number: '', mfa_whatsapp_verified_at: '', ...whatsappOtp.clearFields(),
+      },
+    }));
+    // Setting it up again asks for the password again.
+    await stepUpService.clearGrant(user, req);
+    await audit.record(audit.EVENTS.MFA_METHOD_DISABLED, { tenantId: user.tenant_id ?? null, req, targetType: 'user', targetId: user.id, summary: `Turned off two-step verification (${methods.map((m) => MFA_METHOD_NAMES[m]).join(', ')})`, meta: { methods, all: true } });
+    await mailTwoStepChange(user, 'all', 'removed');
+    return res.json({ success: true, mfa_methods: [] });
   } catch (error) {
     return fail(res, error);
   }
@@ -593,6 +695,10 @@ exports.me = async (req, res) => {
       mfa_whatsapp_number: fresh?.mfa_whatsapp_number ? whatsappOtp.maskNumber(fresh.mfa_whatsapp_number) : null,
       recovery_codes_left: fresh?.mfa_recovery_hashes?.length || 0,
       last_login: fresh?.last_login || null,
+      // true: this account may not turn two-step verification off.
+      mfa_required_by_policy: Boolean(fresh && mfaEnforcedFor(fresh)),
+      // Seconds the "confirm it's you" check of this session is still valid.
+      mfa_stepup_seconds: stepUpService.grantSecondsLeft(fresh, req),
       workspace: lifecycle ? { id: lifecycle.tenant.id, name: lifecycle.tenant.name, state: lifecycle.state, access: lifecycle.access } : null,
     });
   } catch (error) {

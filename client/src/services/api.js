@@ -267,6 +267,17 @@ class LeadOSAPI {
     return this.request(`/api/auth/mfa/reauth/${channel}/send`, { method: 'POST', body: '{}' });
   }
 
+  // "Confirm it's you" once ({ password } plus the current code when two-step
+  // is on). For a few minutes the two-step changes need no password.
+  async confirmStepUp(proof) {
+    return this.request('/api/auth/mfa/step-up', { method: 'POST', body: JSON.stringify(proof) });
+  }
+
+  // Turns two-step verification off (every method).
+  async disableAllMfa() {
+    return this.request('/api/auth/mfa/disable-all', { method: 'POST', body: '{}' });
+  }
+
   async disableMfaMethod(method, reauth) {
     return this.request('/api/auth/mfa/disable', { method: 'POST', body: JSON.stringify({ ...reauth, method }) });
   }

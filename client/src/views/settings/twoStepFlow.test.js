@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shownMethods, setupSteps, showsSteps, currentStep, firstCodeMethod, secondsLeft, shouldAutoSend, waitFromError, otherCodeMethods } from './twoStepFlow.js';
+import {
+  shownMethods, setupSteps, showsSteps, currentStep, firstCodeMethod, secondsLeft, shouldAutoSend, waitFromError, otherCodeMethods,
+  setupChoices, switchState, setupBlocker, removeBlocker, whatsappOnly, needsConfirmation, isConfirmed, confirmationProof,
+} from './twoStepFlow.js';
+
+const me = (enrolled = [], extra = {}) => ({
+  mfa_enabled: enrolled.length > 0, mfa_methods: enrolled, mfa_methods_enrolled: enrolled, whatsapp_otp_available: true,
+  mfa_extra_methods_enabled: true, ...extra,
+});
 
 test('step labels follow the method', () => {
   assert.deepEqual(setupSteps('totp'), ["Confirm it's you", 'Scan the QR code', 'Enter the code']);
@@ -14,12 +22,12 @@ test('only turning a method on shows the step indicator', () => {
   assert.equal(showsSteps('recovery'), false);
 });
 
-test('current step', () => {
-  assert.equal(currentStep({ step: 'confirm', method: 'totp' }), 1);
-  assert.equal(currentStep({ step: 'finish', method: 'totp', codeLength: 0 }), 2);
-  assert.equal(currentStep({ step: 'finish', method: 'totp', codeLength: 2 }), 3);
-  assert.equal(currentStep({ step: 'finish', method: 'email' }), 3);
-  assert.equal(currentStep({ step: 'finish', method: 'whatsapp' }), 3);
+test('current step: confirm, then the QR code or getting a code, then the code', () => {
+  assert.equal(currentStep('confirm'), 1);
+  assert.equal(currentStep('starting'), 2);
+  assert.equal(currentStep('scan'), 2);
+  assert.equal(currentStep('phone'), 2);
+  assert.equal(currentStep('code'), 3);
 });
 
 test('first code method: none when off, else the default, then the app', () => {
@@ -74,4 +82,48 @@ test('method cards: only the app while extra methods are off, unless already on'
   // Someone who already uses email codes keeps the card (to turn it off).
   assert.deepStrictEqual(shownMethods({ mfa_extra_methods_enabled: false, mfa_methods_enrolled: ['email'] }), ['totp', 'email']);
   assert.deepStrictEqual(shownMethods({ mfa_methods_enrolled: ['whatsapp', 'totp'] }), ['totp', 'whatsapp']);
+});
+
+test('switch: off with no method, on with one, locked when the account must keep it', () => {
+  assert.deepStrictEqual(switchState(me()), { on: false, locked: false, reason: '' });
+  assert.deepStrictEqual(switchState(me(['email'])), { on: true, locked: false, reason: '' });
+  const forced = switchState(me(['totp'], { mfa_required_by_policy: true }));
+  assert.equal(forced.locked, true);
+  assert.match(forced.reason, /cannot be turned off/);
+  assert.equal(switchState(me([], { mfa_required_by_policy: true })).locked, false, 'it can still be turned on');
+});
+
+test('turning on offers the authenticator app or email (when allowed), never WhatsApp', () => {
+  assert.deepStrictEqual(setupChoices(me()), ['totp', 'email']);
+  assert.deepStrictEqual(setupChoices(me([], { mfa_extra_methods_enabled: false })), ['totp']);
+});
+
+test('WhatsApp is an extra method', () => {
+  assert.match(setupBlocker(me(), 'whatsapp'), /app or email codes first/);
+  assert.equal(setupBlocker(me([], { mfa_extra_methods_enabled: false }), 'whatsapp'), 'Turn on the authenticator app first.');
+  assert.equal(setupBlocker(me(['email']), 'whatsapp'), '');
+  assert.match(setupBlocker(me(['email'], { whatsapp_otp_available: false }), 'whatsapp'), /Not available/);
+  assert.equal(setupBlocker(me(), 'totp'), '');
+  assert.match(removeBlocker(me(['email', 'whatsapp']), 'email'), /WhatsApp/);
+  assert.equal(removeBlocker(me(['email', 'totp', 'whatsapp']), 'email'), '');
+  assert.equal(removeBlocker(me(['email', 'whatsapp']), 'whatsapp'), '');
+  assert.equal(removeBlocker(me(['email']), 'email'), '');
+  assert.match(removeBlocker(me(['email'], { mfa_required_by_policy: true }), 'email'), /keep one/);
+  assert.equal(whatsappOnly(me(['whatsapp'])), true);
+  assert.equal(whatsappOnly(me(['whatsapp', 'totp'])), false);
+});
+
+test('confirmation: asked again only when it ran out or the server says so', () => {
+  assert.equal(isConfirmed(0, 1000), false);
+  assert.equal(isConfirmed(601000, 1000), true);
+  assert.equal(isConfirmed(5000, 1000), false);
+  assert.equal(needsConfirmation({ code: 'PASSWORD_REQUIRED' }), true);
+  assert.equal(needsConfirmation({ code: 'MFA_CODE_REQUIRED' }), true);
+  assert.equal(needsConfirmation({ code: 'PASSWORD_INCORRECT' }), false);
+});
+
+test('what the pop-up sends', () => {
+  assert.deepStrictEqual(confirmationProof({ hasMfa: false, password: 'p', method: null, code: '' }), { password: 'p' });
+  assert.deepStrictEqual(confirmationProof({ hasMfa: true, password: 'p', method: 'totp', code: '123456' }), { password: 'p', code_method: 'totp', code: '123456' });
+  assert.deepStrictEqual(confirmationProof({ hasMfa: true, password: 'p', method: 'recovery', code: ' AB-CD ' }), { password: 'p', recovery_code: 'AB-CD' });
 });

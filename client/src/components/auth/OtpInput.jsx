@@ -61,7 +61,7 @@ const OtpInput = ({ value, onChange, onComplete, length = 6, disabled = false, i
             maxLength={length}
             aria-label={`Digit ${i + 1}`}
             className={cn(
-              'h-11 w-11 min-w-0 shrink-0 rounded-xl border-2 bg-white p-0 text-center text-xl font-bold text-slate-900 shadow-sm outline-none transition-all sm:h-12 sm:w-12',
+              'h-11 w-11 min-w-0 shrink-0 rounded-xl border-2 bg-white p-0 text-center text-xl font-bold text-slate-900 shadow-sm outline-none transition-all max-[400px]:w-9 sm:h-12 sm:w-12',
               'focus:border-blue-600 focus:ring-4 focus:ring-blue-600/15',
               digit ? 'border-slate-300' : 'border-slate-200',
               invalid && 'animate-[shake_0.35s] border-red-400 focus:border-red-500 focus:ring-red-100',
