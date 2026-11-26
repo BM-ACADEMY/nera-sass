@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
+const { memberEmail } = require('../utils/memberEmail');
 
 const memoryOutbox = [];
 let transport = null;
@@ -103,9 +104,11 @@ function layout(title, paragraphs, button) {
 
 function invitationEmail({ to, inviteeName, workspaceName, inviterName, role, url, expiresAt, staff, passwordPreset = false }) {
   const product = productName();
-  const where = staff ? `the ${product} admin panel` : `the ${workspaceName} workspace on ${product}`;
-  const roleName = staff ? ({ founder: 'Admin (Owner)', ops: 'Staff' }[role] || role) : role;
-  const title = `You're invited to ${staff ? product : workspaceName}`;
+  // People invited to a customer workspace get the designed team email.
+  if (!staff) return send({ to, ...memberEmail({ method: 'invite', product, to, name: inviteeName, workspaceName, inviterName, role, url, expiresAt }) });
+  const where = `the ${product} admin panel`;
+  const roleName = { founder: 'Admin (Owner)', ops: 'Staff' }[role] || role;
+  const title = `You're invited to ${product}`;
   const lines = [
     `Hi ${inviteeName || 'there'},`,
     `${inviterName || 'An administrator'} invited you to join ${where} as ${roleName}.`,
@@ -114,6 +117,12 @@ function invitationEmail({ to, inviteeName, workspaceName, inviterName, role, ur
       : `Open the link below to set your own password. It works once and expires on ${new Date(expiresAt).toUTCString()}.`,
   ];
   return send({ to, subject: title, text: `${lines.join('\n\n')}\n\n${url}\n`, html: layout(title, lines, { url, label: 'Accept invitation' }) });
+}
+
+// A workspace login created with a temporary password (Team page, or the admin
+// panel's workspace page). Takes no password: whoever added them shares it.
+function memberAddedEmail({ to, name, workspaceName, inviterName, role }) {
+  return send({ to, ...memberEmail({ method: 'password', product: productName(), to, name, workspaceName, inviterName, role, url: `${appUrl()}/login` }) });
 }
 
 const STAFF_ROLE_OVERVIEW = {
@@ -296,6 +305,7 @@ module.exports = {
   twoStepChangedEmail,
   deliveryMode,
   invitationEmail,
+  memberAddedEmail,
   staffWelcomeEmail,
   passwordResetEmail,
   signInLinkSentEmail,

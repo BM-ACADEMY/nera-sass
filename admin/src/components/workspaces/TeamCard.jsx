@@ -60,8 +60,10 @@ function AddUserDialog({ open, onOpenChange, tenantId, onSaved }) {
       const res = await axiosClient.post(`/admin/tenants/${tenantId}/users`, body);
       if (values.method === 'invite') {
         toast[res.data.delivery?.delivered === false ? 'warning' : 'success'](res.data.delivery?.delivered === false ? 'Invitation created, but the email was not sent' : `Invitation sent to ${body.email}`);
+      } else if (res.data.delivery?.delivered) {
+        toast.success(`User added and emailed how to sign in (without the password). ${SHARE}`);
       } else {
-        toast.success(`User added. ${SHARE}`);
+        toast.warning(`User added, but the email was not sent. ${SHARE}`);
       }
       onOpenChange(false);
       onSaved?.();

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert';
 import {
   passwordProblem, assignableRoles, canSeeTeam, canActOn, memberStatus, seatSummary, addMemberProblem, editMemberProblem,
+  menuSections, addedNotice, resentNotice,
 } from './teamPolicy.js';
 
 test('the Team card is for people who may see the team; agents never see it', () => {
@@ -53,4 +54,31 @@ test('add and edit forms are checked like the server', () => {
   assert.strictEqual(passwordProblem('abcdefghij'), 'Use at least one letter and one number');
   assert.strictEqual(editMemberProblem({ name: 'Ravi', phone: '' }), null);
   assert.match(editMemberProblem({ name: 'R' }), /name/);
+});
+
+test('sidebar: the Team item needs view_team, and an empty section is dropped', () => {
+  const sections = [
+    { label: 'Overview', items: [{ path: '/dashboard' }] },
+    { label: 'Workspace', items: [{ path: '/team', permission: 'view_team' }] },
+  ];
+  const labels = (permissions) => menuSections(sections, permissions).map((s) => s.label);
+  assert.deepStrictEqual(labels({ view_team: true }), ['Overview', 'Workspace']);
+  assert.deepStrictEqual(labels({ view_team: false }), ['Overview']);
+  assert.deepStrictEqual(labels(null), ['Overview'], 'hidden until the server has answered');
+});
+
+test('after adding or resending, the page says whether the email went out', () => {
+  const who = { name: 'Priya', email: 'priya@shop.in' };
+  const sent = addedNotice({ method: 'password', delivery: { delivered: true }, ...who });
+  assert.strictEqual(sent.ok, true);
+  assert.match(sent.text, /emailed the sign-in details to priya@shop\.in, without the password/);
+  for (const delivery of [{ delivered: false }, undefined]) {
+    const failed = addedNotice({ method: 'password', delivery, ...who });
+    assert.strictEqual(failed.ok, false);
+    assert.match(failed.text, /was added and can sign in, but the email could not be sent/);
+    assert.strictEqual(addedNotice({ method: 'invite', delivery, ...who }).ok, false);
+    assert.strictEqual(resentNotice(delivery, who.email).ok, false);
+  }
+  assert.match(addedNotice({ method: 'invite', delivery: { delivered: true }, ...who }).text, /Invitation emailed to/);
+  assert.strictEqual(resentNotice({ delivered: true }, who.email).ok, true);
 });

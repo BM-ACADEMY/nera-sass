@@ -20,6 +20,7 @@ const LABELS = {
   reports: 'Reports',
   clients: 'Clients',
   settings: 'Settings',
+  team: 'Team',
   billing: 'Billing',
   'sales-tasks': 'Sales Tasks',
   calendar: 'Calendar',

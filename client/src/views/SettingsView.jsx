@@ -10,7 +10,6 @@ import { ProfileSection } from './settings/ProfileSection.jsx';
 import { BrandProfileSection } from './settings/BrandProfileSection.jsx';
 import { TwoStepSection } from './settings/TwoStepSection.jsx';
 import { PasswordSection } from './settings/PasswordSection.jsx';
-import { TeamSection } from './settings/TeamSection.jsx';
 import { ActivitySection } from './settings/ActivitySection.jsx';
 import { IntegrationsSection } from './settings/IntegrationsSection.jsx';
 import { Badge } from '@/components/ui/badge';
@@ -23,7 +22,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 // signed-in user's own workspace (the server decides which one from the
 // session); what can be edited follows the permission flags in GET
 // /api/tenant, and the server checks every change again.
-// Billing is its own page (/billing); WhatsApp is on the WhatsApp Number page.
+// Billing is its own page (/billing), so is Team (/team); WhatsApp is on the
+// WhatsApp Number page.
 export const SettingsView = () => {
   const { section } = useParams();
   const navigate = useNavigate();
@@ -92,7 +92,7 @@ export const SettingsView = () => {
   );
 
   const props = { tenantInfo, brand, me, onSaved: load };
-  // A section this person may not open (for example Team for an agent).
+  // A section this person may not open (for example Activity for an agent).
   if (section && !settingsSections(tenantInfo?.permissions).some((s) => s.key === section)) return <Navigate to="/settings" replace />;
   if (section) {
     return (
@@ -102,7 +102,6 @@ export const SettingsView = () => {
         {section === 'brand' && <BrandProfileSection key={version} {...props} />}
         {section === 'two-step' && <TwoStepSection key={version} {...props} />}
         {section === 'password' && <PasswordSection key={version} {...props} onSignedOutEverywhere={signedOutEverywhere} />}
-        {section === 'team' && <TeamSection key={version} {...props} />}
         {section === 'activity' && <ActivitySection {...props} />}
         {section === 'integrations' && <IntegrationsSection key={version} />}
       </div>
@@ -115,9 +114,6 @@ export const SettingsView = () => {
     brand: brand?.name || 'Not set up yet',
     'two-step': me?.mfa_enabled ? <Badge variant="success">On</Badge> : <Badge variant="danger">Off</Badge>,
     password: null,
-    team: tenantInfo?.usage?.max_users
-      ? `${(tenantInfo.usage.users || 0) + (tenantInfo.usage.pending_invitations || 0)} of ${tenantInfo.usage.max_users} seats used`
-      : null,
   };
 
   return (
