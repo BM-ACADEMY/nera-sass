@@ -7,15 +7,13 @@ export const ROLE_LABELS = { owner: 'Owner', admin: 'Admin', manager: 'Manager',
 export const roleLabel = (role) => ROLE_LABELS[role] || '';
 
 // Settings sections, in the admin panel's style: a hub of cards, each opening
-// /settings/<key>. Billing has its own page (/billing, from the profile menu)
-// and WhatsApp lives on the WhatsApp Number page.
+// /settings/<key>. Billing (/billing, from the profile menu) and Team (/team,
+// in the sidebar) have their own pages; WhatsApp is on WhatsApp Number.
 export const SETTINGS_SECTIONS = [
   { key: 'profile', title: 'Profile & workspace', text: 'Your sign-in details, your workspace and its language.' },
   { key: 'brand', title: 'Brand profile', text: 'Business name, category and automated replies.' },
   { key: 'two-step', title: 'Two-step verification', text: 'Ask for a code from your phone when you sign in.' },
   { key: 'password', title: 'Password & sessions', text: 'Change your password or sign out of every device.' },
-  // Only for people who may see the team (GET /api/tenant permissions.view_team).
-  { key: 'team', title: 'Team', text: 'Add the people who work in this workspace and choose what they can do.', permission: 'view_team' },
   // Activity log: who in the workspace did what. Owners and admins only
   // (permissions.view_activity; GET /api/activity answers 403 to other roles).
   { key: 'activity', title: 'Activity', text: 'See who in your team changed what, and when.', permission: 'view_activity' },

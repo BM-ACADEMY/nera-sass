@@ -25,10 +25,30 @@ const userAdmin = require('./userAdmin');
 const invitations = require('./invitations');
 const sessions = require('./sessions');
 const audit = require('./audit');
+const notify = require('./notify');
 
 const { UserAdminError } = userAdmin;
 const PHONE_RE = /^\+?[0-9 ()-]{7,20}$/;
 const BCRYPT_ROUNDS = 12; // same as sign-up, password change and reset
+const MAIL_WAIT_MS = 15000;
+
+// Tells a new person about their login. The account already exists, so a slow
+// or failing mail server never fails the request: the answer says delivered: false.
+async function sendAddedEmail(details) {
+  let timer;
+  try {
+    const result = await Promise.race([
+      notify.memberAddedEmail(details),
+      new Promise((resolve) => { timer = setTimeout(resolve, MAIL_WAIT_MS, { delivered: false, mode: 'timeout' }); }),
+    ]);
+    return { delivered: Boolean(result.delivered), mode: result.mode };
+  } catch (error) {
+    console.error('[team] Welcome email not sent:', error.message);
+    return { delivered: false, mode: 'error' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function cleanName(name) {
   const value = typeof name === 'string' ? name.trim() : '';
@@ -65,8 +85,9 @@ function checkPassword(password, email) {
 
 /**
  * Adds a person. method 'password': the account is created now with the
- * temporary password; 'invite': an invitation email (they set their own).
- * Returns { user } or { invitation, delivery }.
+ * temporary password and they are emailed how to sign in (never the
+ * password); 'invite': an invitation email (they set their own).
+ * Returns { user, delivery } or { invitation, delivery }.
  */
 async function createMember({ tenantId, actor, name, email, phone, role, method, password, req = null }) {
   const cleanEmail = normalizeEmail(email);
@@ -134,7 +155,8 @@ async function createMember({ tenantId, actor, name, email, phone, role, method,
     tenantId: tenant.id, req, targetType: 'user', targetId: user.id,
     meta: { email: cleanEmail, role: newRole, method: 'temporary_password', by_staff: actor.kind === 'staff' },
   });
-  return { user: userAdmin.presentUser(user.toObject()) };
+  const delivery = await sendAddedEmail({ to: cleanEmail, name: displayName, workspaceName: tenant.name, inviterName: actor.name, role: newRole });
+  return { user: userAdmin.presentUser(user.toObject()), delivery };
 }
 
 /** Name, phone and role. Only the fields given are changed. */
