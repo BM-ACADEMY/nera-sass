@@ -171,6 +171,9 @@ function BusinessForm({ form, set }) {
         <Field label="Who takes over from the AI" required hint="The AI hands these chats to your WhatsApp Chat with the reason.">
           <Input maxLength={300} value={form.handoff_contacts || ''} placeholder="Front desk team" onChange={(e) => set({ handoff_contacts: e.target.value })} />
         </Field>
+        <Field label="Which chats the AI answers" hint="Only for a WhatsApp number shared with other brands. Chats for the brands you list to leave alone get no AI reply.">
+          <Textarea rows={3} maxLength={800} value={form.brand_scope || ''} placeholder="Answer chats from our ads or about our services. Leave chats about our sister brand alone. If unclear, ask which one they mean." onChange={(e) => set({ brand_scope: e.target.value })} />
+        </Field>
       </Section>
     </div>
   );
@@ -318,7 +321,7 @@ function TestTab({ profile }) {
     setBusy(true);
     try {
       const res = await api.post('/brain/test', { message, history, profile });
-      setChat((list) => [...list, { direction: 'outbound', content: res.reply, handoff: res.handoff ? res.handoff_reason || 'Handed to your team' : null }]);
+      setChat((list) => [...list, { direction: 'outbound', content: res.reply, handoff: res.handoff ? res.handoff_reason || 'Handed to your team' : null, leftAlone: res.in_scope === false }]);
     } catch (err) {
       setChat((list) => [...list, { direction: 'error', content: err.message || 'The AI could not answer.' }]);
     } finally {
@@ -338,6 +341,7 @@ function TestTab({ profile }) {
           <div key={i} className={cn('max-w-[85%] rounded-lg px-3 py-2 text-sm break-words whitespace-pre-wrap', m.direction === 'inbound' && 'self-end bg-emerald-100', m.direction === 'outbound' && 'self-start bg-background shadow-xs', m.direction === 'error' && 'self-center bg-red-50 text-red-700')}>
             {m.content}
             {m.handoff && <div className="mt-1 text-xs font-semibold text-amber-700">Handed to your team: {m.handoff}</div>}
+            {m.leftAlone && <div className="mt-1 text-xs font-semibold text-amber-700">Another brand on this number: this reply would not be sent</div>}
           </div>
         ))}
         {busy && <div className="self-start text-xs text-muted-foreground">Typing…</div>}

@@ -63,6 +63,8 @@ function parseOutput(raw) {
     order: orderFlow.cleanProposal(parsed.order),
     follow_up_on: followupDate.cleanProposal(parsed.follow_up_on),
     answered_from: ANSWERED_FROM.includes(parsed.answered_from) ? parsed.answered_from : null,
+    // Only an explicit false leaves the chat alone; anything else is answered.
+    in_scope: parsed.in_scope !== false,
   };
 }
 
@@ -240,6 +242,12 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
     return finishWithoutSend('The AI could not answer: please reply yourself', 'notify', err.usage ? { model: BRAIN_MODEL, ...costOf(err.usage), latency_ms: err.latency ?? null } : {});
   }
   const { output, prompt, latency, usage, lang } = result;
+  // A shared number: a chat for another brand is left unanswered for people
+  // (no reply and no handover alert). Opt-outs and safety replies still go out.
+  if (brain.profile?.brand_scope && !output.in_scope && !output.opt_out && !/^safety\b/i.test(output.handoff_reason || '')) {
+    await finish({ status: 'no_send', handoff: false, handoff_reason: 'Left alone: this chat is for another brand on this number', language: language.code, model: BRAIN_MODEL, ...costOf(usage), latency_ms: latency });
+    return { sent: false, reason: 'This chat is for another brand on this number: left for the team', out_of_scope: true };
+  }
   let { afterHours } = result;
   let bookedAppointment = null;
   let draftToSave;
