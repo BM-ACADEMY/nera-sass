@@ -38,6 +38,15 @@ function fail(res, error, where) {
   return res.status(500).json({ error: 'Something went wrong on our side. Please try again.' });
 }
 
+// While online payment is off (BILLING_PAYMENTS_ENABLED is not 'true'), no
+// route may create a Razorpay order or charge for extras. Verification and the
+// webhook for payments already started are left alone.
+const PAYMENTS_OFF_MESSAGE = 'Online payment is not open yet. Please contact us to change your plan.';
+function requirePaymentsOn(req, res, next) {
+  if (billing.razorpay.paymentsEnabled()) return next();
+  return res.status(403).json({ error: PAYMENTS_OFF_MESSAGE, code: 'PAYMENTS_OFF' });
+}
+
 // WhatsApp numbers this workspace has connected (read only; the sending code is untouched).
 async function numbersInUse(tenantId) {
   const brand = await Clients.findOne({}, { _id: 0, id: 1, phone_number_id: 1 }).lean();
@@ -69,6 +78,7 @@ router.get('/summary', async (req, res) => {
       billing.alerts.recent(10),
     ]);
     const subscription = billing.subscriptions.publicSubscription(sub, now);
+    const paymentsEnabled = billing.razorpay.paymentsEnabled();
     res.json({
       subscription,
       plan: gate.plan || (sub ? await billing.plans.planById(sub.plan_id) : null),
@@ -87,7 +97,8 @@ router.get('/summary', async (req, res) => {
       seats: { used: seats.used, active_users: seats.activeUsers, pending_invitations: seats.pendingInvitations, limit: limits.seats, extra: subscription?.extra_seats || 0 },
       numbers: { used: numbers, limit: limits.numbers, extra: subscription?.extra_numbers || 0 },
       alerts: notices,
-      payments: { enabled: billing.razorpay.isConfigured(), key_id: billing.razorpay.keyId() },
+      payments_enabled: paymentsEnabled,
+      payments: { enabled: paymentsEnabled && billing.razorpay.isConfigured(), key_id: paymentsEnabled ? billing.razorpay.keyId() : null },
       meta_billing_note: 'WhatsApp conversation charges are billed to you by Meta directly. The wallet pays only for AI replies beyond your plan, extra seats and extra numbers.',
       permissions: { manage_billing: can(req.identity, 'billing.manage') },
     });
@@ -166,7 +177,7 @@ router.get('/orders', requirePermission('billing.view'), async (req, res) => {
 });
 
 // POST /api/billing/orders { purpose: 'subscription', plan_code } | { purpose: 'wallet_topup', amount_inr }
-router.post('/orders', requirePermission('billing.manage'), async (req, res) => {
+router.post('/orders', requirePermission('billing.manage'), requirePaymentsOn, async (req, res) => {
   try {
     const purpose = String(req.body?.purpose || '');
     const result = await billing.orders.createOrder({
@@ -204,7 +215,7 @@ router.post('/orders/verify', requirePermission('billing.manage'), async (req, r
 });
 
 // POST /api/billing/extras { kind: 'seat' | 'number', quantity }
-router.post('/extras', requirePermission('billing.manage'), async (req, res) => {
+router.post('/extras', requirePermission('billing.manage'), requirePaymentsOn, async (req, res) => {
   try {
     const result = await billing.orders.buyExtra({ kind: String(req.body?.kind || ''), quantity: req.body?.quantity ?? 1, userId: req.user.id });
     res.json(result);

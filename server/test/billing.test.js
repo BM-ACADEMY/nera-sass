@@ -74,6 +74,8 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     gatewayFails = false;
     sends = [];
     delete process.env.BILLING_REQUIRE_PLAN;
+    // This suite tests the money flow, so online payment is on unless a test turns it off.
+    process.env.BILLING_PAYMENTS_ENABLED = 'true';
     await billing.plans.ensureDefaultPlans();
     axios.post = async (url, body) => { sends.push({ url, body }); return { data: { messages: [{ id: `wamid.${sends.length}` }] } }; };
     openRouter.models.generateContent = async () => ({ text: JSON.stringify({ reply: 'Sure, we can help.', handoff: false, handoff_reason: null, lead_updates: {}, opt_out: false }), usage: {} });
@@ -203,6 +205,74 @@ test('N3: plans, subscriptions and wallet', async (t) => {
     const again = await runAsTenant(1, () => billing.wallet.credit({ amountPaise: 50000, reason: 'adjustment', referenceType: 'test', referenceId: 'c1' }));
     assert.strictEqual(again.duplicate, true);
     assert.strictEqual(await balance(1), 37500);
+  });
+
+  // ── Payment switch ───────────────────────────────────────
+  await t.test('PO1. With BILLING_PAYMENTS_ENABLED off, every order/extras route answers 403 PAYMENTS_OFF; verify, invoices and GST details still work', async () => {
+    const ws = await workspace(1);
+    await subscribe(ws.owner, 'desk'); // payments on: a plan and a pending order to verify later
+    const pending = await request(app).post('/api/billing/orders').set(bearer(ws.owner)).send({ purpose: 'wallet_topup', amount_inr: 2000 });
+    assert.strictEqual(pending.status, 201);
+    const callsBefore = gatewayCalls.length;
+    const balanceBefore = await balance(1);
+
+    for (const value of [undefined, '', 'false', 'TRUE', '1', 'yes', ' true']) {
+      if (value === undefined) delete process.env.BILLING_PAYMENTS_ENABLED; else process.env.BILLING_PAYMENTS_ENABLED = value;
+      const routes = [
+        ['/api/billing/orders', { purpose: 'subscription', plan_code: 'complete' }], // upgrade
+        ['/api/billing/orders', { purpose: 'subscription', plan_code: 'desk' }], // renew / buy
+        ['/api/billing/orders', { purpose: 'wallet_topup', amount_inr: 500 }],
+        ['/api/billing/extras', { kind: 'seat', quantity: 1 }],
+        ['/api/billing/extras', { kind: 'number', quantity: 1 }],
+      ];
+      for (const [path, body] of routes) {
+        const res = await request(app).post(path).set(bearer(ws.owner)).send(body);
+        assert.strictEqual(res.status, 403, `${path} ${JSON.stringify(body)} with ${JSON.stringify(value)}`);
+        assert.strictEqual(res.body.code, 'PAYMENTS_OFF');
+        assert.strictEqual(res.body.error, 'Online payment is not open yet. Please contact us to change your plan.');
+      }
+      const summary = await request(app).get('/api/billing/summary').set(bearer(ws.owner));
+      assert.strictEqual(summary.status, 200);
+      assert.strictEqual(summary.body.payments_enabled, false);
+      assert.strictEqual(summary.body.payments.enabled, false);
+      assert.strictEqual(summary.body.payments.key_id, null);
+      assert.strictEqual(summary.body.plan.code, 'desk', 'the current plan still shows');
+    }
+    assert.strictEqual(gatewayCalls.length, callsBefore, 'no Razorpay order was created');
+    assert.strictEqual(await balance(1), balanceBefore, 'no wallet charge');
+
+    // A payment started before the switch went off still verifies and still credits via the webhook.
+    const orderId = pending.body.checkout.order_id;
+    const paymentId = 'pay_after_switch_off';
+    const verified = await request(app).post('/api/billing/orders/verify').set(bearer(ws.owner))
+      .send({ razorpay_order_id: orderId, razorpay_payment_id: paymentId, razorpay_signature: checkoutSignature(orderId, paymentId) });
+    assert.strictEqual(verified.status, 200, JSON.stringify(verified.body));
+    assert.strictEqual((await signedWebhook(webhookBody(orderId, paymentId, 200000))).status, 200);
+    assert.strictEqual(await balance(1), balanceBefore + 200000);
+
+    // Invoices and GST details keep working.
+    assert.strictEqual((await request(app).get('/api/billing/invoices').set(bearer(ws.owner))).status, 200);
+    assert.strictEqual((await request(app).get('/api/billing/invoice-details').set(bearer(ws.owner))).status, 200);
+    assert.strictEqual((await request(app).put('/api/billing/invoice-details').set(bearer(ws.owner)).send({ legal_name: 'Acme', gstin: 'BAD' })).status, 400, 'GSTIN still validated');
+    assert.strictEqual((await request(app).put('/api/billing/invoice-details').set(bearer(ws.owner)).send({ legal_name: 'Acme', state_code: '33', address: 'Chennai' })).status, 200);
+    // Permission is still checked first.
+    assert.strictEqual((await request(app).post('/api/billing/orders').set(bearer(ws.agent)).send({ purpose: 'wallet_topup', amount_inr: 500 })).status, 403);
+
+    // Back on: the same routes work normally.
+    process.env.BILLING_PAYMENTS_ENABLED = 'true';
+    const on = await request(app).get('/api/billing/summary').set(bearer(ws.owner));
+    assert.strictEqual(on.body.payments_enabled, true);
+    assert.strictEqual(on.body.payments.enabled, true);
+    assert.strictEqual(on.body.payments.key_id, KEY_ID);
+    const upgrade = await request(app).post('/api/billing/orders').set(bearer(ws.owner)).send({ purpose: 'subscription', plan_code: 'complete' });
+    assert.strictEqual(upgrade.status, 201, JSON.stringify(upgrade.body));
+    const topup = await request(app).post('/api/billing/orders').set(bearer(ws.owner)).send({ purpose: 'wallet_topup', amount_inr: 500 });
+    assert.strictEqual(topup.status, 201);
+    const seat = await request(app).post('/api/billing/extras').set(bearer(ws.owner)).send({ kind: 'seat', quantity: 1 });
+    assert.strictEqual(seat.status, 200, JSON.stringify(seat.body));
+    const number = await request(app).post('/api/billing/extras').set(bearer(ws.owner)).send({ kind: 'number', quantity: 1 });
+    assert.strictEqual(number.status, 200, JSON.stringify(number.body));
+    assert.strictEqual(gatewayCalls.length, callsBefore + 2);
   });
 
   // ── Orders and checkout ──────────────────────────────────

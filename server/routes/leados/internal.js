@@ -291,7 +291,7 @@ app.get('/api/internal/followups/due', internalPlatformAuth, async (req, res) =>
       whatsapp_opt_out: { $ne: true },
       status: { $nin: ai.CLOSED_STATUSES },
       phone: { $nin: [null, ''] },
-    }, { _id: 0, id: 1, tenant_id: 1, name: 1, ai_followup_step: 1, ai_followup_due: 1, last_inbound_at: 1, whatsapp_opt_in: 1 }).sort({ ai_followup_due: 1 }).limit(100).lean();
+    }, { _id: 0, id: 1, tenant_id: 1, name: 1, ai_followup_step: 1, ai_followup_due: 1, ai_followup_promised_for: 1, last_inbound_at: 1, whatsapp_opt_in: 1 }).sort({ ai_followup_due: 1 }).limit(100).lean();
 
     const tenants = new Map();
     const items = [];
@@ -318,6 +318,8 @@ app.get('/api/internal/followups/due', internalPlatformAuth, async (req, res) =>
         lead_id: lead.id,
         name: lead.name || null,
         step: Number(lead.ai_followup_step || 0) + 1,
+        // The customer named this day themselves ("I will contact you on Monday").
+        promised: Boolean(lead.ai_followup_promised_for),
         in_window: lastInbound > 0 && now.getTime() - lastInbound < ai.DAY_MS,
         template: tenant.followup_template || process.env.AI_FOLLOWUP_TEMPLATE || 'follow_up',
         language: tenant.language || 'en',

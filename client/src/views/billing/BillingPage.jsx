@@ -7,6 +7,7 @@ import { C } from '../../constants/theme.js';
 import { api } from '../../services/api.js';
 import {
   formatInr, formatRupees, canManageBilling, allowanceBar, aiStatusLine, planAction, validTopup, ledgerLabel,
+  paymentsOpen, PAYMENTS_SOON_NOTICE,
 } from '../settings/billingPolicy.js';
 import { Callout, FormRow } from '../settings/SettingsKit.jsx';
 import { Badge } from '@/components/ui/badge';
@@ -126,10 +127,16 @@ export default function BillingPage() {
   }, [reloadKey]);
 
   const manage = canManageBilling(summary);
-  const paymentsOn = summary?.payments?.enabled;
+  // Online payment is open only when the server sends payments_enabled: true
+  // (BILLING_PAYMENTS_ENABLED). While it is closed there is no pay, upgrade,
+  // top-up or extra seat/number control, and Razorpay Checkout is never loaded.
+  // paymentsOn = open and the gateway is configured.
+  const open = paymentsOpen(summary);
+  const paymentsOn = open && Boolean(summary?.payments?.enabled);
 
   // Creates the order on the server, pays, then lets the server verify the signature.
   const checkout = async (order, label) => {
+    if (!open) return;
     setBusy(label);
     try {
       await loadCheckout();
@@ -151,6 +158,7 @@ export default function BillingPage() {
   };
 
   const buyExtra = async (kind) => {
+    if (!open) return;
     const price = kind === 'seat' ? summary?.plan?.extra_seat_price_inr : summary?.plan?.extra_number_price_inr;
     if (!window.confirm(`Add one extra ${kind} for ${formatRupees(price)} from the wallet, until the end of this period?`)) return;
     setBusy(kind);
@@ -208,8 +216,9 @@ export default function BillingPage() {
         </div>
       </div>
 
-      {!manage && <Callout><FiInfo className="mr-1 inline" /> Only the workspace Owner or an Admin can change the plan or add money.</Callout>}
-      {!paymentsOn && <Callout tone="warn">Online payments are not available right now. Contact Getnera to pay for a plan.</Callout>}
+      {!open && <Callout><FiInfo className="mr-1 inline" /> {PAYMENTS_SOON_NOTICE}</Callout>}
+      {open && !manage && <Callout><FiInfo className="mr-1 inline" /> Only the workspace Owner or an Admin can change the plan or add money.</Callout>}
+      {open && !paymentsOn && <Callout tone="warn">Online payments are not available right now. Contact Getnera to pay for a plan.</Callout>}
       {summary.ai && !summary.ai.allowed && <Callout tone="error">{summary.ai.reason}</Callout>}
       {alerts.slice(0, 2).map((alert) => (
         <Callout key={alert.id} tone={alert.kind === 'ai_blocked' ? 'error' : 'info'}>{alert.message}</Callout>
@@ -224,11 +233,17 @@ export default function BillingPage() {
           </div>
           <div className="text-2xl font-extrabold">{active ? sub.plan_name : 'None'}</div>
           <p className="text-[13px] text-muted-foreground">
-            {active ? `${formatRupees(sub.price_inr)} a month · ${sub.days_left} days left` : sub?.status === 'expired' ? 'Your plan has expired. Renew it below.' : 'Choose a plan below to get started.'}
+            {active
+              ? `${formatRupees(sub.price_inr)} a month · ${sub.days_left} days left`
+              : sub?.status === 'expired'
+                ? (open ? 'Your plan has expired. Renew it below.' : 'Your plan has expired.')
+                : (open ? 'Choose a plan below to get started.' : 'No plan yet.')}
           </p>
-          <Button variant="outline" className="mt-auto" onClick={() => document.getElementById('plans')?.scrollIntoView({ behavior: 'smooth' })}>
-            <FiPackage /> {active ? 'Change or renew plan' : 'See plans'}
-          </Button>
+          {open && (
+            <Button variant="outline" className="mt-auto" onClick={() => document.getElementById('plans')?.scrollIntoView({ behavior: 'smooth' })}>
+              <FiPackage /> {active ? 'Change or renew plan' : 'See plans'}
+            </Button>
+          )}
         </Card>
 
         {/* Usage */}
@@ -240,7 +255,7 @@ export default function BillingPage() {
             <UsageRow icon={FiUsers} label="Seats" value={`${summary.seats.used} / ${summary.seats.limit}`} hint={summary.seats.extra ? `${summary.seats.extra} extra this period` : 'Included in the plan'} />
             <UsageRow icon={FiSmartphone} label="WhatsApp numbers" value={`${summary.numbers.used} / ${summary.numbers.limit}`} hint={summary.numbers.extra ? `${summary.numbers.extra} extra this period` : 'Included in the plan'} />
           </div>
-          {manage && active && (
+          {open && manage && active && (
             <div className="mt-2 flex flex-wrap gap-2">
               <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => buyExtra('seat')}>{busy === 'seat' ? <Spinner /> : <FiPlus />} Seat ({formatRupees(summary.plan?.extra_seat_price_inr)})</Button>
               <Button size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => buyExtra('number')}>{busy === 'number' ? <Spinner /> : <FiPlus />} Number ({formatRupees(summary.plan?.extra_number_price_inr)})</Button>
@@ -253,7 +268,7 @@ export default function BillingPage() {
           <span className="text-[13px] font-medium text-muted-foreground">Wallet</span>
           <div className="text-2xl font-extrabold tabular-nums">{formatInr(summary.wallet.balance_paise)}</div>
           <p className="text-[13px] text-muted-foreground">Pays AI replies beyond the plan, extra seats and numbers.</p>
-          {manage && (
+          {open && manage && (
             <div className="mt-auto flex items-end gap-2">
               <FormRow label="Top up (₹)" htmlFor="topup">
                 <Input id="topup" value={topup} onChange={(e) => setTopup(e.target.value)} inputMode="numeric" className="w-32" />
@@ -261,7 +276,7 @@ export default function BillingPage() {
               <Button disabled={!paymentsOn || Boolean(busy)} onClick={startTopup}>{busy === 'topup' ? <Spinner /> : <FiPlus />} Add money</Button>
             </div>
           )}
-          <p className="text-xs text-muted-foreground">Money added shows here once Razorpay confirms the payment, usually within a minute.</p>
+          {open && <p className="text-xs text-muted-foreground">Money added shows here once Razorpay confirms the payment, usually within a minute.</p>}
         </Card>
       </div>
 
@@ -288,7 +303,7 @@ export default function BillingPage() {
                     `Extra seat ${formatRupees(plan.extra_seat_price_inr)} · extra number ${formatRupees(plan.extra_number_price_inr)}`,
                   ].map((feature) => <li key={feature} className="flex gap-2"><FiCheck className="mt-0.5 shrink-0 text-green-600" /> {feature}</li>)}
                 </ul>
-                {manage && (
+                {open && manage && (
                   <Button className="mt-auto" variant={currentPlan ? 'outline' : 'default'} disabled={!paymentsOn || Boolean(busy)} onClick={() => checkout({ purpose: 'subscription', plan_code: plan.code }, plan.code)}>
                     {busy === plan.code ? <><Spinner /> Opening payment…</> : <><FiZap /> {planAction(plan, sub)}</>}
                   </Button>

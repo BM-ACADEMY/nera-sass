@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { allowanceBar, aiStatusLine, planAction, validTopup, formatInr, canManageBilling, ledgerLabel } from './billingPolicy.js';
+import { allowanceBar, aiStatusLine, planAction, validTopup, formatInr, canManageBilling, ledgerLabel, paymentsOpen } from './billingPolicy.js';
 
 test('allowance bar: used share, warning at 20 percent left, error when used up', () => {
   assert.strictEqual(allowanceBar({ allowance: -1 }), null);
@@ -34,4 +34,12 @@ test('plan card actions and top-up validation', () => {
   assert.strictEqual(canManageBilling({ permissions: { manage_billing: true } }), true);
   assert.strictEqual(canManageBilling({}), false);
   assert.strictEqual(ledgerLabel('ai_overage'), 'AI reply (beyond plan)');
+});
+
+test('payments are open only when the server sends payments_enabled: true', () => {
+  assert.strictEqual(paymentsOpen({ payments_enabled: true, payments: { enabled: true } }), true);
+  assert.strictEqual(paymentsOpen({ payments_enabled: false, payments: { enabled: true } }), false);
+  assert.strictEqual(paymentsOpen({ payments: { enabled: true } }), false, 'missing flag = closed');
+  assert.strictEqual(paymentsOpen({ payments_enabled: 'true' }), false);
+  assert.strictEqual(paymentsOpen(null), false);
 });

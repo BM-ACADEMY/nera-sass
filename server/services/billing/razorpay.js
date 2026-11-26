@@ -19,6 +19,9 @@ const keySecret = () => String(process.env.RAZORPAY_SECRET || process.env.RAZORP
 const webhookSecret = () => String(process.env.RAZORPAY_WEBHOOK_SECRET || '').trim() || null;
 
 const isConfigured = () => Boolean(keyId() && keySecret());
+// Master switch for taking money online. Off unless BILLING_PAYMENTS_ENABLED is
+// exactly 'true', so a server with test keys and no switch never opens checkout.
+const paymentsEnabled = () => process.env.BILLING_PAYMENTS_ENABLED === 'true';
 const webhookConfigured = () => Boolean(webhookSecret());
 
 let client = null;
@@ -78,6 +81,7 @@ module.exports = {
   gateway,
   keyId,
   isConfigured,
+  paymentsEnabled,
   webhookConfigured,
   verifyPaymentSignature,
   verifyWebhookSignature,
