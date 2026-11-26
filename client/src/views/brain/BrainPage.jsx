@@ -174,6 +174,12 @@ function BusinessForm({ form, set }) {
         <Field label="Which chats the AI answers" hint="Only for a WhatsApp number shared with other brands. Chats for the brands you list to leave alone get no AI reply.">
           <Textarea rows={3} maxLength={800} value={form.brand_scope || ''} placeholder="Answer chats from our ads or about our services. Leave chats about our sister brand alone. If unclear, ask which one they mean." onChange={(e) => set({ brand_scope: e.target.value })} />
         </Field>
+        <Field label="Never answer chats that mention" hint="Comma-separated words for the other brand. Checked before the AI runs; these chats get no AI reply.">
+          <Input value={form.brand_skip_text || ''} placeholder="BM Academy, course, placement, class" onChange={(e) => set({ brand_skip_text: e.target.value })} />
+        </Field>
+        <Field label="Always answer chats that mention" hint="Comma-separated words for this brand. They win over the words above.">
+          <Input value={form.brand_keep_text || ''} placeholder="BM TechX, Google Maps, online store, website" onChange={(e) => set({ brand_keep_text: e.target.value })} />
+        </Field>
       </Section>
     </div>
   );
@@ -359,11 +365,13 @@ const toForm = (profile = {}) => ({
   products_text: (profile.products_and_services || []).join('\n'),
   questions_text: (profile.qualifying_questions || []).join('\n'),
   languages_text: (profile.languages || []).join(', '),
+  brand_keep_text: (profile.brand_keep_keywords || []).join(', '),
+  brand_skip_text: (profile.brand_skip_keywords || []).join(', '),
 });
 
 const toProfile = (form) => {
-  const { products_text: products, questions_text: questions, languages_text: languages, ...rest } = form;
-  return { ...rest, products_and_services: splitLines(products), qualifying_questions: splitLines(questions), languages: splitComma(languages) };
+  const { products_text: products, questions_text: questions, languages_text: languages, brand_keep_text: keep, brand_skip_text: skip, ...rest } = form;
+  return { ...rest, products_and_services: splitLines(products), qualifying_questions: splitLines(questions), languages: splitComma(languages), brand_keep_keywords: splitComma(keep), brand_skip_keywords: splitComma(skip) };
 };
 
 const TABS = [['business', 'Business details', FiBook], ['knowledge', 'Knowledge', FiCpu], ['test', 'Test', FiMessageCircle]];
