@@ -80,3 +80,18 @@ test('export and delete follow the server roles', async () => {
   assert.deepStrictEqual(leadPermissions('agent'), { canExport: false, canDelete: false });
   assert.deepStrictEqual(leadPermissions(undefined), { canExport: false, canDelete: false });
 });
+
+test('bulk lead actions ask first and state the count', async () => {
+  const { bulkLeadConfirm, exportButtonLabel } = await import('./leadsPolicy.js');
+  const assign = bulkLeadConfirm({ action: 'assign', count: 12, assigneeName: 'Priya' });
+  assert.strictEqual(assign.title, 'Assign 12 leads to Priya?');
+  assert.strictEqual(assign.actionLabel, 'Assign 12 leads');
+  assert.strictEqual(bulkLeadConfirm({ action: 'assign', count: 1, assigneeName: null }).title, 'Unassign 1 lead?');
+  const status = bulkLeadConfirm({ action: 'status', count: 3, statusLabel: 'Hot' });
+  assert.strictEqual(status.title, 'Change 3 leads to Hot?');
+  assert.strictEqual(status.actionLabel, 'Set 3 leads to Hot');
+  assert.strictEqual(exportButtonLabel(12), 'Export 12 leads');
+  assert.strictEqual(exportButtonLabel(1), 'Export 1 lead');
+  assert.strictEqual(exportButtonLabel(1500), 'Export 1,500 leads');
+  assert.strictEqual(exportButtonLabel(null), 'Download CSV');
+});

@@ -159,3 +159,26 @@ export function leadPermissions(role) {
   const allowed = ['owner', 'admin', 'manager', 'platform_staff'].includes(value);
   return { canExport: allowed, canDelete: allowed };
 }
+
+const leadCount = (count) => `${Number(count) || 0} lead${Number(count) === 1 ? '' : 's'}`;
+
+// The question asked before a bulk change is sent to the server, with the
+// number of leads it touches: { title, description, actionLabel }.
+// action: 'assign' (assigneeName, or none to unassign) | 'status' (statusLabel).
+export function bulkLeadConfirm({ action, count, assigneeName, statusLabel }) {
+  const leads = leadCount(count);
+  if (action === 'assign') {
+    return assigneeName
+      ? { title: `Assign ${leads} to ${assigneeName}?`, description: `${assigneeName} becomes the owner of the ${leads} you selected.`, actionLabel: `Assign ${leads}` }
+      : { title: `Unassign ${leads}?`, description: `The ${leads} you selected will have no one assigned.`, actionLabel: `Unassign ${leads}` };
+  }
+  if (action === 'status') {
+    return { title: `Change ${leads} to ${statusLabel}?`, description: `The status of the ${leads} you selected becomes ${statusLabel}.`, actionLabel: `Set ${leads} to ${statusLabel}` };
+  }
+  return { title: `Update ${leads}?`, description: '', actionLabel: `Update ${leads}` };
+}
+
+// The export dialog's download button states how many leads it exports.
+export function exportButtonLabel(count) {
+  return count == null ? 'Download CSV' : `Export ${Number(count).toLocaleString('en-IN')} lead${Number(count) === 1 ? '' : 's'}`;
+}

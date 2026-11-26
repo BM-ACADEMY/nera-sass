@@ -58,3 +58,18 @@ test('form body', () => {
     { title: 'Call', description: '', lead_id: 4, assigned_to: 9, due_date: '2026-12-01', due_time: null }
   );
 });
+
+test('bulk task actions ask first and state the count', async () => {
+  const { bulkTaskConfirm } = await import('./salesTasks.js');
+  const done = bulkTaskConfirm('complete', 4);
+  assert.strictEqual(done.title, 'Mark 4 tasks as done?');
+  assert.strictEqual(done.actionLabel, 'Mark 4 tasks as done');
+  assert.strictEqual(done.destructive, false);
+  const del = bulkTaskConfirm('selected', 1);
+  assert.strictEqual(del.title, 'Delete 1 task?');
+  assert.strictEqual(del.actionLabel, 'Delete 1 task');
+  assert.strictEqual(del.destructive, true);
+  const range = bulkTaskConfirm('range', 9, { from: '2026-11-01', to: '2026-11-05' });
+  assert.strictEqual(range.title, 'Delete 9 tasks?');
+  assert.match(range.text, /2026-11-01 to 2026-11-05/);
+});

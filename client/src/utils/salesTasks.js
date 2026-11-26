@@ -142,3 +142,16 @@ export function taskBody(form) {
     due_time: form.due_date && form.due_time ? form.due_time : null,
   };
 }
+
+// The question asked before a bulk change to sales tasks, with the count:
+// { title, text, actionLabel, busyLabel, destructive }.
+// kind: 'complete' | 'selected' (delete ticked tasks) | 'range' (delete by date).
+export function bulkTaskConfirm(kind, count, { from, to } = {}) {
+  const n = Number(count) || 0;
+  const tasks = `${n} task${n === 1 ? '' : 's'}`;
+  if (kind === 'complete') {
+    return { title: `Mark ${tasks} as done?`, text: `The ${tasks} you selected will move to Done.`, actionLabel: `Mark ${tasks} as done`, busyLabel: 'Saving…', destructive: false };
+  }
+  const text = kind === 'range' ? `Every task created from ${from} to ${to} will be removed. This cannot be undone.` : 'The selected tasks will be removed from Sales Tasks. This cannot be undone.';
+  return { title: `Delete ${tasks}?`, text, actionLabel: `Delete ${tasks}`, busyLabel: 'Deleting…', destructive: true };
+}

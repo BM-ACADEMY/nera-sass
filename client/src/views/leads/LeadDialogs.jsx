@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
-import { ADD_LEAD_SOURCES, IMPORT_COLUMNS, SOURCE_LABELS, importSampleCsv, importSummary } from './leadsPolicy.js';
+import { ADD_LEAD_SOURCES, IMPORT_COLUMNS, SOURCE_LABELS, importSampleCsv, importSummary, exportButtonLabel } from './leadsPolicy.js';
 
 const Field = ({ label, htmlFor, hint, required, children }) => (
   <div className="flex flex-col gap-1.5">
@@ -283,7 +283,11 @@ export function ExportLeadsDialog({ open, onOpenChange, selectedIds = [], showFa
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Export leads</DialogTitle>
-          <DialogDescription>Download leads as a CSV file you can open in Excel.</DialogDescription>
+          <DialogDescription>
+            {mode === 'selected'
+              ? `Download the ${selectedIds.length} lead${selectedIds.length === 1 ? '' : 's'} you selected as a CSV file you can open in Excel.`
+              : 'Download leads as a CSV file you can open in Excel.'}
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={run} className="flex flex-col gap-3">
           <div role="radiogroup" className="flex flex-col gap-2">
@@ -324,7 +328,7 @@ export function ExportLeadsDialog({ open, onOpenChange, selectedIds = [], showFa
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={exporting}>Cancel</Button>
-            <Button type="submit" disabled={exporting || counting || !count || Boolean(dateProblem)}>{exporting ? <Spinner /> : <FiDownload />} Download CSV</Button>
+            <Button type="submit" disabled={exporting || counting || !count || Boolean(dateProblem)}>{exporting ? <Spinner /> : <FiDownload />} {exportButtonLabel(count)}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

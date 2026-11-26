@@ -8,7 +8,7 @@ import ConfirmDialog from '../components/templates/ConfirmDialog';
 import { AddLeadDialog, ImportLeadsDialog, ExportLeadsDialog } from './leads/LeadDialogs.jsx';
 import {
   PAGE_SIZE, SOURCE_LABELS, SOURCE_VARIANT, STATUS_OPTIONS, sourceFilters, leadSourceKind, statusInfo, pageInfo,
-  lastMessageText, timeAgo, shortDate, toggleAll, toggleOne, uniqueLeads, leadPermissions,
+  lastMessageText, timeAgo, shortDate, toggleAll, toggleOne, uniqueLeads, leadPermissions, bulkLeadConfirm,
 } from './leads/leadsPolicy.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -212,15 +212,23 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
     }
   };
 
+  // Bulk changes ask first, with the number of leads, then call the server.
   const bulkAssign = (value) => {
     const user = users.find((u) => String(u.id) === value);
-    bulkUpdate(
-      { action: 'assign', assigned_to: value === 'none' ? null : Number(value) },
-      (n) => (value === 'none' ? `${n} leads unassigned` : `${n} leads assigned to ${user?.name || 'the team member'}`),
-    );
+    const name = value === 'none' ? null : (user?.name || 'the team member');
+    setConfirm({
+      ...bulkLeadConfirm({ action: 'assign', count: selectedIds.length, assigneeName: name }),
+      run: () => bulkUpdate(
+        { action: 'assign', assigned_to: value === 'none' ? null : Number(value) },
+        (n) => (value === 'none' ? `${n} leads unassigned` : `${n} leads assigned to ${name}`),
+      ),
+    });
   };
 
-  const bulkStatus = (value) => bulkUpdate({ action: 'status', status: value }, (n) => `${n} leads set to ${statusInfo(value).label}`);
+  const bulkStatus = (value) => setConfirm({
+    ...bulkLeadConfirm({ action: 'status', count: selectedIds.length, statusLabel: statusInfo(value).label }),
+    run: () => bulkUpdate({ action: 'status', status: value }, (n) => `${n} leads set to ${statusInfo(value).label}`),
+  });
 
   const askDelete = (lead) => setConfirm({
     title: `Delete ${lead.name || 'this lead'}?`,
@@ -454,7 +462,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
       {dialog === 'add' && <AddLeadDialog open onOpenChange={(open) => !open && setDialog(null)} users={users} onSaved={refreshAll} />}
       {dialog === 'import' && <ImportLeadsDialog open onOpenChange={(open) => !open && setDialog(null)} onImported={refreshAll} />}
       {dialog === 'export' && <ExportLeadsDialog open onOpenChange={(open) => !open && setDialog(null)} selectedIds={selectedIds} showFacebook={hasFacebook} />}
-      <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />
+      <ConfirmDialog confirm={confirm} onClose={() => { setConfirm(null); setBulkKey((key) => key + 1); }} />
     </div>
   );
 };

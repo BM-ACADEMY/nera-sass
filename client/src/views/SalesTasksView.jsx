@@ -9,7 +9,7 @@ import {
 } from 'react-icons/fi';
 import { api, allianceInboxApi } from '../services/api.js';
 import {
-  DEFAULT_TIME_ZONE, typeOf, taskTitle, isDone, dueState, dueInputs, formatDue, formatDateTime, filterTasks, sortTasks, countDue, taskBody,
+  DEFAULT_TIME_ZONE, typeOf, taskTitle, isDone, dueState, dueInputs, formatDue, formatDateTime, filterTasks, sortTasks, countDue, taskBody, bulkTaskConfirm,
 } from '../utils/salesTasks.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -361,17 +361,22 @@ function NoteDialog({ task, onClose, onSaved }) {
   );
 }
 
+// Asks before a delete or a bulk change. `confirm` carries title, text and,
+// for bulk actions, actionLabel / busyLabel / destructive (bulkTaskConfirm).
 function ConfirmDelete({ confirm, busy, onCancel, onConfirm }) {
+  const destructive = confirm?.destructive !== false;
   return (
     <Dialog open={Boolean(confirm)} onOpenChange={(next) => { if (!next && !busy) onCancel(); }}>
       <DialogContent className="sm:max-w-md" showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><FiAlertTriangle className="text-red-500" /> {confirm?.title}</DialogTitle>
-          <DialogDescription>{confirm?.text} This cannot be undone.</DialogDescription>
+          <DialogTitle className="flex items-center gap-2">{destructive ? <FiAlertTriangle className="text-red-500" /> : <FiCheck className="text-blue-600" />} {confirm?.title}</DialogTitle>
+          <DialogDescription>{confirm?.text}</DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={onCancel}>Cancel</Button>
-          <Button variant="destructive" disabled={busy} onClick={onConfirm}>{busy ? 'Deleting…' : 'Delete'}</Button>
+          <Button variant={destructive ? 'destructive' : 'default'} disabled={busy} onClick={onConfirm}>
+            {busy ? (confirm?.busyLabel || 'Deleting…') : (confirm?.actionLabel || 'Delete')}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -540,7 +545,9 @@ export const SalesTasksView = () => {
     if (!confirm) return;
     setDeleting(true);
     try {
-      if (confirm.kind === 'one') {
+      if (confirm.kind === 'complete') {
+        await completeSelected(confirm.ids);
+      } else if (confirm.kind === 'one') {
         await api.delete(`/sales-tasks/${confirm.task.id}`);
         setTasks((list) => list.filter((t) => t.id !== confirm.task.id));
         setSelected((ids) => ids.filter((id) => id !== confirm.task.id));
@@ -561,9 +568,15 @@ export const SalesTasksView = () => {
     }
   };
 
-  const completeSelected = async () => {
-    const ids = selected.filter((id) => !isDone(tasks.find((t) => t.id === id) || {}));
+  // Open tasks among the ticked ones; "Mark as done" asks first with that count.
+  const openSelected = () => selected.filter((id) => !isDone(tasks.find((t) => t.id === id) || {}));
+  const askCompleteSelected = () => {
+    const ids = openSelected();
     if (!ids.length) { toast('The selected tasks are already done'); return; }
+    setConfirm({ kind: 'complete', ids, ...bulkTaskConfirm('complete', ids.length) });
+  };
+
+  const completeSelected = async (ids) => {
     const results = await Promise.allSettled(ids.map((id) => api.patch(`/sales-tasks/${id}`, { status: 'completed' })));
     results.forEach((r) => { if (r.status === 'fulfilled' && r.value?.task) replaceTask(r.value.task); });
     const failed = results.filter((r) => r.status === 'rejected').length;
@@ -591,7 +604,7 @@ export const SalesTasksView = () => {
     onStatus: setStatus,
     onOpenLead: openLead,
     onNote: (task) => setNoteTask(task),
-    onDelete: (task) => setConfirm({ kind: 'one', task, title: 'Delete this task?', text: `“${taskTitle(task)}” will be removed from Sales Tasks.` }),
+    onDelete: (task) => setConfirm({ kind: 'one', task, title: 'Delete this task?', text: `“${taskTitle(task)}” will be removed from Sales Tasks. This cannot be undone.` }),
   };
 
   // ── Loading and error states ──
@@ -704,8 +717,8 @@ export const SalesTasksView = () => {
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5">
           <span className="text-sm font-medium text-blue-900">{selected.length} selected</span>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" className="bg-white" onClick={completeSelected}><FiCheck /> Mark as done</Button>
-            <Button size="sm" variant="outline" className="bg-white text-red-600 hover:text-red-700" onClick={() => setConfirm({ kind: 'selected', title: `Delete ${selected.length} task${selected.length === 1 ? '' : 's'}?`, text: 'The selected tasks will be removed from Sales Tasks.' })}><FiTrash2 /> Delete</Button>
+            <Button size="sm" variant="outline" className="bg-white" onClick={askCompleteSelected}><FiCheck /> Mark as done</Button>
+            <Button size="sm" variant="outline" className="bg-white text-red-600 hover:text-red-700" onClick={() => setConfirm({ kind: 'selected', ...bulkTaskConfirm('selected', selected.length) })}><FiTrash2 /> Delete</Button>
             <Button size="sm" variant="ghost" onClick={() => setSelected([])}>Clear</Button>
           </div>
         </div>
@@ -819,7 +832,7 @@ export const SalesTasksView = () => {
       {noteTask && <NoteDialog key={noteTask.id} task={noteTask} onClose={() => setNoteTask(null)} onSaved={noteSaved} />}
       <ConfirmDelete confirm={confirm} busy={deleting} onCancel={() => setConfirm(null)} onConfirm={runDelete} />
       {rangeOpen && <DateRangeDialog open tasks={tasks} timeZone={timeZone} onClose={() => setRangeOpen(false)}
-        onDelete={({ from, to, count }) => { setRangeOpen(false); setConfirm({ kind: 'range', from, to, title: `Delete ${count} task${count === 1 ? '' : 's'}?`, text: `Every task created from ${from} to ${to} will be removed.` }); }} />}
+        onDelete={({ from, to, count }) => { setRangeOpen(false); setConfirm({ kind: 'range', from, to, ...bulkTaskConfirm('range', count, { from, to }) }); }} />}
     </div>
   );
 };
