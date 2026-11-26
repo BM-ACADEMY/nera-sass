@@ -115,7 +115,11 @@ test('Task 2: customer Settings APIs', async (t) => {
       assert.strictEqual(res.body.lifecycle.access, 'full', role);
       // Without a plan a workspace keeps its single login (N3: seats come from the plan).
       assert.strictEqual(res.body.usage.max_users, 1, role);
+      assert.strictEqual(res.body.tenant.ai_enabled, undefined, `${role}: AI never toggled = on`);
     }
+    // The chat header reads the workspace AI switch from here.
+    await sys(() => Tenants.updateOne({ id: 10 }, { $set: { ai_enabled: false } }));
+    assert.strictEqual((await request(app).get('/api/tenant').set(bearer(users.agent))).body.tenant.ai_enabled, false);
   });
 
   await t.test('W2. Workspace settings: owner/admin can edit (audited); manager/agent 403; a browser tenant_id is ignored', async () => {

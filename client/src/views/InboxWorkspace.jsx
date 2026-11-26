@@ -213,6 +213,18 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   const [activeLeadId, setActiveLeadId] = useState(location.state?.leadId || null);
   const { lead: activeLead, conversations, loadingMore, hasMore, loadMoreMessages, refetch: refetchLead, loading: loadingLead } = useInboxLead(activeLeadId);
   const [aiPause, setAiPause] = useState({ paused: false, reason: null });
+  // Workspace AI switch (AI Brain toggle): tenant.ai_enabled is false only when
+  // it was turned off; missing or not loaded counts as on.
+  const [workspaceAiEnabled, setWorkspaceAiEnabled] = useState(null);
+  useEffect(() => {
+    if (alliance) return undefined;
+    let active = true;
+    api.getTenant()
+      .then((res) => { if (active) setWorkspaceAiEnabled(res?.tenant ? res.tenant.ai_enabled !== false : null); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [alliance]);
+  const workspaceAiOff = !alliance && workspaceAiEnabled === false;
   const [resumingAi, setResumingAi] = useState(false);
   const [msg, setMsg] = useState('');
   const [sending, setSending] = useState(false);
@@ -1128,7 +1140,9 @@ return (
                   </div>
                 )}
               </div>
-              {!alliance && aiPause.paused ? (
+              {workspaceAiOff ? (
+                <p title="Turn the AI on in AI Brain" style={{ fontSize: 12, fontWeight: 600, color: '#64748b', margin: 0, marginTop: 2 }}>AI off for this workspace</p>
+              ) : !alliance && aiPause.paused ? (
                 <p title={aiPause.reason || undefined} style={{ fontSize: 11, fontWeight: 600, color: '#b45309', margin: 0, marginTop: 4, wordBreak: 'break-word' }}>
                   AI paused{aiPause.reason ? ` - ${aiPause.reason}` : ''}
                 </p>

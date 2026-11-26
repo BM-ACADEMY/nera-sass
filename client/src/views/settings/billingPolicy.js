@@ -7,6 +7,11 @@ export const formatRupees = (inr) => `₹${Number(inr || 0).toLocaleString('en-I
 
 export const canManageBilling = (summary) => Boolean(summary?.permissions?.manage_billing);
 
+// Online payment is open only when the server says so (BILLING_PAYMENTS_ENABLED).
+// While it is closed, no pay / buy / upgrade / top-up control is shown.
+export const paymentsOpen = (summary) => summary?.payments_enabled === true;
+export const PAYMENTS_SOON_NOTICE = 'Online payment opens soon. To change your plan, contact us.';
+
 // Plan replies used, as a 0-100 bar; null when the plan has no limit.
 export function allowanceBar(ai) {
   if (!ai || ai.allowance == null || ai.allowance < 0) return null;

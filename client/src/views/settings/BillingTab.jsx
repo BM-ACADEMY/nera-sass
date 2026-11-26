@@ -6,6 +6,7 @@ import { SectionTitle, SubTitle, Button, Notice, Divider } from './ui.jsx';
 import { inputStyle } from './styles.js';
 import {
   formatInr, formatRupees, canManageBilling, allowanceBar, aiStatusLine, planAction, validTopup, ledgerLabel,
+  paymentsOpen, PAYMENTS_SOON_NOTICE,
 } from './billingPolicy.js';
 
 const CHECKOUT_SRC = 'https://checkout.razorpay.com/v1/checkout.js';
@@ -89,7 +90,10 @@ export const BillingTab = ({ me }) => {
   }, [reloadKey]);
 
   const manage = canManageBilling(summary);
-  const paymentsOn = summary?.payments?.enabled;
+  // payments_enabled false = online payment is closed: no pay controls at all
+  // (and so Razorpay Checkout is never loaded). paymentsOn = open and configured.
+  const open = paymentsOpen(summary);
+  const paymentsOn = open && summary?.payments?.enabled;
 
   // Creates the order on the server, pays, then lets the server verify the signature.
   const checkout = async (order, label) => {
@@ -146,15 +150,16 @@ export const BillingTab = ({ me }) => {
   return (
     <div>
       <SectionTitle>Billing</SectionTitle>
-      {!manage && <Notice tone="muted">Only the workspace Owner or an Admin can change the plan or add money.</Notice>}
-      {!paymentsOn && <Notice tone="muted">Online payments are not available right now. Contact Getnera to pay for a plan.</Notice>}
+      {!open && <Notice tone="muted">{PAYMENTS_SOON_NOTICE}</Notice>}
+      {open && !manage && <Notice tone="muted">Only the workspace Owner or an Admin can change the plan or add money.</Notice>}
+      {open && !paymentsOn && <Notice tone="muted">Online payments are not available right now. Contact Getnera to pay for a plan.</Notice>}
       {summary.ai && !summary.ai.allowed && <Notice tone="error">{summary.ai.reason}</Notice>}
       {alerts.slice(0, 2).map((alert) => (
         <Notice key={alert.id} tone={alert.kind === 'ai_blocked' ? 'error' : 'info'}>{alert.message}</Notice>
       ))}
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <Stat label="Plan" value={sub?.status === 'active' ? sub.plan_name : 'None'} hint={sub?.status === 'active' ? `${formatRupees(sub.price_inr)} a month · ${sub.days_left} days left` : sub?.status === 'expired' ? 'Expired: renew below' : 'Choose a plan below'} />
+        <Stat label="Plan" value={sub?.status === 'active' ? sub.plan_name : 'None'} hint={sub?.status === 'active' ? `${formatRupees(sub.price_inr)} a month · ${sub.days_left} days left` : sub?.status === 'expired' ? (open ? 'Expired: renew below' : 'Expired') : (open ? 'Choose a plan below' : 'No plan yet')} />
         <Stat label="Wallet" value={formatInr(summary.wallet.balance_paise)} hint="Pays AI replies beyond the plan, extra seats and numbers" />
         <Stat label="Seats" value={`${summary.seats.used} / ${summary.seats.limit}`} hint={summary.seats.extra ? `${summary.seats.extra} extra this period` : 'Included in the plan'} />
         <Stat label="WhatsApp numbers" value={`${summary.numbers.used} / ${summary.numbers.limit}`} hint={summary.numbers.extra ? `${summary.numbers.extra} extra this period` : 'Included in the plan'} />
@@ -181,7 +186,7 @@ export const BillingTab = ({ me }) => {
                 <li>{plan.ai_replies_month === -1 ? 'Unlimited AI replies' : `${plan.ai_replies_month.toLocaleString('en-IN')} AI replies, then ${formatInr(plan.ai_overage_price_paise)} each`}</li>
                 <li>Extra seat {formatRupees(plan.extra_seat_price_inr)} · extra number {formatRupees(plan.extra_number_price_inr)}</li>
               </ul>
-              {manage && (
+              {open && manage && (
                 <Button type="button" busy={busy === plan.code} disabled={!paymentsOn || Boolean(busy)} onClick={() => checkout({ purpose: 'subscription', plan_code: plan.code }, plan.code)} style={{ width: '100%' }}>
                   {busy === plan.code ? 'Opening payment…' : planAction(plan, sub)}
                 </Button>
@@ -195,7 +200,7 @@ export const BillingTab = ({ me }) => {
 
       <Divider />
       <SubTitle>Wallet</SubTitle>
-      {manage && (
+      {open && manage && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div style={{ flex: '0 0 160px' }}>
             <label style={{ display: 'block', fontSize: 9, color: C.muted, marginBottom: 5, fontWeight: 700, letterSpacing: 1, textTransform: 'uppercase' }}>Top up (₹)</label>
@@ -210,7 +215,7 @@ export const BillingTab = ({ me }) => {
           )}
         </div>
       )}
-      <p style={{ fontSize: 10, color: C.muted, marginTop: 8 }}>Money added shows here once Razorpay confirms the payment, usually within a minute.</p>
+      {open && <p style={{ fontSize: 10, color: C.muted, marginTop: 8 }}>Money added shows here once Razorpay confirms the payment, usually within a minute.</p>}
 
       {ledger.length > 0 && (
         <div className="table-responsive" style={{ marginTop: 12 }}>

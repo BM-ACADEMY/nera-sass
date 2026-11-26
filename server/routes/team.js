@@ -32,12 +32,13 @@ function fail(res, error) {
 
 const actorOf = (req) => ({ id: req.user.id, kind: 'tenant', role: req.identity.role });
 
-// Workspace summary for any signed-in member.
+// Workspace summary for any signed-in member. tenant.ai_enabled is false only
+// when the workspace turned its AI off (AI Brain toggle); missing means on.
 router.get('/tenant', async (req, res) => {
   try {
     const tenantId = req.identity.tenantId;
     const [tenant, seats, limits, subscription] = await Promise.all([
-      runAsSystem(() => Tenants.findOne({ id: tenantId }, { _id: 0, id: 1, name: 1, status: 1, language: 1, currency: 1, tax_treatment: 1, timezone: 1, owner_user_id: 1, created_at: 1 }).lean(), 'team'),
+      runAsSystem(() => Tenants.findOne({ id: tenantId }, { _id: 0, id: 1, name: 1, status: 1, language: 1, currency: 1, tax_treatment: 1, timezone: 1, owner_user_id: 1, created_at: 1, ai_enabled: 1 }).lean(), 'team'),
       seatUsage(tenantId),
       billingLimits.limits(null),
       billingSubscriptions.current(),
