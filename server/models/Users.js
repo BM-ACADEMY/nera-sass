@@ -63,6 +63,9 @@ module.exports = defineModel('users', {
   mfa_wa_code_expires_at: { type: Date },
   mfa_wa_code_sent_at: { type: Date },
   mfa_wa_code_attempts: { type: Number, default: 0 },
+  // WhatsApp sign-in codes sent on this India-time day (YYYY-MM-DD).
+  mfa_wa_login_day: { type: String },
+  mfa_wa_login_sends: { type: Number },
   // Different numbers a WhatsApp setup code was sent to in the current 24-hour
   // window (for the per-day cap).
   mfa_whatsapp_setup_window_start: { type: Date },
@@ -73,7 +76,20 @@ module.exports = defineModel('users', {
   mfa_code_locked_until: { type: Date },
   // The method offered first at sign-in ('totp' | 'email' | 'whatsapp').
   mfa_default_method: { type: String },
-  // Until when a re-authenticated enrolment (password + current code) may be confirmed.
+  // A method added with the password alone cannot confirm sensitive changes
+  // until then (services/mfa.js).
+  mfa_totp_hold_until: { type: Date },
+  mfa_email_hold_until: { type: Date },
+  mfa_whatsapp_hold_until: { type: Date },
+  // Which signed-in session started the pending setup of a method, and when:
+  // only that session may reopen it (POST /api/auth/mfa/setup/resume).
+  mfa_totp_setup_session: { type: Number },
+  mfa_totp_setup_at: { type: Date },
+  mfa_email_setup_session: { type: Number },
+  mfa_email_setup_at: { type: Date },
+  mfa_whatsapp_setup_session: { type: Number },
+  mfa_whatsapp_setup_at: { type: Date },
+  // Until when a re-authenticated enrolment may be confirmed.
   mfa_stepup_until: { type: Date },
   invited_by: { type: Number },
   last_login: { type: Date },

@@ -115,8 +115,10 @@ router.get('/team/users', requirePermission('team.view'), async (req, res) => {
 });
 
 // Adds a person: method 'password' creates the login now with a temporary
-// password (they choose their own at first sign-in); method 'invite' emails
-// an invitation link. The password is never returned or logged.
+// password (they choose their own at first sign-in) and emails them how to
+// sign in; method 'invite' emails an invitation link. delivery.delivered says
+// whether the email went out. The password is never returned, logged or
+// emailed.
 router.post('/team/users', requirePermission('team.manage'), async (req, res) => {
   try {
     const body = req.body || {};

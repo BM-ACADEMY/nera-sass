@@ -6,6 +6,7 @@
 import { isInvalidMfaCode, NOTICE_KEY, NOTICES, USER_KEY, USER_UPDATED_EVENT, PASSWORD_CHANGE_REQUIRED } from './session.js';
 import { toApiError } from '../utils/friendlyError.js';
 import { collectClientHints } from './sessionFormat.js';
+import { clearWizard } from '../utils/twoStepWizard.js';
 
 export const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:3601').replace(/\/+$/, '');
 
@@ -70,6 +71,7 @@ class LeadOSAPI {
   clearToken() {
     this.token = null;
     localStorage.removeItem('leados_token');
+    clearWizard(); // a half-done two-step setup ends with the sign-in
   }
 
   // Any 401 ends the session, with a message on the login page. The one
@@ -265,6 +267,24 @@ class LeadOSAPI {
   // A code for confirming a security change while signed in ('email' | 'whatsapp').
   async sendReauthCode(channel) {
     return this.request(`/api/auth/mfa/reauth/${channel}/send`, { method: 'POST', body: '{}' });
+  }
+
+  // "Confirm it's you" once ({ password } plus the current code when two-step
+  // is on). For a few minutes the two-step changes need no password.
+  async confirmStepUp(proof) {
+    return this.request('/api/auth/mfa/step-up', { method: 'POST', body: JSON.stringify(proof) });
+  }
+
+  // What a started two-step setup still waits for, after a page reload: the
+  // same authenticator key, or how long the code already sent still works.
+  // Creates and sends nothing.
+  async resumeMfaSetup(method) {
+    return this.request('/api/auth/mfa/setup/resume', { method: 'POST', body: JSON.stringify({ method }) });
+  }
+
+  // Turns two-step verification off (every method).
+  async disableAllMfa() {
+    return this.request('/api/auth/mfa/disable-all', { method: 'POST', body: '{}' });
   }
 
   async disableMfaMethod(method, reauth) {

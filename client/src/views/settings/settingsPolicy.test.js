@@ -14,17 +14,16 @@ test('Settings sections: no WhatsApp or Billing (they have their own pages)', ()
   assert.deepStrictEqual(settingsSections().map((s) => s.key), ['profile', 'brand', 'two-step', 'password']);
   assert.deepStrictEqual(
     settingsSections({ view_team: true, view_activity: true, manage_integrations: true }).map((s) => s.key),
-    ['profile', 'brand', 'two-step', 'password', 'team', 'activity', 'integrations'],
+    ['profile', 'brand', 'two-step', 'password', 'activity', 'integrations'],
   );
   assert.strictEqual(findSection('whatsapp'), null);
   assert.strictEqual(findSection('billing'), null);
   assert.strictEqual(findSection('profile').title, 'Profile & workspace');
 });
 
-test('Team section: shown to people who may see the team, never to agents', () => {
-  assert.ok(settingsSections({ view_team: true }).some((s) => s.key === 'team'));
-  assert.ok(!settingsSections({ view_team: false }).some((s) => s.key === 'team'));
-  assert.strictEqual(findSection('team').title, 'Team');
+test('Team is not a Settings section any more (it has its own page, /team)', () => {
+  assert.ok(!settingsSections({ view_team: true }).some((s) => s.key === 'team'));
+  assert.strictEqual(findSection('team'), null);
 });
 
 test('Integrations section: only with the manage_integrations permission', () => {

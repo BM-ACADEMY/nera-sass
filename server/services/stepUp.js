@@ -5,7 +5,7 @@
  * wrong passwords (and wrong codes) count toward the same lockout as wrong
  * logins: counting and locking live in passwordAttempts.js only.
  */
-const { Users } = require('../models');
+const { Users, UserSessions } = require('../models');
 const { runAsSystem } = require('./tenantContext');
 const { decrypt } = require('../utils/crypto');
 const mfa = require('./mfa');
@@ -71,6 +71,14 @@ async function verifySecondStep(user, { method, code, recoveryCode } = {}, codeP
   return { ok, locked: !ok && locked };
 }
 
+// A code from a method that was just added does not confirm a sensitive
+// change (a recovery code still does).
+const TOO_NEW = Object.freeze({
+  error: `This sign-in method was added less than ${mfa.NEW_METHOD_HOLD_HOURS} hours ago, so it cannot confirm this change yet. Use an older method or a recovery code.`,
+  code: 'MFA_METHOD_TOO_NEW',
+});
+const codeOnHold = (user, { method, code } = {}) => Boolean(code) && mfa.onHold(user, codeMethod(user, method));
+
 const LOCKED = { status: 423, body: { error: passwordAttempts.LOCKED_MESSAGE, code: 'ACCOUNT_LOCKED' } };
 
 /**
@@ -109,7 +117,9 @@ async function confirmIdentity(user, body = {}, emailPurpose = 'confirm', req = 
   }
   // code_method (as in the two-step settings) or method (My sessions UIs).
   const method = body.code_method || body.method;
+  const tooNew = withMfa && codeOnHold(user, { method, code });
   if (withMfa) {
+    if (tooNew && !recoveryCode) return { status: 403, body: { ...TOO_NEW } };
     // Answered before the password is looked at, so neither reply tells
     // whether the password was right: a method that is not turned on, and
     // locked code checks when no recovery code was sent.
@@ -122,7 +132,7 @@ async function confirmIdentity(user, body = {}, emailPurpose = 'confirm', req = 
     return refused;
   }
   if (withMfa) {
-    const check = await verifySecondStep(user, { method, code, recoveryCode }, emailPurpose);
+    const check = await verifySecondStep(user, { method, code: tooNew ? '' : code, recoveryCode }, emailPurpose);
     if (check.methodOff) return { status: 400, body: { error: 'This verification method is not turned on for this account' } };
     // Locked since the check above (a parallel request). With a recovery code
     // sent, a wrong one is counted below like a wrong password instead.
@@ -138,4 +148,61 @@ async function confirmIdentity(user, body = {}, emailPurpose = 'confirm', req = 
   return null;
 }
 
-module.exports = { codeMethod, verifySecondStep, confirmIdentity, confirmPassword, isLocked };
+/**
+ * The remembered confirmation for two-step changes, kept on the session row
+ * (never in the browser) for STEP_UP_GRANT_MINUTES, not extended by use. It
+ * ends when the session is signed out, the password or token version changes,
+ * or the account is locked. It has one of two strengths:
+ *  - password only: enough to add a method, never enough to remove one, turn
+ *    two-step verification off or change the default while it is on;
+ *  - full (password and a code, or made while two-step was off, where there is
+ *    no code to ask for): covers those changes too. `full: true` asks for it.
+ */
+const STEP_UP_GRANT_MINUTES = 10;
+
+// Seconds the confirmation of this request's session is still valid (0 = none).
+// `user` is the account as just read from the database.
+function grantSecondsLeft(user, req, { full = false } = {}) {
+  const row = req?.authSession;
+  if (!user || !row?.stepup_until || Number(row.user_id) !== Number(user.id)) return 0;
+  if (Number(row.stepup_token_version) !== Number(user.token_version || 0)) return 0;
+  if (full && mfa.hasMfa(user) && row.stepup_second_factor !== true) return 0;
+  if (isLocked(user)) return 0;
+  return Math.max(0, Math.ceil((new Date(row.stepup_until).getTime() - Date.now()) / 1000));
+}
+
+async function writeGrant(user, req, set) {
+  const res = await sys(() => UserSessions.updateOne({ id: req.authSession.id, user_id: user.id, revoked_at: null }, { $set: set }));
+  if (res.matchedCount !== 1) return false;
+  Object.assign(req.authSession, set);
+  return true;
+}
+
+// Call only right after the identity check passed. `secondFactor`: a code (or
+// recovery code) was checked too. False for a token without a tracked session
+// (nothing to bind the confirmation to).
+async function saveGrant(user, req, { secondFactor = false } = {}) {
+  if (!req?.authSession) return false;
+  return writeGrant(user, req, {
+    stepup_until: new Date(Date.now() + STEP_UP_GRANT_MINUTES * 60000),
+    stepup_token_version: Number(user.token_version || 0),
+    stepup_second_factor: Boolean(secondFactor) && mfa.hasMfa(user),
+  });
+}
+
+// After the FIRST method was turned on in this session (its code was just
+// entered), a live confirmation is a full one for the account now that two-step
+// is on. Adding a further method never raises the strength. The expiry stays as
+// it was. `user` is the account as read before the change.
+async function upgradeGrant(user, req) {
+  if (!mfa.hasMfa(user) && grantSecondsLeft(user, req)) await writeGrant(user, req, { stepup_second_factor: true });
+}
+
+async function clearGrant(user, req) {
+  if (req?.authSession) await writeGrant(user, req, { stepup_until: null });
+}
+
+module.exports = {
+  codeMethod, verifySecondStep, confirmIdentity, confirmPassword, isLocked, codeOnHold, TOO_NEW,
+  STEP_UP_GRANT_MINUTES, grantSecondsLeft, saveGrant, upgradeGrant, clearGrant,
+};

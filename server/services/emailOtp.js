@@ -28,4 +28,10 @@ const store = createOtpStore({
 const sendCode = (user, purpose) => store.sendCode(user, purpose);
 const verifyCode = (user, code, purpose) => store.verifyCode(user, code, purpose);
 
-module.exports = { sendCode, verifyCode, maskEmail, EmailOtpError, MAX_ATTEMPTS };
+// The setup code still waiting to be entered, for a reopened setup screen.
+async function pendingSetup(user) {
+  const pending = await store.pendingCode(user.id, 'setup');
+  return pending && { ...pending, sent_to: maskEmail(user.email) };
+}
+
+module.exports = { pendingSetup, sendCode, verifyCode, maskEmail, EmailOtpError, MAX_ATTEMPTS };

@@ -660,7 +660,10 @@ async function sendAuthCode({ to, payload }) {
     return { wa_message_id: res.data?.messages?.[0]?.id || null };
   } catch (error) {
     const reason = error.response?.data?.error?.error_user_msg || error.response?.data?.error?.message || error.message || 'Meta refused the message';
-    throw new InboxError(502, `Not sent: ${reason}`, 'SEND_FAILED');
+    const failed = new InboxError(502, `Not sent: ${reason}`, 'SEND_FAILED');
+    // A 4xx answer means Meta did not accept the message (nothing was sent).
+    failed.refused = error.response?.status >= 400 && error.response?.status < 500;
+    throw failed;
   }
 }
 

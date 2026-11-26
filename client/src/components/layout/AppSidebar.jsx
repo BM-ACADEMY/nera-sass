@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { io as socketIO } from 'socket.io-client';
-import { FiGrid, FiUsers, FiCheckSquare, FiSmartphone, FiFileText, FiSend, FiCpu, FiBarChart2, FiSettings, FiCalendar, FiPackage, FiLogOut, FiMoreVertical, FiCreditCard, FiMonitor } from 'react-icons/fi';
+import { FiGrid, FiUsers, FiCheckSquare, FiSmartphone, FiFileText, FiSend, FiCpu, FiBarChart2, FiSettings, FiCalendar, FiPackage, FiLogOut, FiMoreVertical, FiCreditCard, FiMonitor, FiUserPlus } from 'react-icons/fi';
 import { FaWhatsapp } from 'react-icons/fa';
 import getneraLogo from '../../assets/getnera-logo.png';
 import { api } from '../../services/api.js';
 import { roleLabel } from '../../views/settings/settingsPolicy.js';
+import { canSeeTeam, menuSections } from '../../views/settings/teamPolicy.js';
 import { useAuth } from '../../hooks/useAuth.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import {
@@ -24,6 +25,8 @@ export const SECTIONS = [
       { path: '/sales-tasks', icon: FiCheckSquare, label: 'Sales Task', badge: 'tasks' },
     ],
   },
+  // Only for people who may see the team (GET /api/tenant permissions.view_team).
+  { label: 'Workspace', items: [{ path: '/team', icon: FiUserPlus, label: 'Team', permission: 'view_team' }] },
   {
     label: 'WhatsApp',
     items: [
@@ -50,6 +53,18 @@ const AppSidebar = ({ onLogout }) => {
   const { user } = useAuth();
   const { isMobile, setOpenMobile } = useSidebar();
   const [taskUnread, setTaskUnread] = useState(0);
+  const [permissions, setPermissions] = useState(null);
+
+  // The server's permission flags decide the gated items. Asked once per role;
+  // a failed request is tried again on the next page change.
+  const askedRole = useRef(null);
+  useEffect(() => {
+    if (askedRole.current === user?.role) return;
+    askedRole.current = user?.role;
+    api.getTenant()
+      .then((data) => setPermissions({ view_team: canSeeTeam(data.permissions) }))
+      .catch(() => { askedRole.current = null; });
+  }, [user?.role, location.pathname]);
 
   useEffect(() => {
     api.get('/sales-tasks/unread-count').then((d) => setTaskUnread(d.count || 0)).catch(() => {});
@@ -97,7 +112,7 @@ const AppSidebar = ({ onLogout }) => {
       </SidebarHeader>
 
       <SidebarContent>
-        {SECTIONS.map((section) => (
+        {menuSections(SECTIONS, permissions).map((section) => (
           <SidebarGroup key={section.label}>
             <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
             <SidebarGroupContent>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../services/api.js';
 import { readStoredSession, mergeProfile, USER_KEY, USER_UPDATED_EVENT } from '../services/session.js';
+import { clearWizard } from '../utils/twoStepWizard.js';
 
 const storedUser = () => readStoredSession(localStorage)?.user ?? null;
 
@@ -21,7 +22,13 @@ export const useAuth = () => {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    const refresh = () => setUser(storedUser());
+    const refresh = () => {
+      const current = storedUser();
+      // Signed out (here or in another tab): a half-done two-step setup ends.
+      if (!current) clearWizard();
+      setUser(current);
+    };
+    if (!storedUser()) clearWizard();
     window.addEventListener(USER_UPDATED_EVENT, refresh);
     window.addEventListener('storage', refresh); // sign-in / sign-out in another tab
     return () => {

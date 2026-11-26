@@ -36,10 +36,11 @@ class OtpError extends Error {
 
 /**
  * prefix: user fields `${prefix}_hash|_purpose|_expires_at|_sent_at|_attempts`.
+ * ttlMinutes: how long a code stays valid (default OTP_TTL_MINUTES).
  * deliver({ user, code, purpose, to, minutes }): sends the code; throws on failure.
  * describeTarget(user, to): what the answer shows as `sent_to` (masked).
  */
-function createOtpStore({ prefix, deliver, describeTarget, scope, ErrorClass = OtpError }) {
+function createOtpStore({ prefix, deliver, describeTarget, scope, ErrorClass = OtpError, ttlMinutes = TTL_MINUTES }) {
   const f = (name) => `${prefix}_${name}`;
   const sys = (fn) => runAsSystem(fn, scope);
   const hashCode = (userId, code, to) => crypto.createHash('sha256').update(to ? `${userId}:${to}:${code}` : `${userId}:${code}`).digest('hex');
@@ -56,7 +57,7 @@ function createOtpStore({ prefix, deliver, describeTarget, scope, ErrorClass = O
     const set = {
       [f('hash')]: hashCode(user.id, code, to),
       [f('purpose')]: purpose,
-      [f('expires_at')]: new Date(now.getTime() + TTL_MINUTES * 60000),
+      [f('expires_at')]: new Date(now.getTime() + ttlMinutes * 60000),
       [f('sent_at')]: now,
     };
     // A fresh count only when the previous code is gone or expired.
@@ -72,8 +73,9 @@ function createOtpStore({ prefix, deliver, describeTarget, scope, ErrorClass = O
       const wait = Math.max(1, Math.ceil((last + RESEND_SECONDS * 1000 - now.getTime()) / 1000));
       throw new ErrorClass(429, `Please wait ${wait} seconds before asking for a new code`, 'OTP_RESEND_WAIT');
     }
-    await deliver({ user, code, purpose, to, minutes: TTL_MINUTES });
-    return { sent_to: describeTarget(user, to), expires_minutes: TTL_MINUTES, resend_after: RESEND_SECONDS };
+    await deliver({ user, code, purpose, to, minutes: ttlMinutes });
+    // expires_in (seconds) drives the countdown the apps show.
+    return { sent_to: describeTarget(user, to), expires_minutes: ttlMinutes, expires_in: ttlMinutes * 60, resend_after: RESEND_SECONDS };
   }
 
   // True when the code matches; a used, expired or over-tried code is cleared.
@@ -107,7 +109,20 @@ function createOtpStore({ prefix, deliver, describeTarget, scope, ErrorClass = O
     return false;
   }
 
-  return { sendCode, verifyCode, clearFields };
+  // The code that is still waiting for `purpose`, without sending anything:
+  // seconds it stays valid and until another may be asked for. Null when there
+  // is none (never the code or its hash).
+  async function pendingCode(userId, purpose) {
+    const user = await sys(() => Users.findOne({ id: userId }, { _id: 0 }).lean());
+    if (!user?.[f('hash')] || user[f('purpose')] !== purpose || Number(user[f('attempts')] || 0) >= MAX_ATTEMPTS) return null;
+    const seconds = (at) => Math.ceil((at - Date.now()) / 1000);
+    const left = seconds(new Date(user[f('expires_at')]).getTime());
+    if (!(left > 0)) return null;
+    const sentAt = user[f('sent_at')] ? new Date(user[f('sent_at')]).getTime() : 0;
+    return { expires_in: left, resend_after: Math.max(0, seconds(sentAt + RESEND_SECONDS * 1000)) };
+  }
+
+  return { sendCode, verifyCode, pendingCode, clearFields };
 }
 
 module.exports = { createOtpStore, OtpError, PURPOSES, TTL_MINUTES, RESEND_SECONDS, MAX_ATTEMPTS };

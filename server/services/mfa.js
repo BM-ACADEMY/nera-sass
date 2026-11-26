@@ -124,16 +124,28 @@ function enrolledMethodsOf(user) {
 // account keeps two-step verification and the recovery codes still work).
 const hasMfa = (user) => Boolean(user?.mfa_email_enabled || user?.mfa_enabled || user?.mfa_whatsapp_enabled);
 
+// A customer can add a method with the password alone, so a method added to an
+// account that already had two-step verification is "on hold" for a day: it
+// signs in, but its codes cannot confirm sensitive changes (stepUp.js). The
+// owner has been emailed and can remove it with an older method meanwhile.
+const NEW_METHOD_HOLD_HOURS = 24;
+const holdField = (method) => `mfa_${method}_hold_until`;
+const onHold = (user, method) => {
+  const until = user?.[holdField(method)];
+  return Boolean(until && new Date(until) > new Date());
+};
+
 // The method offered first at sign-in: the user's choice when it is usable,
-// else the authenticator app, else the first usable one.
+// else the authenticator app, else the first usable one (methods on hold last).
 function defaultMethodOf(user) {
   const methods = methodsOf(user);
   if (methods.includes(user?.mfa_default_method)) return user.mfa_default_method;
-  return METHOD_ORDER.find((m) => methods.includes(m)) || null;
+  const ordered = METHOD_ORDER.filter((m) => methods.includes(m));
+  return ordered.find((m) => !onHold(user, m)) || ordered[0] || null;
 }
 
 module.exports = {
   generateSecret, totp, verifyTotp, otpauthUrl, generateRecoveryCodes, hashRecoveryCode, base32Encode, base32Decode,
   methodsOf, enrolledMethodsOf, hasMfa, defaultMethodOf, whatsappOtpEnabled, setWhatsappAvailability, METHOD_ORDER,
-  extraMethodsEnabled, EXTRA_METHOD_OFF,
+  extraMethodsEnabled, EXTRA_METHOD_OFF, NEW_METHOD_HOLD_HOURS, holdField, onHold,
 };
