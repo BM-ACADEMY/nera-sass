@@ -22,6 +22,7 @@ import CalendarPage from './views/calendar/CalendarPage.jsx';
 import PluginsPage from './views/plugins/PluginsPage.jsx';
 import { ReportsView } from './views/ReportsView.jsx';
 import { SettingsView } from './views/SettingsView.jsx';
+import TeamPage from './views/team/TeamPage.jsx';
 import BillingPage from './views/billing/BillingPage.jsx';
 import SessionsPage from './views/account/SessionsPage.jsx';
 import { LoginScreen } from './views/auth/LoginScreen.jsx';
@@ -86,6 +87,9 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
               <Route path="/plugins" element={<PluginsPage />} />
               <Route path="/brain" element={<BrainPage />} />
               <Route path="/reports" element={<ReportsView />} />
+              <Route path="/team" element={<TeamPage />} />
+              {/* Team used to be a Settings section: old links keep working. */}
+              <Route path="/settings/team" element={<Navigate to="/team" replace />} />
               <Route path="/settings/:section?" element={<SettingsView />} />
               <Route path="/billing" element={<BillingPage />} />
               <Route path="/account/sessions" element={<SessionsPage />} />

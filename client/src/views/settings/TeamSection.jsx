@@ -2,15 +2,16 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
-  FiUserPlus, FiMoreVertical, FiEdit2, FiKey, FiLogOut, FiSlash, FiCheckCircle, FiTrash2, FiSend, FiX, FiShield, FiRefreshCw, FiAlertTriangle,
+  FiUserPlus, FiUsers, FiMoreVertical, FiEdit2, FiKey, FiLogOut, FiSlash, FiCheckCircle, FiTrash2, FiSend, FiX, FiShield, FiRefreshCw, FiAlertTriangle,
 } from 'react-icons/fi';
 import { api } from '../../services/api.js';
 import { timeAgo } from '../../services/sessionFormat.js';
 import { roleLabel } from './settingsPolicy.js';
 import {
   assignableRoles, canActOn, memberStatus, invitationStatus, seatSummary, addMemberProblem, editMemberProblem, passwordProblem, ROLE_HELP,
+  SHARE_HINT, addedNotice, resentNotice,
 } from './teamPolicy.js';
-import { SettingsPageHeader, FormRow, Callout } from './SettingsKit.jsx';
+import { FormRow, Callout } from './SettingsKit.jsx';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -25,7 +26,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 
-const SHARE_HINT = 'Share it with them yourself, for example in person or by phone. They will be asked to choose their own password when they first sign in.';
+// Success, or a longer-lasting warning when the email did not go out.
+const showNotice = ({ ok, text }) => (ok
+  ? toast.success(text, { duration: 8000 })
+  : toast(text, { duration: 12000, icon: <FiAlertTriangle className="size-5 shrink-0 text-amber-400" /> }));
 
 const RoleSelect = ({ id, value, onChange, roles, disabled }) => (
   <Select value={value} onValueChange={onChange} disabled={disabled}>
@@ -82,13 +86,7 @@ function AddMemberDialog({ open, onClose, myRole, onAdded }) {
       const body = { name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim() || null, role: form.role, method: form.method };
       if (form.method === 'password') body.password = form.password;
       const result = await api.addTeamMember(body);
-      if (form.method === 'invite') {
-        toast.success(result.delivery?.delivered === false
-          ? `Invitation created, but the email could not be sent. Use "Resend invite" to try again.`
-          : `Invitation sent to ${body.email}.`, { duration: 6000 });
-      } else {
-        toast.success(`${body.name} can now sign in. ${SHARE_HINT}`, { duration: 8000 });
-      }
+      showNotice(addedNotice({ method: form.method, delivery: result.delivery, name: body.name, email: body.email }));
       onAdded();
       onClose();
     } catch (err) {
@@ -123,7 +121,7 @@ function AddMemberDialog({ open, onClose, myRole, onAdded }) {
           <div className="grid gap-2">
             <span className="text-[13px] font-semibold text-slate-700">How will they get their password?</span>
             <MethodOption value="password" current={form.method} onChange={set('method')} disabled={busy}
-              title="Set a temporary password" text="You choose it now and tell them. They change it when they first sign in." />
+              title="Set a temporary password" text="You choose it now and tell them. We email them how to sign in, without the password. They change it when they first sign in." />
             <MethodOption value="invite" current={form.method} onChange={set('method')} disabled={busy}
               title="Send an invitation email" text="They get a link by email and choose their own password. The link works once." />
           </div>
@@ -303,7 +301,17 @@ const Row = ({ avatar, title, subtitle, role, status, twoStep, lastSeen, actions
   </li>
 );
 
-// Settings > Team: everyone in the workspace, pending invitations, seats,
+const TeamHeader = () => (
+  <div className="mb-6 flex items-center gap-3.5">
+    <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-sky-600 ring-4 ring-sky-100"><FiUsers size={20} /></span>
+    <div className="min-w-0">
+      <h2 className="text-lg font-extrabold tracking-tight">Team</h2>
+      <p className="text-[13px] text-muted-foreground">Add the people who work in this workspace and choose what they can do.</p>
+    </div>
+  </div>
+);
+
+// The Team page (/team): everyone in the workspace, pending invitations, seats,
 // and (for Owners and Admins) adding and managing people.
 export const TeamSection = ({ tenantInfo, me }) => {
   const navigate = useNavigate();
@@ -339,7 +347,7 @@ export const TeamSection = ({ tenantInfo, me }) => {
   if (!team) {
     return (
       <div className="max-w-6xl">
-        <SettingsPageHeader section="team" />
+        <TeamHeader />
         {error ? (
           <Card className="items-center gap-3 px-6 py-10 text-center">
             <FiAlertTriangle className="size-6 text-amber-500" />
@@ -353,6 +361,16 @@ export const TeamSection = ({ tenantInfo, me }) => {
       </div>
     );
   }
+
+  const resend = async (inv) => {
+    try {
+      const result = await api.resendInvitation(inv.id);
+      showNotice(resentNotice(result.delivery, inv.email));
+      load();
+    } catch (err) {
+      toast.error(err.message || 'Could not resend the invitation');
+    }
+  };
 
   const seats = seatSummary(team.seats);
   const users = team.users || [];
@@ -416,7 +434,7 @@ export const TeamSection = ({ tenantInfo, me }) => {
           <Button variant="ghost" size="icon" aria-label={`Actions for the invitation to ${inv.email}`}><FiMoreVertical /></Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
-          <DropdownMenuItem onSelect={() => act(() => api.resendInvitation(inv.id), `Invitation sent again to ${inv.email}`, 'Could not resend the invitation')().catch(() => {})}>
+          <DropdownMenuItem onSelect={() => resend(inv)}>
             <FiSend /> Resend invite
           </DropdownMenuItem>
           <DropdownMenuItem variant="destructive" onSelect={() => setConfirm({
@@ -433,7 +451,7 @@ export const TeamSection = ({ tenantInfo, me }) => {
 
   return (
     <div className="max-w-6xl">
-      <SettingsPageHeader section="team" />
+      <TeamHeader />
       <div className="flex flex-col gap-5">
         {/* Seats */}
         <Card className="gap-3">
