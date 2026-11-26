@@ -199,10 +199,7 @@ async function removeMember({ tenantId, userId, actor, req = null }) {
   }));
   await sessions.revokeOthers(target.id, null, 'removed');
   // The workspace's recorded owner moves to another active Owner.
-  if (isOwner) {
-    const next = await runAsTenant(tenantId, () => Users.findOne({ role: 'owner', is_active: { $ne: false }, removed_at: null }, { _id: 0, id: 1 }).sort({ created_at: 1 }).lean());
-    if (next) await runAsSystem(() => Tenants.updateOne({ id: Number(tenantId), owner_user_id: target.id }, { $set: { owner_user_id: next.id, updated_at: now } }), 'team');
-  }
+  if (isOwner) await userAdmin.moveRecordedOwner(tenantId, target.id);
   await audit.record(audit.EVENTS.TEAM_MEMBER_REMOVED, { tenantId, req, targetType: 'user', targetId: target.id, meta: { email: target.email, role: normalizeTenantRole(target.role) } });
   return { success: true };
 }

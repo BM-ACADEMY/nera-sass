@@ -11,7 +11,7 @@
  *  - deactivation revokes every session immediately (token_version + 1);
  *  - reactivation counts against the plan's user limit.
  */
-const { Users } = require('../models');
+const { Users, Tenants } = require('../models');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
 const { TENANT_ROLES, STAFF_ROLES, canAssignRole, normalizeTenantRole, describeUser } = require('./permissions');
 const audit = require('./audit');
@@ -66,6 +66,22 @@ async function loadTarget(tenantId, userId) {
   return target;
 }
 
+// The workspace's recorded owner (Tenants.owner_user_id, who gets alerts and
+// emails) moves to the earliest other active Owner when the recorded one is
+// demoted, disabled or removed. Nothing changes if fromUserId is not recorded.
+async function moveRecordedOwner(tenantId, fromUserId) {
+  const next = await runAsTenant(tenantId, () => Users.findOne(
+    { role: 'owner', is_active: { $ne: false }, removed_at: null, id: { $ne: Number(fromUserId) } },
+    { _id: 0, id: 1 },
+  ).sort({ created_at: 1, id: 1 }).lean());
+  if (!next) return null;
+  await runAsSystem(() => Tenants.updateOne(
+    { id: Number(tenantId), owner_user_id: Number(fromUserId) },
+    { $set: { owner_user_id: next.id, updated_at: new Date() } },
+  ), 'user-admin');
+  return next.id;
+}
+
 // actor: { id, kind: 'tenant' | 'staff', role }
 function assertCanManage(actor, target) {
   if (Number(actor.id) === Number(target.id)) throw new UserAdminError(400, 'You cannot change your own account this way');
@@ -95,6 +111,7 @@ async function changeRole({ tenantId, userId, newRole, actor, req, event = audit
     { $set: { role, updated_at: new Date() } },
     { new: true, projection: { _id: 0 } },
   ).lean());
+  if (currentRole === 'owner') await moveRecordedOwner(tenantId, target.id);
   await audit.record(event, { tenantId, req, targetType: 'user', targetId: target.id, meta: { email: target.email, from: currentRole, to: role } });
   return presentUser(updated);
 }
@@ -114,6 +131,7 @@ async function setActive({ tenantId, userId, active, actor, req, events = { on: 
     : { $set: { is_active: false, active: false, deactivated_at: new Date(), deactivated_by: actor.id ?? null, updated_at: new Date() }, $inc: { token_version: 1 } };
   const updated = await runAsTenant(tenantId, () => Users.findOneAndUpdate({ id: target.id }, update, { new: true, projection: { _id: 0 } }).lean());
   if (!active) await sessions.revokeOthers(target.id, null, 'deactivated');
+  if (!active && normalizeTenantRole(target.role) === 'owner') await moveRecordedOwner(tenantId, target.id);
   await audit.record(active ? events.on : events.off, { tenantId, req, targetType: 'user', targetId: target.id, meta: { email: target.email } });
   return presentUser(updated);
 }
@@ -198,6 +216,7 @@ module.exports = {
   loadTarget,
   assertCanManage,
   activeOwnerCount,
+  moveRecordedOwner,
   listTenantUsers,
   changeRole,
   setActive,

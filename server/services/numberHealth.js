@@ -143,8 +143,11 @@ async function marketingBlock(phoneNumberId) {
 async function workspaceOwner() {
   const tenantId = currentTenantId();
   const tenant = tenantId ? await runAsSystem(() => Tenants.findOne({ id: tenantId }, { _id: 0, id: 1, name: 1, owner_user_id: 1 }).lean(), 'number-health') : null;
-  let owner = tenant?.owner_user_id ? await Users.findOne({ id: tenant.owner_user_id }, { _id: 0, id: 1, name: 1, email: 1 }).lean() : null;
-  if (!owner) owner = await Users.findOne({ role: 'owner', is_active: { $ne: false } }, { _id: 0, id: 1, name: 1, email: 1 }).sort({ id: 1 }).lean();
+  // Only an active, not removed Owner: a disabled or demoted former owner
+  // still recorded on older data gets nothing.
+  const activeOwner = { role: 'owner', is_active: { $ne: false }, removed_at: null };
+  let owner = tenant?.owner_user_id ? await Users.findOne({ id: tenant.owner_user_id, ...activeOwner }, { _id: 0, id: 1, name: 1, email: 1 }).lean() : null;
+  if (!owner) owner = await Users.findOne(activeOwner, { _id: 0, id: 1, name: 1, email: 1 }).sort({ id: 1 }).lean();
   return { tenant, owner };
 }
 
@@ -322,5 +325,6 @@ module.exports = {
   resumeMarketing,
   pauseMarketing,
   notifyOwner,
+  workspaceOwner,
   summary,
 };

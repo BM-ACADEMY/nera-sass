@@ -51,8 +51,11 @@ const hours = (name, fallback) => {
 
 async function recipientsFor(tenantId) {
   const tenant = await runAsSystem(() => Tenants.findOne({ id: Number(tenantId) }, { _id: 0, id: 1, name: 1, owner_user_id: 1, alerts_whatsapp: 1 }).lean(), 'alerts-tenant');
-  let owner = tenant?.owner_user_id ? await Users.findOne({ id: tenant.owner_user_id }, { _id: 0, id: 1, name: 1, email: 1 }).lean() : null;
-  if (!owner) owner = await Users.findOne({ role: 'owner', is_active: { $ne: false } }, { _id: 0, id: 1, name: 1, email: 1 }).sort({ id: 1 }).lean();
+  // Only an active, not removed Owner: a disabled or demoted former owner
+  // still recorded on older data gets nothing.
+  const activeOwner = { role: 'owner', is_active: { $ne: false }, removed_at: null };
+  let owner = tenant?.owner_user_id ? await Users.findOne({ id: tenant.owner_user_id, ...activeOwner }, { _id: 0, id: 1, name: 1, email: 1 }).lean() : null;
+  if (!owner) owner = await Users.findOne(activeOwner, { _id: 0, id: 1, name: 1, email: 1 }).sort({ id: 1 }).lean();
   return { tenant, owner };
 }
 
@@ -394,4 +397,5 @@ module.exports = {
   evaluateWallet, paymentFailed, evaluateQuality, evaluateSetup, evaluateTemplates, evaluateTenant, sweepAll, pendingSetup,
   templateRejected, templateResubmitted, templateStatusChanged, cleanReasonCode,
   listNotices, markRead, markAllRead, attentionList, present, retryEmails,
+  recipientsFor,
 };

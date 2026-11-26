@@ -438,4 +438,42 @@ test('Cross-customer security', async (t) => {
     const revoked = await request(app).delete(`/api/team/invitations/${extra.id}`).set(bearer(owner));
     assert.strictEqual(revoked.status, 200, JSON.stringify(revoked.body));
   });
+  await t.test('C11. Workspace alerts never go to a disabled or demoted former Owner', async () => {
+    const { Users, Tenants } = models;
+    const { owner } = A.users;
+    const mk = async (email, extra = {}) => (await sys(() => Users.create({
+      tenant_id: 1, role: 'owner', email, name: email, password_hash: bcrypt.hashSync('Original-Pass-1', 4),
+      is_active: true, active: true, token_version: 0, ...extra,
+    }))).toObject();
+    const owner2 = await mk('owner2@t1.test', { created_at: new Date(Date.now() - 500) });
+    const owner3 = await mk('owner3@t1.test', { created_at: new Date(Date.now() - 100) });
+    const recorded = async () => (await sys(() => Tenants.findOne({ id: 1 }).lean())).owner_user_id;
+    assert.strictEqual(await recorded(), owner.id);
+    // Demoting the recorded owner moves the record to another active Owner.
+    const demoted = await request(app).patch(`/api/team/users/${owner.id}/role`).set(bearer(owner2)).send({ role: 'agent' });
+    assert.strictEqual(demoted.status, 200, JSON.stringify(demoted.body));
+    assert.strictEqual(await recorded(), owner2.id, 'demote moves the recorded owner');
+    // So does disabling them (the team route and the older one share it).
+    const disabled = await request(app).post(`/api/team/users/${owner2.id}/deactivate`).set(bearer(owner3));
+    assert.strictEqual(disabled.status, 200, JSON.stringify(disabled.body));
+    assert.strictEqual(await recorded(), owner3.id, 'disable moves the recorded owner');
+
+    // Older data may still point at someone who is no longer an active Owner:
+    // the alert senders skip them and use an active Owner instead.
+    const alerts = require('../services/alerts');
+    const numberHealth = require('../services/numberHealth');
+    for (const stale of [owner.id /* demoted, still active */, owner2.id /* disabled */, A.disabled.id /* disabled agent */]) {
+      await sys(() => Tenants.updateOne({ id: 1 }, { $set: { owner_user_id: stale } }));
+      const viaAlerts = await runAsTenant(1, () => alerts.recipientsFor(1));
+      assert.strictEqual(viaAlerts.owner?.id, owner3.id, `alerts skip user ${stale}`);
+      const viaHealth = await runAsTenant(1, () => numberHealth.workspaceOwner());
+      assert.strictEqual(viaHealth.owner?.id, owner3.id, `number health skips user ${stale}`);
+    }
+    // No active Owner at all: nobody is emailed rather than a former one.
+    await sys(() => Users.updateOne({ id: owner3.id }, { $set: { is_active: false } }));
+    await sys(() => Tenants.updateOne({ id: 1 }, { $set: { owner_user_id: owner3.id } }));
+    assert.strictEqual((await runAsTenant(1, () => alerts.recipientsFor(1))).owner, null);
+    assert.strictEqual((await runAsTenant(1, () => numberHealth.workspaceOwner())).owner, null);
+  });
+
 });
