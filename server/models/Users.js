@@ -63,6 +63,9 @@ module.exports = defineModel('users', {
   mfa_wa_code_expires_at: { type: Date },
   mfa_wa_code_sent_at: { type: Date },
   mfa_wa_code_attempts: { type: Number, default: 0 },
+  // WhatsApp sign-in codes sent on this India-time day (YYYY-MM-DD).
+  mfa_wa_login_day: { type: String },
+  mfa_wa_login_sends: { type: Number },
   // Different numbers a WhatsApp setup code was sent to in the current 24-hour
   // window (for the per-day cap).
   mfa_whatsapp_setup_window_start: { type: Date },

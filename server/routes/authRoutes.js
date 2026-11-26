@@ -64,7 +64,10 @@ router.post('/change-password', requireAuth, reauthLimit, authController.changeP
 router.post('/logout', requireAuth, authController.logout);
 router.post('/logout-all', requireAuth, authController.logoutAll);
 router.patch('/profile', requireAuth, authController.updateProfile);
+// "Confirm it's you" once, remembered for this session for a few minutes.
+router.post('/mfa/step-up', loginLimit, requireAuth, reauthLimit, authController.confirmStepUp);
 router.post('/mfa/disable', loginLimit, requireAuth, reauthLimit, authController.disableMfaMethod);
+router.post('/mfa/disable-all', loginLimit, requireAuth, reauthLimit, authController.disableAllMfa);
 router.post('/mfa/recovery-codes', loginLimit, requireAuth, reauthLimit, authController.regenerateRecoveryCodes);
 // Code for confirming a security change: /mfa/reauth/email/send or /mfa/reauth/whatsapp/send.
 router.post('/mfa/reauth/:channel/send', loginLimit, requireAuth, reauthLimit, authController.sendReauthCode);

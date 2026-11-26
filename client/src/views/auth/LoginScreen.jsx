@@ -9,6 +9,8 @@ import { mfaErrorKind, NOTICES } from '../../services/session.js';
 import OtpInput from '../../components/auth/OtpInput.jsx';
 import { AuthenticatorArt, EmailCodeArt, ShieldArt } from '../../components/auth/Art.jsx';
 import { MethodTile } from '../../components/auth/MfaBrandIcons.jsx';
+import { useSecondsUntil } from '../../hooks/useSecondsUntil.js';
+import { codeDeadline, formatClock, sendsLeftText, sendsUsedUp } from '../../utils/otpTimer.js';
 
 const YEAR = new Date().getFullYear();
 const cn = (...parts) => parts.filter(Boolean).join(' ');
@@ -57,6 +59,16 @@ const MethodCard = ({ icon: Icon, tone, tile, title, text, onClick, disabled }) 
   </button>
 );
 
+// Time left on a WhatsApp code.
+const CodeTimer = ({ left, sent }) => {
+  if (!sent) return null;
+  return (
+    <p role="timer" className={cn('m-0 text-center text-[13px]', left ? 'text-slate-600' : 'font-semibold text-red-600')}>
+      {left ? <>Code expires in <b className="tabular-nums">{formatClock(left)}</b></> : 'This code has expired.'}
+    </p>
+  );
+};
+
 const Field = ({ label, htmlFor, children }) => (
   <div className="flex flex-col gap-2">
     <label htmlFor={htmlFor} className="text-[13px] font-semibold text-slate-700">{label}</label>
@@ -90,6 +102,19 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
   const [recoveryCodes, setRecoveryCodes] = useState([]);
   const [pending, setPending] = useState(null);
   const [resendIn, setResendIn] = useCountdown();
+  // WhatsApp codes: when the code on screen ends (0: none sent) and what is
+  // left of today's sign-in codes.
+  const [waDeadline, setWaDeadline] = useState(0);
+  const [waStatus, setWaStatus] = useState(null);
+  const [waSetupDeadline, setWaSetupDeadline] = useState(0);
+  const waLeft = useSecondsUntil(waDeadline);
+  const waSetupLeft = useSecondsUntil(waSetupDeadline);
+
+  const showWaStatus = (status) => {
+    if (!status) return;
+    setWaStatus(status);
+    setWaDeadline(codeDeadline(status));
+  };
 
   useEffect(() => { document.title = 'Sign in · Getnera'; }, []);
 
@@ -100,6 +125,9 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
     setCode('');
     setUseRecovery(false);
     setMethods([]);
+    setWaDeadline(0);
+    setWaStatus(null);
+    setWaSetupDeadline(0);
     setNotice(text);
   };
 
@@ -128,10 +156,20 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
         : (purpose === 'setup' ? await api.startEmailSetup(token) : await api.sendMfaEmail(token));
       if (channel === 'whatsapp') setWhatsappHint(res.sent_to || whatsappHint);
       else setEmailHint(res.sent_to || emailHint);
+      if (channel === 'whatsapp') {
+        if (purpose === 'setup') setWaSetupDeadline(codeDeadline(res));
+        else showWaStatus(res.whatsapp_status);
+      }
       setResendIn(res.resend_after || 45);
       message.success(`Code sent to ${res.sent_to}`);
       return true;
     } catch (err) {
+      const status = err?.response?.data?.whatsapp_status;
+      showWaStatus(status);
+      // The code that failed to go out replaced the one before it.
+      if (err?.code === 'WHATSAPP_SEND_FAILED') setWaDeadline(0);
+      // Today's codes are used up: the code screen explains what else works.
+      if (err?.code === 'WHATSAPP_DAILY_LIMIT') { message.warning(err.message); return true; }
       if (err?.code === 'OTP_RESEND_WAIT') { message.info(err.message); return true; }
       onError(err, 'The code could not be sent');
       return false;
@@ -155,6 +193,8 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
     setWhatsappHint(info.whatsapp_hint || '');
     setWhatsappAvailable(Boolean(info.whatsapp_available));
     setCode('');
+    setWaStatus(info.whatsapp_status || null);
+    setWaDeadline(codeDeadline(info.whatsapp_status));
     if (result.mfa === 'setup') {
       setStep('setup-choose');
       return;
@@ -178,7 +218,9 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
     setMethod(picked);
     setCode('');
     setUseRecovery(false);
-    if ((picked === 'email' || picked === 'whatsapp') && !(await sendCode(picked, 'login'))) return;
+    // A WhatsApp code that is still valid is not sent again (3 a day).
+    const stillValid = picked === 'whatsapp' && waDeadline > Date.now();
+    if ((picked === 'email' || picked === 'whatsapp') && !stillValid && !(await sendCode(picked, 'login'))) return;
     setStep('verify');
   };
 
@@ -266,7 +308,7 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
       : method === 'email'
         ? ['Check your email', `We sent a 6-digit code to ${emailHint || 'your email'}.`]
         : method === 'whatsapp'
-          ? ['Check WhatsApp', `We sent a 6-digit code to your WhatsApp ${whatsappHint || 'number'}.`]
+          ? ['Check WhatsApp', waDeadline ? `We sent a 6-digit code to your WhatsApp ${whatsappHint || 'number'}.` : 'Ask for a code, or use another method.']
           : ['Authenticator code', 'Open Google Authenticator (or your authenticator app) and enter the 6-digit code for Getnera.'],
     'setup-choose': ['Protect your account', 'Your account needs two-step verification. Pick a method to finish signing in.'],
     'setup-email': ['Check your email', `Enter the 6-digit code we sent to ${emailHint || 'your email'} to turn on email verification.`],
@@ -277,9 +319,11 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
   }[step];
 
   const back = <LinkButton onClick={() => restart()} className="text-slate-500"><ArrowLeft size={14} /> Back to sign in</LinkButton>;
+  const waVerify = step === 'verify' && method === 'whatsapp' && !useRecovery;
+  const waUsedUp = sendsUsedUp(waStatus);
   const resend = (channel, purpose) => (
-    <LinkButton disabled={resendIn > 0 || busy} onClick={() => sendCode(channel, purpose)} className="text-blue-600">
-      {resendIn > 0 ? `Resend code in ${resendIn}s` : 'Didn’t get it? Resend code'}
+    <LinkButton disabled={resendIn > 0 || busy || (channel === 'whatsapp' && purpose === 'login' && waUsedUp)} onClick={() => sendCode(channel, purpose)} className="text-blue-600">
+      {resendIn > 0 && !(channel === 'whatsapp' && purpose === 'login' && waUsedUp) ? `Resend code in ${resendIn}s` : 'Didn’t get it? Resend code'}
     </LinkButton>
   );
 
@@ -346,6 +390,20 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
                 ) : (
                   <OtpInput value={code} onChange={setCode} onComplete={verify} invalid={invalid} disabled={busy} />
                 )}
+                {waVerify && (
+                  <div className="flex flex-col gap-2">
+                    <CodeTimer left={waLeft} sent={Boolean(waDeadline)} />
+                    {!waUsedUp && sendsLeftText(waStatus) && <p className="m-0 text-center text-xs text-slate-500">{sendsLeftText(waStatus)}</p>}
+                    {waUsedUp && (
+                      <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-[13px] text-amber-800">
+                        <b>{sendsLeftText(waStatus)}</b>{' '}
+                        {waLeft > 0 ? 'You can still enter the last code before it expires. ' : ''}
+                        {methods.length > 1 ? 'Use another method or a recovery code.' : 'Use a recovery code.'}{' '}
+                        New WhatsApp codes are available after midnight (India time). No recovery codes? Contact Getnera support.
+                      </div>
+                    )}
+                  </div>
+                )}
                 <PrimaryButton type="submit" disabled={busy || (useRecovery ? !code.trim() : code.length !== 6)}>
                   {busy ? <><Spinner /> Checking…</> : 'Verify and sign in'}
                 </PrimaryButton>
@@ -406,6 +464,7 @@ export function LoginScreen({ login, completeSession, authLoading, initialNotice
             {step === 'setup-whatsapp' && (
               <form onSubmit={(e) => { e.preventDefault(); confirmSetup(); }} className="flex flex-col gap-5">
                 <OtpInput value={code} onChange={setCode} onComplete={confirmSetup} invalid={invalid} disabled={busy} />
+                <CodeTimer left={waSetupLeft} sent={Boolean(waSetupDeadline)} />
                 <PrimaryButton type="submit" disabled={busy || code.length !== 6}>
                   {busy ? <><Spinner /> Checking…</> : 'Turn on and sign in'}
                 </PrimaryButton>

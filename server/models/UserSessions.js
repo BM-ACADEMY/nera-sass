@@ -33,6 +33,11 @@ module.exports = defineModel('user_sessions', {
   expires_at: { type: Date },
   revoked_at: { type: Date, default: null },
   revoked_reason: { type: String, default: null },
+  // "Confirm it's you" for two-step changes (services/stepUp.js): valid for a
+  // few minutes, for this session only, while token_version is unchanged.
+  stepup_until: { type: Date, default: null },
+  stepup_token_version: { type: Number },
+  stepup_second_factor: { type: Boolean },
 }, {
   autoId: true,
   unique: [['session_hash']],
