@@ -26,6 +26,10 @@ test('User Management & Security Lifecycle Suite', async (t) => {
   await t.test('1. Role assignment permissions: Admin cannot assign Owner', async () => {
     // Admin trying to promote agent to owner
     assert.strictEqual(canAssignRole('admin', 'agent', 'owner'), false);
+    // Admins grant Manager/Agent only, and never change another Admin.
+    assert.strictEqual(canAssignRole('admin', 'agent', 'admin'), false);
+    assert.strictEqual(canAssignRole('admin', 'admin', 'agent'), false);
+    assert.strictEqual(canAssignRole('admin', 'agent', 'manager'), true);
     // Owner CAN promote agent to admin or owner
     assert.strictEqual(canAssignRole('owner', 'agent', 'admin'), true);
     assert.strictEqual(canAssignRole('owner', 'agent', 'owner'), true);

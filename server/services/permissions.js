@@ -121,7 +121,8 @@ function requirePermission(permission) {
 function canAssignRole(actorRole, targetCurrentRole, newRole) {
   if (!TENANT_ROLES.includes(newRole)) return false;
   if (actorRole === 'owner') return true;
-  if (actorRole === 'admin') return newRole !== 'owner' && targetCurrentRole !== 'owner';
+  // Admins manage Managers and Agents only, and never grant Owner or Admin.
+  if (actorRole === 'admin') return ['manager', 'agent'].includes(newRole) && ['manager', 'agent'].includes(targetCurrentRole);
   return false;
 }
 

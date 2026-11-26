@@ -13,7 +13,7 @@ export function passwordProblem(password, email = '') {
 
 export const ROLE_HELP = {
   owner: 'Full access, including billing and the team.',
-  admin: 'Everything except managing Owners.',
+  admin: 'Everything except managing Owners and other Admins.',
   manager: 'Leads, campaigns, templates and AI Brain. Can see the team.',
   agent: 'Inbox and leads only.',
 };
@@ -30,10 +30,10 @@ export function assignableRoles(myRole) {
 export const canSeeTeam = (permissions) => Boolean(permissions?.view_team);
 
 // Whether `me` may act on `member` (edit, reset, disable, remove). Nobody acts
-// on themselves here; Admins leave Owners alone.
+// on themselves here; Admins leave Owners and other Admins alone.
 export function canActOn({ myRole, myId, canManage }, member) {
   if (!canManage || !member || member.id === myId) return false;
-  if (myRole === 'admin' && member.role === 'owner') return false;
+  if (myRole === 'admin' && (member.role === 'owner' || member.role === 'admin')) return false;
   return myRole === 'owner' || myRole === 'admin';
 }
 

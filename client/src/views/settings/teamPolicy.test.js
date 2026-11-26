@@ -24,6 +24,11 @@ test('actions: never on yourself, Admins leave Owners alone, managers only look'
   assert.strictEqual(canActOn({ myRole: 'owner', myId: 1, canManage: true }, agent), true);
   assert.strictEqual(canActOn({ myRole: 'admin', myId: 2, canManage: true }, owner), false);
   assert.strictEqual(canActOn({ myRole: 'admin', myId: 2, canManage: true }, agent), true);
+  // Admins leave other Admins to an Owner; Owners manage Admins.
+  const otherAdmin = { id: 5, role: 'admin' };
+  assert.strictEqual(canActOn({ myRole: 'admin', myId: 2, canManage: true }, otherAdmin), false);
+  assert.strictEqual(canActOn({ myRole: 'admin', myId: 2, canManage: true }, { id: 6, role: 'manager' }), true);
+  assert.strictEqual(canActOn({ myRole: 'owner', myId: 1, canManage: true }, otherAdmin), true);
   assert.strictEqual(canActOn({ myRole: 'manager', myId: 4, canManage: false }, agent), false);
 });
 

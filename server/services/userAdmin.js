@@ -5,7 +5,8 @@
  *
  * Rules:
  *  - a user never changes their own role and never deactivates themselves;
- *  - customer Admins cannot change or deactivate Owners, or grant Owner;
+ *  - customer Admins manage Managers and Agents only: they cannot change,
+ *    reset, deactivate or remove Owners or other Admins, or grant either role;
  *  - a workspace always keeps at least one active Owner;
  *  - deactivation revokes every session immediately (token_version + 1);
  *  - reactivation counts against the plan's user limit.
@@ -71,6 +72,8 @@ function assertCanManage(actor, target) {
   if (actor.kind === 'staff') return;
   const targetRole = normalizeTenantRole(target.role);
   if (actor.role === 'admin' && targetRole === 'owner') throw new UserAdminError(403, 'Only an Owner can change another Owner');
+  // Admins manage Managers and Agents only; another Admin needs an Owner.
+  if (actor.role === 'admin' && targetRole === 'admin') throw new UserAdminError(403, 'Only an Owner can change another Admin');
   if (!['owner', 'admin'].includes(actor.role)) throw new UserAdminError(403, 'You do not have permission to manage users');
 }
 

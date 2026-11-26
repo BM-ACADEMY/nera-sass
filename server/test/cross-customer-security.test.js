@@ -383,4 +383,32 @@ test('Cross-customer security', async (t) => {
     assert.strictEqual(second.status, 201, JSON.stringify(second.body));
     assert.strictEqual((await request(app).post(`/api/team/invitations/${second.body.invitation.id}/resend`).set(h)).status, 200, 'a pending invitation resends');
   });
+  await t.test('C9. Only an Owner manages an Admin: an Admin cannot reset, disable, remove, demote or change another Admin', async () => {
+    const { owner, admin, manager } = A.users;
+    const admin2 = (await sys(() => models.Users.create({
+      tenant_id: 1, role: 'admin', email: 'admin2@t1.test', name: 'Second Admin',
+      password_hash: bcrypt.hashSync('Original-Pass-1', 4), is_active: true, active: true, token_version: 0,
+    }))).toObject();
+    const ha = bearer(admin);
+    const before = await snapshot(1);
+    for (const [method, path, payload] of [
+      ['patch', `/api/team/users/${admin2.id}`, { name: 'Renamed By Admin' }],
+      ['patch', `/api/team/users/${admin2.id}`, { role: 'agent' }],
+      ['patch', `/api/team/users/${admin2.id}/role`, { role: 'manager' }],
+      ['post', `/api/team/users/${admin2.id}/reset-password`, { password: TEMP }],
+      ['post', `/api/team/users/${admin2.id}/deactivate`, {}],
+      ['post', `/api/team/users/${admin2.id}/revoke-sessions`, {}],
+      ['delete', `/api/team/users/${admin2.id}`, {}],
+    ]) refused(await request(app)[method](path).set(ha).send(payload), `admin ${method} ${path} on another admin`, [403]);
+    assert.strictEqual(await snapshot(1), before, 'the other Admin is unchanged');
+    // Admins still manage Managers and Agents.
+    const renamed = await request(app).patch(`/api/team/users/${manager.id}`).set(ha).send({ name: 'Manager Renamed' });
+    assert.strictEqual(renamed.status, 200, JSON.stringify(renamed.body));
+    // An Owner manages Admins.
+    const ho = bearer(owner);
+    assert.strictEqual((await request(app).post(`/api/team/users/${admin2.id}/reset-password`).set(ho).send({ password: TEMP })).status, 200);
+    assert.strictEqual((await request(app).patch(`/api/team/users/${admin2.id}`).set(ho).send({ role: 'manager' })).status, 200);
+    // Once a Manager, the Admin may manage them.
+    assert.strictEqual((await request(app).post(`/api/team/users/${admin2.id}/deactivate`).set(ha)).status, 200);
+  });
 });
