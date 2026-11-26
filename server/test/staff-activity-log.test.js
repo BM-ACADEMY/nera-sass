@@ -166,6 +166,74 @@ test('Staff activity log', async (t) => {
     return { a, b };
   }
 
+  await t.test('A6. sales task added and edited by hand are recorded without the title or details text', async () => {
+    const { brand, users } = await workspace(10);
+    const l = await lead(10, { client_id: brand.id });
+    const created = await request(app).post('/api/sales-tasks').set(bearer(users.manager))
+      .send({ title: 'Secret discount plan', description: 'private details', lead_id: l.id, assigned_to: users.agent.id });
+    assert.strictEqual(created.status, 201, JSON.stringify(created.body));
+    const [added] = await events(10, 'SALES_TASK_CREATED');
+    assert.ok(added, 'SALES_TASK_CREATED recorded');
+    assert.strictEqual(added.actor_user_id, users.manager.id);
+    assert.strictEqual(added.target_type, 'sales_task');
+    assert.match(added.summary, /manual task for lead "Ravi"/);
+    assert.match(added.summary, /agent 10/);
+
+    const edited = await request(app).patch(`/api/sales-tasks/${created.body.task.id}`).set(bearer(users.manager))
+      .send({ title: 'Another secret title', assigned_to: null });
+    assert.strictEqual(edited.status, 200, JSON.stringify(edited.body));
+    const [update] = await events(10, 'SALES_TASK_UPDATED');
+    assert.ok(update, 'SALES_TASK_UPDATED recorded');
+    assert.deepStrictEqual(update.meta.fields.sort(), ['assigned_to', 'title']);
+    assert.strictEqual(update.meta.before.assigned_to, users.agent.id);
+    assert.strictEqual(update.meta.after.assigned_to, null);
+
+    const done = await request(app).patch(`/api/sales-tasks/${created.body.task.id}`).set(bearer(users.manager)).send({ status: 'completed' });
+    assert.strictEqual(done.status, 200);
+    assert.strictEqual((await events(10, 'SALES_TASK_COMPLETED')).length, 1);
+    const all = JSON.stringify(await events(10));
+    for (const text of ['Secret discount plan', 'private details', 'Another secret title']) assert.ok(!all.includes(text), `${text} is not logged`);
+  });
+
+  await t.test('A7. bulk assign and bulk status change are one summary entry each, with the count', async () => {
+    const { brand, users } = await workspace(10);
+    const ids = [];
+    for (let i = 0; i < 3; i += 1) ids.push((await lead(10, { client_id: brand.id, phone: `98765432${i}0` })).id);
+    const assign = await request(app).post('/api/leads/bulk').set(bearer(users.owner)).send({ ids, action: 'assign', assigned_to: users.agent.id });
+    assert.strictEqual(assign.status, 200, JSON.stringify(assign.body));
+    const status = await request(app).post('/api/leads/bulk').set(bearer(users.owner)).send({ ids, action: 'status', status: 'hot' });
+    assert.strictEqual(status.status, 200);
+    const [assigned] = await events(10, 'LEADS_BULK_ASSIGNED');
+    assert.strictEqual(assigned.meta.count, 3);
+    assert.deepStrictEqual([...assigned.meta.ids].sort(), [...ids].sort());
+    assert.strictEqual(assigned.summary, 'Assigned 3 leads to agent 10');
+    const [changed] = await events(10, 'LEADS_BULK_STATUS_CHANGED');
+    assert.strictEqual(changed.meta.count, 3);
+    assert.strictEqual(changed.summary, 'Changed the status of 3 leads to "hot"');
+    assert.strictEqual((await events(10, 'LEAD_ASSIGNED')).length, 0, 'no per-lead entries');
+    // Both show under the Leads filter.
+    const res = await request(app).get('/api/activity').query({ group: 'leads' }).set(bearer(users.owner));
+    assert.strictEqual(res.status, 200);
+    assert.ok(['LEADS_BULK_ASSIGNED', 'LEADS_BULK_STATUS_CHANGED'].every((e) => res.body.events.some((row) => row.event === e)));
+  });
+
+  await t.test('A8. team member events (TEAM_MEMBER_*) are in the Team group with plain labels', async () => {
+    const { users } = await workspace(10);
+    const audit = require('../services/audit');
+    const activity = require('../services/activity');
+    for (const event of ['TEAM_MEMBER_ADDED', 'TEAM_MEMBER_UPDATED', 'TEAM_MEMBER_ROLE_CHANGED', 'TEAM_MEMBER_PASSWORD_RESET', 'TEAM_MEMBER_DISABLED', 'TEAM_MEMBER_ENABLED', 'TEAM_MEMBER_REMOVED']) {
+      assert.strictEqual(activity.groupOf(event), 'team', event);
+      assert.ok(activity.LABELS[event], `${event} has a label`);
+      await audit.record(event, { tenantId: 10, actor: activity.actorForUser(users.owner), targetType: 'user', targetId: users.agent.id });
+    }
+    await audit.record('LEAD_CREATED', { tenantId: 10, actor: activity.actorForUser(users.owner) });
+    const res = await request(app).get('/api/activity').query({ group: 'team' }).set(bearer(users.owner));
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.events.length, 7);
+    assert.ok(res.body.events.every((e) => e.group === 'team' && e.event.startsWith('TEAM_MEMBER_')));
+    assert.strictEqual(res.body.events.find((e) => e.event === 'TEAM_MEMBER_ADDED').action, 'Added a team member');
+  });
+
   await t.test('R1. owner and admin read their own workspace log, newest first, with staff list', async () => {
     const { a } = await seed();
     for (const role of ['owner', 'admin']) {
