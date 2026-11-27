@@ -33,6 +33,9 @@ const BillingCard = ({ tenantId }) => {
   const [dialog, setDialog] = useState(null); // 'grant' | 'extend' | null
   const [planCode, setPlanCode] = useState('');
   const [days, setDays] = useState('');
+  const [direction, setDirection] = useState('credit');
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('adjustment');
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -68,6 +71,9 @@ const BillingCard = ({ tenantId }) => {
     setDialog(kind);
     setNote('');
     setDays('');
+    setDirection('credit');
+    setAmount('');
+    setReason('adjustment');
     setError('');
     setPlanCode(sub?.plan_code || plans[0]?.code || '');
   };
@@ -83,6 +89,11 @@ const BillingCard = ({ tenantId }) => {
         if (!planCode) { setError('Choose a plan.'); setSaving(false); return; }
         await axiosClient.post(`/admin/tenants/${tenantId}/billing/grant`, { plan_code: planCode, note: trimmed });
         toast.success(`${chosen?.name || 'Plan'} granted`);
+      } else if (dialog === 'wallet') {
+        const inr = Number(amount);
+        if (!Number.isFinite(inr) || inr <= 0 || inr > 100000 || Math.round(inr * 100) !== inr * 100) { setError('Enter an amount from ₹1 to ₹1,00,000, with at most 2 decimals.'); setSaving(false); return; }
+        const res = await axiosClient.post(`/admin/tenants/${tenantId}/billing/wallet/adjust`, { direction, amount_inr: inr, reason, note: trimmed });
+        toast.success(`Wallet ${direction === 'credit' ? 'credited' : 'debited'}. New balance ₹${(res.data.balance_paise / 100).toLocaleString('en-IN')}`);
       } else {
         const n = Number(days);
         if (!Number.isInteger(n) || n < 1 || n > 365) { setError('Days must be a whole number from 1 to 365.'); setSaving(false); return; }
@@ -109,10 +120,11 @@ const BillingCard = ({ tenantId }) => {
     <Card className="gap-4">
       <CardHeader className="px-4 sm:px-6">
         <div className="min-w-0">
-          <CardTitle className="flex items-center gap-2 text-[15px]"><FiCreditCard className="text-primary" /> Plan and AI replies</CardTitle>
-          <CardDescription className="mt-1 text-xs">Plans are granted by hand while online payments are off. Every change needs a note and is audited.</CardDescription>
+          <CardTitle className="flex items-center gap-2 text-[15px]"><FiCreditCard className="text-primary" /> Plan, wallet and AI replies</CardTitle>
+          <CardDescription className="mt-1 text-xs">Plans and wallet money are changed by hand while online payments are off. Every change needs a note and is audited.</CardDescription>
         </div>
         <div className="flex gap-2">
+          <Button size="sm" variant="outline" disabled={!data} onClick={() => open('wallet')}>Adjust wallet</Button>
           <Button size="sm" variant="outline" disabled={!data || !sub} onClick={() => open('extend')}>Add days</Button>
           <Button size="sm" disabled={!data || plans.length === 0} onClick={() => open('grant')}>Grant plan</Button>
         </div>
@@ -121,10 +133,11 @@ const BillingCard = ({ tenantId }) => {
         {!data ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /> Loading</div>
         ) : (
-          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-5">
             <Stat label="Plan">{sub ? <span className="flex items-center gap-2">{sub.plan_name}<Badge variant={sub.status === 'active' ? 'success' : 'muted'}>{sub.status}</Badge></span> : null}</Stat>
             <Stat label="Paid until">{sub ? `${shortDate(sub.current_period_end)} (${sub.days_left} days left)` : null}</Stat>
             <Stat label="AI replies">{ai ? (ai.allowance != null && ai.source !== 'none' ? `${ai.used ?? 0} used, ${ai.left ?? 0} left of ${ai.allowance}` : 'Not limited yet (plans are not required)') : null}</Stat>
+            <Stat label="Wallet">{data.wallet ? `₹${Number(data.wallet.balance_inr).toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : null}</Stat>
             <Stat label="AI right now">{ai ? (ai.allowed ? 'Allowed' : `Blocked: ${ai.reason || 'no allowance'}`) : null}</Stat>
           </dl>
         )}
@@ -134,9 +147,9 @@ const BillingCard = ({ tenantId }) => {
         <DialogContent className="sm:max-w-md">
           <form onSubmit={submit} noValidate className="flex flex-col gap-5">
             <DialogHeader>
-              <DialogTitle>{dialog === 'grant' ? 'Grant a plan' : 'Add days to the paid period'}</DialogTitle>
+              <DialogTitle>{dialog === 'grant' ? 'Grant a plan' : dialog === 'wallet' ? 'Adjust the wallet' : 'Add days to the paid period'}</DialogTitle>
               <DialogDescription>
-                {dialog === 'grant' ? grantHint : 'Adds whole days to the end of the paid period. Use it to make good for a service problem instead of a refund.'}
+                {dialog === 'grant' ? grantHint : dialog === 'wallet' ? 'Adds or removes wallet money by hand, for example a refund or goodwill. It is a new ledger entry, never an edit, and it is audited. No payment is taken and no invoice is issued.' : 'Adds whole days to the end of the paid period. Use it to make good for a service problem instead of a refund.'}
               </DialogDescription>
             </DialogHeader>
             {dialog === 'grant' ? (
@@ -145,6 +158,24 @@ const BillingCard = ({ tenantId }) => {
                   {plans.map((p) => <option key={p.code} value={p.code}>{p.name} (₹{p.price_inr} a month)</option>)}
                 </select>
               </FormField>
+            ) : dialog === 'wallet' ? (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormField label="Action" htmlFor="w-dir">
+                  <select id="w-dir" className={selectClass} value={direction} onChange={(e) => setDirection(e.target.value)}>
+                    <option value="credit">Add money to the wallet</option>
+                    <option value="debit">Remove money from the wallet</option>
+                  </select>
+                </FormField>
+                <FormField label="Amount (₹)" htmlFor="w-amt">
+                  <Input id="w-amt" type="number" min="1" max="100000" step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="e.g. 500" />
+                </FormField>
+                <FormField label="Reason" htmlFor="w-reason" className="sm:col-span-2">
+                  <select id="w-reason" className={selectClass} value={reason} onChange={(e) => setReason(e.target.value)}>
+                    <option value="adjustment">Correction or goodwill</option>
+                    <option value="refund">Refund</option>
+                  </select>
+                </FormField>
+              </div>
             ) : (
               <FormField label="Days to add" htmlFor="g-days">
                 <Input id="g-days" type="number" min="1" max="365" inputMode="numeric" value={days} onChange={(e) => setDays(e.target.value)} placeholder="e.g. 5" />
@@ -155,7 +186,7 @@ const BillingCard = ({ tenantId }) => {
             </FormField>
             <DialogFooter>
               <Button type="button" variant="outline" disabled={saving} onClick={close}>Cancel</Button>
-              <Button type="submit" disabled={saving}>{saving && <Spinner />} {dialog === 'grant' ? 'Grant plan' : 'Add days'}</Button>
+              <Button type="submit" disabled={saving}>{saving && <Spinner />} {dialog === 'grant' ? 'Grant plan' : dialog === 'wallet' ? 'Save change' : 'Add days'}</Button>
             </DialogFooter>
           </form>
         </DialogContent>
