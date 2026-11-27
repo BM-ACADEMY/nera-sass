@@ -21,4 +21,5 @@ module.exports = defineModel('messages', {
   pinned_until: { type: Date },
   is_starred: { type: Boolean, default: false },
   reactions: { type: Mixed, default: () => ({}) },
-}, { autoId: true, indexes: [['conversation_id'], ['conversation_id', 'sent_at']] });
+}, { autoId: true, // tenant + time: Reports > Team reads one workspace's messages by date.
+  indexes: [['conversation_id'], ['conversation_id', 'sent_at'], ['tenant_id', 'sent_at']] });

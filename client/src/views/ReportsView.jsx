@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import html2pdf from 'html2pdf.js';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -10,6 +10,20 @@ import {
 } from 'lucide-react';
 import { C } from '../constants/theme.js';
 import { api } from '../services/api.js';
+import { USER_KEY } from '../services/session.js';
+import { formatMoney, formatMoneyFull, isAllZero, canViewTeamReport } from '../utils/reportFormat.js';
+import { TeamReport } from './reports/TeamReport.jsx';
+
+const readRole = () => {
+  try { return JSON.parse(localStorage.getItem(USER_KEY) || '{}')?.role || null; } catch { return null; }
+};
+
+// Shown instead of a chart that has nothing to draw for the chosen dates.
+const NoData = ({ height = 220 }) => (
+  <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 12, background: C.bg, border: `1px dashed ${C.border}`, borderRadius: 8 }}>
+    No data yet for this period
+  </div>
+);
 
 export const ReportsView = () => {
   const [stats, setStats] = useState(null);
@@ -22,6 +36,9 @@ export const ReportsView = () => {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [appliedRange, setAppliedRange] = useState(null);
+  const role = readRole();
+  const showTeam = canViewTeamReport(role);
+  const rangeParams = useMemo(() => (appliedRange ? { range: 'custom', from: appliedRange.from, to: appliedRange.to } : { range: timeRange }), [appliedRange, timeRange]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -78,7 +95,7 @@ export const ReportsView = () => {
         html2canvas:  { 
           scale: 2, 
           useCORS: true, 
-          backgroundColor: '#060c17',
+          backgroundColor: C.bg,
           logging: false
         },
         jsPDF:        { unit: 'mm', format: 'a3', orientation: 'landscape' }
@@ -248,7 +265,7 @@ export const ReportsView = () => {
           </div>
           <p style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{appliedRange ? 'Revenue in Range' : 'Monthly Revenue'}</p>
           <h2 style={{ fontSize: 26, fontWeight: 800, color: C.text, margin: '8px 0 4px 0', fontFamily: "'Inter',sans-serif" }}>
-            {loading ? '-' : `₹${Math.round(stats?.revenue_month || 0).toLocaleString()}`}
+            {loading ? '-' : <span title={formatMoneyFull(stats?.revenue_month)}>{formatMoney(stats?.revenue_month)}</span>}
           </h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }}>
             {revenuePercentage.isPositive ? (
@@ -265,7 +282,7 @@ export const ReportsView = () => {
           <div style={{ position: 'absolute', top: 18, right: 18, background: `${C.accent}15`, padding: 8, borderRadius: 8 }}>
             <Flame size={16} color={C.accent} />
           </div>
-          <p style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Hot Pipelines</p>
+          <p style={{ fontSize: 11, fontWeight: 600, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Hot leads</p>
           <h2 style={{ fontSize: 26, fontWeight: 800, color: C.text, margin: '8px 0 4px 0', fontFamily: "'Inter',sans-serif" }}>
             {loading ? '-' : stats?.hot_leads}
           </h2>
@@ -296,11 +313,12 @@ export const ReportsView = () => {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}`, gap: 20, marginBottom: 20 }}>
+      <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}`, gap: 20, marginBottom: 20, overflowX: 'auto', whiteSpace: 'nowrap' }}>
         {[
           { id: 'overview', label: 'Performance Overview', icon: <Briefcase size={14} /> },
           { id: 'funnel', label: 'Funnel & Lead Channels', icon: <Layers size={14} /> },
-          { id: 'brands', label: 'Brand Analytics', icon: <Globe size={14} /> }
+          { id: 'brands', label: 'Brand Analytics', icon: <Globe size={14} /> },
+          ...(showTeam ? [{ id: 'team', label: 'Team', icon: <Users size={14} /> }] : [])
         ].map(tab => (
           <button
             key={tab.id}
@@ -320,7 +338,9 @@ export const ReportsView = () => {
       </div>
 
       {/* Main Tab Content */}
-      {loading ? (
+      {activeTab === 'team' && showTeam ? (
+        <TeamReport params={rangeParams} role={role} />
+      ) : loading ? (
         <div style={{ height: 350, display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.card, border: `1px solid ${C.border}`, borderRadius: 12 }}>
           <Activity className="animate-spin" size={24} color={C.accent} style={{ animation: 'spin 1.5s linear infinite' }} />
         </div>
@@ -337,15 +357,17 @@ export const ReportsView = () => {
                     <span style={{ fontSize: 10, color: C.accent, fontWeight: 600, background: `${C.accent}15`, padding: '3px 8px', borderRadius: 4 }}>Last 7 Days</span>
                   </div>
                   
+                  {isAllZero(weeklyData, ['leads', 'converted']) ? <NoData /> : (
                   <ResponsiveContainer width="100%" height={220}>
                     <BarChart data={weeklyData} barSize={16}>
                       <XAxis dataKey="d" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                      <YAxis allowDecimals={false} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
                       <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11, color: C.text }} />
                       <Bar dataKey="leads" name="Incoming Leads" fill={C.accent} radius={[3, 3, 0, 0]} />
                       <Bar dataKey="converted" name="Converted Leads" fill={C.green} radius={[3, 3, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
+                  )}
                 </div>
 
                 {/* Revenue Growth Trend */}
@@ -355,14 +377,16 @@ export const ReportsView = () => {
                     <span style={{ fontSize: 10, color: C.blue, fontWeight: 600, background: `${C.blue}15`, padding: '3px 8px', borderRadius: 4 }}>Last 6 Months</span>
                   </div>
                   
+                  {isAllZero(stats?.revenue_trend, ['r']) ? <NoData /> : (
                   <ResponsiveContainer width="100%" height={220}>
                     <LineChart data={stats?.revenue_trend || []}>
                       <XAxis dataKey="m" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                      <YAxis tickFormatter={(v) => "₹" + (v / 1000) + "k"} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
-                      <Tooltip formatter={(v) => "₹" + v.toLocaleString()} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11, color: C.text }} />
+                      <YAxis allowDecimals={false} tickFormatter={formatMoney} width={56} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                      <Tooltip formatter={(v) => [formatMoneyFull(v), 'Revenue']} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11, color: C.text }} />
                       <Line type="monotone" dataKey="r" stroke={C.blue} strokeWidth={3} dot={{ fill: C.blue, strokeWidth: 2, r: 4 }} activeDot={{ r: 6 }} />
                     </LineChart>
                   </ResponsiveContainer>
+                  )}
                 </div>
               </div>
 
@@ -370,6 +394,7 @@ export const ReportsView = () => {
               <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20 }}>
                 <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 16 }}>Top Brands Breakdown</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {!clients.length && <NoData height={80} />}
                   {clients.slice(0, 4).map((c, i) => {
                     const lCount = parseInt(c.lead_count || 0);
                     const convCount = parseInt(c.converted_count || 0);
@@ -402,7 +427,8 @@ export const ReportsView = () => {
                 <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 18 }}>Lead Ingestion Funnel</h3>
                 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {funnelData.map((step, idx) => (
+                  {!funnelData[0]?.count && <NoData height={180} />}
+                  {!!funnelData[0]?.count && funnelData.map((step, idx) => (
                     <div key={step.name} style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                       <div style={{ width: 120, fontSize: 11, fontWeight: 600, color: C.muted }}>{step.name}</div>
                       <div style={{ flex: 1, position: 'relative', height: 32, background: C.surface, borderRadius: 6, overflow: 'hidden', border: `1px solid ${C.border}` }}>
@@ -429,6 +455,7 @@ export const ReportsView = () => {
                 <h3 style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>Ingestion Channels</h3>
                 
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 180 }}>
+                  {isAllZero(pieData, ['value']) ? <div style={{ width: '100%' }}><NoData height={160} /></div> : (
                   <ResponsiveContainer width="100%" height={160}>
                     <PieChart>
                       <Pie
@@ -447,6 +474,7 @@ export const ReportsView = () => {
                       <Tooltip formatter={(value) => `${value} leads`} contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, fontSize: 11, color: C.text }} />
                     </PieChart>
                   </ResponsiveContainer>
+                  )}
                 </div>
 
                 {/* Legend Suffix */}
@@ -503,7 +531,7 @@ export const ReportsView = () => {
                     </div>
                   );
                 }) : (
-                  <div style={{ textAlign: 'center', padding: 30, color: C.muted }}>No brand statistics found.</div>
+                  <div style={{ textAlign: 'center', padding: 30, color: C.muted }}>No data yet for this period</div>
                 )}
               </div>
             </div>

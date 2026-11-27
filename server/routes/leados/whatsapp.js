@@ -265,6 +265,8 @@ app.post('/api/whatsapp/send', auth, async (req, res) => {
     const sentMessage = await Messages.create({
       conversation_id: conversationId, direction: 'outbound', content: message, msg_type: type, media_url: storedMedia?.ref || localUpload?.publicPath || media_url || null,
       wa_msg_id: waMessageId, status: 'sent', sent_at: new Date(), reply_to_wa_id: reply_to_wa_id || null, is_forwarded: is_forwarded || false,
+      // Who sent it (Reports > Team first reply time); null for the service key.
+      sent_by: req.identity?.kind === 'tenant' ? (req.user?.id ?? null) : null,
     });
     const savedRows = [{
       id: sentMessage.id, direction: sentMessage.direction, content: sentMessage.content, type: sentMessage.msg_type,
