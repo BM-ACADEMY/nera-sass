@@ -1,5 +1,5 @@
 /**
- * LeadOS routes: Lead create, update, delete and tags.
+ * LeadOS routes: Lead create, update and delete.
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
@@ -78,7 +78,6 @@ const {
   Clients,
   Conversations,
   LeadNotes,
-  LeadTags,
   Leads,
   Messages,
   NO_ID,
@@ -89,7 +88,6 @@ const {
   deleteCascade,
   evaluateLeadBrandAndSchedule,
   getLeadOSBrand,
-  insertIgnore,
   Users,
 } = ctx;
 
@@ -291,28 +289,7 @@ app.delete('/api/leads/:id', auth, requirePermission('leads.delete'), async (req
   }
 });
 
-app.post('/api/leads/:id/tags', auth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { tagId } = req.body;
-    await insertIgnore(LeadTags, { lead_id: id, tag_id: tagId, assigned_at: new Date() });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Add lead tag error:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.delete('/api/leads/:id/tags/:tagId', auth, async (req, res) => {
-  try {
-    const { id, tagId } = req.params;
-    await LeadTags.deleteMany({ lead_id: id, tag_id: tagId });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Remove lead tag error:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
+// Labels on a lead (and the older /tags calls): routes/leados/labels.js.
 
 // ── Notes (remarks the team keeps about a lead) ─────────────────────────
 // Everyone who can see the lead reads and adds notes; a note is deleted by

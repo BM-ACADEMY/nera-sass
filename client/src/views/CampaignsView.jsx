@@ -114,6 +114,8 @@ const PAGE_CSS = `
 `;
 
 const AUDIENCE_TAG = 'tag';
+// This workspace's lead labels with counts (audience-counts `labels`; older servers sent `tags`).
+const audienceLabels = (audience) => audience?.labels || audience?.tags || [];
 const AUDIENCE_LIST = 'custom_csv';
 
 export const CampaignsView = () => {
@@ -247,7 +249,7 @@ export const CampaignsView = () => {
   // Keep the audience choice valid: only options that have contacts.
   useEffect(() => {
     if (!audience) return;
-    const valid = new Set([...(audience.statuses || []).map((s) => s.value), ...(audience.total > 0 ? ['all'] : []), AUDIENCE_LIST, ...(audience.tags?.length ? [AUDIENCE_TAG] : [])]);
+    const valid = new Set([...(audience.statuses || []).map((s) => s.value), ...(audience.total > 0 ? ['all'] : []), AUDIENCE_LIST, ...(audienceLabels(audience).some((l) => l.lead_count > 0) ? [AUDIENCE_TAG] : [])]);
     if (!targetStatus || !valid.has(targetStatus)) setTargetStatus(audience.statuses?.[0]?.value || (audience.total > 0 ? 'all' : AUDIENCE_LIST));
   }, [audience]);
 
@@ -307,7 +309,7 @@ export const CampaignsView = () => {
   const estimate = useMemo(() => {
     if (!audience) return null;
     if (targetStatus === AUDIENCE_LIST) return listCheck?.summary?.ready ?? null;
-    if (targetStatus === AUDIENCE_TAG) return audience.tags?.find((t) => String(t.id) === String(tagId))?.lead_count ?? null;
+    if (targetStatus === AUDIENCE_TAG) return audienceLabels(audience).find((t) => String(t.id) === String(tagId))?.lead_count ?? null;
     if (targetStatus === 'all') return audience.total;
     return audience.statuses?.find((s) => s.value === targetStatus)?.count ?? null;
   }, [audience, targetStatus, tagId, listCheck]);
@@ -330,7 +332,7 @@ export const CampaignsView = () => {
       }
     }
     if (!targetStatus) return 'Choose who should receive it.';
-    if (targetStatus === AUDIENCE_TAG && !tagId) return 'Choose a tag.';
+    if (targetStatus === AUDIENCE_TAG && !tagId) return 'Choose a label.';
     if (targetStatus === AUDIENCE_LIST) {
       if (!listFile) return 'Upload your contact list.';
       if (checkingList) return 'Your list is still being checked. One moment.';
@@ -360,7 +362,7 @@ export const CampaignsView = () => {
       }
       const payload = {
         name: name.trim(), client_id: clientId, template_id: templateId,
-        target_status: finalTarget, target_tag_id: targetStatus === AUDIENCE_TAG ? Number(tagId) : null,
+        target_status: finalTarget, target_label_id: targetStatus === AUDIENCE_TAG ? Number(tagId) : null,
         // A wall-clock time: the server reads it in the workspace's time zone.
         scheduled_at: sendType === 'later' ? scheduledAt : null,
         template_parameters: templateParameters,
@@ -528,7 +530,8 @@ export const CampaignsView = () => {
 
   const audienceLabel = (c) => {
     if (String(c.target_status || '').startsWith('csv_')) return 'Uploaded list';
-    if (c.target_tag_id != null) return c.tag_name ? `Tag: ${c.tag_name}` : 'Tagged contacts';
+    if (c.target_label_id != null) return c.tag_name ? `Label: ${c.tag_name}` : 'Labelled contacts';
+    if (c.target_tag_id != null) return 'Tagged contacts';
     if (!c.target_status || c.target_status === 'all') return 'All contacts';
     return audience?.statuses?.find((s) => s.value === c.target_status)?.label || `${c.target_status} leads`;
   };
@@ -664,16 +667,16 @@ export const CampaignsView = () => {
                 {!audience && <option value="">Counting contacts…</option>}
                 {audience?.statuses?.map((s) => <option key={s.value} value={s.value}>{s.label} ({formatNumber(s.count)})</option>)}
                 {audience?.total > 0 && <option value="all">All contacts ({formatNumber(audience.total)})</option>}
-                {audience?.tags?.length > 0 && <option value={AUDIENCE_TAG}>Contacts with a tag</option>}
+                {audienceLabels(audience).some((l) => l.lead_count > 0) && <option value={AUDIENCE_TAG}>Contacts with a label</option>}
                 {audience && <option value={AUDIENCE_LIST}>Upload Custom List</option>}
               </select>
             </Field>
 
             {targetStatus === AUDIENCE_TAG && (
-              <Field label="Tag">
+              <Field label="Label" hint="Your workspace's labels, with how many contacts of this brand carry each. Add labels on the Leads page.">
                 <select value={tagId} onChange={(e) => setTagId(e.target.value)} style={inputStyle}>
-                  <option value="">Select a tag</option>
-                  {audience?.tags?.map((tag) => <option key={tag.id} value={tag.id}>{tag.name} ({formatNumber(tag.lead_count)})</option>)}
+                  <option value="">Select a label</option>
+                  {audienceLabels(audience).map((tag) => <option key={tag.id} value={tag.id} disabled={!tag.lead_count}>{tag.name} ({formatNumber(tag.lead_count)})</option>)}
                 </select>
               </Field>
             )}

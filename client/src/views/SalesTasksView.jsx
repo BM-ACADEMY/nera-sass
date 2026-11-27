@@ -7,7 +7,8 @@ import {
   FiCheckCircle, FiRotateCcw, FiMessageSquare, FiExternalLink, FiAlertTriangle, FiClock, FiUser, FiChevronDown,
   FiChevronUp, FiCalendar, FiPlay, FiCheckSquare,
 } from 'react-icons/fi';
-import { api, allianceInboxApi } from '../services/api.js';
+import { api } from '../services/api.js';
+import { labelsAsInboxTags } from './leads/labels/labelsApi.js';
 import {
   DEFAULT_TIME_ZONE, typeOf, taskTitle, isDone, dueState, dueInputs, formatDue, formatDateTime, filterTasks, sortTasks, countDue, taskBody, bulkTaskConfirm,
 } from '../utils/salesTasks.js';
@@ -459,7 +460,8 @@ export const SalesTasksView = () => {
     const first = setTimeout(() => {
       load();
       api.get('/sales-tasks/assignees').then((res) => setAssignees(res.users || [])).catch(() => setAssignees([]));
-      allianceInboxApi.getTags().then((res) => setTags(Array.isArray(res) ? res : res?.tags || [])).catch(() => setTags([]));
+      // This workspace's lead labels (task.tags are the lead's labels).
+      labelsAsInboxTags.getTags().then((res) => setTags(Array.isArray(res) ? res : res?.tags || [])).catch(() => setTags([]));
     }, 0);
     // Overdue highlights move on while the page is open.
     const clock = setInterval(() => setNow(new Date()), 60 * 1000);
@@ -699,8 +701,8 @@ export const SalesTasksView = () => {
             <option value="upcoming">Upcoming</option>
             <option value="none">No due date</option>
           </select>
-          <select className={selectClass} value={filters.tag} onChange={(e) => setFilter('tag', e.target.value)} aria-label="Lead tag">
-            <option value="">Any tag</option>
+          <select className={selectClass} value={filters.tag} onChange={(e) => setFilter('tag', e.target.value)} aria-label="Lead label">
+            <option value="">Any label</option>
             {tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}
           </select>
         </div>

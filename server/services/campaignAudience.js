@@ -8,11 +8,14 @@
  * STOP, the number's marketing pause and the daily cap at send time
  * (services/sendPolicy.js, services/whatsappSendQueue.js).
  *
- * Audience kinds, in order: an uploaded list (target_status "csv_..."), a tag
- * (target_tag_id), a lead status, or everyone of the brand ("all").
+ * Audience kinds, in order: an uploaded list (target_status "csv_..."), a label
+ * (target_label_id, services/leadLabels.js), a lead status, or everyone of the
+ * brand ("all"). Campaigns saved before labels existed may still carry
+ * target_tag_id (an old lead tag) until migrations/043_lead_labels.js moves them.
  * Every query runs inside the caller's tenant context.
  */
-const { Leads, LeadTags, CampaignImportRecipients, WhatsappConsents, AllianceInboxTags, Clients, Templates, MetaWhatsappPhoneNumbers } = require('../models');
+const { Leads, LeadTags, CampaignImportRecipients, WhatsappConsents, Clients, Templates, MetaWhatsappPhoneNumbers } = require('../models');
+const leadLabels = require('./leadLabels');
 const { NO_ID } = require('../db/mongo');
 const consent = require('./consent');
 const numberHealth = require('./numberHealth');
@@ -26,7 +29,12 @@ const maskPhone = (phone) => {
   return digits.length > 4 ? `${'•'.repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}` : '••••';
 };
 
-/** The leads of an audience. `campaign` = { client_id, target_status, target_tag_id }. */
+const filled = (value) => value != null && value !== '';
+
+/** The label id an audience asks for: target_label_id, or target_tag_id as sent by older builders. */
+const labelIdOf = (input) => (filled(input.target_label_id) ? input.target_label_id : filled(input.target_tag_id) ? input.target_tag_id : null);
+
+/** The leads of an audience. `campaign` = { client_id, target_status, target_label_id } (or a saved legacy target_tag_id). */
 async function resolveAudience(campaign) {
   const target = String(campaign.target_status || 'all');
   if (target.startsWith('csv_')) {
@@ -39,7 +47,11 @@ async function resolveAudience(campaign) {
       .map((r) => ({ ...byId.get(r.lead_id), template_parameters: r.template_parameters }));
   }
   const filter = { client_id: campaign.client_id };
-  if (campaign.target_tag_id != null && campaign.target_tag_id !== '') {
+  if (filled(campaign.target_label_id)) {
+    // Links are tenant-scoped: another workspace's label id selects nobody.
+    filter.id = { $in: await leadLabels.leadIdsWith(campaign.target_label_id) };
+  } else if (filled(campaign.target_tag_id)) {
+    // A campaign saved before labels (old lead_tags); tenant-scoped too.
     const links = await LeadTags.find({ tag_id: Number(campaign.target_tag_id) }, { _id: 0, lead_id: 1 }).lean();
     filter.id = { $in: links.map((link) => link.lead_id) };
   }
@@ -47,17 +59,16 @@ async function resolveAudience(campaign) {
   return Leads.find(filter, LEAD_FIELDS).lean();
 }
 
-/** Tags in use in this workspace, with how many leads carry each: [{ id, name, color, lead_count }]. */
-async function listTags(clientId = null) {
-  const counts = await LeadTags.aggregate([{ $group: { _id: '$tag_id', lead_count: { $sum: 1 } } }]);
-  if (!counts.length) return [];
-  const names = new Map((await AllianceInboxTags.find({ id: { $in: counts.map((c) => c._id) } }, { _id: 0, id: 1, name: 1, color: 1 }).lean()).map((t) => [t.id, t]));
-  void clientId;
-  return counts
-    .filter((c) => names.has(c._id))
-    .map((c) => ({ id: c._id, name: names.get(c._id).name, color: names.get(c._id).color, lead_count: c.lead_count }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+/**
+ * This workspace's labels with how many leads carry each (of the brand when
+ * clientId is given): [{ id, name, color, lead_count }], by name.
+ */
+async function listLabels(clientId = null) {
+  const [labels, counts] = await Promise.all([leadLabels.list(), leadLabels.leadCounts(clientId)]);
+  return labels.map((label) => ({ id: label.id, name: label.name, color: label.color, lead_count: counts.get(label.id) || 0 }));
 }
+// Older name.
+const listTags = listLabels;
 
 /**
  * Splits an audience by what the send queue will do with each contact.
@@ -97,7 +108,9 @@ async function audienceCounts(clientId) {
     .map((row) => ({ value: String(row._id), label: statusLabel(row._id), count: row.count }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   const total = rows.reduce((sum, row) => sum + row.count, 0);
-  return { total, statuses, tags: (await listTags()).filter((tag) => tag.lead_count > 0) };
+  const labels = await listLabels(clientId);
+  // labels: every label (counts may be 0); tags: the older list of labels in use.
+  return { total, statuses, labels, tags: labels.filter((label) => label.lead_count > 0) };
 }
 
 const TIER_LABELS = Object.freeze({ TIER_50: 50, TIER_250: 250, TIER_1K: 1000, TIER_10K: 10000, TIER_100K: 100000, TIER_UNLIMITED: null });
@@ -150,9 +163,14 @@ async function previewCampaign(input) {
   if (brand && brand.whatsapp_status !== 'verified') block('WhatsApp is not verified for this brand yet.');
 
   const target = String(input.target_status || 'all');
-  const hasTag = input.target_tag_id != null && input.target_tag_id !== '';
+  const labelId = labelIdOf(input);
+  const hasTag = labelId != null;
   if (!target && !hasTag) block('Choose who should receive it.');
-  const leads = brand ? await resolveAudience({ client_id: brand.id, target_status: target, target_tag_id: hasTag ? input.target_tag_id : null }) : [];
+  // The label must be one of this workspace's (the lookup is tenant-scoped).
+  const label = hasTag ? await leadLabels.find(labelId) : null;
+  if (hasTag && !label) block('This label was not found. Choose another label.');
+  out.label = label ? { id: label.id, name: label.name, color: label.color } : null;
+  const leads = brand && (!hasTag || label) ? await resolveAudience({ client_id: brand.id, target_status: target, target_label_id: label ? label.id : null }) : [];
   const sorted = await classify(leads);
   out.audience = {
     kind: target.startsWith('csv_') ? 'uploaded_list' : hasTag ? 'tag' : target === 'all' ? 'all' : 'status',
@@ -203,4 +221,4 @@ async function previewCampaign(input) {
   return out;
 }
 
-module.exports = { resolveAudience, listTags, classify, previewCampaign, maskPhone, audienceCounts, sendingBudget, statusLabel };
+module.exports = { resolveAudience, listTags, listLabels, labelIdOf, classify, previewCampaign, maskPhone, audienceCounts, sendingBudget, statusLabel };

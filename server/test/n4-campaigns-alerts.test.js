@@ -338,8 +338,9 @@ async function seedAudience(tenantId = 1) {
     await consent.recordOptIn({ phone: yes.phone, leadId: yes.id, source: 'shop', text: 'Ticked the offers box' });
     await consent.recordOptIn({ phone: stopped.phone, leadId: stopped.id, source: 'shop', text: 'Ticked the offers box' });
     await consent.recordOptOut({ phone: stopped.phone, leadId: stopped.id, source: 'inbound_keyword', text: 'STOP' });
-    const tag = (await models.AllianceInboxTags.create({ name: `vip-${tenantId}` })).toObject();
-    for (const lead of [yes, stopped, never, bad]) await models.LeadTags.create({ lead_id: lead.id, tag_id: tag.id });
+    // The audience label (lead labels are per workspace).
+    const tag = (await models.Labels.create({ name: `vip-${tenantId}`, name_key: `vip-${tenantId}`, color: 'violet' })).toObject();
+    for (const lead of [yes, stopped, never, bad]) await models.LeadLabelLinks.create({ lead_id: lead.id, label_id: tag.id });
     const template = (await models.Templates.create({ name: `promo_${tenantId}`, category: 'MARKETING', body: 'Hi {{1}}, new stock is in', status: 'approved', client_id: ctx.brand.id, meta_template_id: `T${tenantId}` })).toObject();
     return { ...ctx, yes, stopped, never, bad, tag, template, params: { body: { 1: { source: 'recipient_name' } } } };
   });
@@ -393,7 +394,8 @@ test('D. Campaign builder', async (t) => {
     await runAsTenant(1, () => models.Templates.updateOne({ id: s.template.id }, { $set: { status: 'approved' } }));
     const ok = await request(app).post('/api/campaigns').set(s.headers).send({ ...body, preview_confirmed: true });
     assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
-    assert.strictEqual(ok.body.campaign.target_tag_id, s.tag.id);
+    assert.strictEqual(ok.body.campaign.target_label_id, s.tag.id);
+    assert.strictEqual(ok.body.campaign.target_tag_id, null);
     assert.strictEqual(ok.body.campaign.status, 'scheduled', 'a future schedule waits');
     assert.strictEqual(await runAsTenant(1, () => models.CampaignMessageQueue.countDocuments({})), 0);
   });
@@ -424,7 +426,9 @@ test('D. Campaign builder', async (t) => {
     const two = await seedAudience(2);
     const res = await request(app).post('/api/campaigns/preview').set(two.headers)
       .send({ client_id: two.brand.id, template_id: two.template.id, target_tag_id: one.tag.id, template_parameters: two.params });
-    assert.strictEqual(res.body.preview.audience.total, 0);
+    // Another workspace's label is not found (it was an empty audience before labels).
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(res.body.code, 'LABEL_NOT_FOUND');
     const own = (await request(app).get('/api/campaigns/tags').set(two.headers)).body.tags;
     assert.deepStrictEqual(own.map((x) => x.id), [two.tag.id]);
   });

@@ -93,6 +93,8 @@ module.exports = {
   GoogleCalendarCredentials: require('./GoogleCalendarCredentials'),
   KnowledgeBase: require('./KnowledgeBase'),
   LeadExportJobs: require('./LeadExportJobs'),
+  Labels: require('./Labels'),
+  LeadLabelLinks: require('./LeadLabelLinks'),
   LeadNotes: require('./LeadNotes'),
   LeadTags: require('./LeadTags'),
   Leads: require('./Leads'),
