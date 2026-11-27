@@ -25,6 +25,12 @@ module.exports = defineModel('leads', {
   assigned_to: { type: Number },
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
+  // The last team member who changed the lead on the Leads page (add, edit,
+  // status, assignment, bulk): name at the time, so it reads right after a
+  // rename. updated_at also moves for automatic changes; updated_by_at does not.
+  updated_by_user_id: { type: Number },
+  updated_by_name: { type: String },
+  updated_by_at: { type: Date },
   client_id: { type: Number },
   interest: { type: String },
   flow_step: { type: String, default: "welcome" },

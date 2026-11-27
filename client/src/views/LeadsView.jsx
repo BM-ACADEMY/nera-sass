@@ -1,19 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'react-hot-toast';
-import { FiPlus, FiUpload, FiDownload, FiSearch, FiUsers, FiMoreVertical, FiMessageCircle, FiTrash2, FiX, FiChevronLeft, FiChevronRight, FiRefreshCw } from 'react-icons/fi';
+import { FiPlus, FiUpload, FiDownload, FiSearch, FiUsers, FiMoreVertical, FiMessageCircle, FiTrash2, FiX, FiChevronLeft, FiChevronRight, FiRefreshCw, FiFileText, FiEdit3, FiUserPlus, FiFlag, FiCheck, FiActivity, FiTag } from 'react-icons/fi';
 import { useLeads } from '../hooks/useLeads.js';
 import { api } from '../services/api.js';
 import { USER_KEY } from '../services/session.js';
 import ConfirmDialog from '../components/templates/ConfirmDialog';
-import { AddLeadDialog, ImportLeadsDialog, ExportLeadsDialog } from './leads/LeadDialogs.jsx';
+import { AddLeadDialog, ImportLeadsDialog, ExportLeadsDialog, AddNoteDialog } from './leads/LeadDialogs.jsx';
+import { LeadDetailSheet } from './leads/LeadDetailSheet.jsx';
+import { StatusBadge, StatusLabel, PersonLabel, NobodyLabel } from './leads/LeadStatus.jsx';
 import {
   PAGE_SIZE, SOURCE_LABELS, SOURCE_VARIANT, STATUS_OPTIONS, sourceFilters, leadSourceKind, statusInfo, pageInfo,
   lastMessageText, timeAgo, shortDate, toggleAll, toggleOne, uniqueLeads, leadPermissions, bulkLeadConfirm,
+  selectionOnPage, changedBy, noteCountLabel,
 } from './leads/leadsPolicy.js';
+import { LabelFilter, LabelsManagerButton, LeadLabelsCell, LeadLabelsDialog } from './leads/labels/index.js';
+import { labelPermissions } from './leads/labelsPolicy.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -32,11 +40,6 @@ const readRole = () => {
 const SourceBadge = ({ lead }) => {
   const kind = leadSourceKind(lead);
   return <Badge variant={SOURCE_VARIANT[kind]}>{SOURCE_LABELS[kind]}</Badge>;
-};
-
-const StatusBadge = ({ status }) => {
-  const info = statusInfo(status);
-  return <Badge variant={info.variant}>{info.label}</Badge>;
 };
 
 const Avatar = ({ name }) => (
@@ -69,19 +72,81 @@ const Checkbox = ({ checked, indeterminate = false, onChange, label }) => (
   />
 );
 
-// Row actions: open the chat, delete (owners, admins and managers).
-const RowMenu = ({ lead, onOpen, onDelete }) => (
-  <DropdownMenu>
-    <DropdownMenuTrigger asChild>
-      <Button variant="ghost" size="icon" className="size-8" aria-label={`Actions for ${lead.name || 'lead'}`} onClick={(e) => e.stopPropagation()}><FiMoreVertical /></Button>
-    </DropdownMenuTrigger>
-    <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-      <DropdownMenuItem onSelect={() => onOpen(lead)}><FiMessageCircle /> Open chat</DropdownMenuItem>
-      {onDelete && <DropdownMenuSeparator />}
-      {onDelete && <DropdownMenuItem variant="destructive" onSelect={() => onDelete(lead)}><FiTrash2 /> Delete lead</DropdownMenuItem>}
-    </DropdownMenuContent>
-  </DropdownMenu>
-);
+// "Aakash · 2:30 pm": the last team member who changed the lead, and when.
+const UpdatedBy = ({ lead, className }) => {
+  const who = changedBy(lead);
+  if (!who) return <span className={cn('text-muted-foreground', className)}>—</span>;
+  return (
+    <span className={className} title={lead.last_changed_at ? new Date(lead.last_changed_at).toLocaleString('en-IN') : undefined}>
+      {who.name}{who.when && <span className="text-muted-foreground"> · {who.when}</span>}
+    </span>
+  );
+};
+
+// Small note icon with the count, when the lead has notes; opens the details.
+const NoteCount = ({ lead, onOpen }) => {
+  const label = noteCountLabel(lead.note_count);
+  if (!label) return null;
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={`${label}: open notes for ${lead.name || 'lead'}`}
+      onClick={(e) => { e.stopPropagation(); onOpen(lead); }}
+      className="inline-flex shrink-0 cursor-pointer items-center gap-0.5 rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-100"
+    >
+      <FiFileText className="size-3" /> {Number(lead.note_count)}
+    </button>
+  );
+};
+
+// Row actions (the ⋮ menu): status and assignment of this one lead (no
+// confirm, unlike bulk changes), notes, details, chat, delete (owners, admins
+// and managers). Radix closes it on Escape, outside click and after a choice.
+const RowMenu = ({ lead, users, onStatus, onAssign, onAddNote, onLabels, onDetails, onOpen, onDelete }) => {
+  const current = statusInfo(lead.status).value;
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" className="size-8" aria-label={`Actions for ${lead.name || 'lead'}`} onClick={(e) => e.stopPropagation()}><FiMoreVertical /></Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" collisionPadding={8} className="w-52" onClick={(e) => e.stopPropagation()}>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger><FiFlag /> Change status</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {STATUS_OPTIONS.map((option) => (
+              <DropdownMenuItem key={option.value} onSelect={() => option.value !== current && onStatus(lead, option.value)}>
+                <StatusLabel status={option.value} />
+                {option.value === current && <FiCheck className="ml-auto text-muted-foreground" aria-label="Current status" />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger><FiUserPlus /> Assign to</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="max-w-64">
+            <DropdownMenuItem onSelect={() => lead.assigned_to != null && onAssign(lead, null)}>
+              <NobodyLabel />
+              {lead.assigned_to == null && <FiCheck className="ml-auto text-muted-foreground" aria-label="Not assigned now" />}
+            </DropdownMenuItem>
+            {users.map((user) => (
+              <DropdownMenuItem key={user.id} onSelect={() => user.id !== lead.assigned_to && onAssign(lead, user)}>
+                <PersonLabel user={user} />
+                {user.id === lead.assigned_to && <FiCheck className="ml-auto text-muted-foreground" aria-label="Assigned now" />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuItem onSelect={() => onAddNote(lead)}><FiEdit3 /> Add note</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onLabels(lead)}><FiTag /> Labels</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onDetails(lead)}><FiActivity /> Notes & activity</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onOpen(lead)}><FiMessageCircle /> Open chat</DropdownMenuItem>
+        {onDelete && <DropdownMenuSeparator />}
+        {onDelete && <DropdownMenuItem variant="destructive" onSelect={() => onDelete(lead)}><FiTrash2 /> Delete lead</DropdownMenuItem>}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+};
 
 const Empty = ({ filtered, onAdd, onImport, onClear }) => (
   <div className="flex flex-col items-center gap-2 px-6 py-14 text-center">
@@ -116,10 +181,20 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
   const [confirm, setConfirm] = useState(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkKey, setBulkKey] = useState(0);
+  const [detailLead, setDetailLead] = useState(null); // lead whose notes & activity are open
+  const [noteLead, setNoteLead] = useState(null); // lead the Add note dialog is for
+  const [notesVersion, setNotesVersion] = useState(0);
   const { canExport, canDelete } = leadPermissions(readRole());
+  // Labels: list filter, the lead whose labels are being edited, reload key.
+  const [labelFilter, setLabelFilter] = useState('all');
+  const [labelLead, setLabelLead] = useState(null);
+  const [labelsKey, setLabelsKey] = useState(0);
+  const { canManage: canManageLabels } = labelPermissions(readRole());
 
   // A different filter starts again at page 1 with nothing selected.
   const resetView = () => { setPage(1); setSelected(new Set()); };
+  // Another page starts with nothing selected too: ticks are per page.
+  const goToPage = (next) => { setPage(next); setSelected(new Set()); };
   const filterSetter = (setter) => (value) => { setter(value); resetView(); };
 
   // Search runs 300 ms after typing stops.
@@ -145,6 +220,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
     campaignName: source === 'facebook' && campaign !== 'all' ? campaign : undefined,
     adName: source === 'facebook' && ad !== 'all' ? ad : undefined,
     search: search || undefined,
+    tagId: labelFilter !== 'all' ? labelFilter : undefined,
     limit: PAGE_SIZE,
     offset: (shownPage - 1) * PAGE_SIZE,
   });
@@ -186,14 +262,16 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
   const filters = sourceFilters(sourceCounts);
   const campaignNames = [...new Set(fbOptions.map((option) => option.campaign_name).filter(Boolean))];
   const adNames = [...new Set(fbOptions.filter((option) => campaign === 'all' || option.campaign_name === campaign).map((option) => option.ad_name).filter(Boolean))];
-  const filtered = source !== 'all' || status !== 'all' || assignedTo !== 'all' || Boolean(search);
+  const filtered = source !== 'all' || status !== 'all' || assignedTo !== 'all' || labelFilter !== 'all' || Boolean(search);
   const pageIds = leads.map((lead) => lead.id);
   const allOnPage = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   const someOnPage = pageIds.some((id) => selected.has(id));
-  const selectedIds = [...selected];
+  // Only ticked rows that are on the page count (a lead that left the list
+  // after a change does not); the bulk bar shows only when there are some.
+  const selectedIds = [...selectionOnPage(selected, pageIds)];
 
   const clearFilters = () => {
-    setSource('all'); setStatus('all'); setAssignedTo('all'); setCampaign('all'); setAd('all'); setSearchInput(''); setSearch('');
+    setSource('all'); setStatus('all'); setAssignedTo('all'); setLabelFilter('all'); setCampaign('all'); setAd('all'); setSearchInput(''); setSearch('');
     resetView();
   };
 
@@ -230,6 +308,39 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
     run: () => bulkUpdate({ action: 'status', status: value }, (n) => `${n} leads set to ${statusInfo(value).label}`),
   });
 
+  // One lead from the row menu: no confirm (bulk changes ask first).
+  const updateOne = async (lead, body, done) => {
+    try {
+      await api.updateLead(lead.id, body);
+      toast.success(done);
+      refreshAll();
+      if (detailLead?.id === lead.id) setNotesVersion((v) => v + 1);
+    } catch (err) {
+      toast.error(err.message || 'Could not update the lead. Please try again.');
+    }
+  };
+  const setOneStatus = (lead, value) => updateOne(lead, { status: value }, `${lead.name || 'Lead'} set to ${statusInfo(value).label}`);
+  const assignOne = (lead, user) => updateOne(
+    lead,
+    { assigned_to: user ? user.id : null },
+    user ? `${lead.name || 'Lead'} assigned to ${user.name || user.email}` : `${lead.name || 'Lead'} unassigned`,
+  );
+
+  const noteSaved = () => { setNotesVersion((v) => v + 1); refetch(); };
+  const rowMenu = (lead) => (
+    <RowMenu
+      lead={lead}
+      users={users}
+      onStatus={setOneStatus}
+      onAssign={assignOne}
+      onAddNote={setNoteLead}
+      onLabels={setLabelLead}
+      onDetails={setDetailLead}
+      onOpen={onLeadClick}
+      onDelete={canDelete ? askDelete : null}
+    />
+  );
+
   const askDelete = (lead) => setConfirm({
     title: `Delete ${lead.name || 'this lead'}?`,
     description: 'Their chat history, payments and tasks are deleted too. This cannot be undone.',
@@ -261,6 +372,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <LabelsManagerButton canManage={canManageLabels} onChanged={() => { setLabelsKey((key) => key + 1); refreshAll(); }} />
           <Button variant="outline" onClick={() => setDialog('import')}><FiUpload /> Import</Button>
           {canExport && <Button variant="outline" onClick={() => setDialog('export')}><FiDownload /> Export</Button>}
           <Button onClick={() => setDialog('add')}><FiPlus /> Add lead</Button>
@@ -299,7 +411,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
               <SelectTrigger className="h-9 w-full sm:w-40" aria-label="Status"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All statuses</SelectItem>
-                {STATUS_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+                {STATUS_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}><StatusLabel status={option.value} /></SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={assignedTo} onValueChange={filterSetter(setAssignedTo)}>
@@ -310,6 +422,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
                 {users.map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.name || user.email}</SelectItem>)}
               </SelectContent>
             </Select>
+            <LabelFilter value={labelFilter} onChange={filterSetter(setLabelFilter)} refreshKey={labelsKey} />
           </div>
         </div>
 
@@ -332,24 +445,24 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
           </div>
         )}
 
-        {/* Bulk actions */}
-        {selected.size > 0 && (
+        {/* Bulk actions: only while rows on this page are ticked */}
+        {selectedIds.length > 0 && (
           <div className="flex flex-col gap-2 rounded-lg border border-blue-200 bg-blue-50/70 px-3 py-2.5 sm:flex-row sm:items-center">
             <div className="flex items-center gap-2 text-[13px] font-semibold text-blue-800">
-              {bulkBusy && <Spinner />} {selected.size} selected
+              {bulkBusy && <Spinner />} {selectedIds.length} selected
               <Button variant="ghost" size="sm" className="h-7 px-2 text-blue-700" onClick={() => setSelected(new Set())}><FiX /> Clear</Button>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:ml-auto sm:flex">
               <Select key={`assign-${bulkKey}`} onValueChange={bulkAssign} disabled={bulkBusy}>
                 <SelectTrigger className="h-8 w-full bg-white sm:w-44" size="sm" aria-label="Assign selected leads"><SelectValue placeholder="Assign to…" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">Nobody (unassign)</SelectItem>
-                  {users.map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.name || user.email}</SelectItem>)}
+                  <SelectItem value="none"><NobodyLabel /></SelectItem>
+                  {users.map((user) => <SelectItem key={user.id} value={String(user.id)}><PersonLabel user={user} /></SelectItem>)}
                 </SelectContent>
               </Select>
               <Select key={`status-${bulkKey}`} onValueChange={bulkStatus} disabled={bulkBusy}>
                 <SelectTrigger className="h-8 w-full bg-white sm:w-40" size="sm" aria-label="Change status of selected leads"><SelectValue placeholder="Change status…" /></SelectTrigger>
-                <SelectContent>{STATUS_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
+                <SelectContent>{STATUS_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}><StatusLabel status={option.value} /></SelectItem>)}</SelectContent>
               </Select>
               {canExport && <Button variant="outline" size="sm" className="col-span-2 bg-white sm:col-span-1" onClick={() => setDialog('export')} disabled={bulkBusy}><FiDownload /> Export</Button>}
             </div>
@@ -388,14 +501,16 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
                   <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="truncate font-semibold">{lead.name || 'No name'}</div>
+                        <div className="flex items-center gap-1.5"><span className="truncate font-semibold">{lead.name || 'No name'}</span><NoteCount lead={lead} onOpen={setDetailLead} /></div>
                         <div className="text-[13px] text-muted-foreground">{lead.phone || '—'}</div>
                       </div>
-                      <RowMenu lead={lead} onOpen={onLeadClick} onDelete={canDelete ? askDelete : null} />
+                      <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>{rowMenu(lead)}</div>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5"><SourceBadge lead={lead} /><StatusBadge status={lead.status} /></div>
+                    <LeadLabelsCell lead={lead} onEdit={setLabelLead} />
                     <LastActivity lead={lead} />
                     <div className="text-xs text-muted-foreground">{lead.assigned_name ? `Assigned to ${lead.assigned_name}` : 'Not assigned'} · Added {shortDate(lead.created_at)}</div>
+                    {changedBy(lead) && <div className="text-xs text-muted-foreground">Updated by <UpdatedBy lead={lead} className="text-slate-700" /></div>}
                   </div>
                 </div>
               ))}
@@ -411,8 +526,10 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
                     <TableHead>Phone</TableHead>
                     <TableHead>Source</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Labels</TableHead>
                     <TableHead>Assigned to</TableHead>
                     <TableHead>Last message</TableHead>
+                    <TableHead>Updated by</TableHead>
                     <TableHead>Added</TableHead>
                     <TableHead className="w-12"><span className="sr-only">Actions</span></TableHead>
                   </TableRow>
@@ -425,7 +542,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
                         <div className="flex items-center gap-3">
                           <Avatar name={lead.name} />
                           <div className="min-w-0">
-                            <div className="max-w-[220px] truncate font-semibold">{lead.name || 'No name'}</div>
+                            <div className="flex items-center gap-1.5"><span className="max-w-[200px] truncate font-semibold">{lead.name || 'No name'}</span><NoteCount lead={lead} onOpen={setDetailLead} /></div>
                             {lead.interest && <div className="max-w-[220px] truncate text-xs text-muted-foreground">{lead.interest}</div>}
                           </div>
                         </div>
@@ -433,10 +550,12 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
                       <TableCell className="text-[13px] whitespace-nowrap text-slate-600">{lead.phone || '—'}</TableCell>
                       <TableCell><SourceBadge lead={lead} /></TableCell>
                       <TableCell><StatusBadge status={lead.status} /></TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}><LeadLabelsCell lead={lead} onEdit={setLabelLead} /></TableCell>
                       <TableCell className="text-[13px] whitespace-nowrap">{lead.assigned_name || <span className="text-muted-foreground">Not assigned</span>}</TableCell>
                       <TableCell><LastActivity lead={lead} /></TableCell>
+                      <TableCell className="text-[13px] whitespace-nowrap"><UpdatedBy lead={lead} /></TableCell>
                       <TableCell className="text-[13px] whitespace-nowrap text-muted-foreground">{shortDate(lead.created_at)}</TableCell>
-                      <TableCell onClick={(e) => e.stopPropagation()}><RowMenu lead={lead} onOpen={onLeadClick} onDelete={canDelete ? askDelete : null} /></TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>{rowMenu(lead)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -449,9 +568,9 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
                 Showing {pager.from.toLocaleString('en-IN')}–{pager.to.toLocaleString('en-IN')} of {pager.total.toLocaleString('en-IN')} leads
               </span>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled={!pager.hasPrev || loading} onClick={() => setPage(pager.page - 1)}><FiChevronLeft /> Previous</Button>
+                <Button variant="outline" size="sm" disabled={!pager.hasPrev || loading} onClick={() => goToPage(pager.page - 1)}><FiChevronLeft /> Previous</Button>
                 <span className="px-1 text-[13px] font-medium">Page {pager.page} of {pager.pages}</span>
-                <Button variant="outline" size="sm" disabled={!pager.hasNext || loading} onClick={() => setPage(pager.page + 1)}>Next <FiChevronRight /></Button>
+                <Button variant="outline" size="sm" disabled={!pager.hasNext || loading} onClick={() => goToPage(pager.page + 1)}>Next <FiChevronRight /></Button>
               </div>
             </div>
           </div>
@@ -462,6 +581,19 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
       {dialog === 'add' && <AddLeadDialog open onOpenChange={(open) => !open && setDialog(null)} users={users} onSaved={refreshAll} />}
       {dialog === 'import' && <ImportLeadsDialog open onOpenChange={(open) => !open && setDialog(null)} onImported={refreshAll} />}
       {dialog === 'export' && <ExportLeadsDialog open onOpenChange={(open) => !open && setDialog(null)} selectedIds={selectedIds} showFacebook={hasFacebook} />}
+      {noteLead && <AddNoteDialog open lead={noteLead} onOpenChange={(open) => !open && setNoteLead(null)} onSaved={noteSaved} />}
+      {detailLead && (
+        <LeadDetailSheet
+          open
+          lead={leads.find((lead) => lead.id === detailLead.id) || detailLead}
+          onOpenChange={(open) => !open && setDetailLead(null)}
+          onAddNote={setNoteLead}
+          onOpenChat={onLeadClick}
+          onNotesChanged={refetch}
+          notesVersion={notesVersion}
+        />
+      )}
+      {labelLead && <LeadLabelsDialog open lead={labelLead} canManage={canManageLabels} onOpenChange={(open) => !open && setLabelLead(null)} onSaved={() => { setLabelsKey((key) => key + 1); refreshAll(); }} />}
       <ConfirmDialog confirm={confirm} onClose={() => { setConfirm(null); setBulkKey((key) => key + 1); }} />
     </div>
   );

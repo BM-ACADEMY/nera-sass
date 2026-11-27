@@ -6,7 +6,10 @@ module.exports = defineModel('campaigns', {
   client_id: { type: Number },
   template_id: { type: Number },
   target_status: { type: String },
-  // Audience by tag (lead_tags.tag_id), optionally narrowed by target_status.
+  // Audience by label (lead_labels.id), optionally narrowed by target_status.
+  target_label_id: { type: Number, default: null },
+  // Older audience by tag (lead_tags.tag_id); migrations/043_lead_labels.js
+  // moves it to target_label_id. New campaigns never set it.
   target_tag_id: { type: Number, default: null },
   // UTC instant; null means "send now". The owner picks it in `timezone`.
   scheduled_at: { type: Date },

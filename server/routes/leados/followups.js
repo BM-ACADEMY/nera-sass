@@ -8,13 +8,13 @@ const numberHealth = require('../../services/numberHealth');
 const { SOURCE_KINDS, normalizeSourceKind, sourceFilter } = require('../../services/leadSources');
 const { requirePermission } = require('../../services/permissions');
 const activity = require('../../services/activity');
+const leadLabels = require('../../services/leadLabels');
 module.exports = function registerFollowupsRoutes(app, ctx) {
 const {
   Clients,
   Conversations,
   LeadExportJobs,
   LeadNotes,
-  LeadTags,
   Leads,
   Messages,
   NO_ID,
@@ -421,7 +421,7 @@ app.get('/api/leads/facebook-filter-options', auth, async (req, res) => {
 
 app.get('/api/leads', auth, async (req, res) => {
   try {
-    const { status, brand, search, source, assigned_to, campaign_name, ad_name, meta_page_id, from, to, tag_id, limit = 100, offset = 0 } = req.query;
+    const { status, brand, search, source, assigned_to, campaign_name, ad_name, meta_page_id, from, to, tag_id, label, limit = 100, offset = 0 } = req.query;
     const and = [];
 
     if (status && status !== 'all') {
@@ -470,8 +470,11 @@ app.get('/api/leads', auth, async (req, res) => {
       if (Number.isNaN(toDate.getTime())) return res.status(400).json({ error: 'Invalid to date' });
       and.push({ created_at: { $lte: toDate } });
     }
-    if (tag_id) {
-      and.push({ id: { $in: await LeadTags.distinct('lead_id', { tag_id: Number(tag_id) }) } });
+    // ?label=<id> (tag_id is the older name). Only this workspace's labels and
+    // links are read, so another workspace's label id matches no lead.
+    const labelFilter = label ?? tag_id;
+    if (labelFilter != null && labelFilter !== '' && labelFilter !== 'all') {
+      and.push({ id: { $in: await leadLabels.leadIdsWith(labelFilter) } });
     }
 
     const candidates = await Leads.find(and.length ? { $and: and } : {}, { id: 1, name: 1, phone: 1, created_at: 1 }).lean();

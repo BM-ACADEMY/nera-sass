@@ -141,6 +141,7 @@ async function eraseContact(leadId, { userId = null } = {}) {
   await del('notes', models.LeadNotes, byLead);
   await del('sales_notes', models.SalesLeadNotes, byLead);
   await del('tags', models.LeadTags, byLead);
+  await del('labels', models.LeadLabelLinks, byLead);
   await del('tasks', models.SalesTasks, byLead);
   await del('queued_sends', models.CampaignMessageQueue, byLead);
   await del('campaign_logs', models.CampaignLogs, byLead);

@@ -491,6 +491,23 @@ class LeadOSAPI {
     });
   }
 
+  // Notes on a lead (newest first) and its activity timeline (Leads page).
+  async getLeadNotes(id) {
+    return this.request(`/api/leads/${id}/notes`);
+  }
+
+  async addLeadNote(id, note) {
+    return this.request(`/api/leads/${id}/notes`, { method: 'POST', body: JSON.stringify({ note }) });
+  }
+
+  async deleteLeadNote(id, noteId) {
+    return this.request(`/api/leads/${id}/notes/${noteId}`, { method: 'DELETE' });
+  }
+
+  async getLeadActivity(id) {
+    return this.request(`/api/leads/${id}/activity`);
+  }
+
   async deleteLead(id) {
     return this.request(`/api/leads/${id}`, {
       method: 'DELETE',

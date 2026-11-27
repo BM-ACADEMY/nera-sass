@@ -76,9 +76,12 @@ test('import summary and sample', () => {
 
 test('export and delete follow the server roles', async () => {
   const { leadPermissions } = await import('./leadsPolicy.js');
-  assert.deepStrictEqual(leadPermissions('owner'), { canExport: true, canDelete: true });
-  assert.deepStrictEqual(leadPermissions('agent'), { canExport: false, canDelete: false });
-  assert.deepStrictEqual(leadPermissions(undefined), { canExport: false, canDelete: false });
+  assert.deepStrictEqual(leadPermissions('owner'), { canExport: true, canDelete: true, canDeleteAnyNote: true });
+  assert.deepStrictEqual(leadPermissions('agent'), { canExport: false, canDelete: false, canDeleteAnyNote: false });
+  assert.deepStrictEqual(leadPermissions(undefined), { canExport: false, canDelete: false, canDeleteAnyNote: false });
+  // Notes: Owner and Admin delete anyone's (leads.notes.delete_any); a manager only their own.
+  assert.strictEqual(leadPermissions('admin').canDeleteAnyNote, true);
+  assert.strictEqual(leadPermissions('manager').canDeleteAnyNote, false);
 });
 
 test('bulk lead actions ask first and state the count', async () => {
@@ -94,4 +97,59 @@ test('bulk lead actions ask first and state the count', async () => {
   assert.strictEqual(exportButtonLabel(1), 'Export 1 lead');
   assert.strictEqual(exportButtonLabel(1500), 'Export 1,500 leads');
   assert.strictEqual(exportButtonLabel(null), 'Download CSV');
+});
+
+test('status mapping: every status has its own icon and colour, unknown ones fall back', async () => {
+  const { STATUS_OPTIONS, STATUS_ICON_KEYS } = await import('./leadsPolicy.js');
+  assert.deepStrictEqual(STATUS_OPTIONS.map((o) => o.value), ['new', 'hot', 'warm', 'cold', 'converted', 'lost']);
+  for (const option of STATUS_OPTIONS) {
+    assert.ok(STATUS_ICON_KEYS.includes(option.icon), `${option.value} icon`);
+    assert.ok(option.tone && option.iconTone, `${option.value} colours`);
+  }
+  assert.strictEqual(new Set(STATUS_OPTIONS.map((o) => o.icon)).size, STATUS_OPTIONS.length, 'one icon per status');
+  assert.strictEqual(new Set(STATUS_OPTIONS.map((o) => o.tone)).size, STATUS_OPTIONS.length, 'one colour per status');
+  assert.match(statusInfo('HOT').tone, /red/);
+  assert.match(statusInfo('cold').iconTone, /sky/);
+  assert.strictEqual(statusInfo('').icon, 'cold');
+  const odd = statusInfo('callback');
+  assert.strictEqual(odd.icon, 'other');
+  assert.ok(STATUS_ICON_KEYS.includes(odd.icon) && odd.tone);
+});
+
+test('bulk bar: only ticked rows on the page shown count', async () => {
+  const { selectionOnPage } = await import('./leadsPolicy.js');
+  assert.strictEqual(selectionOnPage(new Set(), [1, 2]).size, 0);
+  assert.strictEqual(selectionOnPage(undefined, [1]).size, 0);
+  // Ticked on another page, or a lead that left the list after a change.
+  assert.strictEqual(selectionOnPage(new Set([7, 8]), [1, 2, 3]).size, 0);
+  assert.deepStrictEqual([...selectionOnPage(new Set([2, 9]), [1, 2, 3])], [2]);
+  assert.strictEqual(selectionOnPage(new Set([1]), []).size, 0);
+});
+
+test('assign list avatars: initials and a steady colour', async () => {
+  const { initials, avatarTone, AVATAR_TONES } = await import('./leadsPolicy.js');
+  assert.strictEqual(initials('Aakash Sharma'), 'AS');
+  assert.strictEqual(initials('priya'), 'P');
+  assert.strictEqual(initials('  Mohammed Ali Khan '), 'MK');
+  assert.strictEqual(initials('owner@shop.test'), 'OT');
+  assert.strictEqual(initials(''), '?');
+  assert.strictEqual(initials(null), '?');
+  assert.strictEqual(avatarTone(5), avatarTone(5));
+  assert.ok(AVATAR_TONES.includes(avatarTone('anyone')));
+});
+
+test('updated by: name and a short time, nothing when no one changed the lead', async () => {
+  const { changedBy, shortWhen, noteCountLabel } = await import('./leadsPolicy.js');
+  const now = new Date('2026-11-27T12:00:00+05:30').getTime();
+  assert.strictEqual(changedBy({}, now), null);
+  assert.strictEqual(changedBy({ last_changed_by: null, last_changed_at: '2026-11-27T09:00:00Z' }, now), null);
+  assert.deepStrictEqual(changedBy({ last_changed_by: 'Aakash', last_changed_at: '2026-11-27T14:30:00+05:30' }, now), { name: 'Aakash', when: '2:30 pm' });
+  assert.match(shortWhen('2026-11-26T10:00:00+05:30', now), /^26 Nov$/);
+  assert.match(shortWhen('2025-03-02T10:00:00+05:30', now), /^2 Mar 2025$/);
+  assert.strictEqual(shortWhen('not a date', now), '');
+  assert.deepStrictEqual(changedBy({ last_changed_by: 'Priya' }, now), { name: 'Priya', when: '' });
+  assert.strictEqual(noteCountLabel(0), '');
+  assert.strictEqual(noteCountLabel(undefined), '');
+  assert.strictEqual(noteCountLabel(1), '1 note');
+  assert.strictEqual(noteCountLabel(4), '4 notes');
 });

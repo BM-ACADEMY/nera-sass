@@ -58,6 +58,9 @@ const TENANT_SCOPED = new Map([
   ['sales_lead_notes', {}],
   ['lead_notes', {}],
   ['lead_tags', {}],
+  // Lead labels (Leads page, campaign audiences) and which lead carries which.
+  ['lead_labels', {}],
+  ['lead_label_links', {}],
   ['followup_rules', {}],
   ['lead_export_jobs', {}],
   ['demo_call_reminders', {}],

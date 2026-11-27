@@ -7,7 +7,8 @@ import {
   FiCheckCircle, FiRotateCcw, FiMessageSquare, FiExternalLink, FiAlertTriangle, FiClock, FiUser, FiChevronDown,
   FiChevronUp, FiCalendar, FiPlay, FiCheckSquare,
 } from 'react-icons/fi';
-import { api, allianceInboxApi } from '../services/api.js';
+import { api } from '../services/api.js';
+import { labelsAsInboxTags } from './leads/labels/labelsApi.js';
 import {
   DEFAULT_TIME_ZONE, typeOf, taskTitle, isDone, dueState, dueInputs, formatDue, formatDateTime, filterTasks, sortTasks, countDue, taskBody, bulkTaskConfirm,
 } from '../utils/salesTasks.js';
@@ -18,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
@@ -27,7 +29,6 @@ import { cn } from '@/lib/utils';
 // in the signed-in user's workspace; the server checks leads and assignees.
 
 const PAGE_SIZE = 20;
-const selectClass = 'h-9 w-full rounded-md border border-border bg-background px-3 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50';
 const DEFAULT_FILTERS = { status: 'open', assignee: 'all', due: 'all', tag: '', search: '' };
 const SALES_STATUSES = [
   ['new', 'New'], ['contacted', 'Contacted'], ['processing', 'In progress'], ['follow_up', 'Follow-up'],
@@ -132,9 +133,12 @@ function TaskDetails({ task, timeZone, onSalesStatus, onNote, onOpenLead }) {
         <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-end">
           <div className="space-y-1.5 sm:w-56">
             <Label htmlFor={`sales-status-${task.id}`} className="text-xs text-muted-foreground">Lead sales status</Label>
-            <select id={`sales-status-${task.id}`} className={selectClass} value={task.sales_status || 'new'} onChange={(e) => onSalesStatus(task, e.target.value)}>
-              {SALES_STATUSES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
+            <Select value={task.sales_status || 'new'} onValueChange={(value) => onSalesStatus(task, value)}>
+              <SelectTrigger id={`sales-status-${task.id}`} className="h-9 w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {SALES_STATUSES.map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="min-w-0 flex-1 space-y-1.5">
             <div className="text-xs text-muted-foreground">Latest sales note</div>
@@ -272,10 +276,13 @@ function TaskDialog({ open, task, assignees, timeZone, onClose, onSaved }) {
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="task-assignee">Assigned to</Label>
-            <select id="task-assignee" className={selectClass} value={form.assigned_to} onChange={(e) => set('assigned_to', e.target.value)}>
-              <option value="">Unassigned</option>
-              {options.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </select>
+            <Select value={form.assigned_to ? String(form.assigned_to) : 'none'} onValueChange={(value) => set('assigned_to', value === 'none' ? '' : value)}>
+              <SelectTrigger id="task-assignee" className="h-9 w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Unassigned</SelectItem>
+                {options.map((u) => <SelectItem key={u.id} value={String(u.id)}>{u.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -459,7 +466,8 @@ export const SalesTasksView = () => {
     const first = setTimeout(() => {
       load();
       api.get('/sales-tasks/assignees').then((res) => setAssignees(res.users || [])).catch(() => setAssignees([]));
-      allianceInboxApi.getTags().then((res) => setTags(Array.isArray(res) ? res : res?.tags || [])).catch(() => setTags([]));
+      // This workspace's lead labels (task.tags are the lead's labels).
+      labelsAsInboxTags.getTags().then((res) => setTags(Array.isArray(res) ? res : res?.tags || [])).catch(() => setTags([]));
     }, 0);
     // Overdue highlights move on while the page is open.
     const clock = setInterval(() => setNow(new Date()), 60 * 1000);
@@ -679,30 +687,42 @@ export const SalesTasksView = () => {
               <button type="button" onClick={() => setFilter('search', '')} className="absolute top-1/2 right-3 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-foreground" aria-label="Clear search"><FiX className="size-4" /></button>
             )}
           </div>
-          <select className={selectClass} value={filters.status} onChange={(e) => setFilter('status', e.target.value)} aria-label="Status">
-            <option value="open">Open tasks</option>
-            <option value="pending">To do</option>
-            <option value="processing">In progress</option>
-            <option value="completed">Done</option>
-            <option value="all">All tasks</option>
-          </select>
-          <select className={selectClass} value={filters.assignee} onChange={(e) => setFilter('assignee', e.target.value)} aria-label="Assigned to">
-            <option value="all">Anyone</option>
-            {me != null && <option value="me">Assigned to me</option>}
-            <option value="none">Unassigned</option>
-            {assignees.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-          </select>
-          <select className={selectClass} value={filters.due} onChange={(e) => setFilter('due', e.target.value)} aria-label="Due">
-            <option value="all">Any due date</option>
-            <option value="overdue">Overdue</option>
-            <option value="today">Due today</option>
-            <option value="upcoming">Upcoming</option>
-            <option value="none">No due date</option>
-          </select>
-          <select className={selectClass} value={filters.tag} onChange={(e) => setFilter('tag', e.target.value)} aria-label="Lead tag">
-            <option value="">Any tag</option>
-            {tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}
-          </select>
+          <Select value={filters.status} onValueChange={(value) => setFilter('status', value)}>
+            <SelectTrigger className="h-9 w-full" aria-label="Status"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="open"><FiCircle className="text-blue-600" /> Open tasks</SelectItem>
+              <SelectItem value="pending"><FiClock className="text-amber-600" /> To do</SelectItem>
+              <SelectItem value="processing"><FiPlay className="text-violet-600" /> In progress</SelectItem>
+              <SelectItem value="completed"><FiCheckCircle className="text-green-600" /> Done</SelectItem>
+              <SelectItem value="all"><FiCheckSquare className="text-muted-foreground" /> All tasks</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={String(filters.assignee)} onValueChange={(value) => setFilter('assignee', value)}>
+            <SelectTrigger className="h-9 w-full" aria-label="Assigned to"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all"><FiUser className="text-muted-foreground" /> Anyone</SelectItem>
+              {me != null && <SelectItem value="me"><FiUser className="text-blue-600" /> Assigned to me</SelectItem>}
+              <SelectItem value="none"><FiUser className="text-muted-foreground opacity-60" /> Unassigned</SelectItem>
+              {assignees.map((u) => <SelectItem key={u.id} value={String(u.id)}>{u.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={filters.due} onValueChange={(value) => setFilter('due', value)}>
+            <SelectTrigger className="h-9 w-full" aria-label="Due"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all"><FiCalendar className="text-muted-foreground" /> Any due date</SelectItem>
+              <SelectItem value="overdue"><FiAlertTriangle className="text-red-600" /> Overdue</SelectItem>
+              <SelectItem value="today"><FiClock className="text-amber-600" /> Due today</SelectItem>
+              <SelectItem value="upcoming"><FiCalendar className="text-blue-600" /> Upcoming</SelectItem>
+              <SelectItem value="none"><FiCalendar className="text-muted-foreground opacity-60" /> No due date</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={filters.tag ? String(filters.tag) : 'any'} onValueChange={(value) => setFilter('tag', value === 'any' ? '' : value)}>
+            <SelectTrigger className="h-9 w-full" aria-label="Lead label"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="any">Any label</SelectItem>
+              {tags.map((tag) => <SelectItem key={tag.id} value={String(tag.id)}>{tag.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
         {(filtersActive || loadError) && (
           <div className="flex flex-wrap items-center justify-between gap-2 text-sm">

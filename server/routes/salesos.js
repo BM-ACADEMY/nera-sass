@@ -5,6 +5,7 @@ const express = require('express');
 const { internalAuth, internalPlatformAuth, staffAuth, hasInternalKey } = require('../middleware/authMiddleware');
 const audit = require('../services/audit');
 const activity = require('../services/activity');
+const leadLabels = require('../services/leadLabels');
 const erasure = require('../services/erasure');
 const { recordTenantWorkflowLog, recordPlatformWorkflowLog, WorkflowLogError } = require('../services/workflowLog');
 const fs = require('fs');
@@ -26,8 +27,6 @@ const {
   WorkflowLogs,
   Payments,
   DemoCallReminders,
-  LeadTags,
-  AllianceInboxTags,
 } = require('../models');
 const { NO_ID, ieq, escapeRegex, insertIgnore, phoneTailRegex, withLock } = require('../db/mongo');
 const founderNotify = require('../services/founderNotify');
@@ -78,8 +77,7 @@ async function loadSalesTaskRows(tasks, { includeLatestNote = false } = {}) {
     { $match: { lead_id: { $in: leadIds } } },
     { $group: { _id: '$lead_id', last: { $max: '$last_message_at' } } },
   ])).map((row) => [row._id, row.last]));
-  const tagLinks = await LeadTags.find({ lead_id: { $in: leadIds } }, { lead_id: 1, tag_id: 1 }).lean();
-  const tags = new Map((await AllianceInboxTags.find({ id: { $in: tagLinks.map((l) => l.tag_id) } }, { id: 1, name: 1, color: 1 }).lean()).map((t) => [t.id, t]));
+  const labelsByLead = await leadLabels.labelsForLeads(leadIds);
   const latestNotes = new Map();
   if (includeLatestNote) {
     const notes = await SalesLeadNotes.find({ lead_id: { $in: leadIds } }, { id: 1, lead_id: 1, note: 1, created_at: 1 }).sort({ created_at: -1 }).lean();
@@ -111,8 +109,9 @@ async function loadSalesTaskRows(tasks, { includeLatestNote = false } = {}) {
       assigned_to: assignedTo,
       assigned_name: userName(assignedTo),
       created_by_name: userName(task.created_by),
-      tags: l ? tagLinks.filter((link) => link.lead_id === l.id && tags.has(link.tag_id))
-        .map((link) => ({ id: tags.get(link.tag_id).id, name: tags.get(link.tag_id).name, color: tags.get(link.tag_id).color })) : [],
+      // The lead's labels (tags keeps the older name, with a CSS colour).
+      labels: l ? labelsByLead.get(l.id) || [] : [],
+      tags: l ? leadLabels.asTags(labelsByLead.get(l.id)) : [],
     };
   });
 }

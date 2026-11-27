@@ -48,6 +48,7 @@ const { customerResponseGuard } = require('./services/responseGuard');
 const { friendlyErrorGuard, finalErrorHandler } = require('./services/errorResponse');
 const { inventoryAccessToken, requireInventoryAccessToken } = require('./services/metaInventoryCredentials');
 const mediaStore = require('./services/mediaStore');
+const leadLabels = require('./services/leadLabels');
 
 // Background jobs (crons, queue processor). Off in tests: JOBS_ENABLED=false.
 const jobsEnabled = () => process.env.JOBS_ENABLED !== 'false';
@@ -1004,8 +1005,12 @@ async function enrichLeadRows(leads) {
       || (new Date(message.sent_at || 0).getTime() === new Date(current.sent_at || 0).getTime() && message.id > current.id);
     if (newer) lastMessages.set(cv.lead_id, message);
   }
-  const tagLinks = await LeadTags.find({ lead_id: { $in: ids } }, { lead_id: 1, tag_id: 1 }).lean();
-  const tags = new Map((await AllianceInboxTags.find({ id: { $in: tagLinks.map((t) => t.tag_id) } }, { id: 1, name: 1, color: 1 }).lean()).map((t) => [t.id, t]));
+  const noteCounts = new Map((await LeadNotes.aggregate([
+    { $match: { lead_id: { $in: ids } } },
+    { $group: { _id: '$lead_id', count: { $sum: 1 } } },
+  ])).map((row) => [row._id, row.count]));
+  // This workspace's labels of these leads (services/leadLabels.js), in two queries.
+  const labelsByLead = await leadLabels.labelsForLeads(ids);
   return leads.map((l) => {
     const brandName = clients.get(l.client_id) ?? null;
     const own = conversations.filter((cv) => cv.lead_id === l.id);
@@ -1021,8 +1026,13 @@ async function enrichLeadRows(leads) {
       unread: own.reduce((sum, cv) => sum + (Number(cv.unread_count) || 0), 0),
       last_contact: contactTimes.length ? new Date(Math.max(...contactTimes)) : null,
       last_msg: message ? { content: message.content ?? null, msg_type: message.msg_type ?? null, media_url: mediaStore.presentUrl(message.media_url ?? null), is_deleted: message.is_deleted ?? null } : null,
-      tags: tagLinks.filter((link) => link.lead_id === l.id && tags.has(link.tag_id))
-        .map((link) => ({ id: link.tag_id, name: tags.get(link.tag_id).name, color: tags.get(link.tag_id).color })),
+      note_count: noteCounts.get(l.id) || 0,
+      // "Updated by" on the Leads page: the last team member who changed the lead.
+      last_changed_by: l.updated_by_name ?? null,
+      last_changed_at: l.updated_by_at ?? null,
+      labels: labelsByLead.get(l.id) || [],
+      // Older shape for the inbox: the same labels with a CSS colour.
+      tags: leadLabels.asTags(labelsByLead.get(l.id)),
     };
   });
 }
@@ -1572,6 +1582,7 @@ const leadosRouteContext = {
   'leads',
   'followups',
   'leads-crud',
+  'labels',
   'whatsapp',
   'whatsapp-overview',
   'whatsapp-profile',
