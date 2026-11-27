@@ -21,7 +21,12 @@ const webhookSecret = () => String(process.env.RAZORPAY_WEBHOOK_SECRET || '').tr
 const isConfigured = () => Boolean(keyId() && keySecret());
 // Master switch for taking money online. Off unless BILLING_PAYMENTS_ENABLED is
 // exactly 'true', so a server with test keys and no switch never opens checkout.
-const paymentsEnabled = () => process.env.BILLING_PAYMENTS_ENABLED === 'true';
+// BILLING_PAYMENTS_TENANTS (comma-separated workspace ids) opens checkout for
+// those workspaces only, e.g. one test workspace while everyone else stays closed.
+const paymentTenants = () => String(process.env.BILLING_PAYMENTS_TENANTS || '').split(',')
+  .map((value) => Number(value.trim())).filter((id) => Number.isInteger(id) && id > 0);
+const paymentsEnabled = (tenantId = null) => process.env.BILLING_PAYMENTS_ENABLED === 'true'
+  || (tenantId != null && paymentTenants().includes(Number(tenantId)));
 const webhookConfigured = () => Boolean(webhookSecret());
 
 let client = null;

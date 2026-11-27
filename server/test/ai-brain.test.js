@@ -429,4 +429,19 @@ test('AI Brain', async (t) => {
     assert.strictEqual(prompt.brandDecision({ ...PROFILE }, { message: 'BM Academy course' }), null);
     assert.deepStrictEqual(prompt.cleanProfile({ brand_skip_keywords: ' BM Academy , Course ,, ' }).brand_skip_keywords, ['bm academy', 'course']);
   });
+  await t.test('A bare "safety:" reason is not a safety handover; a real one still is', async () => {
+    const { lead, conversation } = await seed();
+    llmReturns({ reply: 'Sure, here are the details.', handoff: true, handoff_reason: 'safety:' });
+    const msg = await inbound(1, conversation, 'Yes tell me');
+    const res = await reply(1, lead.id, msg.id);
+    assert.strictEqual(res.body.sent, true);
+    assert.strictEqual(res.body.handoff, false, JSON.stringify(res.body));
+    const saved = await leadOf(1, lead.id);
+    assert.ok(!saved.handover_priority, 'no priority flag');
+    assert.ok(!saved.needs_human, 'no handover');
+    const engine = require('../services/brainEngine');
+    const real = engine.parseOutput(JSON.stringify({ reply: 'Please call 112 now.', handoff: true, handoff_reason: 'safety: customer mentioned self-harm' }));
+    assert.strictEqual(real.handoff, true);
+    assert.match(real.handoff_reason, /^safety: customer/);
+  });
 });
