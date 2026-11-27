@@ -41,6 +41,8 @@ const TENANT_PERMISSIONS = {
   'workspace.export': ['owner', 'admin'],
   // Settings > Activity: who in the workspace did what, and when.
   'activity.view': ['owner', 'admin'],
+  // Reports > Team: per-member replies, reply times, conversions and tasks.
+  'reports.team': ['owner', 'admin', 'manager'],
 };
 
 const STAFF_PERMISSIONS = {

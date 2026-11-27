@@ -900,6 +900,18 @@ class LeadOSAPI {
     return this.request(`/api/reports/summary${query ? '?' + query : ''}`);
   }
 
+  // Reports > Team (owner/admin/manager): { range } or { range: 'custom', from, to }.
+  async getTeamReport(params = {}) {
+    const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')).toString();
+    return this.request(`/api/reports/team${query ? `?${query}` : ''}`);
+  }
+
+  // One member's latest actions in the same range (Reports > Team row detail).
+  async getTeamMemberActivity(userId, params = {}) {
+    const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '')).toString();
+    return this.request(`/api/reports/team/${encodeURIComponent(userId)}/activity${query ? `?${query}` : ''}`);
+  }
+
   async getFounderDashboard() {
     return this.request('/api/reports/founder-dashboard');
   }

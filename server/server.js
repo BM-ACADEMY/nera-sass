@@ -628,6 +628,8 @@ app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/account/sessions', require('./routes/accountSessions'));
 // Settings > Activity: who in the workspace did what (owner/admin).
 app.use('/api/activity', require('./routes/activity'));
+// Reports > Team: per-member numbers for a date range (owner/admin/manager).
+app.use('/api/reports/team', require('./routes/reportsTeam'));
 // Customer workspace administration: /api/tenant, /api/team/*.
 app.use('/api', require('./routes/team'));
 // Plans, subscription and wallet of the signed-in workspace (customer login).
