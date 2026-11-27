@@ -21,6 +21,8 @@ const EVENTS = Object.freeze({
   LEAD_STATUS_CHANGED: 'LEAD_STATUS_CHANGED',
   LEAD_ASSIGNED: 'LEAD_ASSIGNED',
   LEAD_DELETED: 'LEAD_DELETED',
+  LEAD_NOTE_ADDED: 'LEAD_NOTE_ADDED',
+  LEAD_NOTE_DELETED: 'LEAD_NOTE_DELETED',
   LEADS_BULK_ASSIGNED: 'LEADS_BULK_ASSIGNED',
   LEADS_BULK_STATUS_CHANGED: 'LEADS_BULK_STATUS_CHANGED',
   LEADS_EXPORTED: 'LEADS_EXPORTED',
@@ -59,6 +61,8 @@ const LABELS = {
   LEAD_STATUS_CHANGED: 'Changed lead status',
   LEAD_ASSIGNED: 'Assigned a lead',
   LEAD_DELETED: 'Deleted a lead',
+  LEAD_NOTE_ADDED: 'Added a note',
+  LEAD_NOTE_DELETED: 'Deleted a note',
   LEADS_BULK_ASSIGNED: 'Assigned leads in bulk',
   LEADS_BULK_STATUS_CHANGED: 'Changed lead status in bulk',
   LEADS_EXPORTED: 'Exported leads',
@@ -133,7 +137,7 @@ const LABELS = {
 // Filter groups. Team events also match by prefix so team-management events
 // added elsewhere (USER_*, INVITATION_*, TEAM_*) are included without a list.
 const GROUPS = {
-  leads: ['LEAD_CREATED', 'LEAD_UPDATED', 'LEAD_STATUS_CHANGED', 'LEAD_ASSIGNED', 'LEAD_DELETED', 'LEADS_EXPORTED', 'LEADS_IMPORTED',
+  leads: ['LEAD_CREATED', 'LEAD_UPDATED', 'LEAD_STATUS_CHANGED', 'LEAD_ASSIGNED', 'LEAD_DELETED', 'LEAD_NOTE_ADDED', 'LEAD_NOTE_DELETED', 'LEADS_EXPORTED', 'LEADS_IMPORTED',
     'LEADS_BULK_ASSIGNED', 'LEADS_BULK_STATUS_CHANGED', 'SALES_TASK_CREATED', 'SALES_TASK_UPDATED', 'SALES_TASK_COMPLETED', 'SALES_TASK_DELETED', 'SALES_STATUS_CHANGED', 'SALES_NOTE_ADDED', 'SALES_TASKS_EXPORTED',
     'CONTACT_EXPORTED', 'CONTACT_ERASED', 'WORKSPACE_EXPORTED', 'FACEBOOK_LEAD_RECEIVED'],
   chat: ['MESSAGE_SENT', 'TEMPLATE_SENT', 'CHAT_AI_PAUSED', 'CHAT_AI_RESUMED'],
@@ -284,7 +288,44 @@ async function list(tenantId, query = {}, { audience = 'customer' } = {}) {
   };
 }
 
+// Bulk events name their leads in meta.ids (the first 100 of each action).
+const BULK_LEAD_EVENTS = ['LEADS_BULK_ASSIGNED', 'LEADS_BULK_STATUS_CHANGED'];
+
+/**
+ * forLead(tenantId, leadId, { limit }) — one lead's timeline for the Leads
+ * page, newest first: events aimed at the lead and bulk changes that included
+ * it. Read in the workspace's own tenant context with an explicit tenant
+ * filter, like list(). Platform staff show as "Getnera team".
+ */
+async function forLead(tenantId, leadId, { limit = 50 } = {}) {
+  const id = Number(leadId);
+  const size = Math.min(Math.max(Number.parseInt(limit, 10) || 50, 1), 100);
+  const filter = {
+    tenant_id: Number(tenantId),
+    event: { $nin: HIDDEN_FROM_CUSTOMER },
+    $or: [
+      { target_type: 'lead', target_id: String(id) },
+      { event: { $in: BULK_LEAD_EVENTS }, 'meta.ids': id },
+    ],
+  };
+  const rows = await runAsTenant(Number(tenantId), () => AuditEvents.find(filter, { _id: 0, ip: 0, meta: 0 })
+    .sort({ created_at: -1, id: -1 }).limit(size).lean());
+  return rows.map((row) => {
+    const platform = row.actor_type === 'staff';
+    let name = platform ? 'Getnera team' : (row.actor_name || null);
+    if (!name) name = row.actor_type === 'user' ? 'Unknown' : 'System';
+    return {
+      id: row.id,
+      at: row.created_at,
+      event: row.event,
+      action: label(row.event),
+      details: row.summary || null,
+      actor: { id: platform ? null : (row.actor_user_id ?? null), name, type: row.actor_type || 'system' },
+    };
+  });
+}
+
 module.exports = {
-  EVENTS, GROUPS, GROUP_NAMES, LABELS, HIDDEN_FROM_CUSTOMER, ActivityQueryError,
-  log, list, label, groupOf, actorForUser, leadName, buildFilter,
+  EVENTS, GROUPS, GROUP_NAMES, LABELS, HIDDEN_FROM_CUSTOMER, BULK_LEAD_EVENTS, ActivityQueryError,
+  log, list, forLead, label, groupOf, actorForUser, leadName, buildFilter,
 };

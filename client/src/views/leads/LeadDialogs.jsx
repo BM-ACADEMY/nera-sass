@@ -8,8 +8,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
+import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
-import { ADD_LEAD_SOURCES, IMPORT_COLUMNS, SOURCE_LABELS, importSampleCsv, importSummary, exportButtonLabel } from './leadsPolicy.js';
+import { ADD_LEAD_SOURCES, IMPORT_COLUMNS, SOURCE_LABELS, importSampleCsv, importSummary, exportButtonLabel, MAX_NOTE_LENGTH } from './leadsPolicy.js';
 
 const Field = ({ label, htmlFor, hint, required, children }) => (
   <div className="flex flex-col gap-1.5">
@@ -329,6 +330,63 @@ export function ExportLeadsDialog({ open, onOpenChange, selectedIds = [], showFa
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={exporting}>Cancel</Button>
             <Button type="submit" disabled={exporting || counting || !count || Boolean(dateProblem)}>{exporting ? <Spinner /> : <FiDownload />} {exportButtonLabel(count)}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Add note ─────────────────────────────────────────────────────────
+// A remark the team keeps about the lead (not sent to the lead). Saved with
+// the author's name; listed in the lead's details, newest first.
+export function AddNoteDialog({ lead, open, onOpenChange, onSaved }) {
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const text = note.trim();
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!text) return toast.error('Write a note first.');
+    setSaving(true);
+    try {
+      const res = await api.addLeadNote(lead.id, text);
+      toast.success('Note added');
+      onSaved?.(res.note);
+      onOpenChange(false);
+    } catch (err) {
+      toast.error(err.message || 'Could not save the note. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add note</DialogTitle>
+          <DialogDescription>For your team only. {lead?.name ? `${lead.name} does not see it.` : 'The lead does not see it.'}</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="flex flex-col gap-3">
+          <Field label="Note" htmlFor="lead-note">
+            <Textarea
+              id="lead-note"
+              value={note}
+              onChange={(e) => setNote(e.target.value.slice(0, MAX_NOTE_LENGTH))}
+              maxLength={MAX_NOTE_LENGTH}
+              rows={5}
+              placeholder="e.g. Called at 4 pm, wants the weekend batch. Call back Monday."
+              autoFocus
+              disabled={saving}
+            />
+          </Field>
+          <p className={cn('-mt-1 text-right text-xs', note.length >= MAX_NOTE_LENGTH ? 'text-amber-700' : 'text-muted-foreground')}>
+            {note.length.toLocaleString('en-IN')} / {MAX_NOTE_LENGTH.toLocaleString('en-IN')}
+          </p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
+            <Button type="submit" disabled={saving || !text}>{saving && <Spinner />} Save note</Button>
           </DialogFooter>
         </form>
       </DialogContent>

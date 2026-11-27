@@ -29,6 +29,8 @@ const TENANT_PERMISSIONS = {
   'ai_brain.manage': ['owner', 'admin', 'manager'],
   'leads.export': ['owner', 'admin', 'manager'],
   'leads.delete': ['owner', 'admin', 'manager'],
+  // Lead notes: everyone deletes their own; these roles delete anyone's.
+  'leads.notes.delete_any': ['owner', 'admin'],
   // Plans, wallet and payments (Settings > Billing).
   'billing.view': ['owner', 'admin', 'manager'],
   'billing.manage': ['owner', 'admin'],

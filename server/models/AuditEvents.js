@@ -21,7 +21,8 @@ module.exports = defineModel('audit_events', {
   created_at: { type: Date, default: Date.now },
 }, {
   autoId: true,
-  indexes: [['event'], ['created_at'], ['tenant_id', 'created_at']],
+  // tenant + target: one lead's timeline on the Leads page (activity.forLead).
+  indexes: [['event'], ['created_at'], ['tenant_id', 'created_at'], ['tenant_id', 'target_type', 'target_id', 'created_at']],
   configure(schema) {
     schema.pre(WRITE_OPS, refuse);
     schema.pre('deleteOne', { document: true, query: false }, refuse);

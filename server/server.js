@@ -1005,6 +1005,10 @@ async function enrichLeadRows(leads) {
     if (newer) lastMessages.set(cv.lead_id, message);
   }
   const tagLinks = await LeadTags.find({ lead_id: { $in: ids } }, { lead_id: 1, tag_id: 1 }).lean();
+  const noteCounts = new Map((await LeadNotes.aggregate([
+    { $match: { lead_id: { $in: ids } } },
+    { $group: { _id: '$lead_id', count: { $sum: 1 } } },
+  ])).map((row) => [row._id, row.count]));
   const tags = new Map((await AllianceInboxTags.find({ id: { $in: tagLinks.map((t) => t.tag_id) } }, { id: 1, name: 1, color: 1 }).lean()).map((t) => [t.id, t]));
   return leads.map((l) => {
     const brandName = clients.get(l.client_id) ?? null;
@@ -1021,6 +1025,10 @@ async function enrichLeadRows(leads) {
       unread: own.reduce((sum, cv) => sum + (Number(cv.unread_count) || 0), 0),
       last_contact: contactTimes.length ? new Date(Math.max(...contactTimes)) : null,
       last_msg: message ? { content: message.content ?? null, msg_type: message.msg_type ?? null, media_url: mediaStore.presentUrl(message.media_url ?? null), is_deleted: message.is_deleted ?? null } : null,
+      note_count: noteCounts.get(l.id) || 0,
+      // "Updated by" on the Leads page: the last team member who changed the lead.
+      last_changed_by: l.updated_by_name ?? null,
+      last_changed_at: l.updated_by_at ?? null,
       tags: tagLinks.filter((link) => link.lead_id === l.id && tags.has(link.tag_id))
         .map((link) => ({ id: link.tag_id, name: tags.get(link.tag_id).name, color: tags.get(link.tag_id).color })),
     };

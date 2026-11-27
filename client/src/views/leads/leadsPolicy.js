@@ -20,14 +20,19 @@ export const SOURCE_VARIANT = {
   facebook: 'info',
 };
 
+// Lead statuses: the one mapping for every status dropdown, the status badge
+// and the row menu. `icon` names an icon in leads/LeadStatus.jsx (STATUS_ICONS);
+// `tone` colours the badge, `iconTone` the icon on its own.
 export const STATUS_OPTIONS = [
-  { value: 'new', label: 'New', variant: 'info' },
-  { value: 'hot', label: 'Hot', variant: 'danger' },
-  { value: 'warm', label: 'Warm', variant: 'warning' },
-  { value: 'cold', label: 'Cold', variant: 'muted' },
-  { value: 'converted', label: 'Converted', variant: 'success' },
-  { value: 'lost', label: 'Lost', variant: 'muted' },
+  { value: 'new', label: 'New', variant: 'info', icon: 'new', tone: 'border-blue-200 bg-blue-50 text-blue-700', iconTone: 'text-blue-600' },
+  { value: 'hot', label: 'Hot', variant: 'danger', icon: 'hot', tone: 'border-red-200 bg-red-50 text-red-700', iconTone: 'text-red-600' },
+  { value: 'warm', label: 'Warm', variant: 'warning', icon: 'warm', tone: 'border-orange-200 bg-orange-50 text-orange-700', iconTone: 'text-orange-500' },
+  { value: 'cold', label: 'Cold', variant: 'muted', icon: 'cold', tone: 'border-sky-200 bg-sky-50 text-sky-700', iconTone: 'text-sky-500' },
+  { value: 'converted', label: 'Converted', variant: 'success', icon: 'converted', tone: 'border-green-200 bg-green-50 text-green-700', iconTone: 'text-green-600' },
+  { value: 'lost', label: 'Lost', variant: 'muted', icon: 'lost', tone: 'border-slate-200 bg-slate-100 text-slate-600', iconTone: 'text-slate-500' },
 ];
+// Icon keys LeadStatus.jsx must provide ('other' is any unknown status).
+export const STATUS_ICON_KEYS = ['new', 'hot', 'warm', 'cold', 'converted', 'lost', 'other'];
 
 // Sources a person can pick in Add lead.
 export const ADD_LEAD_SOURCES = [
@@ -66,7 +71,7 @@ export function statusInfo(status) {
   const found = STATUS_OPTIONS.find((option) => option.value === value);
   if (found) return found;
   if (!value) return STATUS_OPTIONS.find((option) => option.value === 'cold');
-  return { value, label: value.charAt(0).toUpperCase() + value.slice(1), variant: 'muted' };
+  return { value, label: value.charAt(0).toUpperCase() + value.slice(1), variant: 'muted', icon: 'other', tone: 'border-slate-200 bg-slate-50 text-slate-600', iconTone: 'text-slate-400' };
 }
 
 /** "Showing 21–40 of 95" numbers and page count, from the server's total. */
@@ -127,6 +132,61 @@ export function toggleOne(selected, id) {
   return next;
 }
 
+/**
+ * The ticked leads that are on the page shown. The bulk bar (Assign, Change
+ * status, Export) appears only when this is not empty, and acts on these ids:
+ * a lead ticked on another page, or one that left the list after a change,
+ * no longer counts.
+ */
+export function selectionOnPage(selected, pageIds) {
+  const on = new Set(pageIds || []);
+  return new Set([...(selected || [])].filter((id) => on.has(id)));
+}
+
+/** "AS" for "Aakash Sharma", "P" for "Priya", "?" for nobody. */
+export function initials(name) {
+  const words = String(name || '').trim().split(/[\s@._-]+/).filter(Boolean);
+  if (!words.length) return '?';
+  const first = words[0].charAt(0);
+  const last = words.length > 1 ? words[words.length - 1].charAt(0) : '';
+  return (first + last).toUpperCase();
+}
+
+// One of a few avatar colours, the same for a person every time.
+export const AVATAR_TONES = ['bg-blue-100 text-blue-700', 'bg-violet-100 text-violet-700', 'bg-emerald-100 text-emerald-700', 'bg-amber-100 text-amber-800', 'bg-rose-100 text-rose-700', 'bg-cyan-100 text-cyan-800'];
+export function avatarTone(key) {
+  const text = String(key ?? '');
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) % 9973;
+  return AVATAR_TONES[hash % AVATAR_TONES.length];
+}
+
+/** "2:30 pm" today, "26 Nov" this year, else "26 Nov 2025" (India time). */
+export function shortWhen(value, now = Date.now()) {
+  if (!value) return '';
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return '';
+  const day = (d) => d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric' });
+  const today = new Date(now);
+  if (day(at) === day(today)) return at.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
+  const sameYear = at.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', year: 'numeric' }) === today.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', year: 'numeric' });
+  return at.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) });
+}
+
+/** "Updated by" cell: { name, when } from the list row, or null when no one has changed the lead. */
+export function changedBy(lead, now = Date.now()) {
+  if (!lead?.last_changed_by) return null;
+  return { name: lead.last_changed_by, when: shortWhen(lead.last_changed_at, now) };
+}
+
+/** "1 note", "3 notes", or '' for none. */
+export function noteCountLabel(count) {
+  const n = Number(count) || 0;
+  return n > 0 ? `${n} note${n === 1 ? '' : 's'}` : '';
+}
+
+export const MAX_NOTE_LENGTH = 1000;
+
 /** One row per lead id (the list can briefly hold a row twice while paging). */
 export function uniqueLeads(leads) {
   return Array.from(new Map((leads || []).map((lead) => [lead.id, lead])).values());
@@ -152,12 +212,13 @@ export function importSummary(result = {}) {
   return parts.length ? parts.join(', ') : 'No rows found in the file';
 }
 
-// Same rule as the server (services/permissions.js: leads.export and
-// leads.delete). Agents can see, add, import and assign leads.
+// Same rule as the server (services/permissions.js: leads.export,
+// leads.delete and leads.notes.delete_any). Agents can see, add, import and
+// assign leads, and add notes; everyone deletes their own notes.
 export function leadPermissions(role) {
   const value = String(role || '').toLowerCase();
   const allowed = ['owner', 'admin', 'manager', 'platform_staff'].includes(value);
-  return { canExport: allowed, canDelete: allowed };
+  return { canExport: allowed, canDelete: allowed, canDeleteAnyNote: ['owner', 'admin', 'platform_staff'].includes(value) };
 }
 
 const leadCount = (count) => `${Number(count) || 0} lead${Number(count) === 1 ? '' : 's'}`;
