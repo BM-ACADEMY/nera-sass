@@ -9,6 +9,18 @@ const campaignStats = require('../../services/campaignStats');
 const campaignSchedule = require('../../services/campaignSchedule');
 const campaignUpload = require('../../services/campaignUpload');
 const activity = require('../../services/activity');
+const leadLabels = require('../../services/leadLabels');
+
+// The audience label of a builder request (target_label_id, or target_tag_id
+// from older builders): { id } when given and this workspace's, { missing }
+// when given but not found (another workspace's label is not found either).
+async function audienceLabel(body) {
+  const value = campaignAudience.labelIdOf(body || {});
+  if (value == null) return { id: null };
+  const label = await leadLabels.find(value);
+  return label ? { id: label.id, label } : { missing: true };
+}
+const LABEL_NOT_FOUND = { error: 'This label was not found. Choose another label.', code: 'LABEL_NOT_FOUND' };
 
 const campaignTime = (at, timezone) => new Date(at).toLocaleString('en-IN', { timeZone: timezone || 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
 const multer = require('multer');
@@ -67,7 +79,8 @@ app.get('/api/campaigns', auth, async (req, res) => {
         ...camp,
         brand_name: clientNames.get(camp.client_id) ?? null,
         template_name: templateNames.get(camp.template_id) ?? null,
-        tag_name: camp.target_tag_id != null ? tagNames.get(camp.target_tag_id) ?? null : null,
+        // Label audience name (tag_name is the older field the page reads).
+        tag_name: camp.target_label_id != null ? tagNames.get(camp.target_label_id) ?? null : null,
         // Cumulative: "delivered" includes messages that were then read or answered.
         sent_count: c.sent, delivered_count: c.delivered, read_count: c.read, replied_count: c.replied,
         failed_count: c.failed, skipped_count: c.skipped,
@@ -160,10 +173,12 @@ app.post('/api/campaigns/audience/upload', auth, manage, acceptList, async (req,
 // the number's limits and the schedule. Nothing is queued or sent.
 app.post('/api/campaigns/preview', auth, manage, async (req, res) => {
   try {
-    const { name, client_id, template_id, target_status, target_tag_id, scheduled_at, template_parameters = {} } = req.body || {};
+    const { name, client_id, template_id, target_status, scheduled_at, template_parameters = {} } = req.body || {};
+    const audience = await audienceLabel(req.body);
+    if (audience.missing) return res.status(404).json(LABEL_NOT_FOUND);
     const timezone = await campaignSchedule.tenantTimezone();
     const schedule = campaignSchedule.parseSchedule(scheduled_at, timezone);
-    const preview = await campaignAudience.previewCampaign({ name, client_id, template_id, target_status: target_status || 'all', target_tag_id, scheduled_at: schedule.at ? schedule.at.toISOString() : null, template_parameters });
+    const preview = await campaignAudience.previewCampaign({ name, client_id, template_id, target_status: target_status || 'all', target_label_id: audience.id, scheduled_at: schedule.at ? schedule.at.toISOString() : null, template_parameters });
     const problem = schedule.error || campaignSchedule.scheduleProblem(schedule.at);
     if (problem) { preview.blockers.push(problem); preview.can_send = false; }
     preview.timezone = timezone;
@@ -177,8 +192,11 @@ app.post('/api/campaigns/preview', auth, manage, async (req, res) => {
 
 app.post('/api/campaigns', auth, manage, async (req, res) => {
   try {
-    const { name, client_id, template_id, target_status, target_tag_id, scheduled_at, template_parameters = {}, preview_confirmed, send_rest_later } = req.body;
-    const hasTag = target_tag_id != null && target_tag_id !== '';
+    const { name, client_id, template_id, target_status, scheduled_at, template_parameters = {}, preview_confirmed, send_rest_later } = req.body;
+    // A label audience must be one of this workspace's labels.
+    const audience = await audienceLabel(req.body);
+    if (audience.missing) return res.status(404).json(LABEL_NOT_FOUND);
+    const hasTag = audience.id != null;
 
     if (!name || !client_id || !template_id || !(target_status || hasTag)) {
       return res.status(400).json({ error: 'Campaign name, brand, template, and target audience are required.' });
@@ -191,7 +209,7 @@ app.post('/api/campaigns', auth, manage, async (req, res) => {
     const scheduleError = schedule.error || campaignSchedule.scheduleProblem(schedule.at);
     if (scheduleError) return res.status(400).json({ error: scheduleError, code: 'SCHEDULE_INVALID' });
     const runAt = schedule.at && schedule.at > new Date() ? schedule.at : null;
-    const preview = await campaignAudience.previewCampaign({ name, client_id, template_id, target_status: target_status || 'all', target_tag_id: hasTag ? target_tag_id : null, scheduled_at: runAt ? runAt.toISOString() : null, template_parameters });
+    const preview = await campaignAudience.previewCampaign({ name, client_id, template_id, target_status: target_status || 'all', target_label_id: audience.id, scheduled_at: runAt ? runAt.toISOString() : null, template_parameters });
     if (!preview.can_send) {
       return res.status(400).json({ error: preview.blockers[0] || 'This campaign cannot be sent yet.', code: 'CAMPAIGN_NOT_READY', blockers: preview.blockers });
     }
@@ -239,7 +257,7 @@ app.post('/api/campaigns', auth, manage, async (req, res) => {
     // before it starts, the scheduler picks it up (scheduled_at null, server.js).
     const campaign = (await Campaigns.create({
       name: String(name).trim().slice(0, 120), client_id: Number(client_id), template_id: Number(template_id), target_status: target_status || 'all',
-      target_tag_id: hasTag ? Number(target_tag_id) : null, scheduled_at: runAt, status: 'scheduled', timezone,
+      target_label_id: audience.id, target_tag_id: null, scheduled_at: runAt, status: 'scheduled', timezone,
       send_rest_later: Boolean(preview.sending?.over_limit), created_by: req.user.id, created_at: new Date(), template_parameters,
     })).toObject();
 

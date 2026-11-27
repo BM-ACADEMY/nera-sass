@@ -10,6 +10,8 @@ import {
   PAGE_SIZE, SOURCE_LABELS, SOURCE_VARIANT, STATUS_OPTIONS, sourceFilters, leadSourceKind, statusInfo, pageInfo,
   lastMessageText, timeAgo, shortDate, toggleAll, toggleOne, uniqueLeads, leadPermissions, bulkLeadConfirm,
 } from './leads/leadsPolicy.js';
+import { LabelFilter, LabelsManagerButton, LeadLabelsCell, LeadLabelsDialog } from './leads/labels/index.js';
+import { labelPermissions } from './leads/labelsPolicy.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -117,6 +119,11 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkKey, setBulkKey] = useState(0);
   const { canExport, canDelete } = leadPermissions(readRole());
+  // Labels: list filter, the lead whose labels are being edited, reload key.
+  const [labelFilter, setLabelFilter] = useState('all');
+  const [labelLead, setLabelLead] = useState(null);
+  const [labelsKey, setLabelsKey] = useState(0);
+  const { canManage: canManageLabels } = labelPermissions(readRole());
 
   // A different filter starts again at page 1 with nothing selected.
   const resetView = () => { setPage(1); setSelected(new Set()); };
@@ -145,6 +152,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
     campaignName: source === 'facebook' && campaign !== 'all' ? campaign : undefined,
     adName: source === 'facebook' && ad !== 'all' ? ad : undefined,
     search: search || undefined,
+    tagId: labelFilter !== 'all' ? labelFilter : undefined,
     limit: PAGE_SIZE,
     offset: (shownPage - 1) * PAGE_SIZE,
   });
@@ -186,14 +194,14 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
   const filters = sourceFilters(sourceCounts);
   const campaignNames = [...new Set(fbOptions.map((option) => option.campaign_name).filter(Boolean))];
   const adNames = [...new Set(fbOptions.filter((option) => campaign === 'all' || option.campaign_name === campaign).map((option) => option.ad_name).filter(Boolean))];
-  const filtered = source !== 'all' || status !== 'all' || assignedTo !== 'all' || Boolean(search);
+  const filtered = source !== 'all' || status !== 'all' || assignedTo !== 'all' || labelFilter !== 'all' || Boolean(search);
   const pageIds = leads.map((lead) => lead.id);
   const allOnPage = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   const someOnPage = pageIds.some((id) => selected.has(id));
   const selectedIds = [...selected];
 
   const clearFilters = () => {
-    setSource('all'); setStatus('all'); setAssignedTo('all'); setCampaign('all'); setAd('all'); setSearchInput(''); setSearch('');
+    setSource('all'); setStatus('all'); setAssignedTo('all'); setLabelFilter('all'); setCampaign('all'); setAd('all'); setSearchInput(''); setSearch('');
     resetView();
   };
 
@@ -261,6 +269,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <LabelsManagerButton canManage={canManageLabels} onChanged={() => { setLabelsKey((key) => key + 1); refreshAll(); }} />
           <Button variant="outline" onClick={() => setDialog('import')}><FiUpload /> Import</Button>
           {canExport && <Button variant="outline" onClick={() => setDialog('export')}><FiDownload /> Export</Button>}
           <Button onClick={() => setDialog('add')}><FiPlus /> Add lead</Button>
@@ -310,6 +319,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
                 {users.map((user) => <SelectItem key={user.id} value={String(user.id)}>{user.name || user.email}</SelectItem>)}
               </SelectContent>
             </Select>
+            <LabelFilter value={labelFilter} onChange={filterSetter(setLabelFilter)} refreshKey={labelsKey} />
           </div>
         </div>
 
@@ -394,6 +404,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
                       <RowMenu lead={lead} onOpen={onLeadClick} onDelete={canDelete ? askDelete : null} />
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5"><SourceBadge lead={lead} /><StatusBadge status={lead.status} /></div>
+                    <LeadLabelsCell lead={lead} onEdit={setLabelLead} />
                     <LastActivity lead={lead} />
                     <div className="text-xs text-muted-foreground">{lead.assigned_name ? `Assigned to ${lead.assigned_name}` : 'Not assigned'} · Added {shortDate(lead.created_at)}</div>
                   </div>
@@ -411,6 +422,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
                     <TableHead>Phone</TableHead>
                     <TableHead>Source</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Labels</TableHead>
                     <TableHead>Assigned to</TableHead>
                     <TableHead>Last message</TableHead>
                     <TableHead>Added</TableHead>
@@ -433,6 +445,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
                       <TableCell className="text-[13px] whitespace-nowrap text-slate-600">{lead.phone || '—'}</TableCell>
                       <TableCell><SourceBadge lead={lead} /></TableCell>
                       <TableCell><StatusBadge status={lead.status} /></TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}><LeadLabelsCell lead={lead} onEdit={setLabelLead} /></TableCell>
                       <TableCell className="text-[13px] whitespace-nowrap">{lead.assigned_name || <span className="text-muted-foreground">Not assigned</span>}</TableCell>
                       <TableCell><LastActivity lead={lead} /></TableCell>
                       <TableCell className="text-[13px] whitespace-nowrap text-muted-foreground">{shortDate(lead.created_at)}</TableCell>
@@ -462,6 +475,7 @@ export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
       {dialog === 'add' && <AddLeadDialog open onOpenChange={(open) => !open && setDialog(null)} users={users} onSaved={refreshAll} />}
       {dialog === 'import' && <ImportLeadsDialog open onOpenChange={(open) => !open && setDialog(null)} onImported={refreshAll} />}
       {dialog === 'export' && <ExportLeadsDialog open onOpenChange={(open) => !open && setDialog(null)} selectedIds={selectedIds} showFacebook={hasFacebook} />}
+      {labelLead && <LeadLabelsDialog open lead={labelLead} canManage={canManageLabels} onOpenChange={(open) => !open && setLabelLead(null)} onSaved={() => { setLabelsKey((key) => key + 1); refreshAll(); }} />}
       <ConfirmDialog confirm={confirm} onClose={() => { setConfirm(null); setBulkKey((key) => key + 1); }} />
     </div>
   );

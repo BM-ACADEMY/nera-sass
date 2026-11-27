@@ -72,6 +72,8 @@ const FOREIGN_KEYS = [
   ['leads', 'id', 'chatbot_userprogresses', 'lead_id', 'cascade'],
   ['leads', 'id', 'conversations', 'lead_id', 'cascade'],
   ['leads', 'id', 'demo_call_reminders', 'lead_id', 'cascade'],
+  ['lead_labels', 'id', 'lead_label_links', 'label_id', 'cascade'],
+  ['leads', 'id', 'lead_label_links', 'lead_id', 'cascade'],
   ['leads', 'id', 'lead_notes', 'lead_id', 'cascade'],
   ['leads', 'id', 'lead_tags', 'lead_id', 'cascade'],
   ['leads', 'id', 'payments', 'lead_id', 'cascade'],

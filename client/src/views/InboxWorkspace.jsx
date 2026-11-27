@@ -7,6 +7,7 @@ import { io as socketIO } from 'socket.io-client';
 import { C } from '../constants/theme.js';
 import { useLeads, useLead, useAllianceInbox, useAllianceLead } from '../hooks/useLeads.js';
 import { api, allianceInboxApi } from '../services/api.js';
+import { labelsAsInboxTags } from './leads/labels/labelsApi.js';
 import { toast } from 'react-hot-toast';
 import { VoiceRecorder, voiceFileName } from '../components/chat/VoiceRecorder.jsx';
 import { CameraDialog } from '../components/chat/CameraDialog.jsx';
@@ -216,6 +217,9 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   const useInboxList = alliance ? useAllianceInbox : useLeads;
   const useInboxLead = alliance ? useAllianceLead : useLead;
   const inboxApi = alliance ? allianceInboxApi : api;
+  // Tag menu: Alliance contacts keep their tags; LeadOS leads use this
+  // workspace's labels (views/leads/labels).
+  const tagApi = alliance ? allianceInboxApi : labelsAsInboxTags;
   const storageKeys = alliance ? {
     reactions: 'alliance_user_reactions', deleted: 'alliance_deleted_for_me',
   } : { reactions: 'leados_user_reactions', deleted: 'leados_deleted_for_me' };
@@ -285,11 +289,11 @@ export const InboxWorkspace = ({ mode = 'leados' }) => {
   useEffect(() => {
     if (!showTagMenu || tagsLoadedRef.current) return;
     tagsLoadedRef.current = true;
-    allianceInboxApi.getTags().then(tags => setAvailableTags(tags)).catch((err) => {
+    tagApi.getTags().then(tags => setAvailableTags(tags)).catch((err) => {
       tagsLoadedRef.current = false;
       console.error(err);
     });
-  }, [showTagMenu]);
+  }, [showTagMenu, tagApi]);
   
   // Files picked, pasted, dropped or photographed, shown in the send preview.
   const [pendingFiles, setPendingFiles] = useState([]);
@@ -2345,7 +2349,7 @@ return (
                                   <button onClick={async () => {
                                     if(window.confirm(`Are you sure you want to permanently delete the "${tag.name}" tag from the workspace?`)) {
                                       try {
-                                        await allianceInboxApi.deleteTag(tag.id);
+                                        await tagApi.deleteTag(tag.id);
                                         setAvailableTags(tags => tags.filter(t => t.id !== tag.id));
                                         refetchLeadsList(); // update sidebar tags if any were removed
                                       } catch(e) { console.error(e); }
@@ -2366,7 +2370,7 @@ return (
                               </div>
                               <button disabled={!newTagName.trim()} onClick={async () => {
                                 try {
-                                  const newTag = await allianceInboxApi.createTag(newTagName, newTagColor);
+                                  const newTag = await tagApi.createTag(newTagName, newTagColor);
                                   setAvailableTags([...(availableTags || []), newTag]);
                                   
                                   // Optimistic assignment
