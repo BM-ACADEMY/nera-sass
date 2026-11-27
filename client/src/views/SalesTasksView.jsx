@@ -9,6 +9,7 @@ import {
 } from 'react-icons/fi';
 import { api } from '../services/api.js';
 import { labelsAsInboxTags } from './leads/labels/labelsApi.js';
+import { queryValue } from '../utils/dashboard.js';
 import {
   DEFAULT_TIME_ZONE, typeOf, taskTitle, isDone, dueState, dueInputs, formatDue, formatDateTime, filterTasks, sortTasks, countDue, taskBody, bulkTaskConfirm,
 } from '../utils/salesTasks.js';
@@ -430,7 +431,8 @@ export const SalesTasksView = () => {
   const [loadError, setLoadError] = useState('');
   const [assignees, setAssignees] = useState([]);
   const [tags, setTags] = useState([]);
-  const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  // ?due=overdue|today|upcoming (Dashboard links) opens the list already filtered.
+  const [filters, setFilters] = useState(() => ({ ...DEFAULT_FILTERS, due: queryValue(window.location.search, 'due', ['overdue', 'today', 'upcoming'], 'all') }));
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState([]);
   const [expanded, setExpanded] = useState(null);
