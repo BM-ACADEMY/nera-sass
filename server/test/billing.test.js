@@ -208,6 +208,27 @@ test('N3: plans, subscriptions and wallet', async (t) => {
   });
 
   // ── Payment switch ───────────────────────────────────────
+  await t.test('PO2. BILLING_PAYMENTS_TENANTS opens checkout for the listed workspace only', async () => {
+    const test = await workspace(1);
+    const other = await workspace(2);
+    delete process.env.BILLING_PAYMENTS_ENABLED;
+    process.env.BILLING_PAYMENTS_TENANTS = ' 1 , abc,0';
+    try {
+      const open = await request(app).post('/api/billing/orders').set(bearer(test.owner)).send({ purpose: 'wallet_topup', amount_inr: 500 });
+      assert.strictEqual(open.status, 201, JSON.stringify(open.body));
+      assert.strictEqual((await request(app).get('/api/billing/summary').set(bearer(test.owner))).body.payments_enabled, true);
+      const closed = await request(app).post('/api/billing/orders').set(bearer(other.owner)).send({ purpose: 'wallet_topup', amount_inr: 500 });
+      assert.strictEqual(closed.status, 403);
+      assert.strictEqual(closed.body.code, 'PAYMENTS_OFF');
+      assert.strictEqual((await request(app).get('/api/billing/summary').set(bearer(other.owner))).body.payments_enabled, false);
+      process.env.BILLING_PAYMENTS_TENANTS = '';
+      assert.strictEqual((await request(app).post('/api/billing/orders').set(bearer(test.owner)).send({ purpose: 'wallet_topup', amount_inr: 500 })).status, 403, 'off again once the list is empty');
+    } finally {
+      delete process.env.BILLING_PAYMENTS_TENANTS;
+      process.env.BILLING_PAYMENTS_ENABLED = 'true';
+    }
+  });
+
   await t.test('PO1. With BILLING_PAYMENTS_ENABLED off, every order/extras route answers 403 PAYMENTS_OFF; verify, invoices and GST details still work', async () => {
     const ws = await workspace(1);
     await subscribe(ws.owner, 'desk'); // payments on: a plan and a pending order to verify later

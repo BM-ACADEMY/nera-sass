@@ -56,6 +56,9 @@ function parseOutput(raw) {
     reply: parsed.reply.trim().slice(0, 4096),
     handoff: parsed.handoff === true,
     handoff_reason: parsed.handoff_reason ? String(parsed.handoff_reason).slice(0, 300) : null,
+    // A bare "safety:" with nothing after it is not a safety signal (the model
+    // sometimes adds it to an ordinary reply): it is dropped, never escalated.
+    ...(/^safety:?\s*$/i.test(String(parsed.handoff_reason || '').trim()) && { handoff: false, handoff_reason: null }),
     lead_updates: parsed.lead_updates && typeof parsed.lead_updates === 'object' && !Array.isArray(parsed.lead_updates) ? parsed.lead_updates : {},
     opt_out: parsed.opt_out === true,
     meeting: booking.cleanMeeting(parsed.meeting),

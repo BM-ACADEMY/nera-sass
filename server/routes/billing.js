@@ -43,7 +43,7 @@ function fail(res, error, where) {
 // webhook for payments already started are left alone.
 const PAYMENTS_OFF_MESSAGE = 'Online payment is not open yet. Please contact us to change your plan.';
 function requirePaymentsOn(req, res, next) {
-  if (billing.razorpay.paymentsEnabled()) return next();
+  if (billing.razorpay.paymentsEnabled(req.tenant?.id ?? req.identity?.tenantId ?? null)) return next();
   return res.status(403).json({ error: PAYMENTS_OFF_MESSAGE, code: 'PAYMENTS_OFF' });
 }
 
@@ -78,7 +78,7 @@ router.get('/summary', async (req, res) => {
       billing.alerts.recent(10),
     ]);
     const subscription = billing.subscriptions.publicSubscription(sub, now);
-    const paymentsEnabled = billing.razorpay.paymentsEnabled();
+    const paymentsEnabled = billing.razorpay.paymentsEnabled(req.tenant?.id ?? req.identity?.tenantId ?? null);
     res.json({
       subscription,
       plan: gate.plan || (sub ? await billing.plans.planById(sub.plan_id) : null),
