@@ -1,50 +1,64 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  AreaChart, Area, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
+  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer
 } from 'recharts';
 import {
-  Users, Target, CheckCircle, BarChart2, AlertCircle, DollarSign,
-  TrendingUp, TrendingDown, Clock, ArrowRight, X, MessageSquare, Phone,
-  FileText, ExternalLink, Activity, Plus, CreditCard, Send, Award, ChevronRight
+  AlertCircle, ArrowRight, X, MessageSquare, Phone,
+  FileText, Activity, Plus, CreditCard, ChevronRight, RefreshCw, Flame, Bot, ClipboardList, Users, CheckCircle, IndianRupee, Inbox
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { Select, Radio, Button } from 'antd';
 import { C } from '../constants/theme.js';
-import { Badge, ScoreBar } from '../components/ui.jsx';
+import { ScoreBar } from '../components/ui.jsx';
 import { useLeads, useLead } from '../hooks/useLeads.js';
 import { useAuth } from '../hooks/useAuth.js';
 import { api } from '../services/api.js';
 import NoticesBox from '../components/NoticesBox.jsx';
+import { Card } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
+import { attentionCards, formatRupees, fullRupees, greeting, isStaffRole, sourceRows } from '../utils/dashboard.js';
 
-// --- Sparkline Component for Stats Cards ---
-const MiniSparkline = ({ data, strokeColor }) => {
-  if (!data || data.length === 0) return null;
+const SOURCE_COLORS = [C.blue, C.green, C.purple, '#f59e0b', C.pink, '#0891b2', C.muted];
+const RANGE_LABEL = { '7d': 'Last 7 days', '30d': 'Last 30 days', '90d': 'Last 90 days' };
+const ATTENTION_ICONS = { unanswered: MessageSquare, hot: Flame, handovers: Bot, overdue: ClipboardList };
+const ATTENTION_REFRESH_MS = 60 * 1000;
+
+const sectionTitle = 'text-[13px] font-semibold uppercase tracking-wide text-slate-700';
+
+// One plain number card (app card style: white, border, small shadow).
+const StatCard = ({ icon: Icon, label, value, sub, title, onClick }) => {
+  const Tag = onClick ? 'button' : 'div';
   return (
-    <ResponsiveContainer width={70} height={28}>
-      <LineChart data={data}>
-        <Line type="monotone" dataKey="v" stroke={strokeColor} strokeWidth={1.5} dot={false} />
-      </LineChart>
-    </ResponsiveContainer>
+    <Tag type={onClick ? 'button' : undefined} onClick={onClick} title={title}
+      className={cn('flex min-w-0 flex-col items-start gap-1 rounded-xl border border-border bg-card p-4 text-left shadow-xs', onClick && 'cursor-pointer transition-colors hover:bg-slate-50')}>
+      <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><Icon size={14} /> {label}</span>
+      <span className="text-2xl leading-tight font-bold text-slate-900">{value}</span>
+      {sub && <span className="text-xs text-muted-foreground">{sub}</span>}
+    </Tag>
   );
 };
 
-// Dummy data for visual widget charts
-const dummySparkline1 = [{v: 10}, {v: 15}, {v: 8}, {v: 25}, {v: 18}, {v: 30}, {v: 22}];
-const dummySparkline2 = [{v: 5}, {v: 20}, {v: 15}, {v: 8}, {v: 12}, {v: 35}, {v: 10}];
-const dummySparkline3 = [{v: 12}, {v: 25}, {v: 15}, {v: 35}, {v: 10}, {v: 30}, {v: 5}];
-const dummyBarData = [{v: 15}, {v: 25}, {v: 10}, {v: 35}, {v: 20}, {v: 15}, {v: 25}, {v: 12}, {v: 30}, {v: 18}];
+const EmptyChart = ({ children }) => (
+  <div className="flex h-full min-h-[140px] flex-col items-center justify-center gap-1 text-center text-[13px] text-muted-foreground">
+    <Inbox size={20} className="text-slate-300" />
+    {children}
+  </div>
+);
 
 export const Dashboard = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const staff = isStaffRole(user?.role);
 
   // Filters & State
   const [timeRange, setTimeRange] = useState('30d');
   const [selectedBrand, setSelectedBrand] = useState('all');
   const [stats, setStats] = useState(null);
-  const [salesOsStats, setSalesOsStats] = useState(null);
+  const [overview, setOverview] = useState(null);
+  const [attention, setAttention] = useState(null);
+  const [attentionError, setAttentionError] = useState(false);
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -60,34 +74,49 @@ export const Dashboard = () => {
     brand: selectedBrand !== 'all' ? clients.find(c => String(c.id) === selectedBrand)?.name : undefined
   });
 
-  // Fetch Dashboard Stats & Clients
+  // Brands for the filter (once)
   useEffect(() => {
+    api.getClients().then((res) => setClients(res.clients || [])).catch(() => setClients([]));
+  }, []);
+
+  // Range numbers: summary (leads, revenue, charts) + overview (converted, sources)
+  useEffect(() => {
+    let cancelled = false;
     const fetchDashboardData = async () => {
       setLoading(true);
-      try {
-        const [statsRes, clientsRes, salesOsRes] = await Promise.all([
-          api.getDashboardStats({
-            range: timeRange,
-            client_id: selectedBrand !== 'all' ? selectedBrand : undefined
-          }),
-          api.getClients(),
-          api.getSalesOSReports()
-        ]);
-        setStats(statsRes);
-        setClients(clientsRes.clients || []);
-        setSalesOsStats(salesOsRes);
-      } catch (err) {
-        console.error('Error fetching dashboard report stats:', err);
-        toast.error('Failed to load dashboard report statistics');
-      } finally {
-        setLoading(false);
-      }
+      const brand = selectedBrand !== 'all' ? selectedBrand : undefined;
+      const [statsRes, overviewRes] = await Promise.allSettled([
+        api.getDashboardStats({ range: timeRange, client_id: brand }),
+        api.getDashboardOverview({ range: timeRange, client_id: brand }),
+      ]);
+      if (cancelled) return;
+      setStats(statsRes.status === 'fulfilled' ? statsRes.value : null);
+      setOverview(overviewRes.status === 'fulfilled' ? overviewRes.value : null);
+      if (statsRes.status === 'rejected' || overviewRes.status === 'rejected') toast.error('Some dashboard numbers could not be loaded');
+      setLoading(false);
     };
     fetchDashboardData();
+    return () => { cancelled = true; };
   }, [timeRange, selectedBrand, refreshTrigger]);
 
-  // Fetch Payments
+  // Needs attention now: on load, on refresh and every minute.
+  const loadAttention = useCallback(async () => {
+    try {
+      setAttention(await api.getDashboardAttention());
+      setAttentionError(false);
+    } catch {
+      setAttentionError(true);
+    }
+  }, []);
   useEffect(() => {
+    const first = setTimeout(loadAttention, 0);
+    const timer = setInterval(loadAttention, ATTENTION_REFRESH_MS);
+    return () => { clearTimeout(first); clearInterval(timer); };
+  }, [loadAttention, refreshTrigger]);
+
+  // Recent payments (workspace revenue: not shown to agents)
+  useEffect(() => {
+    if (staff) return;
     const fetchPaymentsData = async () => {
       setPaymentsLoading(true);
       try {
@@ -100,588 +129,373 @@ export const Dashboard = () => {
       }
     };
     fetchPaymentsData();
-  }, [refreshTrigger]);
+  }, [refreshTrigger, staff]);
 
-  // Calculations for KPI Card Trends
-  const leadsChange = stats?.leads_yesterday ? Math.round(((stats.leads_today - stats.leads_yesterday) / stats.leads_yesterday) * 100) : 0;
-  const convertedChange = stats?.converted_yesterday ? Math.round(((stats.converted_today - stats.converted_yesterday) / stats.converted_yesterday) * 100) : 0;
-  const revenueChange = stats?.revenue_last_month ? Math.round(((stats.revenue_month - stats.revenue_last_month) / stats.revenue_last_month) * 100) : 0;
+  const weeklyData = (stats?.weekly || []).map((w) => ({ day: w.day, Leads: parseInt(w.leads || 0), Converted: parseInt(w.converted || 0) }));
+  const hasLeadsInRange = weeklyData.some((d) => d.Leads > 0 || d.Converted > 0);
+  const sources = sourceRows(overview?.sources).map((s, i) => ({ ...s, color: SOURCE_COLORS[i % SOURCE_COLORS.length] }));
+  const revenueTrend = stats?.revenue_trend || [];
+  const hasRevenue = revenueTrend.some((r) => Number(r.r) > 0);
 
-  const formatRevenueValue = (val) => {
-    if (val === undefined || val === null) return '₹0';
-    if (val >= 100000) return '₹' + (val / 100000).toFixed(1) + 'L';
-    if (val >= 1000) return '₹' + (val / 1000).toFixed(0) + 'K';
-    return '₹' + val;
-  };
-
-  const leadsConversionRate = stats?.funnel?.total
-    ? Math.round((parseInt(stats.funnel.converted || 0) / parseInt(stats.funnel.total)) * 100)
-    : 0;
-
-  // Process data for Weekly Leads AreaChart
-  const weeklyData = stats?.weekly && stats.weekly.length > 0
-    ? stats.weekly.map((w) => ({
-        day: w.day,
-        Leads: parseInt(w.leads || 0),
-        Converted: parseInt(w.converted || 0)
-      }))
-    : [];
-
-  // Generate sparkline values for widgets
-  const leadsSparkline = weeklyData.map(d => ({ v: d.Leads }));
-  const convertedSparkline = weeklyData.map(d => ({ v: d.Converted }));
-
-  // Process data for Donut PieChart
-  const totalSourcesCount = stats?.sources ? stats.sources.reduce((sum, s) => sum + parseInt(s.count || 0), 0) : 0;
-  const SOURCE_COLORS = [C.accent, C.blue, C.purple, C.pink, C.green, C.muted];
-  const sourceData = stats?.sources && stats.sources.length > 0
-    ? stats.sources.map((s, i) => ({
-        name: s.source || 'Manual',
-        value: parseInt(s.count || 0),
-        percentage: totalSourcesCount > 0 ? Math.round((parseInt(s.count || 0) / totalSourcesCount) * 100) : 0,
-        color: SOURCE_COLORS[i % SOURCE_COLORS.length]
-      }))
-    : [];
-
-  // Funnel steps data
-  const funnelData = stats?.funnel
-    ? [
-        { label: "Total Traffic", count: parseInt(stats.funnel.total || 0), color: C.blue, percent: 100 },
-        { label: "Contacted Leads", count: parseInt(stats.funnel.contacted || 0), color: C.purple, percent: stats.funnel.total ? Math.round((stats.funnel.contacted / stats.funnel.total) * 100) : 0 },
-        { label: "Qualified Leads (Score >= 40)", count: parseInt(stats.funnel.qualified || 0), color: C.pink, percent: stats.funnel.total ? Math.round((stats.funnel.qualified / stats.funnel.total) * 100) : 0 },
-        { label: "Hot Stage", count: parseInt(stats.funnel.hot || 0), color: C.red, percent: stats.funnel.total ? Math.round((stats.funnel.hot / stats.funnel.total) * 100) : 0 },
-        { label: "Converted Client", count: parseInt(stats.funnel.converted || 0), color: C.green, percent: stats.funnel.total ? Math.round((stats.funnel.converted / stats.funnel.total) * 100) : 0 }
-      ]
-    : [];
+  const funnelTotal = parseInt(stats?.funnel?.total || 0);
+  const pct = (n) => (funnelTotal ? Math.round((parseInt(n || 0) / funnelTotal) * 100) : 0);
+  const funnelData = stats?.funnel ? [
+    { label: 'All leads', count: funnelTotal, color: C.blue, percent: 100 },
+    { label: 'Contacted', count: parseInt(stats.funnel.contacted || 0), color: C.purple, percent: pct(stats.funnel.contacted) },
+    { label: 'Qualified (score 40+)', count: parseInt(stats.funnel.qualified || 0), color: C.pink, percent: pct(stats.funnel.qualified) },
+    { label: 'Hot', count: parseInt(stats.funnel.hot || 0), color: C.red, percent: pct(stats.funnel.hot) },
+    { label: 'Converted', count: parseInt(stats.funnel.converted || 0), color: C.green, percent: pct(stats.funnel.converted) },
+  ] : [];
 
   // Filter payments by selected brand client-side (backend returns all payments)
   const filteredPayments = payments.filter(p => {
     if (selectedBrand === 'all') return true;
     const client = clients.find(c => String(c.id) === selectedBrand);
-    // Find matching lead to check brand
     return p.lead_name && p.brand_name === client?.name;
   }).slice(0, 5);
 
+  const cards = attentionCards(attention);
+  const show = (value) => (loading ? '…' : value ?? '—');
+  const myDay = attention?.my_day;
+  const leadsDelta = stats ? Number(stats.leads_today || 0) - Number(stats.leads_yesterday || 0) : 0;
+
   return (
-    <div className="p-mobile" style={{ padding: 26, overflowY: 'auto', height: '100%', background: C.bg, position: 'relative' }}>
+    <div className="p-4 md:p-6" style={{ overflowY: 'auto', height: '100%', background: C.bg, position: 'relative' }}>
       <NoticesBox />
 
-      {/* Dynamic Keyframes and Custom styles */}
       <style>{`
-        @keyframes slideIn {
-          from { transform: translateX(100%); }
-          to { transform: translateX(0); }
-        }
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-        .slide-drawer {
-          animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-        .drawer-overlay {
-          animation: fadeIn 0.2s ease-out forwards;
-        }
+        @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .slide-drawer { animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .drawer-overlay { animation: fadeIn 0.2s ease-out forwards; }
         .dashboard-card {
           background: ${C.card};
           border: 1px solid ${C.border};
-          border-radius: 16px;
-          padding: 22px;
-          transition: all 0.25s ease;
-          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+          border-radius: 12px;
+          padding: 18px;
+          min-width: 0;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
         }
-        .dashboard-card:hover {
-          border-color: ${C.border}bb;
-          transform: translateY(-2px);
-          box-shadow: 0 12px 20px -8px rgba(0, 0, 0, 0.3);
-        }
-        .kpi-card {
-          position: relative;
-          overflow: hidden;
-        }
-        .kpi-card::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 3px;
-          background: transparent;
-          transition: background 0.25s ease;
-        }
-        .kpi-card.leads::before { background: linear-gradient(90deg, ${C.accent}, ${C.purple}); }
-        .kpi-card.hot::before { background: linear-gradient(90deg, ${C.red}, ${C.pink}); }
-        .kpi-card.converted::before { background: linear-gradient(90deg, ${C.green}, ${C.blue}); }
-        .kpi-card.revenue::before { background: linear-gradient(90deg, ${C.blue}, ${C.purple}); }
-        
-        .interactive-row {
-          transition: background 0.15s ease;
-          cursor: pointer;
-        }
-        .interactive-row:hover {
-          background: ${C.surface}bb !important;
-        }
-        .filter-btn {
-          background: transparent;
-          color: ${C.muted};
-          border: none;
-          padding: 6px 14px;
-          border-radius: 8px;
-          font-size: 11px;
-          font-weight: 600;
-          transition: all 0.2s ease;
-        }
-        .filter-btn.active {
-          background: ${C.card};
-          color: ${C.text};
-          box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        }
-        .custom-select {
-          background: ${C.surface};
-          border: 1px solid ${C.border};
-          color: ${C.text};
-          padding: 8px 14px;
-          border-radius: 9px;
-          font-size: 12px;
-          outline: none;
-          cursor: pointer;
-          font-weight: 600;
-          transition: border-color 0.2s ease;
-        }
-        .custom-select:focus {
-          border-color: ${C.accent};
-        }
+        .interactive-row { transition: background 0.15s ease; cursor: pointer; }
+        .interactive-row:hover { background: ${C.bg} !important; }
       `}</style>
 
-      {/* --- HEADER CONTROLS --- */}
-      <div className="flex-col-mobile" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, marginBottom: 26 }}>
-        <div>
-          <h1 style={{ fontFamily: "'Inter', sans-serif", fontSize: 22, fontWeight: 600, color: C.text, display: 'flex', alignItems: 'center', gap: 8, letterSpacing: '-0.5px' }}>
-            Good morning, {user?.name?.split(' ')[0] || 'User'}
-            <Activity size={18} color={C.accent} style={{ animation: 'pulse 2s infinite' }} />
+      {/* --- HEADER: greeting (My day for agents) + filters --- */}
+      <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold tracking-tight text-slate-900">
+            {greeting()}, {user?.name?.split(' ')[0] || 'there'}
           </h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
-            {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {new Date().toLocaleDateString('en-IN', { weekday: 'long', month: 'long', day: 'numeric' })}
           </p>
+          {staff && (
+            <div className="mt-3">
+              <div className="mb-1.5 text-xs font-semibold text-slate-700">My day</div>
+              <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
+                {[
+                  { label: 'My open leads', value: myDay?.open_leads, onClick: () => navigate('/leads') },
+                  { label: 'My replies today', value: myDay?.replies_today },
+                  { label: 'My tasks due today', value: myDay?.tasks_due_today, onClick: () => navigate('/sales-tasks?due=today') },
+                ].map((item) => {
+                  const Tag = item.onClick ? 'button' : 'div';
+                  return (
+                    <Tag key={item.label} type={item.onClick ? 'button' : undefined} onClick={item.onClick}
+                      className={cn('flex flex-col items-start rounded-lg border border-border bg-card px-3 py-2 text-left shadow-xs sm:min-w-32', item.onClick && 'cursor-pointer hover:bg-slate-50')}>
+                      <span className="text-lg leading-tight font-bold text-slate-900">{attention ? item.value ?? 0 : '…'}</span>
+                      <span className="text-xs text-muted-foreground">{item.label}</span>
+                    </Tag>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Global Dashboard Filters */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, alignSelf: 'stretch', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          
-          {/* Brand/Client Selector */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Brand</span>
-            <Select
-              value={selectedBrand}
-              onChange={(val) => setSelectedBrand(val)}
-              style={{ width: 140 }}
-              options={[
-                { value: 'all', label: 'All Brands' },
-                ...clients.map(c => ({ value: c.id, label: c.name }))
-              ]}
-            />
-          </div>
-
-          {/* Time range switcher */}
-          <Radio.Group 
-            value={timeRange} 
-            onChange={e => setTimeRange(e.target.value)}
-            optionType="button"
-            buttonStyle="solid"
-          >
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={selectedBrand}
+            onChange={(val) => setSelectedBrand(val)}
+            style={{ width: 150 }}
+            aria-label="Brand"
+            options={[
+              { value: 'all', label: 'All brands' },
+              ...clients.map(c => ({ value: String(c.id), label: c.name }))
+            ]}
+          />
+          <Radio.Group value={timeRange} onChange={e => setTimeRange(e.target.value)} optionType="button" buttonStyle="solid">
             <Radio.Button value="7d">7D</Radio.Button>
             <Radio.Button value="30d">30D</Radio.Button>
             <Radio.Button value="90d">90D</Radio.Button>
           </Radio.Group>
-
-          {/* Manual Refresh Trigger */}
           <Button
-            icon={<Clock size={14} />}
+            icon={<RefreshCw size={14} />}
+            aria-label="Refresh"
             onClick={() => {
               setRefreshTrigger(prev => prev + 1);
               refetchHotLeads();
-              toast.success('Metrics updated');
             }}
-            title="Refresh statistics"
+            title="Refresh"
           />
         </div>
       </div>
 
-      {/* --- SALESOS LIVE METRICS --- */}
-      {salesOsStats && (
-        <div className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-          {/* Card 1: Today's Revenue (Blue) */}
-          <div style={{ background: '#4285F4', borderRadius: 8, color: '#fff', position: 'relative', overflow: 'hidden', height: 110, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-            <div style={{ padding: '16px 16px 0' }}>
-              <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1 }}>{formatRevenueValue(salesOsStats.revenueToday)}</div>
-              <div style={{ fontSize: 11, marginTop: 4, opacity: 0.9 }}>Today's Revenue</div>
-            </div>
-            <div style={{ flex: 1, position: 'relative', marginTop: 10 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={dummySparkline1} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="colorBlue" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#fff" stopOpacity={0.4}/>
-                      <stop offset="95%" stopColor="#fff" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <Area type="monotone" dataKey="v" stroke="#fff" strokeWidth={1.5} fillOpacity={1} fill="url(#colorBlue)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+      {/* --- NEEDS ATTENTION NOW --- */}
+      <section className="mb-5" aria-labelledby="attention-title">
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <h2 id="attention-title" className={sectionTitle}>Needs attention now</h2>
+          <span className="text-xs text-muted-foreground">
+            {attention?.scope === 'mine' ? 'Yours and unassigned, all brands' : 'All brands'}
+          </span>
+        </div>
+        {attentionError && !attention ? (
+          <Card className="flex-row items-center justify-between gap-3 px-4 py-3 text-sm">
+            <span className="text-muted-foreground">Could not load what needs attention.</span>
+            <Button size="small" onClick={loadAttention}>Try again</Button>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {(cards.length ? cards : [{ key: 'unanswered' }, { key: 'hot' }, { key: 'handovers' }, { key: 'overdue' }]).map((card) => {
+              const Icon = ATTENTION_ICONS[card.key];
+              const urgent = card.count > 0;
+              return (
+                <button key={card.key} type="button" disabled={!attention}
+                  onClick={() => navigate(card.to, card.state ? { state: card.state } : undefined)}
+                  className={cn('group flex min-w-0 cursor-pointer flex-col items-start gap-1 rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:bg-slate-50 sm:p-4',
+                    urgent ? 'border-red-200' : 'border-border')}>
+                  <span className="flex w-full items-center gap-1.5 text-xs font-medium text-slate-600">
+                    <Icon size={14} className={urgent ? 'text-red-500' : 'text-slate-400'} />
+                    <span className="min-w-0 flex-1">{card.label || '…'}</span>
+                  </span>
+                  <span className={cn('text-2xl leading-tight font-bold', urgent ? 'text-red-600' : 'text-slate-400')}>
+                    {attention ? card.count : '…'}
+                  </span>
+                  <span className="text-xs text-muted-foreground">{card.hint || ' '}</span>
+                  {urgent && (
+                    <span className="mt-1 flex items-center gap-1 text-xs font-semibold text-blue-600 group-hover:underline">
+                      {card.action} <ArrowRight size={12} />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
+        )}
+      </section>
 
-          {/* Card 2: Pending Follow-ups (Pink/Red) */}
-          <div style={{ background: '#F86C85', borderRadius: 8, color: '#fff', position: 'relative', overflow: 'hidden', height: 110, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-            <div style={{ padding: '16px 16px 0' }}>
-              <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1 }}>{salesOsStats.pendingFollowups}</div>
-              <div style={{ fontSize: 11, marginTop: 4, opacity: 0.9 }}>Pending Follow-ups</div>
-            </div>
-            <div style={{ flex: 1, position: 'relative', marginTop: 10 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={dummySparkline2} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="colorPink" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#fff" stopOpacity={0.4}/>
-                      <stop offset="95%" stopColor="#fff" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <Area type="monotone" dataKey="v" stroke="#fff" strokeWidth={1.5} fillOpacity={1} fill="url(#colorPink)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+      {/* --- KEY NUMBERS --- */}
+      <section className={cn('mb-5 grid grid-cols-2 gap-3', staff ? 'lg:grid-cols-3' : 'lg:grid-cols-4')} aria-label="Key numbers">
+        <StatCard icon={Users} label="Leads today" value={show(stats?.leads_today)}
+          sub={stats ? `${leadsDelta >= 0 ? '+' : ''}${leadsDelta} vs yesterday` : null} />
+        <StatCard icon={MessageSquare} label="Replies pending" value={attention ? attention.unanswered?.count ?? 0 : '…'}
+          sub={`Waiting over ${attention?.unanswered?.after_minutes || 15} min`} onClick={() => navigate('/inbox', attention?.unanswered?.oldest_lead_id != null ? { state: { leadId: attention.unanswered.oldest_lead_id } } : undefined)} />
+        <StatCard icon={CheckCircle} label="Converted" value={show(overview?.converted)} sub={RANGE_LABEL[timeRange]} />
+        {!staff && (
+          <StatCard icon={IndianRupee} label="Revenue this month" value={loading ? '…' : formatRupees(stats?.revenue_month)}
+            title={stats ? fullRupees(stats.revenue_month) : undefined} sub="Captured payments" />
+        )}
+      </section>
 
-          {/* Card 3: SLA Breaches (Green) */}
-          <div style={{ background: '#84B955', borderRadius: 8, color: '#fff', position: 'relative', overflow: 'hidden', height: 110, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-            <div style={{ padding: '16px 16px 0' }}>
-              <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1 }}>{salesOsStats.slaBreaches}</div>
-              <div style={{ fontSize: 11, marginTop: 4, opacity: 0.9 }}>SLA Breaches</div>
-            </div>
-            <div style={{ flex: 1, position: 'relative', marginTop: 10 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={dummySparkline3} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="colorGreen" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#fff" stopOpacity={0.4}/>
-                      <stop offset="95%" stopColor="#fff" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <Area type="monotone" dataKey="v" stroke="#fff" strokeWidth={1.5} fillOpacity={1} fill="url(#colorGreen)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Card 4: AI Confidence (Orange/Yellow) */}
-          <div style={{ background: '#FDB751', borderRadius: 8, color: '#fff', position: 'relative', overflow: 'hidden', height: 110, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-            <div style={{ padding: '16px 16px 0' }}>
-              <div style={{ fontSize: 20, fontWeight: 600, lineHeight: 1 }}>{Math.round(salesOsStats.aiPerformance)}%</div>
-              <div style={{ fontSize: 11, marginTop: 4, opacity: 0.9 }}>AI Confidence (Avg)</div>
-            </div>
-            <div style={{ flex: 1, position: 'relative', marginTop: 10, padding: '0 8px' }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={dummyBarData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
-                  <Bar dataKey="v" fill="#fff" fillOpacity={0.7} radius={[2, 2, 0, 0]} barSize={12} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* --- STAT CARDS GRID --- */}
-      <div className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14, marginBottom: 20 }}>
-        
-        <div style={{ background: '#8b5cf6', borderRadius: 16, padding: 24, color: '#fff', position: 'relative', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', right: -20, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.1)' }} />
-          <div style={{ position: 'absolute', right: -40, bottom: -20, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
-          <Users size={20} color="#ffffff" style={{ opacity: 0.8, marginBottom: 20 }} />
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', opacity: 0.9 }}>Leads Today</div>
-          <div style={{ fontSize: 36, fontWeight: 800, marginTop: 4 }}>{loading ? '...' : stats?.leads_today}</div>
-        </div>
-
-        <div style={{ background: '#f97316', borderRadius: 16, padding: 24, color: '#fff', position: 'relative', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', right: -20, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.1)' }} />
-          <div style={{ position: 'absolute', right: -40, bottom: -20, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
-          <Target size={20} color="#ffffff" style={{ opacity: 0.8, marginBottom: 20 }} />
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', opacity: 0.9 }}>Hot Pipelines</div>
-          <div style={{ fontSize: 36, fontWeight: 800, marginTop: 4 }}>{loading ? '...' : stats?.hot_leads}</div>
-        </div>
-
-        <div style={{ background: '#10b981', borderRadius: 16, padding: 24, color: '#fff', position: 'relative', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', right: -20, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.1)' }} />
-          <div style={{ position: 'absolute', right: -40, bottom: -20, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
-          <CheckCircle size={20} color="#ffffff" style={{ opacity: 0.8, marginBottom: 20 }} />
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', opacity: 0.9 }}>Converted Today</div>
-          <div style={{ fontSize: 36, fontWeight: 800, marginTop: 4 }}>{loading ? '...' : stats?.converted_today}</div>
-        </div>
-
-        <div style={{ background: '#ef4444', borderRadius: 16, padding: 24, color: '#fff', position: 'relative', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', right: -20, bottom: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.1)' }} />
-          <div style={{ position: 'absolute', right: -40, bottom: -20, width: 140, height: 140, borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
-          <DollarSign size={20} color="#ffffff" style={{ opacity: 0.8, marginBottom: 20 }} />
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px', opacity: 0.9 }}>Revenue MTD</div>
-          <div style={{ fontSize: 36, fontWeight: 800, marginTop: 4 }}>{loading ? '...' : formatRevenueValue(stats?.revenue_month)}</div>
-        </div>
-      </div>
-
-      {/* --- ROW 1: PRIMARY CHARTS GRID --- */}
-      <div className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 16, marginBottom: 16 }}>
-        
-        {/* Leads & Conversions AreaChart */}
+      {/* --- ROW 1: LEADS CHART + SOURCES --- */}
+      <div className="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-[1.6fr_1fr]">
         <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column', minHeight: 280 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
-            <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Lead Acquisition & Conversions</h3>
-            <span style={{ fontSize: 10, color: C.accent, fontWeight: 700, background: `${C.accent}15`, padding: '3px 8px', borderRadius: 4 }}>
-              Active Timeline: {timeRange.toUpperCase()}
-            </span>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <h3 className={sectionTitle}>New leads & conversions</h3>
+            <span className="rounded bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">{RANGE_LABEL[timeRange]}</span>
           </div>
-
           <div style={{ flex: 1, minHeight: 200 }}>
             {loading ? (
-              <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 12 }}>
-                Loading Chart...
-              </div>
-            ) : weeklyData.length > 0 ? (
+              <EmptyChart>Loading…</EmptyChart>
+            ) : hasLeadsInRange ? (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={weeklyData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
                   <defs>
                     <linearGradient id="leadsGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={C.accent} stopOpacity={0.25} />
+                      <stop offset="0%" stopColor={C.accent} stopOpacity={0.2} />
                       <stop offset="100%" stopColor={C.accent} stopOpacity={0} />
                     </linearGradient>
                     <linearGradient id="convGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={C.green} stopOpacity={0.25} />
+                      <stop offset="0%" stopColor={C.green} stopOpacity={0.2} />
                       <stop offset="100%" stopColor={C.green} stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} />
+                  <XAxis dataKey="day" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={12} />
+                  <YAxis allowDecimals={false} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
                   <Tooltip
-                    contentStyle={{ background: C.surface, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11, color: C.text }}
-                    labelStyle={{ color: C.muted, fontWeight: 700, marginBottom: 4 }}
+                    contentStyle={{ background: C.surface, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 12, color: C.text }}
+                    labelStyle={{ color: C.muted, fontWeight: 600, marginBottom: 4 }}
                   />
                   <Area type="monotone" dataKey="Leads" stroke={C.accent} strokeWidth={2} fill="url(#leadsGrad)" />
                   <Area type="monotone" dataKey="Converted" stroke={C.green} strokeWidth={2} fill="url(#convGrad)" />
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
-              <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 12 }}>
-                No lead acquisition records found in this range.
-              </div>
+              <EmptyChart>No leads yet in this period</EmptyChart>
             )}
           </div>
         </div>
 
-        {/* Ingestion Sources PieChart */}
         <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column', minHeight: 280 }}>
-          <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 14 }}>Traffic Channels</h3>
-          
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 140 }}>
-            {loading ? (
-              <span style={{ fontSize: 12, color: C.muted }}>Loading...</span>
-            ) : sourceData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={150}>
-                <PieChart>
-                  <Pie
-                    data={sourceData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={46}
-                    outerRadius={62}
-                    paddingAngle={3}
-                    dataKey="value"
-                  >
-                    {sourceData.map((s, idx) => (
-                      <Cell key={idx} fill={s.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(v) => `${v} leads`} contentStyle={{ background: C.surface, border: '1px solid ' + C.border, fontSize: 11, color: C.text }} />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <span style={{ fontSize: 11, color: C.muted }}>No traffic source details</span>
-            )}
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 className={sectionTitle}>Where leads came from</h3>
+            {overview?.total_leads > 0 && <span className="text-xs text-muted-foreground">{overview.total_leads} leads</span>}
           </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, borderTop: `1px solid ${C.border}`, paddingTop: 12, marginTop: 8 }}>
-            {sourceData.map((s, idx) => (
-              <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}>
-                <div style={{ width: 7, height: 7, borderRadius: '50%', background: s.color }} />
-                <span style={{ color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 70 }} title={s.name}>{s.name}</span>
-                <span style={{ color: C.muted, fontWeight: 700 }}>{s.percentage}%</span>
+          {loading ? (
+            <EmptyChart>Loading…</EmptyChart>
+          ) : sources.length > 0 ? (
+            <div className="flex flex-1 flex-col items-center gap-4 sm:flex-row lg:flex-col xl:flex-row">
+              <div className="h-[140px] w-[140px] shrink-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={sources} dataKey="count" nameKey="label" cx="50%" cy="50%" innerRadius={44} outerRadius={64} paddingAngle={sources.length > 1 ? 2 : 0}>
+                      {sources.map((s) => <Cell key={s.kind} fill={s.color} />)}
+                    </Pie>
+                    <Tooltip formatter={(v, name) => [`${v} lead${v === 1 ? '' : 's'}`, name]} contentStyle={{ background: C.surface, border: '1px solid ' + C.border, fontSize: 12, color: C.text }} />
+                  </PieChart>
+                </ResponsiveContainer>
               </div>
-            ))}
-          </div>
+              <ul className="w-full min-w-0 space-y-2">
+                {sources.map((s) => (
+                  <li key={s.kind} className="flex items-center gap-2 text-[13px]">
+                    <span className="size-2.5 shrink-0 rounded-full" style={{ background: s.color }} />
+                    <span className="min-w-0 flex-1 text-slate-700">{s.label}</span>
+                    <span className="font-semibold text-slate-900 tabular-nums">{s.count}</span>
+                    <span className="w-10 text-right text-muted-foreground tabular-nums">{s.percent}%</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <EmptyChart>No leads yet in this period</EmptyChart>
+          )}
         </div>
       </div>
 
-      {/* --- ROW 2: SECONDARY CHARTS GRID --- */}
-      <div className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-        
-        {/* Revenue trend line/bar */}
-        <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column', minHeight: 250 }}>
-          <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 16 }}>Revenue Performance</h3>
-          
-          <div style={{ flex: 1, minHeight: 160 }}>
-            {loading ? (
-              <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 12 }}>
-                Loading...
-              </div>
-            ) : stats?.revenue_trend && stats.revenue_trend.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={stats.revenue_trend} barSize={22}>
-                  <XAxis dataKey="m" tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} />
-                  <YAxis tickFormatter={(v) => "₹" + (v / 1000) + "K"} tick={{ fill: C.muted, fontSize: 9 }} axisLine={false} tickLine={false} />
-                  <Tooltip
-                    formatter={v => "₹" + v.toLocaleString()}
-                    contentStyle={{ background: C.surface, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11, color: C.text }}
-                  />
-                  <Bar dataKey="r" fill={C.blue} radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 12 }}>
-                No captured payments recorded.
-              </div>
-            )}
+      {/* --- ROW 2: REVENUE (not for agents) + FUNNEL --- */}
+      <div className={cn('mb-4 grid grid-cols-1 gap-4', !staff && 'lg:grid-cols-2')}>
+        {!staff && (
+          <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column', minHeight: 250 }}>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <h3 className={sectionTitle}>Revenue</h3>
+              <span className="text-xs text-muted-foreground">Captured payments, last 6 months</span>
+            </div>
+            <div style={{ flex: 1, minHeight: 160 }}>
+              {loading ? (
+                <EmptyChart>Loading…</EmptyChart>
+              ) : hasRevenue ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={revenueTrend} barSize={22} margin={{ top: 5, right: 5, left: -10, bottom: 0 }}>
+                    <XAxis dataKey="m" tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <YAxis tickFormatter={formatRupees} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                    <Tooltip
+                      formatter={(v) => [fullRupees(v), 'Revenue']}
+                      contentStyle={{ background: C.surface, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 12, color: C.text }}
+                    />
+                    <Bar dataKey="r" fill={C.blue} radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <EmptyChart>No payments captured yet</EmptyChart>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Funnel Dropoff Breakdown */}
         <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column', minHeight: 250 }}>
-          <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 12 }}>Pipeline Drop-off Funnel</h3>
-          
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 className={sectionTitle}>Pipeline</h3>
+            <span className="text-xs text-muted-foreground">All leads, current status</span>
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1, justifyContent: 'center' }}>
             {loading ? (
-              <span style={{ fontSize: 12, color: C.muted, textAlign: 'center' }}>Loading funnel...</span>
-            ) : funnelData.length > 0 ? (
-              funnelData.map((f, i) => (
-                <div key={i} style={{ marginBottom: 2 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3, fontSize: 10 }}>
-                    <span style={{ color: C.muted, fontWeight: 600 }}>{f.label}</span>
-                    <span style={{ color: C.text, fontWeight: 700 }}>{f.count} <span style={{ color: f.color, fontSize: 9 }}>({f.percent}%)</span></span>
+              <EmptyChart>Loading…</EmptyChart>
+            ) : funnelTotal > 0 ? (
+              funnelData.map((f) => (
+                <div key={f.label}>
+                  <div className="mb-1 flex justify-between gap-2 text-xs">
+                    <span className="font-medium text-slate-600">{f.label}</span>
+                    <span className="font-semibold text-slate-900 tabular-nums">{f.count} <span className="font-normal text-muted-foreground">({f.percent}%)</span></span>
                   </div>
-                  <div style={{ height: 5, background: C.border, borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${f.percent}%`, background: f.color, borderRadius: 3, transition: 'width 0.4s ease' }} />
                   </div>
                 </div>
               ))
             ) : (
-              <span style={{ fontSize: 11, color: C.muted, textAlign: 'center' }}>No leads matching parameters.</span>
+              <EmptyChart>No leads yet</EmptyChart>
             )}
           </div>
         </div>
       </div>
 
-      {/* --- ROW 3: DETAILED OPERATIONS GRID --- */}
-      <div className="grid-responsive" style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 16, marginBottom: 16 }}>
-        
-        {/* Recent Transactions List */}
-        <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-            <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Recent Captured Payments</h3>
-            <CreditCard size={15} color={C.muted} />
-          </div>
-
-          <div className="table-responsive" style={{ flex: 1 }}>
-            {paymentsLoading ? (
-              <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 12 }}>Loading payments...</div>
-            ) : filteredPayments.length > 0 ? (
-              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                <thead>
-                  <tr style={{ borderBottom: `1px solid ${C.border}`, fontSize: 9, fontWeight: 700, color: C.muted, textTransform: 'uppercase' }}>
-                    <th style={{ padding: '8px 10px' }}>Lead</th>
-                    <th style={{ padding: '8px 10px' }}>Details</th>
-                    <th style={{ padding: '8px 10px', textAlign: 'right' }}>Amount</th>
-                    <th style={{ padding: '8px 10px', textAlign: 'center' }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPayments.map((p) => (
-                    <tr
-                      key={p.id}
-                      className="interactive-row"
-                      style={{ borderBottom: `1px solid ${C.border}`, fontSize: 11, color: C.text }}
-                      onClick={() => setSelectedLeadId(p.lead_id)}
-                    >
-                      <td style={{ padding: '10px 10px', fontWeight: 600 }}>{p.lead_name || 'N/A'}</td>
-                      <td style={{ padding: '10px 10px', color: C.muted, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.description || 'Service Payment'}</td>
-                      <td style={{ padding: '10px 10px', textAlign: 'right', fontWeight: 700, color: C.green }}>₹{p.amount?.toLocaleString()}</td>
-                      <td style={{ padding: '10px 10px', textAlign: 'center' }}>
-                        <span style={{
-                          background: p.status === 'captured' ? '#0a2018' : p.status === 'pending' ? '#2d1f0a' : '#2d1010',
-                          color: p.status === 'captured' ? C.green : p.status === 'pending' ? C.accent : C.red,
-                          padding: '2px 8px', borderRadius: 12, fontSize: 9, fontWeight: 700, textTransform: 'capitalize'
-                        }}>
-                          {p.status}
-                        </span>
-                      </td>
+      {/* --- ROW 3: RECENT PAYMENTS (not for agents) + HOT LEADS --- */}
+      <div className={cn('mb-4 grid grid-cols-1 gap-4', !staff && 'lg:grid-cols-[1.2fr_0.8fr]')}>
+        {!staff && (
+          <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className={sectionTitle}>Recent payments</h3>
+              <CreditCard size={15} color={C.muted} />
+            </div>
+            <div style={{ flex: 1, overflowX: 'auto' }}>
+              {paymentsLoading ? (
+                <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 12 }}>Loading payments…</div>
+              ) : filteredPayments.length > 0 ? (
+                <table style={{ width: '100%', minWidth: 420, borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${C.border}`, fontSize: 10, fontWeight: 600, color: C.muted, textTransform: 'uppercase' }}>
+                      <th style={{ padding: '8px 10px' }}>Lead</th>
+                      <th style={{ padding: '8px 10px' }}>Details</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'right' }}>Amount</th>
+                      <th style={{ padding: '8px 10px', textAlign: 'center' }}>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div style={{ padding: '40px 10px', textAlign: 'center', color: C.muted, fontSize: 11 }}>
-                No recent payment transactions recorded.
-              </div>
-            )}
+                  </thead>
+                  <tbody>
+                    {filteredPayments.map((p) => (
+                      <tr key={p.id} className="interactive-row" style={{ borderBottom: `1px solid ${C.border}`, fontSize: 12, color: C.text }} onClick={() => setSelectedLeadId(p.lead_id)}>
+                        <td style={{ padding: '10px 10px', fontWeight: 600 }}>{p.lead_name || 'N/A'}</td>
+                        <td style={{ padding: '10px 10px', color: C.muted, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.description || 'Service Payment'}</td>
+                        <td style={{ padding: '10px 10px', textAlign: 'right', fontWeight: 700, color: C.green }}>{fullRupees(p.amount)}</td>
+                        <td style={{ padding: '10px 10px', textAlign: 'center' }}>
+                          <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize',
+                            p.status === 'captured' ? 'bg-green-50 text-green-700' : p.status === 'pending' ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700')}>
+                            {p.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <EmptyChart>No payments yet</EmptyChart>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Hot Leads list */}
         <div className="dashboard-card" style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
+          <div className="mb-3 flex items-center gap-1.5">
             <AlertCircle size={15} color={C.red} />
-            <h3 style={{ fontFamily: "'Inter', sans-serif", fontSize: 13, fontWeight: 700, color: C.text, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Hot Pipelines</h3>
-            <span style={{ marginLeft: 'auto', background: `${C.red}15`, color: C.red, padding: '2px 8px', borderRadius: 12, fontSize: 9, fontWeight: 700 }}>
-              {hotLeads.length} Urgent
-            </span>
+            <h3 className={sectionTitle}>Hot leads</h3>
+            <span className="ml-auto rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700">{hotLeads.length}</span>
           </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 9, flex: 1, overflowY: 'auto', maxHeight: 260 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, overflowY: 'auto', maxHeight: 280 }}>
             {hotLeads.length > 0 ? (
               hotLeads.slice(0, 5).map((l) => (
-                <div
-                  key={l.id}
-                  onClick={() => setSelectedLeadId(l.id)}
-                  style={{
-                    background: C.surface,
-                    border: `1px solid ${C.border}`,
-                    borderRadius: 10,
-                    padding: '9px 12px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease'
-                  }}
-                  className="interactive-row"
-                >
-                  <div style={{
-                    width: 28, height: 28, borderRadius: '50%',
-                    background: `${C.red}15`, display: 'flex',
-                    alignItems: 'center', justifyContent: 'center',
-                    fontSize: 10, fontWeight: 700, color: C.red
-                  }}>
+                <div key={l.id} onClick={() => setSelectedLeadId(l.id)} className="interactive-row"
+                  style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: '9px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: '50%', background: `${C.red}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.red, flexShrink: 0 }}>
                     {l.name ? l.name[0].toUpperCase() : 'L'}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ fontSize: 12, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</p>
-                    <p style={{ fontSize: 10, color: C.muted }}>{l.brand_name || 'Individual'}</p>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.name}</p>
+                    <p style={{ fontSize: 11, color: C.muted }}>{l.brand_name || 'No brand'}</p>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                    <ScoreBar score={l.score || 0} />
-                    <span style={{ fontSize: 9, color: C.muted }}>Score</span>
-                  </div>
+                  <ScoreBar score={l.score || 0} />
                   <ChevronRight size={14} color={C.muted} />
                 </div>
               ))
             ) : (
-              <div style={{ padding: '40px 10px', textAlign: 'center', color: C.muted, fontSize: 11 }}>
-                No hot leads requiring follow-up. Good job!
-              </div>
+              <EmptyChart>No hot leads right now</EmptyChart>
             )}
           </div>
         </div>

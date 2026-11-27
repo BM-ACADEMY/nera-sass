@@ -15,6 +15,7 @@ import {
 } from './leads/leadsPolicy.js';
 import { LabelFilter, LabelsManagerButton, LeadLabelsCell, LeadLabelsDialog } from './leads/labels/index.js';
 import { labelPermissions } from './leads/labelsPolicy.js';
+import { queryValue } from '../utils/dashboard.js';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -166,7 +167,8 @@ const Empty = ({ filtered, onAdd, onImport, onClear }) => (
 
 export const LeadsView = ({ onLeadClick, refreshTrigger }) => {
   const [source, setSource] = useState('all');
-  const [status, setStatus] = useState('all');
+  // ?status=hot (Dashboard links) opens the list already filtered.
+  const [status, setStatus] = useState(() => queryValue(window.location.search, 'status', STATUS_OPTIONS.map((o) => o.value), 'all'));
   const [assignedTo, setAssignedTo] = useState('all');
   const [campaign, setCampaign] = useState('all');
   const [ad, setAd] = useState('all');

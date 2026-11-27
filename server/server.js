@@ -1583,6 +1583,7 @@ const leadosRouteContext = {
   'followups',
   'leads-crud',
   'labels',
+  'dashboard',
   'whatsapp',
   'whatsapp-overview',
   'whatsapp-profile',

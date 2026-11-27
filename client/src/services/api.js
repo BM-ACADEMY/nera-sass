@@ -900,6 +900,17 @@ class LeadOSAPI {
     return this.request(`/api/reports/summary${query ? '?' + query : ''}`);
   }
 
+  // Dashboard "Needs attention now" (+ "My day" for agents) and the range
+  // numbers (converted, lead sources): server/routes/leados/dashboard.js.
+  async getDashboardAttention() {
+    return this.request('/api/dashboard/attention');
+  }
+
+  async getDashboardOverview({ range, client_id } = {}) {
+    const params = new URLSearchParams({ ...(range && { range }), ...(client_id && { client_id }) });
+    return this.request(`/api/dashboard/overview?${params}`);
+  }
+
   async getFounderDashboard() {
     return this.request('/api/reports/founder-dashboard');
   }
