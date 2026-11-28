@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { requireSection } = require('../../services/permissions');
 const { currentTenantId } = require('../../services/tenantContext');
 const { postToN8n } = require('../../services/n8n');
 const consent = require('../../services/consent');
@@ -25,7 +26,7 @@ const {
   upload,
   xlsx,
 } = ctx;
-app.post('/api/leads/import', auth, upload.single('file'), async (req, res) => {
+app.post('/api/leads/import', auth, requireSection('leads'), upload.single('file'), async (req, res) => {
   try {
     const { client_id } = req.body;
     const leadOSBrand = await getLeadOSBrand();

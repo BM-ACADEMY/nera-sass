@@ -72,7 +72,7 @@ test('adding people', async (t) => {
   });
 
   const add = (body) => request(app).post('/api/team/users').set({ Authorization: `Bearer ${makeToken(owner)}` }).send(body);
-  const priya = { name: 'Priya Agent', email: 'priya@acme.test', role: 'agent', method: 'password', password: TEMP };
+  const priya = { name: 'Priya Agent', email: 'priya@acme.test', role: 'staff', method: 'password', password: TEMP };
 
   await t.test('temporary password: sign-in details by email, never the password', async () => {
     const res = await add(priya);
@@ -86,7 +86,7 @@ test('adding people', async (t) => {
       assert.ok(!body.includes(TEMP), 'the password is not in the mail');
       assert.ok(body.includes('https://app.example.test/login'));
       assert.ok(body.includes('Asha Owner'));
-      assert.ok(body.includes('Agent'));
+      assert.ok(body.includes('Staff'));
       assert.match(body, /temporary password that Asha Owner will share with you/);
       assert.match(body, /must change the temporary one at your first sign-in/);
     }
@@ -96,7 +96,7 @@ test('adding people', async (t) => {
   });
 
   await t.test('invitation: the designed email with the one-time link', async () => {
-    const res = await add({ name: 'Ravi', email: 'ravi@acme.test', role: 'manager', method: 'invite' });
+    const res = await add({ name: 'Ravi', email: 'ravi@acme.test', role: 'staff', method: 'invite' });
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     assert.strictEqual(res.body.delivery.delivered, true);
     assert.strictEqual(notify.outbox().length, 1);
@@ -106,7 +106,7 @@ test('adding people', async (t) => {
     assert.ok(mail.html.includes(`href="${link}"`));
     for (const body of [mail.text, mail.html]) {
       assert.ok(body.includes('Asha Owner'));
-      assert.ok(body.includes('Manager'));
+      assert.ok(body.includes('Staff'));
       assert.match(body, /Choose your own password/);
       assert.match(body, /works once and expires on/);
     }

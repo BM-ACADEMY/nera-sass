@@ -136,8 +136,9 @@ test('Exports', async (t) => {
     assert.strictEqual((await request(app).get('/api/data-export/workspace.csv').set(agent.headers)).status, 403);
     assert.strictEqual((await request(app).get(`/api/contacts/${agent.lead.id}/export.csv`).set(agent.headers)).status, 403);
     assert.strictEqual((await request(app).get('/api/data-export/workspace.csv')).status, 401);
-    const manager = await seedTenant(2, { role: 'manager' });
-    assert.strictEqual((await request(app).get(`/api/contacts/${manager.lead.id}/export.csv`).set(manager.headers)).status, 200, 'managers may export one contact');
+    // An Admin with Leads exports one contact; the whole workspace is for Owners. Old managers are Staff now (no export).
+    const manager = await seedTenant(2, { role: 'admin' });
+    assert.strictEqual((await request(app).get(`/api/contacts/${manager.lead.id}/export.csv`).set(manager.headers)).status, 200, 'admins may export one contact');
     assert.strictEqual((await request(app).get('/api/data-export/workspace.csv').set(manager.headers)).status, 403, 'but not the whole workspace');
     assert.strictEqual((await auditEvents('WORKSPACE_EXPORTED')).length, 0);
   });

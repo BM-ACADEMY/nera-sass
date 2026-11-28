@@ -3,6 +3,8 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { normalizeTenantRole } = require('../../services/permissions');
+
 module.exports = function registerUsersRoutes(app, ctx) {
 const {
   Users,
@@ -14,7 +16,8 @@ const {
 app.get('/api/users', auth, async (req, res) => {
   try {
     const rows = await Users.find({}, { _id: 0, id: 1, name: 1, email: 1, role: 1, is_active: 1, last_login: 1, created_at: 1 }).sort({ created_at: 1 }).lean();
-    res.json({ users: rows });
+    // Retired roles (manager, agent) are shown as Staff.
+    res.json({ users: rows.map((row) => ({ ...row, role: row.role ? normalizeTenantRole(row.role) : row.role })) });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
   }

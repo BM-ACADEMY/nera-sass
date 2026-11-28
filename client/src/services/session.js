@@ -26,7 +26,8 @@ export function readStoredSession(storage) {
   }
 }
 
-const PROFILE_FIELDS = ['name', 'email', 'phone', 'role', 'tenant_id', 'tenant_name', 'mfa_enabled', 'must_change_password'];
+const PROFILE_FIELDS = ['name', 'email', 'phone', 'role', 'sections', 'tenant_id', 'tenant_name', 'mfa_enabled', 'must_change_password'];
+const sameValue = (a, b) => (Array.isArray(a) || Array.isArray(b) ? JSON.stringify(a) === JSON.stringify(b) : a === b);
 
 // Applies the current /api/auth/me answer to the stored user (display only).
 export function mergeProfile(stored, me) {
@@ -34,7 +35,7 @@ export function mergeProfile(stored, me) {
   let changed = false;
   const user = { ...stored };
   for (const field of PROFILE_FIELDS) {
-    if (me[field] !== undefined && me[field] !== stored[field]) {
+    if (me[field] !== undefined && !sameValue(me[field], stored[field])) {
       user[field] = me[field];
       changed = true;
     }

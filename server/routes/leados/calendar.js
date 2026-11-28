@@ -4,7 +4,7 @@
  * workspace's working hours; the team sees and cancels them here.
  */
 const { runAsTenant } = require('../../services/tenantContext');
-const { requirePermission, can } = require('../../services/permissions');
+const { requirePermission, can, requireSection } = require('../../services/permissions');
 const audit = require('../../services/audit');
 const activity = require('../../services/activity');
 const googleCalendar = require('../../services/googleCalendar');
@@ -24,7 +24,7 @@ module.exports = function registerCalendarRoutes(app, ctx) {
     return res.status(500).json({ error: 'Server error' });
   };
 
-  app.get('/api/calendar/status', internalAuth, async (req, res) => {
+  app.get('/api/calendar/status', internalAuth, requireSection('plugins'), async (req, res) => {
     try {
       const status = await googleCalendar.getConnectionStatus();
       // Lets the Calendar page show Connect/Save only to people allowed to use them.
@@ -35,7 +35,7 @@ module.exports = function registerCalendarRoutes(app, ctx) {
   });
 
   // Returns the Google consent URL; the browser goes there next.
-  app.post('/api/calendar/google/connect', auth, manage, async (req, res) => {
+  app.post('/api/calendar/google/connect', auth, requireSection('plugins'), manage, async (req, res) => {
     try {
       res.json({ url: googleCalendar.getAuthorizationUrl({ userId: req.user?.id }) });
     } catch (error) {
@@ -71,7 +71,7 @@ module.exports = function registerCalendarRoutes(app, ctx) {
     }
   });
 
-  app.delete('/api/calendar/google', auth, manage, async (req, res) => {
+  app.delete('/api/calendar/google', auth, requireSection('plugins'), manage, async (req, res) => {
     try {
       await googleCalendar.disconnect();
       await audit.record(audit.EVENTS.CALENDAR_DISCONNECTED, { tenantId: req.identity.tenantId, req, targetType: 'google_calendar', summary: 'Disconnected Google Calendar' });
@@ -81,7 +81,7 @@ module.exports = function registerCalendarRoutes(app, ctx) {
     }
   });
 
-  app.put('/api/calendar/settings', auth, manage, async (req, res) => {
+  app.put('/api/calendar/settings', auth, requireSection('plugins'), manage, async (req, res) => {
     try {
       const settings = await googleCalendar.updateSettings(req.body || {});
       const fields = Object.keys(req.body || {});
@@ -94,7 +94,7 @@ module.exports = function registerCalendarRoutes(app, ctx) {
 
   // Upcoming booked meetings, plus times leads asked for while booking was
   // unavailable (for the team to confirm).
-  app.get('/api/calendar/meetings', auth, async (req, res) => {
+  app.get('/api/calendar/meetings', auth, requireSection('plugins'), async (req, res) => {
     try {
       const since = new Date(Date.now() - 2 * 60 * 60 * 1000);
       const fields = { _id: 0, id: 1, name: 1, phone: 1, email: 1, booking_status: 1, call_booked_at: 1, meeting_requested_for: 1, google_meet_link: 1, calendar_event_url: 1 };
@@ -108,7 +108,7 @@ module.exports = function registerCalendarRoutes(app, ctx) {
     }
   });
 
-  app.post('/api/calendar/meetings/:leadId/cancel', auth, async (req, res) => {
+  app.post('/api/calendar/meetings/:leadId/cancel', auth, requireSection('plugins'), async (req, res) => {
     try {
       const leadId = Number(req.params.leadId);
       if (!(await Leads.exists({ id: leadId }))) return res.status(404).json({ error: 'Lead not found' });

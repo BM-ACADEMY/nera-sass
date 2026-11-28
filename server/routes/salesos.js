@@ -4,6 +4,10 @@ const express = require('express');
 // service key or founder/ops platform staff only, never a customer token.
 const { internalAuth, internalPlatformAuth, staffAuth, hasInternalKey } = require('../middleware/authMiddleware');
 const audit = require('../services/audit');
+// Customer calls are limited to the sections they were given (n8n and staff pass).
+const { requireSection, ownDataOnly } = require('../services/permissions');
+// Dashboard and report numbers: Staff count only the leads assigned to them.
+const ownLeads = (req) => (ownDataOnly(req.identity) ? { assigned_to: req.user.id } : {});
 const activity = require('../services/activity');
 const leadLabels = require('../services/leadLabels');
 const erasure = require('../services/erasure');
@@ -1860,26 +1864,26 @@ router.get('/reports/founder-dashboard', internalPlatformAuth, async (req, res) 
   }
 });
 
-router.get('/reports/revenue-today', internalAuth, async (req, res) => {
+router.get('/reports/revenue-today', internalAuth, requireSection('dashboard', 'reports'), async (req, res) => {
   try {
-    const converted = await Leads.countDocuments({ status: 'converted', updated_at: { $gte: startOfUtcDay() } });
+    const converted = await Leads.countDocuments({ ...ownLeads(req), status: 'converted', updated_at: { $gte: startOfUtcDay() } });
     res.json({ revenue: converted * 500 });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/revenue-month', internalAuth, async (req, res) => {
+router.get('/reports/revenue-month', internalAuth, requireSection('dashboard', 'reports'), async (req, res) => {
   try {
     const monthStart = startOfUtcMonth();
     const nextMonth = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 1));
-    const converted = await Leads.countDocuments({ status: 'converted', updated_at: { $gte: monthStart, $lt: nextMonth } });
+    const converted = await Leads.countDocuments({ ...ownLeads(req), status: 'converted', updated_at: { $gte: monthStart, $lt: nextMonth } });
     res.json({ revenue: converted * 500 });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/brand-revenue', internalAuth, async (req, res) => {
+router.get('/reports/brand-revenue', internalAuth, requireSection('dashboard', 'reports'), async (req, res) => {
   try {
     const convertedByClient = await Leads.aggregate([
-      { $match: { status: 'converted', client_id: { $ne: null } } },
+      { $match: { ...ownLeads(req), status: 'converted', client_id: { $ne: null } } },
       { $group: { _id: '$client_id', count: { $sum: 1 } } },
     ]);
     const revenueClients = new Map((await Clients.find({ id: { $in: convertedByClient.map((r) => r._id) } }, { id: 1, name: 1 }).lean()).map((c) => [c.id, c.name]));
@@ -1893,9 +1897,10 @@ router.get('/reports/brand-revenue', internalAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/lead-sources', internalAuth, async (req, res) => {
+router.get('/reports/lead-sources', internalAuth, requireSection('dashboard', 'reports'), async (req, res) => {
   try {
     const sources = await Leads.aggregate([
+      { $match: ownLeads(req) },
       { $group: { _id: '$source', count: { $sum: 1 } } },
       { $project: { _id: 0, source: '$_id', count: 1 } },
     ]);
@@ -1903,9 +1908,10 @@ router.get('/reports/lead-sources', internalAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/conversion-rate', internalAuth, async (req, res) => {
+router.get('/reports/conversion-rate', internalAuth, requireSection('dashboard', 'reports'), async (req, res) => {
   try {
     const data = await Leads.aggregate([
+      { $match: ownLeads(req) },
       { $group: { _id: '$status', count: { $sum: 1 } } },
       { $project: { _id: 0, status: '$_id', count: 1 } },
     ]);
@@ -1913,21 +1919,21 @@ router.get('/reports/conversion-rate', internalAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/followups-pending', internalAuth, async (req, res) => {
+router.get('/reports/followups-pending', internalAuth, requireSection('dashboard', 'reports'), async (req, res) => {
   try {
-    const pending = await Leads.countDocuments({ next_followup_due: { $gt: new Date() }, status: { $nin: ['converted', null] } });
+    const pending = await Leads.countDocuments({ ...ownLeads(req), next_followup_due: { $gt: new Date() }, status: { $nin: ['converted', null] } });
     res.json({ pending });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/sla-breaches', internalAuth, async (req, res) => {
+router.get('/reports/sla-breaches', internalAuth, requireSection('dashboard', 'reports'), async (req, res) => {
   try {
-    const breaches = await Leads.countDocuments({ next_followup_due: { $lt: new Date() }, status: { $nin: ['converted', null] } });
+    const breaches = await Leads.countDocuments({ ...ownLeads(req), next_followup_due: { $lt: new Date() }, status: { $nin: ['converted', null] } });
     res.json({ breaches });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/ai-performance', internalAuth, async (req, res) => {
+router.get('/reports/ai-performance', internalAuth, requireSection('dashboard', 'reports'), async (req, res) => {
   try {
     const [avg] = await AiDecisions.aggregate([{ $group: { _id: null, avg_confidence: { $avg: '$confidence' } } }]);
     res.json({ avg_confidence: parseFloat(avg?.avg_confidence) || 0 });
@@ -1937,7 +1943,7 @@ router.get('/reports/ai-performance', internalAuth, async (req, res) => {
 // ==========================================
 // WF02 - Followup Engine
 // ==========================================
-router.get('/followups/due', internalAuth, async (req, res) => {
+router.get('/followups/due', internalAuth, requireSection('followups'), async (req, res) => {
   try {
     await salesTrackingReady;
     const MAX_FOLLOWUP_ATTEMPTS = 5; // Stop after 5 attempts
@@ -1962,7 +1968,7 @@ router.get('/followups/due', internalAuth, async (req, res) => {
 });
 
 // 2. Fetch Followup Rule
-router.post('/followups/sales-guard', internalAuth, async (req, res) => {
+router.post('/followups/sales-guard', internalAuth, requireSection('followups'), async (req, res) => {
   try {
     await salesTrackingReady;
     const leadRow = await Leads.findOne({ id: req.body.lead_id }, { id: 1, sales_status: 1, sales_followup_stopped: 1, sales_followup_at: 1 }).lean();
@@ -1989,7 +1995,7 @@ router.post('/followups/sales-guard', internalAuth, async (req, res) => {
 });
 
 // 2. Fetch Followup Rule
-router.post('/followups/rule', internalAuth, async (req, res) => {
+router.post('/followups/rule', internalAuth, requireSection('followups'), async (req, res) => {
   const { touch_count } = req.body;
   try {
     const cadenceHours = [4, 8, 12, 24, 72];
@@ -2061,7 +2067,7 @@ router.post('/whatsapp/check-24h', internalAuth, async (req, res) => {
 });
 
 // 4. Generate & Send Followup AI Text
-router.post('/ai/followup', internalAuth, async (req, res) => {
+router.post('/ai/followup', internalAuth, requireSection('followups'), async (req, res) => {
   const { lead_id } = req.body;
   try {
     const lead = await leadWithClient(lead_id, { brand_name: 'name', phone_number_id: 'phone_number_id', client_wa_token: 'wa_access_token' });
@@ -2686,7 +2692,7 @@ router.post('/leads/internal-note', internalAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/leads/update-followup', internalAuth, async (req, res) => {
+router.post('/leads/update-followup', internalAuth, requireSection('followups'), async (req, res) => {
   const { lead_id, touch_count_increment } = req.body;
   try {
     const increment = touch_count_increment || 1;
@@ -2720,7 +2726,7 @@ router.post('/leads/update-followup', internalAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/reports/overdue-followups', internalAuth, async (req, res) => {
+router.get('/reports/overdue-followups', internalAuth, requireSection('followups'), async (req, res) => {
   try {
     const overdue = await Leads.find(
       { next_followup_due: { $lt: new Date() }, status: { $nin: ['converted', null] } },
@@ -2914,7 +2920,7 @@ const findLiveTask = (id) => SalesTasks.findOne({ id: toId(id, 'Task'), ...LIVE 
 const statusChange = (status) => ({ status, completed_at: status === 'completed' ? new Date() : null });
 const AUTO_TASK_TYPES = ['call', 'hot_lead', 'followup', 'overdue'];
 
-router.get('/sales-tasks', internalAuth, async (req, res) => {
+router.get('/sales-tasks', internalAuth, requireSection('sales_tasks'), async (req, res) => {
   try {
     await salesTasksReady;
     await salesTrackingReady;
@@ -3006,7 +3012,7 @@ async function logTaskEdit(req, before, after, changes) {
 
 // Team members a task can be given to: active users of this workspace only.
 // Every member may read this short list (the full /team/users page needs team.view).
-router.get('/sales-tasks/assignees', internalAuth, async (req, res) => {
+router.get('/sales-tasks/assignees', internalAuth, requireSection('sales_tasks'), async (req, res) => {
   try {
     const users = await Users.find(
       { is_platform_staff: { $ne: true }, is_active: { $ne: false }, active: { $ne: false } },
@@ -3017,7 +3023,7 @@ router.get('/sales-tasks/assignees', internalAuth, async (req, res) => {
 });
 
 // Add a task by hand.
-router.post('/sales-tasks', internalAuth, async (req, res) => {
+router.post('/sales-tasks', internalAuth, requireSection('sales_tasks'), async (req, res) => {
   try {
     const body = req.body || {};
     const title = cleanText(body.title, 'Title', 200);
@@ -3048,7 +3054,7 @@ router.post('/sales-tasks', internalAuth, async (req, res) => {
 });
 
 // Edit a task: title, details, lead, assignee, due time, status.
-router.patch('/sales-tasks/:id', internalAuth, async (req, res) => {
+router.patch('/sales-tasks/:id', internalAuth, requireSection('sales_tasks'), async (req, res) => {
   try {
     const body = req.body || {};
     const existing = await findLiveTask(req.params.id);
@@ -3086,7 +3092,7 @@ router.patch('/sales-tasks/:id', internalAuth, async (req, res) => {
   } catch (err) { taskFail(res, err); }
 });
 
-router.post('/sales-tasks/export', internalAuth, async (req, res) => {
+router.post('/sales-tasks/export', internalAuth, requireSection('sales_tasks'), async (req, res) => {
   try {
     const ids = Array.isArray(req.body.ids)
       ? [...new Set(req.body.ids.map(Number).filter(Number.isInteger))]
@@ -3140,7 +3146,7 @@ router.post('/sales-tasks/export', internalAuth, async (req, res) => {
 });
 
 // Complete / reopen. Kept for existing callers; PATCH /sales-tasks/:id does the same.
-router.put('/sales-tasks/:id/status', internalAuth, async (req, res) => {
+router.put('/sales-tasks/:id/status', internalAuth, requireSection('sales_tasks'), async (req, res) => {
   try {
     await salesTasksReady;
     const status = String(req.body.status || '').toLowerCase();
@@ -3168,7 +3174,7 @@ router.put('/sales-tasks/:id/status', internalAuth, async (req, res) => {
   }
 });
 
-router.get('/sales-tasks/unread-count', internalAuth, async (req, res) => {
+router.get('/sales-tasks/unread-count', internalAuth, requireSection('sales_tasks'), async (req, res) => {
   try {
     await salesTasksReady;
     const count = await SalesTasks.countDocuments({ unread: true, status: { $ne: 'completed' }, ...LIVE });
@@ -3176,7 +3182,7 @@ router.get('/sales-tasks/unread-count', internalAuth, async (req, res) => {
   } catch (err) { taskFail(res, err); }
 });
 
-router.put('/sales-tasks/lead/:leadId/read', internalAuth, async (req, res) => {
+router.put('/sales-tasks/lead/:leadId/read', internalAuth, requireSection('sales_tasks', 'inbox', 'leads'), async (req, res) => {
   try {
     await salesTasksReady;
     const leadId = toId(req.params.leadId, 'Lead');
@@ -3187,7 +3193,7 @@ router.put('/sales-tasks/lead/:leadId/read', internalAuth, async (req, res) => {
 });
 
 // A task without a lead is marked read on its own.
-router.put('/sales-tasks/:id/read', internalAuth, async (req, res) => {
+router.put('/sales-tasks/:id/read', internalAuth, requireSection('sales_tasks'), async (req, res) => {
   try {
     const task = await SalesTasks.findOneAndUpdate({ id: toId(req.params.id, 'Task'), ...LIVE }, { $set: { unread: false, updated_at: new Date() } }, { new: true, projection: { _id: 0, id: 1, lead_id: 1 } }).lean();
     if (!task) throw new TaskInputError('Task not found', 404);
@@ -3196,7 +3202,7 @@ router.put('/sales-tasks/:id/read', internalAuth, async (req, res) => {
   } catch (err) { taskFail(res, err); }
 });
 
-router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, async (req, res) => {
+router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, requireSection('sales_tasks', 'inbox', 'leads'), async (req, res) => {
   try {
     await salesTrackingReady;
     const allowed = ['new', 'contacted', 'processing', 'follow_up', 'converted', 'not_interested', 'closed'];
@@ -3228,7 +3234,7 @@ router.put('/sales-tasks/lead/:leadId/sales-status', internalAuth, async (req, r
   } catch (err) { taskFail(res, err); }
 });
 
-router.post('/sales-tasks/lead/:leadId/notes', internalAuth, async (req, res) => {
+router.post('/sales-tasks/lead/:leadId/notes', internalAuth, requireSection('sales_tasks', 'inbox', 'leads'), async (req, res) => {
   try {
     await salesTrackingReady;
     const note = String(req.body.note || '').trim();
@@ -3277,7 +3283,7 @@ Return only JSON: {"stop_followups":boolean,"followup_at":string|null}. Set stop
   } catch (err) { taskFail(res, err); }
 });
 
-router.put('/sales-tasks/notes/:noteId', internalAuth, async (req, res) => {
+router.put('/sales-tasks/notes/:noteId', internalAuth, requireSection('sales_tasks', 'inbox', 'leads'), async (req, res) => {
   try {
     const note = String(req.body.note || '').trim();
     if (!note) return res.status(400).json({ error: 'Note is required' });
@@ -3287,7 +3293,7 @@ router.put('/sales-tasks/notes/:noteId', internalAuth, async (req, res) => {
   } catch (err) { taskFail(res, err); }
 });
 
-router.delete('/sales-tasks/notes/:noteId', internalAuth, async (req, res) => {
+router.delete('/sales-tasks/notes/:noteId', internalAuth, requireSection('sales_tasks', 'inbox', 'leads'), async (req, res) => {
   try {
     const deletedNote = await SalesLeadNotes.findOneAndDelete({ id: toId(req.params.noteId, 'Note') }, { projection: { lead_id: 1 } }).lean();
     if (!deletedNote) return res.status(404).json({ error: 'Note not found' });
@@ -3308,7 +3314,7 @@ async function removeTasks(filter) {
   return doomed;
 }
 
-router.post('/sales-tasks/bulk-delete', internalAuth, async (req, res) => {
+router.post('/sales-tasks/bulk-delete', internalAuth, requireSection('sales_tasks'), async (req, res) => {
   try {
     await salesTasksReady;
     const ids = Array.isArray(req.body.ids)
@@ -3347,7 +3353,7 @@ router.post('/sales-tasks/bulk-delete', internalAuth, async (req, res) => {
   }
 });
 
-router.delete('/sales-tasks/:id', internalAuth, async (req, res) => {
+router.delete('/sales-tasks/:id', internalAuth, requireSection('sales_tasks'), async (req, res) => {
   try {
     await salesTasksReady;
     const [deletedTask] = await removeTasks({ id: toId(req.params.id, 'Task') });

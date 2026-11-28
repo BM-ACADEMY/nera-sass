@@ -6,7 +6,7 @@ import { FaWhatsapp } from 'react-icons/fa';
 import getneraLogo from '../../assets/getnera-logo.png';
 import { api } from '../../services/api.js';
 import { roleLabel } from '../../views/settings/settingsPolicy.js';
-import { canSeeTeam, menuSections } from '../../views/settings/teamPolicy.js';
+import { canSeeTeam, menuSections, mySections, hasSection } from '../../views/settings/teamPolicy.js';
 import { useAuth } from '../../hooks/useAuth.js';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import {
@@ -16,13 +16,15 @@ import {
 
 // The customer panel menu, in the same sections and look as the admin panel.
 // Settings, Billing and sign-out live in the profile menu at the bottom.
+// `section`: shown only to people given that section (Owners have all);
+// `permission`: shown only with that GET /api/tenant permission flag.
 export const SECTIONS = [
-  { label: 'Overview', items: [{ path: '/dashboard', icon: FiGrid, label: 'Dashboard' }] },
+  { label: 'Overview', items: [{ path: '/dashboard', icon: FiGrid, label: 'Dashboard', section: 'dashboard' }] },
   {
     label: 'Sales',
     items: [
-      { path: '/leads', icon: FiUsers, label: 'Leads' },
-      { path: '/sales-tasks', icon: FiCheckSquare, label: 'Sales Task', badge: 'tasks' },
+      { path: '/leads', icon: FiUsers, label: 'Leads', section: 'leads' },
+      { path: '/sales-tasks', icon: FiCheckSquare, label: 'Sales Task', badge: 'tasks', section: 'sales_tasks' },
     ],
   },
   // Only for people who may see the team (GET /api/tenant permissions.view_team).
@@ -30,21 +32,22 @@ export const SECTIONS = [
   {
     label: 'WhatsApp',
     items: [
-      { path: '/inbox', label: 'WhatsApp Chat', whatsapp: true },
-      { path: '/whatsapp', icon: FiSmartphone, label: 'WhatsApp Number' },
-      { path: '/templates', icon: FiFileText, label: 'Templates' },
-      { path: '/campaigns', icon: FiSend, label: 'Campaigns' },
+      { path: '/inbox', label: 'WhatsApp Chat', whatsapp: true, section: 'inbox' },
+      // Connecting the number is for Owners.
+      { path: '/whatsapp', icon: FiSmartphone, label: 'WhatsApp Number', permission: 'manage_whatsapp' },
+      { path: '/templates', icon: FiFileText, label: 'Templates', section: 'templates' },
+      { path: '/campaigns', icon: FiSend, label: 'Campaigns', section: 'campaigns' },
     ],
   },
-  { label: 'AI', items: [{ path: '/brain', icon: FiCpu, label: 'AI Brain' }] },
+  { label: 'AI', items: [{ path: '/brain', icon: FiCpu, label: 'AI Brain', section: 'ai_brain' }] },
   {
     label: 'Plugins',
     items: [
-      { path: '/plugins', icon: FiPackage, label: 'Plugins' },
-      { path: '/calendar', icon: FiCalendar, label: 'Calendar' },
+      { path: '/plugins', icon: FiPackage, label: 'Plugins', section: 'plugins' },
+      { path: '/calendar', icon: FiCalendar, label: 'Calendar', section: 'plugins' },
     ],
   },
-  { label: 'Insights', items: [{ path: '/reports', icon: FiBarChart2, label: 'Reports' }] },
+  { label: 'Insights', items: [{ path: '/reports', icon: FiBarChart2, label: 'Reports', section: 'reports' }] },
 ];
 
 const AppSidebar = ({ onLogout }) => {
@@ -55,18 +58,27 @@ const AppSidebar = ({ onLogout }) => {
   const [taskUnread, setTaskUnread] = useState(0);
   const [permissions, setPermissions] = useState(null);
 
-  // The server's permission flags decide the gated items. Asked once per role;
-  // a failed request is tried again on the next page change.
-  const askedRole = useRef(null);
+  // The server's permission flags and sections decide the gated items. Asked
+  // once per role and sections; a failed request is tried again on the next
+  // page change. Until it answers, the signed-in user's own sections are used.
+  const askedFor = useRef(null);
+  const accessKey = `${user?.role}|${(user?.sections || []).join(',')}`;
   useEffect(() => {
-    if (askedRole.current === user?.role) return;
-    askedRole.current = user?.role;
+    if (askedFor.current === accessKey) return;
+    askedFor.current = accessKey;
     api.getTenant()
-      .then((data) => setPermissions({ view_team: canSeeTeam(data.permissions) }))
-      .catch(() => { askedRole.current = null; });
-  }, [user?.role, location.pathname]);
+      .then((data) => setPermissions({
+        view_team: canSeeTeam(data.permissions),
+        manage_whatsapp: Boolean(data.permissions?.manage_whatsapp),
+        sections: Array.isArray(data.sections) ? data.sections : mySections(user),
+      }))
+      .catch(() => { askedFor.current = null; });
+  }, [accessKey, location.pathname, user]);
+  const access = permissions || { view_team: false, manage_whatsapp: user?.role === 'owner', sections: mySections(user) };
+  const canTasks = hasSection(access.sections, 'sales_tasks');
 
   useEffect(() => {
+    if (!canTasks) return undefined;
     api.get('/sales-tasks/unread-count').then((d) => setTaskUnread(d.count || 0)).catch(() => {});
     const socket = socketIO(api.baseUrl, { auth: { token: localStorage.getItem('leados_token') }, transports: ['websocket', 'polling'] });
     socket.on('sales_task_update', (data) => {
@@ -83,7 +95,7 @@ const AppSidebar = ({ onLogout }) => {
       }
     });
     return () => socket.disconnect();
-  }, [navigate]);
+  }, [navigate, canTasks]);
 
   const go = (path) => {
     if (path === '/sales-tasks' && 'Notification' in window && Notification.permission === 'default') {
@@ -112,7 +124,7 @@ const AppSidebar = ({ onLogout }) => {
       </SidebarHeader>
 
       <SidebarContent>
-        {menuSections(SECTIONS, permissions).map((section) => (
+        {menuSections(SECTIONS, access).map((section) => (
           <SidebarGroup key={section.label}>
             <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
             <SidebarGroupContent>
@@ -166,7 +178,8 @@ const AppSidebar = ({ onLogout }) => {
                 </div>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => go('/settings')}><FiSettings /> Settings</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => go('/billing')}><FiCreditCard /> Billing</DropdownMenuItem>
+                {/* Billing is for Owners and Admins (Admins can look, only Owners pay). */}
+                {user?.role !== 'staff' && <DropdownMenuItem onSelect={() => go('/billing')}><FiCreditCard /> Billing</DropdownMenuItem>}
                 <DropdownMenuItem onSelect={() => go('/account/sessions')}><FiMonitor /> My sessions</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem variant="destructive" onSelect={onLogout}><FiLogOut /> Log out</DropdownMenuItem>

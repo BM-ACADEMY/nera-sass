@@ -7,7 +7,7 @@ const { currentTenantId } = require('../../services/tenantContext');
 const { postToN8n } = require('../../services/n8n');
 const aiAutomation = require('../../services/aiAutomation');
 const consent = require('../../services/consent');
-const { requirePermission, can } = require('../../services/permissions');
+const { requirePermission, can, requireSection, LEAD_WORK } = require('../../services/permissions');
 const { normalizeSourceKind } = require('../../services/leadSources');
 const activity = require('../../services/activity');
 
@@ -119,7 +119,7 @@ function addLeadSource(value) {
   return kind === 'manual' || kind === 'whatsapp' ? ADD_LEAD_SOURCES[kind] : null;
 }
 // POST /api/leads
-app.post('/api/leads', auth, async (req, res) => {
+app.post('/api/leads', auth, requireSection('leads'), async (req, res) => {
   try {
     const { name, phone, source, interest, assigned_to, whatsapp_opt_in, opt_in_source, opt_in_text } = req.body;
     const leadOSBrand = await getLeadOSBrand();
@@ -175,7 +175,7 @@ app.post('/api/leads', auth, async (req, res) => {
 
 // POST /api/leads/bulk  { ids, action: 'assign' | 'status', assigned_to, status }
 // The Leads page's bulk actions. Only this workspace's leads are changed.
-app.post('/api/leads/bulk', auth, async (req, res) => {
+app.post('/api/leads/bulk', auth, requireSection('leads'), async (req, res) => {
   try {
     const { ids, action } = req.body || {};
     const leadIds = Array.isArray(ids) ? [...new Set(ids.map(Number).filter((id) => Number.isInteger(id) && id > 0))] : [];
@@ -217,7 +217,7 @@ app.post('/api/leads/bulk', auth, async (req, res) => {
 });
 
 // PATCH /api/leads/:id
-app.patch('/api/leads/:id', auth, async (req, res) => {
+app.patch('/api/leads/:id', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const { name, phone, email, status, score, assigned_to, interest, notes } = req.body;
     const updates = {};
@@ -250,7 +250,7 @@ app.patch('/api/leads/:id', auth, async (req, res) => {
 // POST /api/leads/:id/ai   { paused: boolean }
 // A person takes over a chat (paused) or hands it back to the AI, which also
 // clears the handover flag and draft.
-app.post('/api/leads/:id/ai', auth, async (req, res) => {
+app.post('/api/leads/:id/ai', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     if (typeof req.body?.paused !== 'boolean') return res.status(400).json({ error: 'paused must be true or false' });
     const found = await aiAutomation.setAiPaused(req.params.id, req.body.paused);
@@ -267,7 +267,7 @@ app.post('/api/leads/:id/ai', auth, async (req, res) => {
 });
 
 // DELETE /api/leads/:id
-app.delete('/api/leads/:id', auth, requirePermission('leads.delete'), async (req, res) => {
+app.delete('/api/leads/:id', auth, requireSection('leads'), requirePermission('leads.delete'), async (req, res) => {
   try {
     const { id } = req.params;
     const doomedLead = await Leads.findOne({ id }, { _id: 0, id: 1, name: 1 }).lean();
@@ -306,7 +306,7 @@ const noteOut = (req, row, names) => ({
 });
 
 // GET /api/leads/:id/notes — newest first.
-app.get('/api/leads/:id/notes', auth, async (req, res) => {
+app.get('/api/leads/:id/notes', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const lead = await visibleLead(req, req.params.id);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
@@ -325,7 +325,7 @@ app.get('/api/leads/:id/notes', auth, async (req, res) => {
 });
 
 // POST /api/leads/:id/notes  { note }
-app.post('/api/leads/:id/notes', auth, async (req, res) => {
+app.post('/api/leads/:id/notes', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const lead = await visibleLead(req, req.params.id);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
@@ -345,7 +345,7 @@ app.post('/api/leads/:id/notes', auth, async (req, res) => {
 });
 
 // DELETE /api/leads/:id/notes/:noteId
-app.delete('/api/leads/:id/notes/:noteId', auth, async (req, res) => {
+app.delete('/api/leads/:id/notes/:noteId', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const lead = await visibleLead(req, req.params.id);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
@@ -367,7 +367,7 @@ app.delete('/api/leads/:id/notes/:noteId', auth, async (req, res) => {
 // GET /api/leads/:id/activity — who did what to this lead, newest first: the
 // workspace activity log limited to this lead and the bulk changes that
 // included it. Anyone who can see the lead may read it.
-app.get('/api/leads/:id/activity', auth, async (req, res) => {
+app.get('/api/leads/:id/activity', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const lead = await visibleLead(req, req.params.id);
     if (!lead) return res.status(404).json({ error: 'Lead not found' });
@@ -381,7 +381,7 @@ app.get('/api/leads/:id/activity', auth, async (req, res) => {
 });
 
 // POST /api/leads/migrate-flow-step — one-time migration
-app.post('/api/leads/migrate-flow-step', auth, async (req, res) => {
+app.post('/api/leads/migrate-flow-step', auth, requireSection('leads'), async (req, res) => {
   try {
     // 1. Add flow_step to leads
     await Leads.updateMany({ flow_step: null }, { $set: { flow_step: 'welcome' } });

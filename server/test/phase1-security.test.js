@@ -109,7 +109,7 @@ test('Phase 1 security remediation', async (t) => {
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     assert.strictEqual(res.body.invitation.status, 'pending');
     assert.strictEqual(res.body.invitation.email, 'new.person@acme.test', 'email normalised');
-    assert.strictEqual(res.body.invitation.role, 'manager');
+    assert.strictEqual(res.body.invitation.role, 'staff', 'the retired manager role is invited as Staff');
     assert.ok(!/password/i.test(JSON.stringify(res.body)), 'no password in the response');
     // services/invitations.js returns the raw invite token only when NODE_ENV=test
     // (or a caller passes returnToken); the admin route never asks for it.
@@ -127,7 +127,8 @@ test('Phase 1 security remediation', async (t) => {
     assert.strictEqual(accept.status, 201, JSON.stringify(accept.body));
     const joined = await runAsSystem(() => Users.findOne({ email: 'new.person@acme.test' }).lean());
     assert.strictEqual(joined.tenant_id, 1);
-    assert.strictEqual(joined.role, 'manager');
+    assert.strictEqual(joined.role, 'staff');
+    assert.ok(joined.sections.includes('campaigns'), 'an old manager invitation keeps its access');
     assert.ok(await bcrypt.compare(STRONG_PASSWORD, joined.password_hash));
     const reuse = await request(app).post('/api/auth/invitations/accept').send({ token, name: 'Again', password: STRONG_PASSWORD });
     assert.strictEqual(reuse.status, 410);

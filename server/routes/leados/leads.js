@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { requireSection, LEAD_WORK } = require('../../services/permissions');
 module.exports = function registerLeadsRoutes(app, ctx) {
 const {
   CampaignImportRecipients,
@@ -91,7 +92,7 @@ app.get('/api/templates/:id/campaign-sheet', async (req, res) => {
 });
 
 // DEBUG: Check campaign import recipients
-app.get('/api/debug/campaign-imports', auth, async (req, res) => {
+app.get('/api/debug/campaign-imports', auth, requireSection('campaigns'), async (req, res) => {
   try {
     const { batch_id } = req.query;
 
@@ -113,7 +114,7 @@ app.get('/api/debug/campaign-imports', auth, async (req, res) => {
   }
 });
 
-app.get('/api/leads/sources', auth, async (req, res) => {
+app.get('/api/leads/sources', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const rows = (await Leads.distinct('source', { source: { $nin: [null, ''] } })).sort().map((source) => ({ source }));
         

@@ -123,7 +123,7 @@ test('Task 2.0: customer brand API security', async (t) => {
     metaRoutes['GET waba-1/phone_numbers'] = { data: [{ id: 'p-1', display_phone_number: '911111111111', status: 'CONNECTED' }] };
     metaRoutes['POST p-1/whatsapp_business_profile'] = { success: true };
     metaRoutes['GET p-1/whatsapp_business_profile'] = { data: [{}] };
-    const setup = await request(app).post(`/api/clients/${brand.id}/whatsapp-setup`).set(bearer(users.admin));
+    const setup = await request(app).post(`/api/clients/${brand.id}/whatsapp-setup`).set(bearer(users.owner));
     assert.strictEqual(setup.status, 200, JSON.stringify(setup.body));
     await assertNoSecret(setup, brand.id, 'POST whatsapp-setup');
     for (const call of metaCalls) assert.strictEqual(call.auth, `Bearer ${BRAND_TOKEN}`, 'setup uses the brand\'s own token');
@@ -147,10 +147,10 @@ test('Task 2.0: customer brand API security', async (t) => {
   });
 
   // ── Roles ────────────────────────────────────────────────
-  await t.test('B3. Managers and agents cannot change the profile or credentials, run setup or upload a logo', async () => {
+  await t.test('B3. Admins, managers and agents cannot change the profile or credentials, run setup or upload a logo', async () => {
     const { brand, users } = await workspace(10, connected);
     const before = await rawBrand(brand.id);
-    for (const role of ['manager', 'agent']) {
+    for (const role of ['admin', 'manager', 'agent']) {
       const who = bearer(users[role]);
       const profile = await request(app).patch(`/api/clients/${brand.id}`).set(who).send({ wa_description: 'changed' });
       assert.strictEqual(profile.status, 403, `${role} profile`);
@@ -171,13 +171,13 @@ test('Task 2.0: customer brand API security', async (t) => {
     assert.strictEqual(metaCalls.length, 0);
   });
 
-  await t.test('B4. Owners and admins can change the profile and WhatsApp credentials', async () => {
+  await t.test('B4. Owners can change the profile and WhatsApp credentials', async () => {
     const { brand, users } = await workspace(10);
     const owner = await request(app).patch(`/api/clients/${brand.id}`).set(bearer(users.owner)).send({ name: 'Renamed Brand' });
     assert.strictEqual(owner.status, 200, JSON.stringify(owner.body));
-    const admin = await request(app).patch(`/api/clients/${brand.id}`).set(bearer(users.admin)).send({ phone_number_id: 'p-new', wa_access_token: BRAND_TOKEN });
+    const admin = await request(app).patch(`/api/clients/${brand.id}`).set(bearer(users.owner)).send({ phone_number_id: 'p-new', wa_access_token: BRAND_TOKEN });
     assert.strictEqual(admin.status, 200, JSON.stringify(admin.body));
-    await assertNoSecret(admin, brand.id, 'admin credential update');
+    await assertNoSecret(admin, brand.id, 'owner credential update');
     const raw = await rawBrand(brand.id);
     assert.strictEqual(raw.name, 'Renamed Brand');
     assert.strictEqual(raw.phone_number_id, 'p-new');

@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { requireSection, LEAD_WORK } = require('../../services/permissions');
 module.exports = function registerWhatsappRoutes(app, ctx) {
 const {
   Clients,
@@ -35,7 +36,7 @@ const erasure = require('../../services/erasure');
 // ══════════════════════════════════════════════════════════
 
 // POST /api/whatsapp/send — manual send from CRM portal
-app.post('/api/whatsapp/send', auth, async (req, res) => {
+app.post('/api/whatsapp/send', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const { lead_id, message, media_url, msg_type, reply_to_wa_id, is_forwarded } = req.body;
 

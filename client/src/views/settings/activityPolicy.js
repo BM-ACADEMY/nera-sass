@@ -42,7 +42,7 @@ export const hasActivityFilters = (filters = {}) => Boolean(
   (filters.user && filters.user !== ALL) || (filters.group && filters.group !== ALL) || filters.from || filters.to,
 );
 
-const ROLE_NAMES = { owner: 'Owner', admin: 'Admin', manager: 'Manager', agent: 'Agent' };
+const ROLE_NAMES = { owner: 'Owner', admin: 'Admin', staff: 'Staff', manager: 'Staff', agent: 'Staff' };
 
 // "Priya · Manager", "Getnera team", "System".
 export function actorText(actor) {
