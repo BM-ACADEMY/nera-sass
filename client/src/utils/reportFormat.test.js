@@ -61,7 +61,9 @@ test('team table sorting', () => {
 
 test('who sees the Team tab, and when it is empty', () => {
   assert.strictEqual(canViewTeamReport('owner'), true);
-  assert.strictEqual(canViewTeamReport('Manager'), true);
+  assert.strictEqual(canViewTeamReport('Admin'), true);
+  assert.strictEqual(canViewTeamReport('manager'), false);
+  assert.strictEqual(canViewTeamReport('staff'), false);
   assert.strictEqual(canViewTeamReport('agent'), false);
   assert.strictEqual(canViewTeamReport(null), false);
   assert.strictEqual(teamHasActivity(null), false);

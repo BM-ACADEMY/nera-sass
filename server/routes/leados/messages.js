@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { requireSection } = require('../../services/permissions');
 module.exports = function registerMessagesRoutes(app, ctx) {
 const {
   Clients,
@@ -27,7 +28,7 @@ const waMedia = require('../../services/waMedia');
 // ══════════════════════════════════════════════════════════
 
 // PUT /api/messages/:id/edit
-app.put('/api/messages/:id/edit', auth, async (req, res) => {
+app.put('/api/messages/:id/edit', auth, requireSection('inbox'), async (req, res) => {
   try {
     const { content } = req.body;
     const msgId = req.params.id;
@@ -47,7 +48,7 @@ app.put('/api/messages/:id/edit', auth, async (req, res) => {
 });
 
 // PUT /api/messages/:id/delete
-app.put('/api/messages/:id/delete', auth, async (req, res) => {
+app.put('/api/messages/:id/delete', auth, requireSection('inbox'), async (req, res) => {
   try {
     const msgId = req.params.id;
     if (String(msgId).startsWith('optimistic-')) {
@@ -65,7 +66,7 @@ app.put('/api/messages/:id/delete', auth, async (req, res) => {
 });
 
 // PUT /api/messages/:id/pin
-app.put('/api/messages/:id/pin', auth, async (req, res) => {
+app.put('/api/messages/:id/pin', auth, requireSection('inbox'), async (req, res) => {
   try {
     const msgId = req.params.id;
     const { duration, unpin } = req.body; // duration in hours: 24, 168 (7 days), 720 (30 days)
@@ -87,7 +88,7 @@ app.put('/api/messages/:id/pin', auth, async (req, res) => {
 });
 
 // PUT /api/messages/:id/star
-app.put('/api/messages/:id/star', auth, async (req, res) => {
+app.put('/api/messages/:id/star', auth, requireSection('inbox'), async (req, res) => {
   try {
     const msgId = req.params.id;
     const { is_starred } = req.body;
@@ -111,7 +112,7 @@ app.put('/api/messages/:id/star', auth, async (req, res) => {
 
 // PUT /api/messages/:id/react
 // Body: { emoji: "👍", action: "add" | "remove" }
-app.put('/api/messages/:id/react', auth, async (req, res) => {
+app.put('/api/messages/:id/react', auth, requireSection('inbox'), async (req, res) => {
   try {
     const msgId = req.params.id;
     const { emoji, action } = req.body;
@@ -189,7 +190,7 @@ app.put('/api/messages/:id/react', auth, async (req, res) => {
   }
 });
 
-app.post('/api/messages/upload', auth, mediaUpload.single('file'), async (req, res) => {
+app.post('/api/messages/upload', auth, requireSection('inbox'), mediaUpload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
   let uploadedFile = req.file;

@@ -8,8 +8,12 @@ module.exports = defineModel('users', {
   email: { type: String, lowercase: true, trim: true },
   password_hash: { type: String },
   phone: { type: String },
-  // Customer role: owner | admin | manager | agent (services/permissions.js).
-  role: { type: String, default: 'agent' },
+  // Customer role: owner | admin | staff (services/permissions.js). Older rows
+  // may still say manager or agent (read as staff; migration 044).
+  role: { type: String, default: 'staff' },
+  // sections (admin and staff): the sidebar sections they can open, a list of
+  // permissions.SECTIONS keys. Not declared here on purpose: a missing field
+  // (an older account) must stay missing, not become an empty list.
   is_platform_staff: { type: Boolean, default: false },
   // Platform staff role: founder | ops | support.
   staff_role: { type: String, default: null },

@@ -101,11 +101,11 @@ test('Customer WhatsApp business profile', async (t) => {
     assert.strictEqual(other.wa_description, 'Untouched', 'another workspace is never touched');
   });
 
-  await t.test('C2. Admin may edit; manager and agent get 403 and nothing reaches Meta', async () => {
-    const { admin, manager, agent } = await seed();
-    assert.strictEqual((await request(app).put('/api/whatsapp/profile').set(bearer(admin)).send({ address: 'New address' })).status, 200);
+  await t.test('C2. The WhatsApp profile is for Owners: admin, manager and agent get 403 and nothing reaches Meta', async () => {
+    const { owner, admin, manager, agent } = await seed();
+    assert.strictEqual((await request(app).put('/api/whatsapp/profile').set(bearer(owner)).send({ address: 'New address' })).status, 200);
     calls.length = 0;
-    for (const u of [manager, agent]) {
+    for (const u of [admin, manager, agent]) {
       const res = await request(app).put('/api/whatsapp/profile').set(bearer(u)).send({ about: 'Nope' });
       assert.strictEqual(res.status, 403, u.role);
       const photo = await request(app).post('/api/whatsapp/profile/photo').set(bearer(u)).attach('photo', Buffer.from('x'), { filename: 'a.png', contentType: 'image/png' });

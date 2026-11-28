@@ -1,5 +1,5 @@
 /**
- * Reports > Team (owner, admin, manager: 'reports.team').
+ * Reports > Team (owner, admin with Reports: 'reports.team').
  *   GET /api/reports/team?range=7d|30d|90d  or  ?range=custom&from=YYYY-MM-DD&to=YYYY-MM-DD
  *       one row per member of the workspace, a totals row and an AI row
  *       (definitions in services/teamReport.js).

@@ -4,7 +4,7 @@
  * as the admin panel; Meta calls use the brand's own credential.
  */
 const { runAsSystem } = require('../../services/tenantContext');
-const { requirePermission, can } = require('../../services/permissions');
+const { requirePermission, can, requireSection } = require('../../services/permissions');
 const { createTemplateApi, replyError, upload, TemplateApiError } = require('../../services/metaTemplateApi');
 const alerts = require('../../services/alerts');
 
@@ -51,7 +51,7 @@ module.exports = function registerWaTemplateRoutes(app, ctx) {
     }
   });
 
-  app.post('/api/wa-templates/check-pending', auth, async (req, res) => {
+  app.post('/api/wa-templates/check-pending', auth, requireSection('templates'), async (req, res) => {
     try {
       const c = await context();
       const result = await sys(() => api.checkPending(c));
@@ -73,7 +73,7 @@ module.exports = function registerWaTemplateRoutes(app, ctx) {
     }
   });
 
-  app.post('/api/wa-templates', auth, manage, async (req, res) => {
+  app.post('/api/wa-templates', auth, requireSection('templates'), manage, async (req, res) => {
     try {
       const c = await context();
       return res.status(201).json({ template: await sys(() => api.create(c, req.body)) });
@@ -82,7 +82,7 @@ module.exports = function registerWaTemplateRoutes(app, ctx) {
     }
   });
 
-  app.put('/api/wa-templates/:templateId', auth, manage, async (req, res) => {
+  app.put('/api/wa-templates/:templateId', auth, requireSection('templates'), manage, async (req, res) => {
     try {
       const c = await context();
       const { template } = await sys(() => api.update(c, req.params.templateId, req.body));
@@ -94,7 +94,7 @@ module.exports = function registerWaTemplateRoutes(app, ctx) {
     }
   });
 
-  app.delete('/api/wa-templates/:templateId', auth, manage, async (req, res) => {
+  app.delete('/api/wa-templates/:templateId', auth, requireSection('templates'), manage, async (req, res) => {
     try {
       const c = await context();
       await sys(() => api.remove(c, req.params.templateId));
@@ -104,7 +104,7 @@ module.exports = function registerWaTemplateRoutes(app, ctx) {
     }
   });
 
-  app.post('/api/wa-templates-media', auth, manage, upload.single('file'), async (req, res) => {
+  app.post('/api/wa-templates-media', auth, requireSection('templates'), manage, upload.single('file'), async (req, res) => {
     try {
       const c = await context();
       return res.json(await api.uploadMedia(c, req.file, req.body?.format));

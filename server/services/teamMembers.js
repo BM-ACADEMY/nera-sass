@@ -7,19 +7,23 @@
  * Rules (on top of userAdmin's: nobody manages themselves, Admins never touch
  * Owners, a workspace keeps one active Owner):
  *  - only an Owner (or platform staff) adds or promotes someone to Owner or
- *    Admin; Admins add Managers and Agents;
+ *    Admin; Admins add and edit Staff only;
+ *  - Admins and Staff have the sections ticked for them (permissions.SECTIONS);
+ *    an Admin gives only sections they have themselves;
  *  - every new login takes a seat (invitations.assertSingleLogin);
  *  - a temporary password follows the normal password rules, is stored only
  *    as a bcrypt hash, is never logged or returned, and must be replaced at the
  *    next sign-in (must_change_password; authMiddleware refuses everything
  *    else until then);
  *  - a password reset or removal signs the person out everywhere.
- * actor: { id, kind: 'tenant' | 'staff', role, name }
+ * actor: { id, kind: 'tenant' | 'staff', role, sections, name }
  */
 const bcrypt = require('bcryptjs');
 const { Users, Invitations, Tenants } = require('../models');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
-const { TENANT_ROLES, normalizeTenantRole } = require('./permissions');
+const {
+  TENANT_ROLES, SECTIONS, LEGACY_SECTIONS, normalizeTenantRole, sectionsFor, defaultSectionsFor, grantableSections,
+} = require('./permissions');
 const { passwordProblem, normalizeEmail, isEmail } = require('../utils/passwordPolicy');
 const userAdmin = require('./userAdmin');
 const invitations = require('./invitations');
@@ -64,18 +68,55 @@ function cleanPhone(phone) {
   return value;
 }
 
+// A role from the request. The retired names (manager, agent) sent by an
+// older app are read as Staff.
 function cleanRole(role) {
   const value = String(role || '').toLowerCase();
-  if (!TENANT_ROLES.includes(value)) throw new UserAdminError(400, `Role must be one of: ${TENANT_ROLES.join(', ')}`);
-  return value;
+  if (TENANT_ROLES.includes(value)) return value;
+  if (LEGACY_SECTIONS[value]) return normalizeTenantRole(value);
+  throw new UserAdminError(400, `Role must be one of: ${TENANT_ROLES.join(', ')}`);
 }
 
-// Owners give any role; Admins give Manager or Agent; staff give any role.
+// Section keys from the request: a list of known keys, or a 400.
+function parseSections(sections) {
+  if (!Array.isArray(sections)) throw new UserAdminError(400, 'Sections must be a list');
+  const keys = sections.map((key) => String(key || '').toLowerCase());
+  const unknown = keys.filter((key) => !SECTIONS.includes(key));
+  if (unknown.length) throw new UserAdminError(400, `Unknown section: ${unknown.join(', ')}. Sections are: ${SECTIONS.join(', ')}`);
+  return SECTIONS.filter((key) => keys.includes(key));
+}
+
+// Owners give any role; Admins give Staff only; platform staff give any role.
 function assertCanGrant(actor, role) {
   if (actor.kind === 'staff' || actor.role === 'owner') return;
-  if (actor.role === 'admin' && ['manager', 'agent'].includes(role)) return;
+  if (actor.role === 'admin' && role === 'staff') return;
   if (actor.role === 'admin') throw new UserAdminError(403, 'Only an Owner can make someone an Owner or Admin');
   throw new UserAdminError(403, 'You do not have permission to manage users');
+}
+
+/**
+ * The sections to store for someone getting `role`. Owners have every section
+ * (nothing is stored: null). `requested` undefined means "not chosen": the
+ * person keeps `current` (an edit) or gets the defaults for the role (a new
+ * person; `rawRole` keeps a retired role's old access). An Admin gives only
+ * sections they have; sections the person already has outside the Admin's
+ * own stay as they are.
+ */
+function resolveSections(actor, { role, rawRole = role, requested, current = null }) {
+  if (role === 'owner') return null;
+  const grantable = grantableSections(actor);
+  let wanted;
+  if (requested === undefined || requested === null) {
+    wanted = current ? [...current] : defaultSectionsFor(rawRole).filter((key) => grantable.includes(key));
+  } else {
+    wanted = parseSections(requested);
+  }
+  const before = current || [];
+  const refused = wanted.filter((key) => !grantable.includes(key) && !before.includes(key));
+  if (refused.length) throw new UserAdminError(403, 'You can only give sections that you have yourself');
+  // Sections outside the actor's own cannot be taken away by them either.
+  const kept = before.filter((key) => !grantable.includes(key));
+  return SECTIONS.filter((key) => wanted.includes(key) || kept.includes(key));
 }
 
 function checkPassword(password, email) {
@@ -89,13 +130,14 @@ function checkPassword(password, email) {
  * password); 'invite': an invitation email (they set their own).
  * Returns { user, delivery } or { invitation, delivery }.
  */
-async function createMember({ tenantId, actor, name, email, phone, role, method, password, req = null }) {
+async function createMember({ tenantId, actor, name, email, phone, role, sections, method, password, req = null }) {
   const cleanEmail = normalizeEmail(email);
   if (!isEmail(cleanEmail)) throw new UserAdminError(400, 'Enter a valid email address');
   const displayName = cleanName(name);
   const cleanPhoneValue = cleanPhone(phone);
-  const newRole = cleanRole(role || 'agent');
+  const newRole = cleanRole(role || 'staff');
   assertCanGrant(actor, newRole);
+  const newSections = resolveSections(actor, { role: newRole, rawRole: role || 'staff', requested: sections });
   const tenant = await runAsSystem(() => Tenants.findOne({ id: Number(tenantId) }, { _id: 0, id: 1, name: 1, status: 1 }).lean(), 'team');
   if (!tenant || tenant.status === 'deleted') throw new UserAdminError(404, 'Workspace not found');
 
@@ -104,7 +146,7 @@ async function createMember({ tenantId, actor, name, email, phone, role, method,
       throw new UserAdminError(400, 'An invited person sets their own password. Choose "Set a temporary password" to set one now.');
     }
     const result = await invitations.createInvitation({
-      tenantId: tenant.id, email: cleanEmail, name: displayName, phone: cleanPhoneValue, role: newRole,
+      tenantId: tenant.id, email: cleanEmail, name: displayName, phone: cleanPhoneValue, role: newRole, sections: newSections,
       invitedBy: { id: actor.id, name: actor.name }, req,
     });
     return { invitation: result.invitation, delivery: result.delivery };
@@ -136,6 +178,7 @@ async function createMember({ tenantId, actor, name, email, phone, role, method,
       phone: cleanPhoneValue,
       password_hash: passwordHash,
       role: newRole,
+      ...(newSections ? { sections: newSections } : {}),
       is_platform_staff: false,
       staff_role: null,
       is_active: true,
@@ -153,23 +196,35 @@ async function createMember({ tenantId, actor, name, email, phone, role, method,
   }
   await audit.record(audit.EVENTS.TEAM_MEMBER_ADDED, {
     tenantId: tenant.id, req, targetType: 'user', targetId: user.id,
-    meta: { email: cleanEmail, role: newRole, method: 'temporary_password', by_staff: actor.kind === 'staff' },
+    meta: { email: cleanEmail, role: newRole, sections: newSections, method: 'temporary_password', by_staff: actor.kind === 'staff' },
   });
   const delivery = await sendAddedEmail({ to: cleanEmail, name: displayName, workspaceName: tenant.name, inviterName: actor.name, role: newRole });
   return { user: userAdmin.presentUser(user.toObject()), delivery };
 }
 
-/** Name, phone and role. Only the fields given are changed. */
+/** Name, phone, role and sections. Only the fields given are changed. */
 async function updateMember({ tenantId, userId, actor, changes = {}, req = null }) {
   const target = await userAdmin.loadTarget(tenantId, userId);
   userAdmin.assertCanManage(actor, target);
   const set = {};
   if (changes.name !== undefined) set.name = cleanName(changes.name);
   if (changes.phone !== undefined) set.phone = cleanPhone(changes.phone);
+  const currentRole = normalizeTenantRole(target.role);
+  const currentSections = currentRole === 'owner' ? null : sectionsFor(target.role, target.sections);
   const role = changes.role !== undefined ? cleanRole(changes.role) : null;
-  if (role && role !== normalizeTenantRole(target.role)) {
-    assertCanGrant(actor, role);
-    await userAdmin.changeRole({ tenantId, userId: target.id, newRole: role, actor, req, event: audit.EVENTS.TEAM_MEMBER_ROLE_CHANGED });
+  const roleChanges = Boolean(role && role !== currentRole);
+  if (roleChanges) assertCanGrant(actor, role);
+  const finalRole = roleChanges ? role : currentRole;
+  // Sections: as given, or kept (an Owner made Admin or Staff gets the defaults).
+  const sectionsGiven = changes.sections !== undefined && changes.sections !== null;
+  const newSections = (sectionsGiven || roleChanges)
+    ? resolveSections(actor, { role: finalRole, requested: changes.sections, current: currentSections })
+    : currentSections;
+  if (roleChanges) {
+    await userAdmin.changeRole({ tenantId, userId: target.id, newRole: role, sections: newSections, actor, req, event: audit.EVENTS.TEAM_MEMBER_ROLE_CHANGED });
+  } else if (sectionsGiven && finalRole !== 'owner' && newSections.join() !== (currentSections || []).join()) {
+    await runAsTenant(tenantId, () => Users.updateOne({ id: target.id }, { $set: { sections: newSections, updated_at: new Date() } }));
+    await audit.record(audit.EVENTS.TEAM_MEMBER_UPDATED, { tenantId, req, targetType: 'user', targetId: target.id, meta: { email: target.email, fields: ['sections'], from: currentSections, to: newSections } });
   }
   const fields = Object.keys(set).filter((key) => (set[key] ?? null) !== (target[key] ?? null));
   if (fields.length) {
@@ -231,4 +286,4 @@ const setActive = (args) => userAdmin.setActive({
   events: { on: audit.EVENTS.TEAM_MEMBER_ENABLED, off: audit.EVENTS.TEAM_MEMBER_DISABLED },
 });
 
-module.exports = { assertCanGrant, createMember, updateMember, resetPassword, removeMember, setActive };
+module.exports = { assertCanGrant, resolveSections, cleanRole, createMember, updateMember, resetPassword, removeMember, setActive };

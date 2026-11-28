@@ -31,10 +31,11 @@
 const models = require('../../models');
 const { leadSourceKind } = require('../../services/leadSources');
 const { CLOSED_STATUSES } = require('../../services/aiAutomation');
+const { requireSection } = require('../../services/permissions');
 
 const UNANSWERED_AFTER_MIN = 15;
 const WINDOW_MS = 24 * 60 * 60 * 1000;
-const FULL_VIEW_ROLES = ['owner', 'admin', 'manager'];
+const FULL_VIEW_ROLES = ['owner', 'admin'];
 const AUTO_TASK_TYPES = ['call', 'hot_lead', 'followup', 'overdue'];
 const SENT_EVENTS = ['MESSAGE_SENT', 'TEMPLATE_SENT'];
 const DEFAULT_TIME_ZONE = 'Asia/Kolkata';
@@ -177,7 +178,7 @@ async function myDay(userId, tasks, today) {
 module.exports = function registerDashboardRoutes(app, ctx) {
 const { auth } = ctx;
 
-app.get('/api/dashboard/attention', auth, async (req, res) => {
+app.get('/api/dashboard/attention', auth, requireSection('dashboard'), async (req, res) => {
   try {
     const now = new Date();
     const me = scopeUserId(req.user);
@@ -208,7 +209,7 @@ app.get('/api/dashboard/attention', auth, async (req, res) => {
 // days including today, like the Lead acquisition chart). Sources use the
 // Leads page kinds (services/leadSources.js); "Campaign upload" leads, which
 // the Leads page files under Manual, are shown on their own as "campaign".
-app.get('/api/dashboard/overview', auth, async (req, res) => {
+app.get('/api/dashboard/overview', auth, requireSection('dashboard'), async (req, res) => {
   try {
     const range = RANGE_DAYS[req.query.range] ? req.query.range : '30d';
     const now = new Date();

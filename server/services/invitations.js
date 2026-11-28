@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { Users, Invitations, Tenants } = require('../models');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
-const { TENANT_ROLES, STAFF_ROLES } = require('./permissions');
+const { TENANT_ROLES, STAFF_ROLES, LEGACY_SECTIONS, normalizeTenantRole, cleanSections, defaultSectionsFor, sectionsFor } = require('./permissions');
 const { passwordProblem, normalizeEmail, isEmail } = require('../utils/passwordPolicy');
 const notify = require('./notify');
 const { encrypt, decrypt } = require('../utils/crypto');
@@ -32,7 +32,8 @@ const publicInvitation = (inv) => inv && ({
   id: inv.id,
   email: inv.email,
   name: inv.name || null,
-  role: inv.is_platform_staff ? inv.staff_role : inv.role,
+  role: inv.is_platform_staff ? inv.staff_role : normalizeTenantRole(inv.role),
+  sections: inv.is_platform_staff ? [] : sectionsFor(inv.role, inv.sections),
   is_platform_staff: Boolean(inv.is_platform_staff),
   expires_at: inv.expires_at,
   accepted_at: inv.accepted_at || null,
@@ -71,7 +72,9 @@ async function assertSingleLogin(tenantId, email = null) {
 
 const NO_FREE_SEAT_MESSAGE = 'This workspace has no free seat. Ask the owner to free one or add a seat.';
 
-async function createInvitation({ tenantId = null, email, name = null, phone = null, role = null, staffRole = null, password = undefined, invitedBy = {}, req = null }) {
+// sections: what an Admin or Staff member gets; the caller checks the actor may
+// give them (teamMembers.resolveSections). Left out: the role's defaults.
+async function createInvitation({ tenantId = null, email, name = null, phone = null, role = null, sections = undefined, staffRole = null, password = undefined, invitedBy = {}, req = null }) {
   const normalized = normalizeEmail(email);
   if (!isEmail(normalized)) throw new InvitationError(400, 'A valid email address is required');
   const staff = tenantId == null;
@@ -83,8 +86,12 @@ async function createInvitation({ tenantId = null, email, name = null, phone = n
     if (passwordError) throw new InvitationError(400, passwordError);
   }
   if (staff && !STAFF_ROLES.includes(staffRole)) throw new InvitationError(400, `Staff role must be one of: ${STAFF_ROLES.join(', ')}`);
+  // Retired role names (manager, agent) from an older app: Staff with their old access.
+  const rawRole = String(role || '').toLowerCase();
+  if (!staff && LEGACY_SECTIONS[rawRole]) role = normalizeTenantRole(rawRole);
   if (!staff && !TENANT_ROLES.includes(role)) throw new InvitationError(400, `Role must be one of: ${TENANT_ROLES.join(', ')}`);
   if (await emailTaken(normalized)) throw new InvitationError(409, 'A user with this email already exists');
+  const inviteSections = staff || role === 'owner' ? null : (Array.isArray(sections) ? cleanSections(sections) : defaultSectionsFor(rawRole));
 
   const run = (fn) => (staff ? runAsSystem(fn, 'invitations') : runAsTenant(tenantId, fn));
   const tenant = staff ? null : await runAsSystem(() => Tenants.findOne({ id: Number(tenantId) }, { _id: 0, id: 1, name: 1 }).lean(), 'invitations');
@@ -104,6 +111,7 @@ async function createInvitation({ tenantId = null, email, name = null, phone = n
     name: name ? String(name).trim() : null,
     phone: phone ? String(phone).trim() : null,
     role: staff ? null : role,
+    sections: inviteSections,
     is_platform_staff: staff,
     staff_role: staff ? staffRole : null,
     password_enc: password !== undefined ? encrypt(password) : null,
@@ -120,7 +128,7 @@ async function createInvitation({ tenantId = null, email, name = null, phone = n
     actor: req ? null : { actor_type: 'system', actor_user_id: invitedBy.id ?? null },
     targetType: 'invitation',
     targetId: invitation.id,
-    meta: { email: normalized, role: staff ? staffRole : role, staff, delivered: delivery.delivered },
+    meta: { email: normalized, role: staff ? staffRole : role, sections: inviteSections, staff, delivered: delivery.delivered },
   });
   return {
     invitation: publicInvitation(invitation.toObject()),
@@ -213,7 +221,7 @@ async function previewInvitation(token) {
   return {
     email: invitation.email,
     name: invitation.name,
-    role: invitation.is_platform_staff ? invitation.staff_role : invitation.role,
+    role: invitation.is_platform_staff ? invitation.staff_role : normalizeTenantRole(invitation.role),
     workspace_name: tenant?.name || null,
     is_platform_staff: Boolean(invitation.is_platform_staff),
     password_preset: Boolean(invitation.password_enc),
@@ -264,7 +272,8 @@ async function acceptInvitation({ token, name, password, phone = null }) {
       email: claimed.email,
       phone: phone ? String(phone).trim() : (claimed.phone || null),
       password_hash: passwordHash,
-      role: staff ? null : claimed.role,
+      role: staff ? null : normalizeTenantRole(claimed.role),
+      ...(!staff && normalizeTenantRole(claimed.role) !== 'owner' ? { sections: sectionsFor(claimed.role, claimed.sections) } : {}),
       is_platform_staff: staff,
       staff_role: staff ? claimed.staff_role : null,
       is_active: true,

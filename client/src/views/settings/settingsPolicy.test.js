@@ -6,9 +6,9 @@ import {
 
 const FLAGS = {
   owner: { manage_team: true, manage_settings: true, manage_whatsapp: true },
-  admin: { manage_team: true, manage_settings: true, manage_whatsapp: true },
-  manager: { manage_team: false, manage_settings: false, manage_whatsapp: false },
-  agent: { manage_team: false, manage_settings: false, manage_whatsapp: false },
+  // Admins manage Staff, but billing, the WhatsApp number and workspace settings stay with Owners.
+  admin: { manage_team: true, manage_settings: false, manage_whatsapp: false },
+  staff: { manage_team: false, manage_settings: false, manage_whatsapp: false },
 };
 test('Settings sections: no WhatsApp or Billing (they have their own pages)', () => {
   assert.deepStrictEqual(settingsSections().map((s) => s.key), ['profile', 'brand', 'two-step', 'password']);
@@ -58,11 +58,11 @@ test('WhatsApp profile: only changed fields, Meta limits and email format', () =
 });
 
 test('editing follows the server permission flags', () => {
-  for (const role of ['owner', 'admin']) {
+  for (const role of ['owner']) {
     assert.strictEqual(canEditWorkspace(FLAGS[role]), true);
     assert.strictEqual(canEditBrand(FLAGS[role]), true);
   }
-  for (const role of ['manager', 'agent']) {
+  for (const role of ['admin', 'staff']) {
     assert.strictEqual(canEditWorkspace(FLAGS[role]), false);
     assert.strictEqual(canEditBrand(FLAGS[role]), false);
   }
@@ -71,12 +71,12 @@ test('editing follows the server permission flags', () => {
 
 test('Connect WhatsApp: hidden without manage_whatsapp, disabled while secure signup is pending', () => {
   const pending = { enabled: false, reason: 'SECURE_SIGNUP_PENDING', message: 'Temporarily unavailable' };
-  assert.deepStrictEqual(connectWhatsApp({ permissions: FLAGS.agent, signupConfig: pending }), { visible: false, enabled: false, reason: null });
+  assert.deepStrictEqual(connectWhatsApp({ permissions: FLAGS.staff, signupConfig: pending }), { visible: false, enabled: false, reason: null });
   assert.deepStrictEqual(connectWhatsApp({ permissions: FLAGS.owner, signupConfig: pending }), { visible: true, enabled: false, reason: 'Temporarily unavailable' });
   assert.strictEqual(connectWhatsApp({ permissions: FLAGS.owner, signupConfig: undefined }).enabled, false, 'no config = disabled');
   assert.strictEqual(connectWhatsApp({ permissions: FLAGS.owner, signupConfig: { enabled: 'true' } }).enabled, false, 'only a real true enables');
-  assert.strictEqual(connectWhatsApp({ permissions: FLAGS.manager, signupConfig: { enabled: true } }).visible, false);
-  assert.deepStrictEqual(connectWhatsApp({ permissions: FLAGS.admin, signupConfig: { enabled: true } }), { visible: true, enabled: true, reason: null });
+  assert.strictEqual(connectWhatsApp({ permissions: FLAGS.admin, signupConfig: { enabled: true } }).visible, false);
+  assert.deepStrictEqual(connectWhatsApp({ permissions: FLAGS.owner, signupConfig: { enabled: true } }), { visible: true, enabled: true, reason: null });
 });
 
 test('identifiers are masked to the last four characters', () => {
@@ -101,7 +101,8 @@ test('WhatsApp summary shows status and masked ids, never a credential', () => {
 
 test('the authenticated role is shown as-is, nothing invented', () => {
   assert.strictEqual(roleLabel('owner'), 'Owner');
-  assert.strictEqual(roleLabel('agent'), 'Agent');
+  assert.strictEqual(roleLabel('staff'), 'Staff');
+  assert.strictEqual(roleLabel('agent'), 'Staff', 'retired roles read as Staff');
   assert.strictEqual(roleLabel('platform_staff'), '');
   assert.strictEqual(roleLabel(undefined), '');
 });

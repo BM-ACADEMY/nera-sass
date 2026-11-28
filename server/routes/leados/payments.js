@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { requireSection, LEAD_WORK } = require('../../services/permissions');
 module.exports = function registerPaymentsRoutes(app, ctx) {
 const {
   Leads,
@@ -14,7 +15,7 @@ const {
 // ══════════════════════════════════════════════════════════
 // PAYMENTS
 // ══════════════════════════════════════════════════════════
-app.post('/api/payments/create-link', auth, async (req, res) => {
+app.post('/api/payments/create-link', auth, requireSection('dashboard', 'reports', LEAD_WORK), async (req, res) => {
   try {
     const { lead_id, amount, description } = req.body;
     const lead = await Leads.findOne({ id: lead_id }, NO_ID).lean();
@@ -45,7 +46,7 @@ app.post('/api/payments/create-link', auth, async (req, res) => {
   }
 });
 
-app.get('/api/payments', auth, async (req, res) => {
+app.get('/api/payments', auth, requireSection('dashboard', 'reports', LEAD_WORK), async (req, res) => {
   try {
     const { lead_id } = req.query;
     const paymentRows = await Payments.find(lead_id ? { lead_id } : {}, NO_ID).sort({ created_at: -1 }).lean();

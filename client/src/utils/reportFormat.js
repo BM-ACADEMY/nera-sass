@@ -2,7 +2,7 @@
 // reportFormat.test.js).
 
 // Roles that see Reports > Team (server permission 'reports.team').
-export const TEAM_REPORT_ROLES = ['owner', 'admin', 'manager'];
+export const TEAM_REPORT_ROLES = ['owner', 'admin'];
 export const canViewTeamReport = (role) => TEAM_REPORT_ROLES.includes(String(role || '').toLowerCase());
 
 const trim = (value) => value.toFixed(1).replace(/\.0$/, '');

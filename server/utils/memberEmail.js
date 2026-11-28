@@ -7,7 +7,7 @@
  * Every value that a user typed (names, workspace, email) is flattened to one
  * line and HTML-escaped; the subject carries no control characters.
  */
-const ROLE_NAMES = { owner: 'Owner', admin: 'Admin', manager: 'Manager', agent: 'Agent' };
+const ROLE_NAMES = { owner: 'Owner', admin: 'Admin', staff: 'Staff', manager: 'Staff', agent: 'Staff' };
 
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 

@@ -102,8 +102,10 @@ test('Task 2: customer Settings APIs', async (t) => {
     const { users } = await workspace(10);
     const expected = {
       owner: { view_team: true, manage_team: true, manage_settings: true, manage_whatsapp: true, manage_billing: true, view_activity: true, manage_integrations: true },
-      admin: { view_team: true, manage_team: true, manage_settings: true, manage_whatsapp: true, manage_billing: true, view_activity: true, manage_integrations: true },
-      manager: { view_team: true, manage_team: false, manage_settings: false, manage_whatsapp: false, manage_billing: false, view_activity: false, manage_integrations: false },
+      // Admins manage the team; billing, WhatsApp, settings, activity and integrations stay with Owners.
+      admin: { view_team: true, manage_team: true, manage_settings: false, manage_whatsapp: false, manage_billing: false, view_activity: false, manage_integrations: false },
+      // Old managers and agents are Staff: no Team page.
+      manager: { view_team: false, manage_team: false, manage_settings: false, manage_whatsapp: false, manage_billing: false, view_activity: false, manage_integrations: false },
       agent: { view_team: false, manage_team: false, manage_settings: false, manage_whatsapp: false, manage_billing: false, view_activity: false, manage_integrations: false },
     };
     for (const [role, flags] of Object.entries(expected)) {
@@ -122,7 +124,7 @@ test('Task 2: customer Settings APIs', async (t) => {
     assert.strictEqual((await request(app).get('/api/tenant').set(bearer(users.agent))).body.tenant.ai_enabled, false);
   });
 
-  await t.test('W2. Workspace settings: owner/admin can change the language only (audited); manager/agent 403; a browser tenant_id is ignored', async () => {
+  await t.test('W2. Workspace settings: the owner can change the language only (audited); admin/manager/agent 403; a browser tenant_id is ignored', async () => {
     const { users } = await workspace(10);
     await workspace(20);
     const owner = await request(app).patch('/api/tenant/settings').set(bearer(users.owner)).send({ language: 'hi', tenant_id: 20 });
@@ -136,8 +138,8 @@ test('Task 2: customer Settings APIs', async (t) => {
       assert.strictEqual(refused.body.code, 'SETTING_MANAGED_BY_PLATFORM');
     }
     assert.strictEqual((await rawTenant(10)).timezone, 'Asia/Kolkata');
-    assert.strictEqual((await request(app).patch('/api/tenant/settings').set(bearer(users.admin)).send({ language: 'ta' })).status, 200);
-    for (const role of ['manager', 'agent']) {
+    assert.strictEqual((await request(app).patch('/api/tenant/settings').set(bearer(users.owner)).send({ language: 'ta' })).status, 200);
+    for (const role of ['admin', 'manager', 'agent']) {
       const res = await request(app).patch('/api/tenant/settings').set(bearer(users[role])).send({ language: 'hi' });
       assert.strictEqual(res.status, 403, role);
     }
@@ -175,7 +177,7 @@ test('Task 2: customer Settings APIs', async (t) => {
 
   await t.test('P2. Profile edit with a number but no own token: saved, no Meta call, credential reported missing', async () => {
     const { brand, users } = await workspace(10, { phone_number_id: 'p-1', wa_business_id: 'waba-1', whatsapp_number: '911111111111' });
-    const res = await request(app).patch(`/api/clients/${brand.id}`).set(bearer(users.admin)).send({ wa_address: '12 Market Road' });
+    const res = await request(app).patch(`/api/clients/${brand.id}`).set(bearer(users.owner)).send({ wa_address: '12 Market Road' });
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body.meta_profile_pending_reason, 'WHATSAPP_CREDENTIAL_MISSING');
     assert.strictEqual((await rawBrand(brand.id)).wa_address, '12 Market Road');
@@ -206,9 +208,9 @@ test('Task 2: customer Settings APIs', async (t) => {
     assert.strictEqual(metaCalls.length, 0);
   });
 
-  await t.test('P4. Managers and agents cannot edit the brand profile', async () => {
+  await t.test('P4. Admins, managers and agents cannot edit the brand profile (Owners only)', async () => {
     const { brand, users } = await workspace(10);
-    for (const role of ['manager', 'agent']) {
+    for (const role of ['admin', 'manager', 'agent']) {
       const res = await request(app).patch(`/api/clients/${brand.id}`).set(bearer(users[role])).send({ wa_description: 'x' });
       assert.strictEqual(res.status, 403, role);
     }
@@ -240,7 +242,7 @@ test('Task 2: customer Settings APIs', async (t) => {
     assert.strictEqual((await request(app).get('/api/auth/me').set(bearerToken(oldToken))).status, 401, 'old session revoked');
     const me = await request(app).get('/api/auth/me').set(bearerToken(ok.body.token));
     assert.strictEqual(me.status, 200, 'fresh token works');
-    assert.strictEqual(me.body.role, 'agent');
+    assert.strictEqual(me.body.role, 'staff', 'an old agent is Staff');
     await assertNoCredential(me, 0, '/api/auth/me');
     assert.ok(await sys(() => AuditEvents.exists({ event: 'PASSWORD_CHANGED', target_id: String(users.agent.id) })));
   });
@@ -288,7 +290,7 @@ test('Task 2: customer Settings APIs', async (t) => {
     assert.strictEqual(bad.status, 401);
     const good = await request(app).post('/api/auth/mfa/verify').send({ mfa_token: login.body.mfa_token, code: mfa.totp(start.body.secret) });
     assert.strictEqual(good.status, 200, JSON.stringify(good.body));
-    assert.strictEqual(good.body.user.role, 'agent');
+    assert.strictEqual(good.body.user.role, 'staff', 'an old agent is Staff');
     assert.strictEqual((await request(app).get('/api/auth/me').set(bearerToken(good.body.token))).status, 200);
 
     const again = await request(app).post('/api/auth/login').send({ email: users.agent.email, password: PASSWORD });

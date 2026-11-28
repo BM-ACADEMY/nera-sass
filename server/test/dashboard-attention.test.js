@@ -49,7 +49,7 @@ async function makeUsers(tenantId, roles) {
   for (const role of roles) {
     const dbRole = role.replace(/\d+$/, '');
     out[role] = (await sys(() => models.Users.create({
-      tenant_id: tenantId, role: dbRole, email: `${role}${tenantId}@shop.test`, name: `${role} ${tenantId}`,
+      tenant_id: tenantId, ...(['agent', 'manager'].includes(dbRole) ? { role: 'staff', sections: ['dashboard', 'leads', 'inbox', 'sales_tasks'] } : { role: dbRole }), email: `${role}${tenantId}@shop.test`, name: `${role} ${tenantId}`,
       password_hash: bcrypt.hashSync('Original-Pass-1', 4), is_active: true, token_version: 0,
     }))).toObject();
   }
@@ -139,7 +139,7 @@ const attention = (headers) => request(app).get('/api/dashboard/attention').set(
 
 test('Dashboard attention: counts for the whole workspace', async () => {
   const s = await seedMain();
-  for (const role of ['owner', 'admin', 'manager']) {
+  for (const role of ['owner', 'admin']) {
     const res = await attention(s.headers[role]);
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body.scope, 'all', role);

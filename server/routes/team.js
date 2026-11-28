@@ -9,7 +9,7 @@
 const express = require('express');
 const { Tenants, Invitations } = require('../models');
 const { runAsSystem } = require('../services/tenantContext');
-const { requirePermission, can } = require('../services/permissions');
+const { requirePermission, can, grantableSections, SECTIONS } = require('../services/permissions');
 const { auth } = require('../middleware/authMiddleware');
 const { seatUsage } = require('../services/entitlements');
 const billingLimits = require('../services/billing/limits');
@@ -31,7 +31,7 @@ function fail(res, error) {
   return res.status(500).json({ error: 'Server error' });
 }
 
-const actorOf = (req) => ({ id: req.user.id, kind: 'tenant', role: req.identity.role, name: req.user.name });
+const actorOf = (req) => ({ id: req.user.id, kind: 'tenant', role: req.identity.role, sections: req.identity.sections, name: req.user.name });
 
 // Workspace summary for any signed-in member. tenant.ai_enabled is false only
 // when the workspace turned its AI off (AI Brain toggle); missing means on.
@@ -60,6 +60,9 @@ router.get('/tenant', async (req, res) => {
         view_activity: can(req.identity, 'activity.view'),
         manage_integrations: can(req.identity, 'integrations.manage'),
       },
+      // The sidebar sections this person can open (the server refuses the rest).
+      role: req.identity.role,
+      sections: req.identity.sections,
     });
   } catch (error) {
     return fail(res, error);
@@ -108,6 +111,9 @@ router.get('/team/users', requirePermission('team.view'), async (req, res) => {
       invitations: pending.map(invitations.publicInvitation),
       seats: { used: seats.used, limit, max_users: limit, active_users: seats.activeUsers, pending_invitations: seats.pendingInvitations },
       can_manage: can(req.identity, 'team.manage'),
+      // Every section, and the ones this person may tick for someone else.
+      sections: SECTIONS,
+      grantable_sections: can(req.identity, 'team.manage') ? grantableSections(actorOf(req)) : [],
     });
   } catch (error) {
     return fail(res, error);
@@ -129,6 +135,7 @@ router.post('/team/users', requirePermission('team.manage'), async (req, res) =>
       email: body.email,
       phone: body.phone,
       role: body.role,
+      sections: body.sections,
       method: body.method,
       password: body.password,
       req,
@@ -141,14 +148,17 @@ router.post('/team/users', requirePermission('team.manage'), async (req, res) =>
 
 router.post('/team/invitations', requirePermission('team.manage'), async (req, res) => {
   try {
-    const role = String(req.body?.role || 'agent').toLowerCase();
+    const actor = actorOf(req);
+    const role = teamMembers.cleanRole(req.body?.role || 'staff');
     if (['owner', 'admin'].includes(role) && req.identity.role !== 'owner') return res.status(403).json({ error: 'Only an Owner can invite an Owner or Admin' });
+    const sections = teamMembers.resolveSections(actor, { role, rawRole: req.body?.role || 'staff', requested: req.body?.sections });
     const result = await invitations.createInvitation({
       tenantId: req.identity.tenantId,
       email: req.body?.email,
       name: req.body?.name,
       phone: typeof req.body?.phone === 'string' ? req.body.phone : null,
       role,
+      sections: sections || undefined,
       invitedBy: { id: req.user.id, name: req.user.name },
       req,
     });
@@ -174,11 +184,11 @@ router.delete('/team/invitations/:id', requirePermission('team.manage'), async (
   }
 });
 
-// Name, phone and role (any of them).
+// Name, phone, role and sections (any of them).
 router.patch('/team/users/:id', requirePermission('team.manage'), async (req, res) => {
   try {
-    const { name, phone, role } = req.body || {};
-    return res.json({ user: await teamMembers.updateMember({ tenantId: req.identity.tenantId, userId: req.params.id, actor: actorOf(req), changes: { name, phone, role }, req }) });
+    const { name, phone, role, sections } = req.body || {};
+    return res.json({ user: await teamMembers.updateMember({ tenantId: req.identity.tenantId, userId: req.params.id, actor: actorOf(req), changes: { name, phone, role, sections }, req }) });
   } catch (error) {
     return fail(res, error);
   }

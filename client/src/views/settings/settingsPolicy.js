@@ -2,7 +2,8 @@
 // (GET /api/tenant permission flags and the signup config). The server checks
 // every change again; this only keeps the page honest about what will work.
 
-export const ROLE_LABELS = { owner: 'Owner', admin: 'Admin', manager: 'Manager', agent: 'Agent' };
+// Retired roles (manager, agent) on older accounts are shown as Staff.
+export const ROLE_LABELS = { owner: 'Owner', admin: 'Admin', staff: 'Staff', manager: 'Staff', agent: 'Staff' };
 
 export const roleLabel = (role) => ROLE_LABELS[role] || '';
 
@@ -22,8 +23,8 @@ export const SETTINGS_SECTIONS = [
   { key: 'integrations', title: 'Integrations', text: 'Connect your Facebook Page to receive Lead Form ad leads.', permission: 'manage_integrations' },
 ];
 
-// Same rule as the server's 'activity.view' (owner and admin).
-export const canViewActivity = (role) => role === 'owner' || role === 'admin';
+// Same rule as the server's 'activity.view' (Owners only).
+export const canViewActivity = (role) => role === 'owner';
 
 // The sections this person may open; one with `permission` needs that flag
 // (GET /api/tenant permissions).

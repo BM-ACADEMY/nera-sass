@@ -4,6 +4,8 @@ import { Search, X, FileText } from 'lucide-react';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { Separator } from '@/components/ui/separator';
 import { C } from '../../constants/theme.js';
+import { useAuth } from '../../hooks/useAuth.js';
+import { mySections, hasSection } from '../../views/settings/teamPolicy.js';
 
 // Optional product label next to the page title (build setting); nothing is
 // shown when it is not set.
@@ -28,26 +30,28 @@ const LABELS = {
   account: 'My sessions',
 };
 
-// Only the pages in the sidebar; other addresses are not routed.
+// Only the pages in the sidebar; other addresses are not routed. Pages this
+// person was not given (section, owner, notStaff) are left out.
 const SEARCH_PAGES = [
-  { path: '/dashboard', label: 'Dashboard', desc: 'Overview and quick stats' },
-  { path: '/leads', label: 'Leads', desc: 'View, filter, and manage all leads' },
-  { path: '/sales-tasks', label: 'Sales Task', desc: 'Manage your daily sales activities' },
-  { path: '/calendar', label: 'Calendar', desc: 'Google Calendar, booking hours and meetings' },
-  { path: '/plugins', label: 'Plugins', desc: 'Google Calendar, Google Meet and more' },
-  { path: '/inbox', label: 'WhatsApp Chat', desc: 'Chat directly with your leads' },
-  { path: '/whatsapp', label: 'WhatsApp Number', desc: 'Your connected number, status and business profile' },
-  { path: '/templates', label: 'Templates', desc: 'Your WhatsApp message templates' },
-  { path: '/campaigns', label: 'Campaigns', desc: 'Send bulk WhatsApp messages' },
-  { path: '/brain', label: 'AI Brain', desc: 'Configure AI assistant behavior' },
-  { path: '/reports', label: 'Reports', desc: 'Detailed analytics and performance' },
+  { path: '/dashboard', section: 'dashboard', label: 'Dashboard', desc: 'Overview and quick stats' },
+  { path: '/leads', section: 'leads', label: 'Leads', desc: 'View, filter, and manage all leads' },
+  { path: '/sales-tasks', section: 'sales_tasks', label: 'Sales Task', desc: 'Manage your daily sales activities' },
+  { path: '/calendar', section: 'plugins', label: 'Calendar', desc: 'Google Calendar, booking hours and meetings' },
+  { path: '/plugins', section: 'plugins', label: 'Plugins', desc: 'Google Calendar, Google Meet and more' },
+  { path: '/inbox', section: 'inbox', label: 'WhatsApp Chat', desc: 'Chat directly with your leads' },
+  { path: '/whatsapp', owner: true, label: 'WhatsApp Number', desc: 'Your connected number, status and business profile' },
+  { path: '/templates', section: 'templates', label: 'Templates', desc: 'Your WhatsApp message templates' },
+  { path: '/campaigns', section: 'campaigns', label: 'Campaigns', desc: 'Send bulk WhatsApp messages' },
+  { path: '/brain', section: 'ai_brain', label: 'AI Brain', desc: 'Configure AI assistant behavior' },
+  { path: '/reports', section: 'reports', label: 'Reports', desc: 'Detailed analytics and performance' },
   { path: '/settings', label: 'Settings', desc: 'Profile, workspace, brand profile and security' },
-  { path: '/billing', label: 'Billing', desc: 'Plan, usage, wallet and invoices' },
+  { path: '/billing', notStaff: true, label: 'Billing', desc: 'Plan, usage, wallet and invoices' },
 ];
 
 export const Header = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const activePath = location.pathname.split('/')[1] || 'dashboard';
   const activeLabel = LABELS[activePath] || 'Dashboard';
 
@@ -84,7 +88,8 @@ export const Header = () => {
     }
   }, [searchOpen]);
 
-  const filteredPages = SEARCH_PAGES.filter(p => 
+  const sections = mySections(user);
+  const filteredPages = SEARCH_PAGES.filter((p) => hasSection(sections, p.section) && (!p.owner || user?.role === 'owner') && (!p.notStaff || user?.role !== 'staff')).filter(p => 
     p.label.toLowerCase().includes(searchQuery.toLowerCase()) || 
     p.desc.toLowerCase().includes(searchQuery.toLowerCase())
   );

@@ -13,7 +13,7 @@
 const consent = require('../../services/consent');
 const numberHealth = require('../../services/numberHealth');
 const sendQueue = require('../../services/whatsappSendQueue');
-const { requirePermission } = require('../../services/permissions');
+const { requirePermission, requireSection, LEAD_WORK } = require('../../services/permissions');
 
 module.exports = function registerSendSafetyRoutes(app, ctx) {
 const { Leads, Clients, CampaignMessageQueue, NO_ID, auth } = ctx;
@@ -32,7 +32,7 @@ const presentConsent = (row, lead) => ({
   events: Array.isArray(row?.events) ? row.events.slice(-50) : [],
 });
 
-app.get('/api/leads/:id/consent', auth, async (req, res) => {
+app.get('/api/leads/:id/consent', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const id = leadId(req.params.id);
     if (!id) return res.status(400).json({ error: 'Invalid lead id' });
@@ -48,7 +48,7 @@ app.get('/api/leads/:id/consent', auth, async (req, res) => {
 
 // The agent records that the contact agreed to marketing messages, naming
 // where (form, call, shop visit...) and the wording the contact agreed to.
-app.post('/api/leads/:id/consent', auth, async (req, res) => {
+app.post('/api/leads/:id/consent', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const id = leadId(req.params.id);
     if (!id) return res.status(400).json({ error: 'Invalid lead id' });
@@ -67,7 +67,7 @@ app.post('/api/leads/:id/consent', auth, async (req, res) => {
   }
 });
 
-app.post('/api/leads/:id/opt-out', auth, async (req, res) => {
+app.post('/api/leads/:id/opt-out', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const id = leadId(req.params.id);
     if (!id) return res.status(400).json({ error: 'Invalid lead id' });

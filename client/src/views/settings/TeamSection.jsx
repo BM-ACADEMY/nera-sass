@@ -9,7 +9,7 @@ import { timeAgo } from '../../services/sessionFormat.js';
 import { roleLabel } from './settingsPolicy.js';
 import {
   assignableRoles, canActOn, memberStatus, invitationStatus, seatSummary, addMemberProblem, editMemberProblem, passwordProblem, ROLE_HELP,
-  SHARE_HINT, addedNotice, resentNotice,
+  SHARE_HINT, addedNotice, resentNotice, SECTIONS, SECTION_KEYS, defaultSections,
 } from './teamPolicy.js';
 import { FormRow, Callout } from './SettingsKit.jsx';
 import { Badge } from '@/components/ui/badge';
@@ -42,6 +42,33 @@ const RoleSelect = ({ id, value, onChange, roles, disabled }) => (
   </Select>
 );
 
+// The sections an Admin or Staff member can open, as tick boxes. Only the
+// sections the person adding may give are listed (an Admin: their own).
+const SectionPicker = ({ value, onChange, grantable, disabled }) => {
+  const shown = SECTIONS.filter((section) => grantable.includes(section.key));
+  const toggle = (key) => onChange(value.includes(key) ? value.filter((k) => k !== key) : SECTION_KEYS.filter((k) => k === key || value.includes(k)));
+  return (
+    <div className="grid gap-2">
+      <span className="text-[13px] font-semibold text-slate-700">What can they open?</span>
+      <div className="grid gap-1.5 sm:grid-cols-2">
+        {shown.map((section) => (
+          <label key={section.key} className={cn('flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-sm transition-colors', value.includes(section.key) ? 'border-primary bg-blue-50/60' : 'border-border hover:bg-slate-50', disabled && 'cursor-not-allowed opacity-60')}>
+            <input type="checkbox" checked={value.includes(section.key)} onChange={() => toggle(section.key)} disabled={disabled} className="size-4 accent-blue-600" />
+            <span className="text-slate-800">{section.label}</span>
+          </label>
+        ))}
+      </div>
+      <span className="text-xs text-muted-foreground">Billing, the WhatsApp number and workspace settings stay with Owners.</span>
+    </div>
+  );
+};
+
+const sectionsText = (member) => {
+  if (member.role === 'owner' || !Array.isArray(member.sections)) return '';
+  if (member.sections.length === SECTION_KEYS.length) return 'All sections';
+  return SECTIONS.filter((section) => member.sections.includes(section.key)).map((section) => section.label).join(', ') || 'No sections';
+};
+
 const PasswordFields = ({ password, setPassword, confirm, setConfirm, disabled }) => (
   <>
     <FormRow label="Temporary password" htmlFor="team-password" hint="At least 10 characters, with a letter and a number.">
@@ -68,13 +95,15 @@ const MethodOption = ({ value, current, onChange, title, text, disabled }) => (
 );
 
 // Add a person: name, email, phone, role and how they get their password.
-function AddMemberDialog({ open, onClose, myRole, onAdded }) {
+function AddMemberDialog({ open, onClose, myRole, grantable, onAdded }) {
   const roles = assignableRoles(myRole);
   // Mounted only while open, so every opening starts from an empty form.
-  const [form, setForm] = useState({ name: '', email: '', phone: '', role: 'agent', method: 'password', password: '', confirm: '' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '', role: 'staff', sections: defaultSections('staff', grantable), method: 'password', password: '', confirm: '' });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const set = (key) => (value) => setForm((f) => ({ ...f, [key]: value }));
+  // A new role starts from its default sections (Staff: Leads and WhatsApp Chat; Admin: all).
+  const setRole = (role) => setForm((f) => ({ ...f, role, sections: defaultSections(role, grantable) }));
 
   const submit = async (e) => {
     e.preventDefault();
@@ -84,6 +113,7 @@ function AddMemberDialog({ open, onClose, myRole, onAdded }) {
     setError('');
     try {
       const body = { name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim() || null, role: form.role, method: form.method };
+      if (form.role !== 'owner') body.sections = form.sections;
       if (form.method === 'password') body.password = form.password;
       const result = await api.addTeamMember(body);
       showNotice(addedNotice({ method: form.method, delivery: result.delivery, name: body.name, email: body.email }));
@@ -116,8 +146,9 @@ function AddMemberDialog({ open, onClose, myRole, onAdded }) {
             </FormRow>
           </div>
           <FormRow label="Role" htmlFor="team-role" hint={ROLE_HELP[form.role]}>
-            <RoleSelect id="team-role" value={form.role} onChange={set('role')} roles={roles} disabled={busy} />
+            <RoleSelect id="team-role" value={form.role} onChange={setRole} roles={roles} disabled={busy} />
           </FormRow>
+          {form.role !== 'owner' && <SectionPicker value={form.sections} onChange={set('sections')} grantable={grantable} disabled={busy} />}
           <div className="grid gap-2">
             <span className="text-[13px] font-semibold text-slate-700">How will they get their password?</span>
             <MethodOption value="password" current={form.method} onChange={set('method')} disabled={busy}
@@ -140,9 +171,16 @@ function AddMemberDialog({ open, onClose, myRole, onAdded }) {
 }
 
 // Edit name, phone and role.
-function EditMemberDialog({ member, onClose, myRole, onSaved }) {
+function EditMemberDialog({ member, onClose, myRole, grantable, onSaved }) {
   // Mounted per member (keyed), so the form starts from their details.
-  const [form, setForm] = useState({ name: member?.name || '', phone: member?.phone || '', role: member?.role || 'agent' });
+  const [form, setForm] = useState({
+    name: member?.name || '', phone: member?.phone || '', role: member?.role || 'staff',
+    sections: Array.isArray(member?.sections) && member?.role !== 'owner' ? member.sections : [],
+  });
+  // An Owner made Admin or Staff starts from that role's default sections.
+  const setRole = (role) => setForm((f) => ({ ...f, role, sections: f.role === 'owner' ? defaultSections(role, grantable) : f.sections }));
+  // Sections they have that this person may not give stay as they are (the server keeps them).
+  const visibleSections = form.sections.filter((key) => grantable.includes(key));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   // Admins cannot give Admin, but a member who already is one keeps it in the list.
@@ -150,13 +188,14 @@ function EditMemberDialog({ member, onClose, myRole, onSaved }) {
 
   const submit = async (e) => {
     e.preventDefault();
-    const problem = editMemberProblem(form);
+    const problem = editMemberProblem({ ...form, sections: form.role === 'owner' ? undefined : form.sections });
     if (problem) return setError(problem);
     setBusy(true);
     setError('');
     try {
       const changes = { name: form.name.trim(), phone: form.phone.trim() || null };
       if (form.role !== member.role) changes.role = form.role;
+      if (form.role !== 'owner') changes.sections = form.sections;
       await api.updateTeamMember(member.id, changes);
       toast.success('Saved');
       onSaved();
@@ -183,8 +222,16 @@ function EditMemberDialog({ member, onClose, myRole, onSaved }) {
             <Input id="edit-phone" type="tel" placeholder="+91 98765 43210" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} disabled={busy} />
           </FormRow>
           <FormRow label="Role" htmlFor="edit-role" hint={ROLE_HELP[form.role]}>
-            <RoleSelect id="edit-role" value={form.role} onChange={(role) => setForm((f) => ({ ...f, role }))} roles={roles} disabled={busy} />
+            <RoleSelect id="edit-role" value={form.role} onChange={setRole} roles={roles} disabled={busy} />
           </FormRow>
+          {form.role !== 'owner' && (
+            <SectionPicker
+              value={visibleSections}
+              onChange={(picked) => setForm((f) => ({ ...f, sections: SECTION_KEYS.filter((key) => picked.includes(key) || (f.sections.includes(key) && !grantable.includes(key))) }))}
+              grantable={grantable}
+              disabled={busy}
+            />
+          )}
           {error && <Callout tone="error">{error}</Callout>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
@@ -330,6 +377,8 @@ export const TeamSection = ({ tenantInfo, me }) => {
   useEffect(() => { load(); }, [load]);
 
   const canManage = Boolean(team?.can_manage ?? tenantInfo?.permissions?.manage_team);
+  // Sections this person may tick for someone else (an Admin: their own).
+  const grantable = Array.isArray(team?.grantable_sections) ? team.grantable_sections : (me?.role === 'owner' ? SECTION_KEYS : []);
   const myRole = me?.role;
   const actor = { myRole, myId: me?.id, canManage };
 
@@ -499,7 +548,7 @@ export const TeamSection = ({ tenantInfo, me }) => {
                   avatar={<Initial name={m.name || m.email} muted={m.status === 'disabled'} />}
                   title={<>{m.name || m.email}{m.id === me?.id && <span className="ml-1.5 text-xs font-normal text-muted-foreground">(you)</span>}</>}
                   subtitle={[m.email, m.phone].filter(Boolean).join(' · ')}
-                  role={roleLabel(m.role)}
+                  role={<span className="block min-w-0"><span className="block">{roleLabel(m.role)}</span>{sectionsText(m) && <span className="block truncate text-xs text-muted-foreground" title={sectionsText(m)}>{sectionsText(m)}</span>}</span>}
                   status={<Badge variant={status.variant}>{status.label}</Badge>}
                   twoStep={<Badge variant={m.mfa_enabled ? 'success' : 'muted'}><FiShield /> {m.mfa_enabled ? 'On' : 'Off'}</Badge>}
                   lastSeen={<span className="text-xs text-muted-foreground">{m.last_login ? timeAgo(m.last_login) : 'Never signed in'}</span>}
@@ -527,8 +576,8 @@ export const TeamSection = ({ tenantInfo, me }) => {
         </Card>
       </div>
 
-      {canManage && adding && <AddMemberDialog open onClose={() => setAdding(false)} myRole={myRole} onAdded={load} />}
-      {editing && <EditMemberDialog key={editing.id} member={editing} onClose={() => setEditing(null)} myRole={myRole} onSaved={load} />}
+      {canManage && adding && <AddMemberDialog open onClose={() => setAdding(false)} myRole={myRole} grantable={grantable} onAdded={load} />}
+      {editing && <EditMemberDialog key={editing.id} member={editing} onClose={() => setEditing(null)} myRole={myRole} grantable={grantable} onSaved={load} />}
       {resetting && <ResetPasswordDialog key={resetting.id} member={resetting} onClose={() => setResetting(null)} onDone={load} />}
       <ConfirmAction confirm={confirm} onClose={() => setConfirm(null)} />
     </div>

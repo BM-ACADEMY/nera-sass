@@ -213,11 +213,11 @@ export function importSummary(result = {}) {
 }
 
 // Same rule as the server (services/permissions.js: leads.export,
-// leads.delete and leads.notes.delete_any). Agents can see, add, import and
+// leads.delete and leads.notes.delete_any). Staff can see, add, import and
 // assign leads, and add notes; everyone deletes their own notes.
 export function leadPermissions(role) {
   const value = String(role || '').toLowerCase();
-  const allowed = ['owner', 'admin', 'manager', 'platform_staff'].includes(value);
+  const allowed = ['owner', 'admin', 'platform_staff'].includes(value);
   return { canExport: allowed, canDelete: allowed, canDeleteAnyNote: ['owner', 'admin', 'platform_staff'].includes(value) };
 }
 

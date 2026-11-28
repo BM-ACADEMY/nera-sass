@@ -6,7 +6,7 @@
 const crypto = require('crypto');
 const multer = require('multer');
 const { AiReplyLogs, BrainProfiles, Clients, Tenants } = require('../../models');
-const { requirePermission } = require('../../services/permissions');
+const { requirePermission, requireSection } = require('../../services/permissions');
 const { runAsSystem } = require('../../services/tenantContext');
 const prompts = require('../../services/brainPrompt');
 const brainEngine = require('../../services/brainEngine');
@@ -74,7 +74,7 @@ async function brainResponse(req, brain = undefined) {
 // ══════════════════════════════════════════════════════════
 // AI BRAIN (brain_docs table)
 // ══════════════════════════════════════════════════════════
-app.get('/api/brain', auth, async (req, res) => {
+app.get('/api/brain', auth, requireSection('ai_brain'), async (req, res) => {
   try {
     const { client_id } = req.query;
     const rows = client_id
@@ -86,7 +86,7 @@ app.get('/api/brain', auth, async (req, res) => {
   }
 });
 
-app.post('/api/brain', auth, manageBrain, async (req, res) => {
+app.post('/api/brain', auth, requireSection('ai_brain'), manageBrain, async (req, res) => {
   try {
     const { client_id, doc_type, content } = req.body;
     const doc = await upsertOne(
@@ -104,7 +104,7 @@ app.post('/api/brain', auth, manageBrain, async (req, res) => {
 });
 
 // ── Brain profile ─────────────────────────────────────────
-app.get('/api/brain/profile', auth, workspaceOnly, async (req, res) => {
+app.get('/api/brain/profile', auth, requireSection('ai_brain'), workspaceOnly, async (req, res) => {
   try {
     res.json(await brainResponse(req));
   } catch (err) {
@@ -114,7 +114,7 @@ app.get('/api/brain/profile', auth, workspaceOnly, async (req, res) => {
 });
 
 // A save may be incomplete (a draft), except while the AI is on.
-app.put('/api/brain/profile', auth, workspaceOnly, manageBrain, async (req, res) => {
+app.put('/api/brain/profile', auth, requireSection('ai_brain'), workspaceOnly, manageBrain, async (req, res) => {
   try {
     const profile = prompts.cleanProfile(req.body?.profile);
     const current = await loadBrain();
@@ -155,7 +155,7 @@ async function createDoc({ kind, title, content }) {
   });
 }
 
-app.post('/api/brain/docs', auth, workspaceOnly, manageBrain, async (req, res) => {
+app.post('/api/brain/docs', auth, requireSection('ai_brain'), workspaceOnly, manageBrain, async (req, res) => {
   try {
     const { kind, title, content } = req.body || {};
     if (!DOC_KINDS.includes(kind)) return res.status(400).json({ error: 'Choose a valid document type' });
@@ -170,7 +170,7 @@ app.post('/api/brain/docs', auth, workspaceOnly, manageBrain, async (req, res) =
   }
 });
 
-app.post('/api/brain/docs/upload', auth, workspaceOnly, manageBrain, docUpload.single('file'), async (req, res) => {
+app.post('/api/brain/docs/upload', auth, requireSection('ai_brain'), workspaceOnly, manageBrain, docUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Choose a PDF or text file' });
     const allowed = req.file.mimetype === 'application/pdf' || req.file.mimetype.startsWith('text/');
@@ -188,7 +188,7 @@ app.post('/api/brain/docs/upload', auth, workspaceOnly, manageBrain, docUpload.s
   }
 });
 
-app.patch('/api/brain/docs/:id', auth, workspaceOnly, manageBrain, async (req, res) => {
+app.patch('/api/brain/docs/:id', auth, requireSection('ai_brain'), workspaceOnly, manageBrain, async (req, res) => {
   try {
     const set = { updated_at: new Date() };
     if (req.body?.title !== undefined) set.title = String(req.body.title).trim().slice(0, 200);
@@ -212,7 +212,7 @@ app.patch('/api/brain/docs/:id', auth, workspaceOnly, manageBrain, async (req, r
   }
 });
 
-app.delete('/api/brain/docs/:id', auth, workspaceOnly, manageBrain, async (req, res) => {
+app.delete('/api/brain/docs/:id', auth, requireSection('ai_brain'), workspaceOnly, manageBrain, async (req, res) => {
   try {
     const doomedDoc = await BrainDocs.findOne(itemFilter(req), { _id: 0, id: 1, doc_type: 1, title: 1 }).lean();
     const result = await BrainDocs.deleteOne(itemFilter(req));
@@ -227,7 +227,7 @@ app.delete('/api/brain/docs/:id', auth, workspaceOnly, manageBrain, async (req, 
 
 // ── AI reply cost: tokens and estimated USD per reply, this workspace only ─
 // GET /api/brain/usage?from=YYYY-MM-DD&to=YYYY-MM-DD  (default: this month)
-app.get('/api/brain/usage', auth, workspaceOnly, manageBrain, async (req, res) => {
+app.get('/api/brain/usage', auth, requireSection('ai_brain'), workspaceOnly, manageBrain, async (req, res) => {
   try {
     const now = new Date();
     const from = req.query.from ? new Date(`${req.query.from}T00:00:00Z`) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -277,7 +277,7 @@ app.get('/api/brain/usage', auth, workspaceOnly, manageBrain, async (req, res) =
 });
 
 // ── Sandbox: never sends to WhatsApp and stores nothing ───
-app.post('/api/brain/test', auth, workspaceOnly, manageBrain, async (req, res) => {
+app.post('/api/brain/test', auth, requireSection('ai_brain'), workspaceOnly, manageBrain, async (req, res) => {
   try {
     const message = String(req.body?.message || '').trim().slice(0, 1000);
     if (!message) return res.status(400).json({ error: 'Type a test message' });
@@ -296,7 +296,7 @@ app.post('/api/brain/test', auth, workspaceOnly, manageBrain, async (req, res) =
 
 // ── Turn the AI Brain on or off ───────────────────────────
 // Off also stops every AI reply, including the older flow.
-app.post('/api/brain/ai-toggle', auth, workspaceOnly, adminOnly, async (req, res) => {
+app.post('/api/brain/ai-toggle', auth, requireSection('ai_brain'), workspaceOnly, adminOnly, async (req, res) => {
   try {
     const enabled = req.body?.enabled === true;
     const current = await loadBrain();

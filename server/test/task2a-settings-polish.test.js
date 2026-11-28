@@ -158,12 +158,13 @@ test('Task 2A: Settings polish', async (t) => {
     }))).toObject();
     const session = bearerToken(makeToken(admin));
     assert.strictEqual((await request(app).get('/api/auth/me').set(session)).body.role, 'admin');
-    await sys(() => Users.updateOne({ id: admin.id }, { $set: { role: 'agent', name: 'Agent Ten' } }));
+    await sys(() => Users.updateOne({ id: admin.id }, { $set: { role: 'staff', sections: ['inbox'], name: 'Agent Ten' } }));
     const me = await request(app).get('/api/auth/me').set(session);
-    assert.strictEqual(me.body.role, 'agent');
+    assert.strictEqual(me.body.role, 'staff');
+    assert.deepStrictEqual(me.body.sections, ['inbox'], 'sections follow too');
     assert.strictEqual(me.body.name, 'Agent Ten');
     const tenant = await request(app).get('/api/tenant').set(session);
-    assert.strictEqual(tenant.body.permissions.manage_settings, false, 'server permissions follow the new role');
+    assert.strictEqual(tenant.body.permissions.view_team, false, 'server permissions follow the new role');
     assert.ok(owner.id);
   });
 });

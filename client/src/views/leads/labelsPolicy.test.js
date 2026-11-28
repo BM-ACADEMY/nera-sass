@@ -40,6 +40,6 @@ test('toggle and filter', () => {
 test('only owners and admins manage labels; everyone labels leads', () => {
   assert.deepStrictEqual(labelPermissions('owner'), { canManage: true, canLabel: true });
   assert.deepStrictEqual(labelPermissions('Admin'), { canManage: true, canLabel: true });
-  assert.deepStrictEqual(labelPermissions('manager'), { canManage: false, canLabel: true });
+  assert.deepStrictEqual(labelPermissions('staff'), { canManage: false, canLabel: true });
   assert.deepStrictEqual(labelPermissions('agent'), { canManage: false, canLabel: true });
 });

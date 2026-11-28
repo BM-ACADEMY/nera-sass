@@ -6,7 +6,7 @@
 const sendPolicy = require('../../services/sendPolicy');
 const numberHealth = require('../../services/numberHealth');
 const { SOURCE_KINDS, normalizeSourceKind, sourceFilter } = require('../../services/leadSources');
-const { requirePermission } = require('../../services/permissions');
+const { requirePermission, requireSection, LEAD_WORK } = require('../../services/permissions');
 const activity = require('../../services/activity');
 const leadLabels = require('../../services/leadLabels');
 module.exports = function registerFollowupsRoutes(app, ctx) {
@@ -38,11 +38,11 @@ const erasure = require('../../services/erasure');
 const { Tenants } = require('../../models');
 const { runAsSystem } = require('../../services/tenantContext');
 // ═══════════════════════════════════════════════════════════════════
-// FOLLOWUP ENGINE APIs (WF02)
+// FOLLOWUP ENGINE APIs (WF02). Customer logins need the followups section.
 // ═══════════════════════════════════════════════════════════════════
 
 // GET /api/followups/due - Get leads due for follow-up
-app.get('/api/followups/due', auth, async (req, res) => {
+app.get('/api/followups/due', auth, requireSection('followups'), async (req, res) => {
   try {
     const dueLeads = await Leads.find(
       { next_follow_up: { $ne: null, $lte: new Date() }, status: { $nin: ['lost', 'converted', null] } },
@@ -61,7 +61,7 @@ app.get('/api/followups/due', auth, async (req, res) => {
 });
 
 // POST /api/followups/rule - Get follow-up rule for a lead
-app.post('/api/followups/rule', auth, async (req, res) => {
+app.post('/api/followups/rule', auth, requireSection('followups'), async (req, res) => {
   try {
     const { lead_id, brand, stage, touch_count } = req.body;
 
@@ -88,7 +88,7 @@ app.post('/api/followups/rule', auth, async (req, res) => {
 });
 
 // POST /api/whatsapp/check-24h - Check if 24h passed since last message
-app.post('/api/whatsapp/check-24h', auth, async (req, res) => {
+app.post('/api/whatsapp/check-24h', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const { lead_id } = req.body;
 
@@ -108,7 +108,7 @@ app.post('/api/whatsapp/check-24h', auth, async (req, res) => {
 });
 
 // POST /api/communication/send-template - Send WhatsApp template
-app.post('/api/communication/send-template', auth, async (req, res) => {
+app.post('/api/communication/send-template', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const { lead_id, template_name, template_params } = req.body;
 
@@ -180,7 +180,7 @@ app.post('/api/communication/send-template', auth, async (req, res) => {
 });
 
 // POST /api/ai/followup - Generate and send AI follow-up text
-app.post('/api/ai/followup', auth, async (req, res) => {
+app.post('/api/ai/followup', auth, requireSection('followups'), async (req, res) => {
   try {
     const { lead_id, prompt } = req.body;
 
@@ -247,7 +247,7 @@ app.post('/api/ai/followup', auth, async (req, res) => {
 });
 
 // POST /api/communication/send-email - Send follow-up email
-app.post('/api/communication/send-email', auth, async (req, res) => {
+app.post('/api/communication/send-email', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const { lead_id, template_id } = req.body;
 
@@ -268,7 +268,7 @@ app.post('/api/communication/send-email', auth, async (req, res) => {
 });
 
 // POST /api/leads/internal-note - Create internal note
-app.post('/api/leads/internal-note', auth, async (req, res) => {
+app.post('/api/leads/internal-note', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const { lead_id, note } = req.body;
 
@@ -281,7 +281,7 @@ app.post('/api/leads/internal-note', auth, async (req, res) => {
 });
 
 // POST /api/leads/update-followup - Update lead follow-up info
-app.post('/api/leads/update-followup', auth, async (req, res) => {
+app.post('/api/leads/update-followup', auth, requireSection('followups'), async (req, res) => {
   try {
     const { lead_id, touch_count_increment, delay_hours } = req.body;
 
@@ -304,7 +304,7 @@ app.post('/api/leads/update-followup', auth, async (req, res) => {
 });
 
 // POST /api/workflows/log - Log workflow execution
-app.post('/api/workflows/log', auth, async (req, res) => {
+app.post('/api/workflows/log', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const { workflow, lead_id, status, error } = req.body;
 
@@ -318,7 +318,7 @@ app.post('/api/workflows/log', auth, async (req, res) => {
 
 // POST /api/leads/exports  { mode: all | source | date | selected, source, from, to, ids }
 const MAX_SELECTED_EXPORT = 5000;
-app.post('/api/leads/exports', auth, requirePermission('leads.export'), async (req, res) => {
+app.post('/api/leads/exports', auth, requireSection('leads'), requirePermission('leads.export'), async (req, res) => {
   try {
     await leadExportReady;
     const { mode = 'all', source, from, to, ids } = req.body || {};
@@ -351,7 +351,7 @@ app.post('/api/leads/exports', auth, requirePermission('leads.export'), async (r
   }
 });
 
-app.get('/api/leads/exports/:id', auth, async (req, res) => {
+app.get('/api/leads/exports/:id', auth, requireSection('leads'), async (req, res) => {
   await leadExportReady;
   const userId = req.user.id || req.user.user_id || null;
   const exportJob = await LeadExportJobs.findOne(
@@ -362,7 +362,7 @@ app.get('/api/leads/exports/:id', auth, async (req, res) => {
   res.json(exportJob);
 });
 
-app.get('/api/leads/exports/:id/download', auth, async (req, res) => {
+app.get('/api/leads/exports/:id/download', auth, requireSection('leads'), async (req, res) => {
   await leadExportReady;
   const userId = req.user.id || req.user.user_id || null;
   const job = await LeadExportJobs.findOne({ id: req.params.id, user_id: userId ?? null }, { _id: 0, status: 1, file_path: 1, mode: 1 }).lean();
@@ -374,7 +374,7 @@ app.get('/api/leads/exports/:id/download', auth, async (req, res) => {
 // GET /api/leads/source-summary: how many leads of each source kind the
 // workspace has. The Leads page shows the Facebook lead form filter only
 // when there are any.
-app.get('/api/leads/source-summary', auth, async (req, res) => {
+app.get('/api/leads/source-summary', auth, requireSection('leads'), async (req, res) => {
   try {
     const counts = await Promise.all(SOURCE_KINDS.map((kind) => Leads.countDocuments(sourceFilter(kind))));
     res.json({ counts: Object.fromEntries(SOURCE_KINDS.map((kind, i) => [kind, counts[i]])) });
@@ -385,7 +385,7 @@ app.get('/api/leads/source-summary', auth, async (req, res) => {
 });
 
 // GET /api/leads/facebook-filter-options
-app.get('/api/leads/facebook-filter-options', auth, async (req, res) => {
+app.get('/api/leads/facebook-filter-options', auth, requireSection('leads'), async (req, res) => {
   try {
     const nullsLast = (a, b) => (a == null ? (b == null ? 0 : 1) : b == null ? -1 : String(a).localeCompare(String(b)));
     const blank = (value) => value == null || String(value).trim() === '';
@@ -419,7 +419,7 @@ app.get('/api/leads/facebook-filter-options', auth, async (req, res) => {
   }
 });
 
-app.get('/api/leads', auth, async (req, res) => {
+app.get('/api/leads', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const { status, brand, search, source, assigned_to, campaign_name, ad_name, meta_page_id, from, to, tag_id, label, limit = 100, offset = 0 } = req.query;
     const and = [];
@@ -514,7 +514,7 @@ app.get('/api/leads', auth, async (req, res) => {
 });
 
 // GET /api/leads/:id
-app.get('/api/leads/:id', auth, async (req, res) => {
+app.get('/api/leads/:id', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const leadRow = await Leads.findOne({ id: req.params.id }, NO_ID).lean();
     if (!leadRow) return res.status(404).json({ error: 'Lead not found' });
@@ -559,7 +559,7 @@ app.get('/api/leads/:id', auth, async (req, res) => {
 });
 
 // GET /api/leads/:id/messages
-app.get('/api/leads/:id/messages', auth, async (req, res) => {
+app.get('/api/leads/:id/messages', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const { limit = 100, offset = 0 } = req.query;
     const messageLead = await Leads.findOne({ id: req.params.id }, { phone: 1, client_id: 1 }).lean();

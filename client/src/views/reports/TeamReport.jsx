@@ -8,10 +8,10 @@ import { TEAM_COLUMNS, defaultTeamSort, formatDuration, sortMembers, teamHasActi
 
 // Reports > Team: one row per person in the workspace for the chosen dates
 // (GET /api/reports/team), a totals row and an AI row. Click a person to see
-// their latest actions. Owner, admin and manager only (the page hides the tab
+// their latest actions. Owner and Admin (with Reports) only (the page hides the tab
 // for others and the server refuses them).
 
-const ROLE_NAMES = { owner: 'Owner', admin: 'Admin', manager: 'Manager', agent: 'Agent' };
+const ROLE_NAMES = { owner: 'Owner', admin: 'Admin', staff: 'Staff', manager: 'Staff', agent: 'Staff' };
 const AVATAR_COLOURS = [C.blue, C.purple, C.green, C.pink, '#0891b2', '#d97706'];
 const colourFor = (id) => AVATAR_COLOURS[Math.abs(Number(id) || 0) % AVATAR_COLOURS.length];
 

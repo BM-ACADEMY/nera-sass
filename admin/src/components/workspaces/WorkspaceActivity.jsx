@@ -19,7 +19,7 @@ const GROUPS = [
   { value: 'security', label: 'Sign-in & security', tone: 'danger' },
 ];
 const groupOf = (value) => GROUPS.find((g) => g.value === value) || { label: 'Other', tone: 'muted' };
-const ROLE_NAMES = { owner: 'Owner', admin: 'Admin', manager: 'Manager', agent: 'Agent', founder: 'Getnera admin', ops: 'Getnera staff' };
+const ROLE_NAMES = { owner: 'Owner', admin: 'Admin', staff: 'Staff', manager: 'Staff', agent: 'Staff', founder: 'Getnera admin', ops: 'Getnera staff' };
 const PAGE_SIZE = 25;
 
 const who = (actor) => {

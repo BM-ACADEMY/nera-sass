@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { requireSection } = require('../../services/permissions');
 const { SalesTasks } = require('../../models');
 
 module.exports = function registerInboxRoutes(app, ctx) {
@@ -18,7 +19,7 @@ const {
 // ══════════════════════════════════════════════════════════
 
 // GET /api/inbox
-app.get('/api/inbox', auth, async (req, res) => {
+app.get('/api/inbox', auth, requireSection('inbox'), async (req, res) => {
   try {
     // Fetch latest message per lead
     // Latest conversation per lead — matched by lead_id, or by phone (last 10 digits) for unlinked conversations
@@ -62,7 +63,7 @@ app.get('/api/inbox', auth, async (req, res) => {
 });
 
 // PUT /api/conversations/:lead_id/read
-app.put('/api/conversations/:lead_id/read', auth, async (req, res) => {
+app.put('/api/conversations/:lead_id/read', auth, requireSection('inbox'), async (req, res) => {
   try {
     const readLead = await Leads.findOne({ id: req.params.lead_id }, { phone: 1 }).lean();
     const readFilter = [{ lead_id: req.params.lead_id }];

@@ -64,7 +64,7 @@ test('Staff activity log', async (t) => {
     assert.ok(status, 'status change recorded');
     assert.strictEqual(status.actor_user_id, users.agent.id);
     assert.strictEqual(status.actor_name, 'agent 10');
-    assert.strictEqual(status.actor_role, 'agent');
+    assert.strictEqual(status.actor_role, 'staff', 'old agents act as Staff');
     assert.strictEqual(status.target_type, 'lead');
     assert.strictEqual(status.target_id, String(l.id));
     assert.deepStrictEqual(status.meta.before, { status: 'new' });
@@ -87,14 +87,15 @@ test('Staff activity log', async (t) => {
   await t.test('A2. lead delete is recorded with the lead name', async () => {
     const { brand, users } = await workspace(11);
     const l = await lead(11, { client_id: brand.id, name: 'Meena' });
-    const res = await request(app).delete(`/api/leads/${l.id}`).set(bearer(users.manager));
+    // Deleting leads is for Owners and Admins with Leads (old managers are Staff now).
+    const res = await request(app).delete(`/api/leads/${l.id}`).set(bearer(users.admin));
     assert.strictEqual(res.status, 200);
     const [deleted] = await events(11, 'LEAD_DELETED');
     assert.ok(deleted);
-    assert.strictEqual(deleted.actor_user_id, users.manager.id);
+    assert.strictEqual(deleted.actor_user_id, users.admin.id);
     assert.match(deleted.summary, /Meena/);
     // A missing lead records nothing.
-    await request(app).delete('/api/leads/99999').set(bearer(users.manager));
+    await request(app).delete('/api/leads/99999').set(bearer(users.admin));
     assert.strictEqual((await events(11, 'LEAD_DELETED')).length, 1);
   });
 
@@ -119,12 +120,13 @@ test('Staff activity log', async (t) => {
 
   await t.test('A4. workspace settings change is recorded with a plain summary', async () => {
     const { users } = await workspace(13);
-    const res = await request(app).patch('/api/tenant/settings').set(bearer(users.admin)).send({ language: 'ta' });
+    // Workspace settings are for Owners.
+    const res = await request(app).patch('/api/tenant/settings').set(bearer(users.owner)).send({ language: 'ta' });
     assert.strictEqual(res.status, 200);
     const [changed] = await events(13, 'TENANT_UPDATED');
     assert.ok(changed);
-    assert.strictEqual(changed.actor_name, 'admin 13');
-    assert.strictEqual(changed.actor_role, 'admin');
+    assert.strictEqual(changed.actor_name, 'owner 13');
+    assert.strictEqual(changed.actor_role, 'owner');
     assert.match(changed.summary, /language to "ta"/);
   });
 
@@ -234,9 +236,9 @@ test('Staff activity log', async (t) => {
     assert.strictEqual(res.body.events.find((e) => e.event === 'TEAM_MEMBER_ADDED').action, 'Added a team member');
   });
 
-  await t.test('R1. owner and admin read their own workspace log, newest first, with staff list', async () => {
+  await t.test('R1. the owner reads their own workspace log, newest first, with staff list', async () => {
     const { a } = await seed();
-    for (const role of ['owner', 'admin']) {
+    for (const role of ['owner']) {
       const res = await request(app).get('/api/activity').set(bearer(a.users[role]));
       assert.strictEqual(res.status, 200, role);
       const summaries = res.body.events.map((e) => e.details);
@@ -251,14 +253,14 @@ test('Staff activity log', async (t) => {
       const status = res.body.events.find((e) => e.event === 'LEAD_STATUS_CHANGED');
       assert.strictEqual(status.action, 'Changed lead status');
       assert.strictEqual(status.group, 'leads');
-      assert.deepStrictEqual(status.actor, { id: a.users.agent.id, name: 'agent 20', role: 'agent', type: 'user' });
+      assert.deepStrictEqual(status.actor, { id: a.users.agent.id, name: 'agent 20', role: 'staff', type: 'user' });
       assert.strictEqual(status.meta, undefined, 'raw meta stays out of the customer view');
     }
   });
 
-  await t.test('R2. manager and agent get 403', async () => {
+  await t.test('R2. admin, manager and agent get 403 (the activity log is for Owners)', async () => {
     const { a } = await seed();
-    for (const role of ['manager', 'agent']) {
+    for (const role of ['admin', 'manager', 'agent']) {
       const res = await request(app).get('/api/activity').set(bearer(a.users[role]));
       assert.strictEqual(res.status, 403, role);
     }

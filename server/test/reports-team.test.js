@@ -210,16 +210,17 @@ test('Reports > Team', async (t) => {
     const lead = await runAsTenant(31, async () => (await Leads.create({ name: 'Ravi', phone: '9876543210', status: 'hot', client_id: brand.id, assigned_to: users.agent.id })).toObject());
     const patch = await request(app).patch(`/api/leads/${lead.id}`).set(bearer(users.agent)).send({ status: 'converted' });
     assert.strictEqual(patch.status, 200);
-    const res = await request(app).get('/api/reports/team?range=30d').set(bearer(users.manager));
+    const res = await request(app).get('/api/reports/team?range=30d').set(bearer(users.admin));
     assert.strictEqual(res.status, 200);
     const agent = res.body.members.find((m) => m.user_id === users.agent.id);
     assert.strictEqual(agent.converted, 1);
     assert.strictEqual(agent.leads_open, 0);
   });
 
-  await t.test('owner, admin and manager only', async () => {
+  await t.test('owner and admin only (old managers are Staff now)', async () => {
     const { users } = await workspace(32);
-    for (const role of ['owner', 'admin', 'manager']) {
+    assert.strictEqual((await request(app).get('/api/reports/team').set(bearer(users.manager))).status, 403, 'manager is staff');
+    for (const role of ['owner', 'admin']) {
       const res = await request(app).get('/api/reports/team').set(bearer(users[role]));
       assert.strictEqual(res.status, 200, role);
     }
