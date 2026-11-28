@@ -108,23 +108,30 @@ async function loadTenant() {
  * 'quick' plan: a customer who got a nudge and answered goes to a telecaller.
  * Never overwrites an assignee and never reaches into another workspace.
  * Order: a team member with role "telecaller" (fewest leads first), then
- * tenant.followup_assignee_user_id; with neither the chat is flagged needs_human.
+ * tenant.followup_assignee_user_id, then the workspace's staff/agent members
+ * shared by load (round robin); with nobody the chat is flagged needs_human.
  */
 async function assignTelecaller(tenant, leadId) {
   const lead = await Leads.findOne({ id: leadId }, { _id: 0, id: 1, tenant_id: 1, assigned_to: 1, needs_human: 1 }).lean();
   if (!lead || lead.assigned_to != null || lead.tenant_id !== tenant.id) return null;
-  const members = await Users.find({ tenant_id: tenant.id, role: 'telecaller', is_active: { $ne: false } }, { _id: 0, id: 1 }).sort({ id: 1 }).lean();
-  let pick = null;
-  if (members.length) {
+  // Fewest assigned leads first (ties: lowest id), so replies spread evenly across the team.
+  const leastLoaded = async (roles) => {
+    const members = await Users.find({ tenant_id: tenant.id, role: { $in: roles }, is_active: { $ne: false } }, { _id: 0, id: 1 }).sort({ id: 1 }).lean();
+    let pick = null;
     let best = Infinity;
     for (const m of members) {
       const load = await Leads.countDocuments({ assigned_to: m.id });
       if (load < best) { best = load; pick = m.id; }
     }
-  } else if (tenant.followup_assignee_user_id != null) {
+    return pick;
+  };
+  let pick = await leastLoaded(['telecaller']);
+  if (pick == null && tenant.followup_assignee_user_id != null) {
     const user = await Users.findOne({ id: Number(tenant.followup_assignee_user_id), tenant_id: tenant.id, is_active: { $ne: false } }, { _id: 0, id: 1 }).lean();
     pick = user ? user.id : null;
   }
+  // No telecaller and no chosen person: share between the workspace's staff (round robin by load).
+  if (pick == null) pick = await leastLoaded(['staff', 'agent']);
   if (pick == null) {
     if (!lead.needs_human) {
       await Leads.updateOne({ id: lead.id, assigned_to: null }, { $set: { needs_human: true, handover_reason: 'Replied to a follow-up; no telecaller set up', handover_at: new Date(), updated_at: new Date() } });
