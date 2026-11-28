@@ -303,6 +303,24 @@ app.get('/api/internal/followups/due', internalPlatformAuth, async (req, res) =>
       }
       const tenant = tenants.get(lead.tenant_id);
       if (!tenant || !ai.inSendingHours(tenant, now)) continue;
+      // Per-workspace plan (tenant.ai_followup_plan); unset keeps the 2/3/5-day schedule.
+      const plan = ai.planOf(tenant);
+      const maxSteps = ai.maxStepsFor(tenant);
+      let step = Number(lead.ai_followup_step || 0) + 1;
+      const inboundMs = lead.last_inbound_at ? new Date(lead.last_inbound_at).getTime() : 0;
+      const windowOpen = inboundMs > 0 && now.getTime() - inboundMs < ai.DAY_MS;
+      if (plan === 'quick') {
+        const stop = () => Leads.updateOne({ id: lead.id, tenant_id: lead.tenant_id, ai_followup_due: lead.ai_followup_due }, { $set: { ai_followup_due: null } });
+        if (step > maxSteps) { await stop(); continue; }
+        // Nudges 1 and 2 are free text and only exist inside the 24-hour window.
+        // Once it has closed, only the single approved template may still go out.
+        if (step <= ai.QUICK.max_nudges && !windowOpen && !lead.ai_followup_promised_for) {
+          if (!ai.templateAfterWindow(tenant)) { await stop(); continue; }
+          step = maxSteps;
+        }
+        // The template step waits for the window to close.
+        if (step > ai.QUICK.max_nudges && windowOpen) continue; // (a day the customer promised keeps today's template path)
+      }
       // Outside the 24-hour window the follow-up is a marketing template:
       // only contacts who opted in get one (send-template refuses the rest).
       const inboundAt = lead.last_inbound_at ? new Date(lead.last_inbound_at).getTime() : 0;
@@ -317,7 +335,9 @@ app.get('/api/internal/followups/due', internalPlatformAuth, async (req, res) =>
         tenant_id: lead.tenant_id,
         lead_id: lead.id,
         name: lead.name || null,
-        step: Number(lead.ai_followup_step || 0) + 1,
+        step,
+        plan,
+        max_steps: maxSteps,
         // The customer named this day themselves ("I will contact you on Monday").
         promised: Boolean(lead.ai_followup_promised_for),
         in_window: lastInbound > 0 && now.getTime() - lastInbound < ai.DAY_MS,
