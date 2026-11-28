@@ -187,6 +187,21 @@ test('quick follow-up plan', async (t) => {
     assert.strictEqual((await get(1, b.id)).assigned_to, mine.id);
   });
 
+  await t.test('assignment: with no telecaller and no chosen person, staff share replies in turn; other tenants and owners never', async () => {
+    await seed();
+    const s1 = await sys(() => Users.create({ tenant_id: 1, email: 's1@example.com', name: 'S1', role: 'staff', password_hash: 'x' }));
+    const s2 = await sys(() => Users.create({ tenant_id: 1, email: 's2@example.com', name: 'S2', role: 'staff', password_hash: 'x' }));
+    await sys(() => Users.create({ tenant_id: 1, email: 'ow@example.com', name: 'Owner', role: 'owner', password_hash: 'x' }));
+    await sys(() => Users.create({ tenant_id: 2, email: 'o2@example.com', name: 'Other', role: 'staff', password_hash: 'x' }));
+    const picked = [];
+    for (let i = 0; i < 4; i += 1) {
+      const l = await lead(1, { ai_followup_step: 1 });
+      await runAsTenant(1, () => ai.recordInbound(l.id));
+      picked.push((await get(1, l.id)).assigned_to);
+    }
+    assert.deepStrictEqual(picked, [s1.id, s2.id, s1.id, s2.id]);
+  });
+
   await t.test('default plan: a reply after a nudge assigns nobody and flags nothing', async () => {
     await seed();
     await sys(() => Users.create({ tenant_id: 2, email: 'd@example.com', name: 'Tele2', role: 'telecaller', password_hash: 'x' }));
