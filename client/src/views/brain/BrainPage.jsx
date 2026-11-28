@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { AddBrandDialog, DeleteBrandDialog } from './BrandDialogs.jsx';
 
 // ABM's own server keeps its multi-brand editor.
 const LegacyBrainEditor = lazy(() => import('../AIBrainView.jsx').then((m) => ({ default: m.AIBrainView })));
@@ -438,6 +439,8 @@ export default function BrainPage() {
   const [brandId, setBrandId] = useState(null);
   const [brandsReady, setBrandsReady] = useState(false);
   const [maxBrands, setMaxBrands] = useState(5);
+  const [adding, setAdding] = useState(false);
+  const [deleting, setDeleting] = useState(null);
   const multi = brands.length > 1;
   const currentBrand = multi ? brands.find((b) => b.client_id === brandId) : null;
 
@@ -493,17 +496,19 @@ export default function BrainPage() {
     }
   };
 
-  const addBrand = async () => {
-    const name = (window.prompt('Name of the other brand on this WhatsApp number') || '').trim();
-    if (!name) return;
-    try {
-      const res = await api.post('/brain/brands', { name });
-      toast.success(`${res.name} added. Fill its details, then turn its AI on.`);
-      setBrain(null);
-      await loadBrands(res.client_id);
-    } catch (err) {
-      toast.error(err.message || 'Could not add this brand');
-    }
+  const saveBrand = async (name) => {
+    const res = await api.post('/brain/brands', { name });
+    toast.success(`${res.name} added. Fill its details, then turn its AI on.`);
+    setTab('business');
+    setBrain(null);
+    await loadBrands(res.client_id);
+  };
+  const removeBrand = async (brand, password) => {
+    await api.post(`/brain/brands/${brand.client_id}/delete`, { password });
+    toast.success(`${brand.name} removed`);
+    setTab('business');
+    setBrain(null);
+    await loadBrands();
   };
   // Shown only to workspaces that already share their number (or have brands).
   const canAddBrand = multi ? brands.length < maxBrands : Boolean(brain?.profile?.brand_scope || brain?.profile?.brand_skip_keywords?.length);
@@ -532,7 +537,14 @@ export default function BrainPage() {
               </button>
             ))}
           </div>
-          {canAddBrand && <Button variant="ghost" size="sm" onClick={addBrand}><FiPlus /> Add brand</Button>}
+          {canAddBrand && <Button variant="outline" size="sm" onClick={() => setAdding(true)}><FiPlus /> Add brand</Button>}
+          {currentBrand && !currentBrand.workspace_client && <Button variant="ghost" size="sm" className="text-red-600 hover:text-red-700" onClick={() => setDeleting(currentBrand)}><FiTrash2 /> Remove {currentBrand.name}</Button>}
+        </div>
+      )}
+      {!multi && canAddBrand && (
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          Another brand answers on this number too?
+          <Button variant="outline" size="sm" onClick={() => setAdding(true)}><FiPlus /> Add brand</Button>
         </div>
       )}
       <StatusCard brain={brain} busy={toggling} onToggle={toggle} brandName={currentBrand?.name} />
@@ -556,14 +568,10 @@ export default function BrainPage() {
       </div>
 
       {tab === 'business' && <BusinessForm form={form} set={set} routing={multi} />}
-      {tab === 'business' && !multi && canAddBrand && (
-        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          Another brand answers on this number too?
-          <Button variant="outline" size="sm" onClick={addBrand}><FiPlus /> Give it its own brain</Button>
-        </div>
-      )}
       {tab === 'knowledge' && <KnowledgeTab key={brandId ?? 'one'} brandId={brandId} />}
       {tab === 'test' && <TestTab key={brandId ?? 'one'} profile={toProfile(form)} brandId={brandId} brands={multi ? brands : []} />}
+      <AddBrandDialog key={adding ? 'add-open' : 'add-closed'} open={adding} onClose={() => setAdding(false)} save={saveBrand} />
+      <DeleteBrandDialog key={deleting?.client_id ?? 'none'} brand={deleting} onClose={() => setDeleting(null)} remove={removeBrand} />
     </div>
   );
 }

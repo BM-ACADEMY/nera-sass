@@ -315,6 +315,35 @@ test('Brand brains', async (t) => {
     assert.strictEqual((await runAsTenant(5, () => BrainProfiles.findOne({ client_id: academyId }).lean())).profile.business_name, 'BM Academy');
   });
 
+  await t.test('API: an Owner removes an added brand with their password; the own brand stays', async () => {
+    const bcrypt = require('bcryptjs');
+    const { client, academyId } = await seed(1);
+    const ownerRow = (await sys(() => Users.create({ tenant_id: 1, role: 'owner', email: 'owner-del@t.test', name: 'Owner', is_active: true, token_version: 0, password_hash: bcrypt.hashSync('Right-Pass-1', 4) }))).toObject();
+    const owner = { Authorization: `Bearer ${makeToken(ownerRow)}` };
+    const path = `/api/brain/brands/${academyId}/delete`;
+
+    const admin = await user(1, 'admin');
+    assert.strictEqual((await request(app).post(path).set(admin).send({ password: 'Right-Pass-1' })).status, 403, 'Owner only');
+    assert.strictEqual((await request(app).post(path).set(owner).send({})).status, 403, 'password required');
+    const wrong = await request(app).post(path).set(owner).send({ password: 'Wrong-Pass-9' });
+    assert.strictEqual(wrong.status, 403);
+    assert.strictEqual(wrong.body.code, 'CONFIRM_FAILED');
+    assert.ok(await runAsTenant(1, () => BrainProfiles.exists({ client_id: academyId })), 'nothing removed yet');
+
+    const own = await request(app).post(`/api/brain/brands/${client.id}/delete`).set(owner).send({ password: 'Right-Pass-1' });
+    assert.strictEqual(own.status, 400);
+    assert.strictEqual(own.body.code, 'OWN_BRAND');
+
+    const ok = await request(app).post(path).set(owner).send({ password: 'Right-Pass-1' });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual(await runAsTenant(1, () => BrainProfiles.exists({ client_id: academyId })), null);
+    assert.strictEqual(await runAsTenant(1, () => BrainDocs.countDocuments({ client_id: academyId })), 0, 'its knowledge is gone');
+    assert.strictEqual(await runAsTenant(1, () => BrainDocs.countDocuments({ client_id: client.id })), 1, 'TechX knowledge stays');
+    const list = await request(app).get('/api/brain/brands').set(owner);
+    assert.strictEqual(list.body.multi, false);
+    assert.strictEqual((await request(app).post(path).set(owner).send({ password: 'Right-Pass-1' })).status, 404);
+  });
+
   await t.test('API: only an Owner turns a brand\'s AI on or off; editing needs the AI Brain section', async () => {
     const { client, academyId } = await seed(1, { academyOn: false });
     const admin = await user(1, 'admin');

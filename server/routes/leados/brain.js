@@ -5,7 +5,8 @@
  */
 const crypto = require('crypto');
 const multer = require('multer');
-const { AiReplyLogs, BrainProfiles, Clients, Tenants } = require('../../models');
+const { AiReplyLogs, BrainProfiles, Clients, Leads, Tenants, Users } = require('../../models');
+const { confirmPassword } = require('../../services/stepUp');
 const { requirePermission, requireSection } = require('../../services/permissions');
 const { runAsSystem } = require('../../services/tenantContext');
 const prompts = require('../../services/brainPrompt');
@@ -436,6 +437,39 @@ app.post('/api/brain/brands', auth, requireSection('ai_brain'), workspaceOnly, m
     }
   } catch (err) {
     console.error('[brain/brands]', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/brain/brands/:clientId/delete { password }: removes an added brand
+// with its brain and knowledge. Owner only, and the Owner types their password.
+// The workspace's own brand cannot be removed. Chats routed to it go back to
+// the router.
+app.post('/api/brain/brands/:clientId/delete', auth, requireSection('ai_brain'), workspaceOnly, adminOnly, async (req, res) => {
+  try {
+    const brandId = Number(req.params.clientId);
+    if (!Number.isInteger(brandId) || brandId <= 0) return res.status(404).json({ error: 'Brand not found' });
+    const user = await Users.findOne({ id: req.user.id }).lean();
+    const refused = await confirmPassword(user, req.body || {}, req);
+    if (refused) return res.status(refused.status).json(refused.body);
+    const client = await workspaceClient();
+    if (client && client.id === brandId) return res.status(400).json({ error: "The workspace's own brand cannot be removed", code: 'OWN_BRAND' });
+    const brain = await BrainProfiles.findOne({ client_id: brandId }, { _id: 0 }).lean();
+    if (!brain) return res.status(404).json({ error: 'Brand not found' });
+    const name = brandLabel(brain);
+    await BrainProfiles.deleteOne({ id: brain.id });
+    const docs = await BrainDocs.deleteMany({ client_id: brandId });
+    await Leads.updateMany({ brand_client_id: brandId }, { $unset: { brand_client_id: '' } });
+    const anyOn = Boolean(await BrainProfiles.exists({ ai_enabled: true }));
+    await runAsSystem(() => Tenants.updateOne({ id: req.identity.tenantId }, { $set: { ai_enabled: anyOn, updated_at: new Date() } }), 'ai-brain');
+    await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, {
+      targetType: 'brain_profile', targetId: brain.id,
+      summary: `Removed the brand "${name}" from the AI Brain`,
+      meta: { client_id: brandId, docs_removed: docs.deletedCount || 0 },
+    });
+    res.json({ removed: true, client_id: brandId, name });
+  } catch (err) {
+    console.error('[brain/brands/delete]', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
