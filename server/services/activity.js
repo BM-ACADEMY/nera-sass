@@ -12,6 +12,9 @@
 const audit = require('./audit');
 const { AuditEvents, Users } = require('../models');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
+const { normalizeTenantRole } = require('./permissions');
+// A workspace person's role as shown: retired names (manager, agent) read as Staff.
+const customerRole = (role) => (role ? normalizeTenantRole(role) : null);
 
 const EVENTS = Object.freeze({
   LOGIN_SUCCEEDED: 'LOGIN_SUCCEEDED',
@@ -189,7 +192,7 @@ function actorForUser(user, req) {
     actor_type: staff ? 'staff' : 'user',
     actor_user_id: user.id ?? null,
     actor_name: user.name || user.email || null,
-    actor_role: staff ? (user.staff_role || 'staff') : (user.role || null),
+    actor_role: staff ? (user.staff_role || 'staff') : customerRole(user.role),
     ip: req?.ip || null,
   };
 }
@@ -279,7 +282,7 @@ async function list(tenantId, query = {}, { audience = 'customer' } = {}) {
       actor: {
         id: platform && audience === 'customer' ? null : (row.actor_user_id ?? null),
         name: actorName,
-        role: platform && audience === 'customer' ? null : (row.actor_role || null),
+        role: platform && audience === 'customer' ? null : (row.actor_type === 'user' ? customerRole(row.actor_role) : (row.actor_role || null)),
         type: row.actor_type || 'system',
       },
       target_type: row.target_type || null,

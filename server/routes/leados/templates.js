@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { requireSection } = require('../../services/permissions');
 const alerts = require('../../services/alerts');
 const { explainRejection, cleanReasonCode } = require('../../services/templateRejection');
 
@@ -35,7 +36,7 @@ app.get('/api/templates', auth, async (req, res) => {
   }
 });
 
-app.post('/api/templates/bulk-scope', auth, async (req, res) => {
+app.post('/api/templates/bulk-scope', auth, requireSection('templates'), async (req, res) => {
   try {
     await templateParameterDefinitionsReady;
     const ids = [...new Set((req.body.template_ids || []).map(Number).filter(Number.isInteger))];
@@ -52,7 +53,7 @@ app.post('/api/templates/bulk-scope', auth, async (req, res) => {
   }
 });
 
-app.post('/api/templates/sync-all', auth, async (req, res) => {
+app.post('/api/templates/sync-all', auth, requireSection('templates', 'campaigns'), async (req, res) => {
   try {
     const { client_id } = req.body;
     const client = client_id ? await Clients.findOne({ id: client_id }, NO_ID).lean() : null;
@@ -135,7 +136,7 @@ app.post('/api/templates/sync-all', auth, async (req, res) => {
   }
 });
 
-app.post('/api/templates', auth, async (req, res) => {
+app.post('/api/templates', auth, requireSection('templates'), async (req, res) => {
   try {
     await templateParameterDefinitionsReady;
     const { name, category, language, header_format, header, body, footer, buttons, client_id, samples, parameter_definitions = {}, template_scope = 'leados' } = req.body;
@@ -153,7 +154,7 @@ app.post('/api/templates', auth, async (req, res) => {
 });
 
 // POST /api/templates/:id/submit — submit to Meta for approval
-app.post('/api/templates/:id/submit', auth, async (req, res) => {
+app.post('/api/templates/:id/submit', auth, requireSection('templates'), async (req, res) => {
   try {
     const tpl = await Templates.findOne({ id: req.params.id }, NO_ID).lean();
     if (!tpl) return res.status(404).json({ error: 'Template not found' });
@@ -212,7 +213,7 @@ app.post('/api/templates/:id/submit', auth, async (req, res) => {
     res.status(500).json({ error: errMsg, meta_error: metaErr || null });
   }
 });
-app.post('/api/templates/upload-media', auth, templateMediaMulter.single('file'), async (req, res) => {
+app.post('/api/templates/upload-media', auth, requireSection('templates'), templateMediaMulter.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const { client_id } = req.body;
   const discardUpload = () => { try { require('fs').unlinkSync(req.file.path); } catch (_) {} };
@@ -273,7 +274,7 @@ app.post('/api/templates/upload-media', auth, templateMediaMulter.single('file')
 });
 
 // GET /api/templates/:id/sync — sync status from Meta
-app.get('/api/templates/:id/sync', auth, async (req, res) => {
+app.get('/api/templates/:id/sync', auth, requireSection('templates', 'campaigns'), async (req, res) => {
   try {
     const tpl = await Templates.findOne({ id: req.params.id }, NO_ID).lean();
     if (!tpl) return res.status(404).json({ error: 'Template not found' });
@@ -364,7 +365,7 @@ app.get('/api/templates/:id/sync', auth, async (req, res) => {
 });
 
 // PUT /api/templates/:id
-app.put('/api/templates/:id', auth, async (req, res) => {
+app.put('/api/templates/:id', auth, requireSection('templates'), async (req, res) => {
   try {
     await templateParameterDefinitionsReady;
     const { name, category, language, header_format, header, body, footer, buttons, client_id, samples, parameter_definitions, template_scope } = req.body;
@@ -447,7 +448,7 @@ app.put('/api/templates/:id', auth, async (req, res) => {
 });
 
 // DELETE /api/templates/:id
-app.delete('/api/templates/:id', auth, async (req, res) => {
+app.delete('/api/templates/:id', auth, requireSection('templates'), async (req, res) => {
   try {
     const { id } = req.params;
     const tpl = await Templates.findOne({ id }, NO_ID).lean();

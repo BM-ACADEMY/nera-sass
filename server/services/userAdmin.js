@@ -5,15 +5,15 @@
  *
  * Rules:
  *  - a user never changes their own role and never deactivates themselves;
- *  - customer Admins manage Managers and Agents only: they cannot change,
- *    reset, deactivate or remove Owners or other Admins, or grant either role;
+ *  - customer Admins manage Staff only: they cannot change, reset,
+ *    deactivate or remove Owners or other Admins, or grant either role;
  *  - a workspace always keeps at least one active Owner;
  *  - deactivation revokes every session immediately (token_version + 1);
  *  - reactivation counts against the plan's user limit.
  */
 const { Users, Tenants } = require('../models');
 const { runAsSystem, runAsTenant } = require('./tenantContext');
-const { TENANT_ROLES, STAFF_ROLES, canAssignRole, normalizeTenantRole, describeUser } = require('./permissions');
+const { TENANT_ROLES, STAFF_ROLES, canAssignRole, normalizeTenantRole, describeUser, sectionsFor, defaultSectionsFor, cleanSections } = require('./permissions');
 const audit = require('./audit');
 const notify = require('./notify');
 const sessions = require('./sessions');
@@ -25,7 +25,7 @@ class UserAdminError extends Error {
   }
 }
 
-const PUBLIC_FIELDS = { _id: 0, id: 1, name: 1, email: 1, phone: 1, role: 1, is_active: 1, last_login: 1, created_at: 1, mfa_enabled: 1, mfa_email_enabled: 1, mfa_whatsapp_enabled: 1, tenant_id: 1, is_platform_staff: 1, staff_role: 1, deactivated_at: 1, must_change_password: 1, removed_at: 1 };
+const PUBLIC_FIELDS = { _id: 0, id: 1, name: 1, email: 1, phone: 1, role: 1, is_active: 1, last_login: 1, created_at: 1, mfa_enabled: 1, mfa_email_enabled: 1, mfa_whatsapp_enabled: 1, tenant_id: 1, is_platform_staff: 1, staff_role: 1, deactivated_at: 1, must_change_password: 1, removed_at: 1, sections: 1 };
 
 function presentUser(user) {
   if (!user) return user;
@@ -36,6 +36,8 @@ function presentUser(user) {
     email: user.email || '',
     phone: user.phone || null,
     role: identity?.kind === 'tenant' ? identity.role : null,
+    // The sections they can open (Owners: all of them).
+    sections: identity?.kind === 'tenant' ? identity.sections : [],
     staff_role: identity?.kind === 'staff' ? identity.staffRole : null,
     is_platform_staff: identity?.kind === 'staff',
     tenant_id: user.tenant_id ?? null,
@@ -88,13 +90,17 @@ function assertCanManage(actor, target) {
   if (actor.kind === 'staff') return;
   const targetRole = normalizeTenantRole(target.role);
   if (actor.role === 'admin' && targetRole === 'owner') throw new UserAdminError(403, 'Only an Owner can change another Owner');
-  // Admins manage Managers and Agents only; another Admin needs an Owner.
+  // Admins manage Staff only; another Admin needs an Owner.
   if (actor.role === 'admin' && targetRole === 'admin') throw new UserAdminError(403, 'Only an Owner can change another Admin');
   if (!['owner', 'admin'].includes(actor.role)) throw new UserAdminError(403, 'You do not have permission to manage users');
 }
 
-async function changeRole({ tenantId, userId, newRole, actor, req, event = audit.EVENTS.USER_ROLE_CHANGED }) {
-  const role = String(newRole || '').toLowerCase();
+// sections: what an Admin or Staff member gets (teamMembers.resolveSections);
+// left out, they keep theirs, or get the role's defaults when they were an Owner.
+async function changeRole({ tenantId, userId, newRole, sections, actor, req, event = audit.EVENTS.USER_ROLE_CHANGED }) {
+  const raw = String(newRole || '').toLowerCase();
+  // Retired names (manager, agent) from an older app are Staff.
+  const role = ['manager', 'agent'].includes(raw) ? 'staff' : raw;
   if (!TENANT_ROLES.includes(role)) throw new UserAdminError(400, `Role must be one of: ${TENANT_ROLES.join(', ')}`);
   const target = await loadTarget(tenantId, userId);
   assertCanManage(actor, target);
@@ -106,13 +112,18 @@ async function changeRole({ tenantId, userId, newRole, actor, req, event = audit
   if (currentRole === 'owner' && target.is_active !== false && (await activeOwnerCount(tenantId)) <= 1) {
     throw new UserAdminError(409, 'A workspace must keep at least one active Owner');
   }
+  const nextSections = role === 'owner' ? null
+    : (Array.isArray(sections) ? cleanSections(sections) : currentRole === 'owner' ? defaultSectionsFor(raw) : sectionsFor(target.role, target.sections));
+  const roleUpdate = nextSections
+    ? { $set: { role, sections: nextSections, updated_at: new Date() } }
+    : { $set: { role, updated_at: new Date() }, $unset: { sections: '' } };
   const updated = await runAsTenant(tenantId, () => Users.findOneAndUpdate(
     { id: target.id },
-    { $set: { role, updated_at: new Date() } },
+    roleUpdate,
     { new: true, projection: { _id: 0 } },
   ).lean());
   if (currentRole === 'owner') await moveRecordedOwner(tenantId, target.id);
-  await audit.record(event, { tenantId, req, targetType: 'user', targetId: target.id, meta: { email: target.email, from: currentRole, to: role } });
+  await audit.record(event, { tenantId, req, targetType: 'user', targetId: target.id, meta: { email: target.email, from: currentRole, to: role, sections: nextSections } });
   return presentUser(updated);
 }
 

@@ -15,7 +15,7 @@
  * Everything runs in the caller's tenant: another workspace's label or lead
  * is "not found" (404).
  */
-const { requirePermission } = require('../../services/permissions');
+const { requirePermission, requireSection, LEAD_WORK } = require('../../services/permissions');
 const leadLabels = require('../../services/leadLabels');
 const activity = require('../../services/activity');
 
@@ -95,7 +95,7 @@ app.delete('/api/labels/:id', auth, manage, async (req, res) => {
   }
 });
 
-app.get('/api/leads/:id/labels', auth, async (req, res) => {
+app.get('/api/leads/:id/labels', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const { Leads } = require('../../models');
     const leadId = leadLabels.toId(req.params.id);
@@ -106,7 +106,7 @@ app.get('/api/leads/:id/labels', auth, async (req, res) => {
   }
 });
 
-app.put('/api/leads/:id/labels', auth, async (req, res) => {
+app.put('/api/leads/:id/labels', auth, requireSection(LEAD_WORK), async (req, res) => {
   try {
     const result = await leadLabels.setForLead(req.params.id, req.body?.label_ids, req.user?.id ?? null);
     for (const label of result.added) await logAdded(req, result.lead, label);
@@ -136,9 +136,9 @@ const removeLabel = (param) => async (req, res) => {
   }
 };
 
-app.post('/api/leads/:id/labels/:labelId', auth, addLabel((req) => req.params.labelId));
-app.delete('/api/leads/:id/labels/:labelId', auth, removeLabel((req) => req.params.labelId));
+app.post('/api/leads/:id/labels/:labelId', auth, requireSection(LEAD_WORK), addLabel((req) => req.params.labelId));
+app.delete('/api/leads/:id/labels/:labelId', auth, requireSection(LEAD_WORK), removeLabel((req) => req.params.labelId));
 // Older callers (inbox): "tags" are labels now.
-app.post('/api/leads/:id/tags', auth, addLabel((req) => req.body?.tagId ?? req.body?.labelId));
-app.delete('/api/leads/:id/tags/:tagId', auth, removeLabel((req) => req.params.tagId));
+app.post('/api/leads/:id/tags', auth, requireSection(LEAD_WORK), addLabel((req) => req.body?.tagId ?? req.body?.labelId));
+app.delete('/api/leads/:id/tags/:tagId', auth, requireSection(LEAD_WORK), removeLabel((req) => req.params.tagId));
 };

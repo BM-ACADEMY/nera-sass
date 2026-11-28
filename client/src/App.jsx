@@ -5,7 +5,10 @@ import { Building2, Globe, Mail, Phone, MapPin, FileText, ShieldCheck, ArrowRigh
 import { STYLE } from './constants/theme.js';
 import { PrivacyPolicy } from './views/PrivacyPolicy.jsx';
 import { TermsAndConditions } from './views/TermsAndConditions.jsx';
-import AppSidebar from './components/layout/AppSidebar.jsx';
+import AppSidebar, { SECTIONS as MENU } from './components/layout/AppSidebar.jsx';
+import { mySections, hasSection, homePath } from './views/settings/teamPolicy.js';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import WhatsAppNumberPage from './views/whatsapp/WhatsAppNumberPage.jsx';
 import { Header } from './components/layout/Header.jsx';
@@ -50,6 +53,31 @@ function TemplatesRoute() {
   return <TemplatesPage itemId={itemId} basePath="/templates" />;
 }
 
+// A page this person was not given (Settings > Team sections). The server
+// refuses its data too; this says so instead of showing a broken page.
+function NoAccess({ home }) {
+  const navigate = useNavigate();
+  return (
+    <div className="p-4 md:p-8">
+      <Card className="mx-auto max-w-lg items-center gap-3 px-6 py-12 text-center">
+        <Lock className="size-7 text-slate-400" />
+        <div className="text-base font-semibold">You don't have access to this page</div>
+        <p className="text-sm text-muted-foreground">Ask the workspace Owner to give you access to it in Team.</p>
+        <Button variant="outline" onClick={() => navigate(home, { replace: true })}>Go to my workspace</Button>
+      </Card>
+    </div>
+  );
+}
+
+// Shows the page only to people with that section (Owners have all). The
+// dashboard, the first page after sign-in, sends others to their first page.
+function SectionRoute({ user, section, children, sendHome = false }) {
+  const sections = mySections(user);
+  if (hasSection(sections, section)) return children;
+  const home = homePath(sections, MENU);
+  return sendHome ? <Navigate to={home} replace /> : <NoAccess home={home} />;
+}
+
 function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
   const navigate = useNavigate();
 
@@ -76,22 +104,24 @@ function AppLayout({ user, logout, leadRefresh, setLeadRefresh }) {
               {/* Only the pages in the sidebar (and Settings and Billing in the profile menu).
                   Any other address, typed or old, goes to the dashboard. */}
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/leads" element={<LeadsView onLeadClick={handleLeadClick} refreshTrigger={leadRefresh} />} />
-              <Route path="/sales-tasks" element={<SalesTasksView />} />
-              <Route path="/inbox" element={<InboxView />} />
-              <Route path="/whatsapp" element={<WhatsAppNumberPage />} />
-              <Route path="/templates/:itemId?" element={<TemplatesRoute />} />
-              <Route path="/campaigns" element={<CampaignsView />} />
-              <Route path="/calendar" element={<CalendarPage />} />
-              <Route path="/plugins" element={<PluginsPage />} />
-              <Route path="/brain" element={<BrainPage />} />
-              <Route path="/reports" element={<ReportsView />} />
+              <Route path="/dashboard" element={<SectionRoute user={user} section="dashboard" sendHome><Dashboard /></SectionRoute>} />
+              <Route path="/leads" element={<SectionRoute user={user} section="leads"><LeadsView onLeadClick={handleLeadClick} refreshTrigger={leadRefresh} /></SectionRoute>} />
+              <Route path="/sales-tasks" element={<SectionRoute user={user} section="sales_tasks"><SalesTasksView /></SectionRoute>} />
+              <Route path="/inbox" element={<SectionRoute user={user} section="inbox"><InboxView /></SectionRoute>} />
+              {/* Connecting the WhatsApp number is for Owners. */}
+              <Route path="/whatsapp" element={user?.role === 'owner' ? <WhatsAppNumberPage /> : <NoAccess home={homePath(mySections(user), MENU)} />} />
+              <Route path="/templates/:itemId?" element={<SectionRoute user={user} section="templates"><TemplatesRoute /></SectionRoute>} />
+              <Route path="/campaigns" element={<SectionRoute user={user} section="campaigns"><CampaignsView /></SectionRoute>} />
+              <Route path="/calendar" element={<SectionRoute user={user} section="plugins"><CalendarPage /></SectionRoute>} />
+              <Route path="/plugins" element={<SectionRoute user={user} section="plugins"><PluginsPage /></SectionRoute>} />
+              <Route path="/brain" element={<SectionRoute user={user} section="ai_brain"><BrainPage /></SectionRoute>} />
+              <Route path="/reports" element={<SectionRoute user={user} section="reports"><ReportsView /></SectionRoute>} />
               <Route path="/team" element={<TeamPage />} />
               {/* Team used to be a Settings section: old links keep working. */}
               <Route path="/settings/team" element={<Navigate to="/team" replace />} />
               <Route path="/settings/:section?" element={<SettingsView />} />
-              <Route path="/billing" element={<BillingPage />} />
+              {/* Billing: Owners pay, Admins can look; not for Staff. */}
+              <Route path="/billing" element={user?.role === 'staff' ? <NoAccess home={homePath(mySections(user), MENU)} /> : <BillingPage />} />
               <Route path="/account/sessions" element={<SessionsPage />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>

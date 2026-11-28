@@ -77,11 +77,11 @@ test('import summary and sample', () => {
 test('export and delete follow the server roles', async () => {
   const { leadPermissions } = await import('./leadsPolicy.js');
   assert.deepStrictEqual(leadPermissions('owner'), { canExport: true, canDelete: true, canDeleteAnyNote: true });
-  assert.deepStrictEqual(leadPermissions('agent'), { canExport: false, canDelete: false, canDeleteAnyNote: false });
+  assert.deepStrictEqual(leadPermissions('staff'), { canExport: false, canDelete: false, canDeleteAnyNote: false });
   assert.deepStrictEqual(leadPermissions(undefined), { canExport: false, canDelete: false, canDeleteAnyNote: false });
-  // Notes: Owner and Admin delete anyone's (leads.notes.delete_any); a manager only their own.
+  // Notes: Owner and Admin delete anyone's (leads.notes.delete_any); Staff only their own.
   assert.strictEqual(leadPermissions('admin').canDeleteAnyNote, true);
-  assert.strictEqual(leadPermissions('manager').canDeleteAnyNote, false);
+  assert.strictEqual(leadPermissions('staff').canDeleteAnyNote, false);
 });
 
 test('bulk lead actions ask first and state the count', async () => {

@@ -3,7 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
-const { requirePermission } = require('../../services/permissions');
+const { requirePermission, requireSection } = require('../../services/permissions');
 const campaignAudience = require('../../services/campaignAudience');
 const campaignStats = require('../../services/campaignStats');
 const campaignSchedule = require('../../services/campaignSchedule');
@@ -61,7 +61,7 @@ const {
 // ══════════════════════════════════════════════════════════
 // CAMPAIGNS
 // ══════════════════════════════════════════════════════════
-app.get('/api/campaigns', auth, async (req, res) => {
+app.get('/api/campaigns', auth, requireSection('campaigns'), async (req, res) => {
   try {
     const campaignRows = await Campaigns.find({}, NO_ID).sort({ created_at: -1 }).lean();
     const [campaignClients, campaignTemplates, counts, tagList] = await Promise.all([
@@ -92,7 +92,7 @@ app.get('/api/campaigns', auth, async (req, res) => {
   }
 });
 // Audience tags in use in this workspace, for the campaign builder.
-app.get('/api/campaigns/tags', auth, async (req, res) => {
+app.get('/api/campaigns/tags', auth, requireSection('campaigns'), async (req, res) => {
   try {
     res.json({ tags: await campaignAudience.listTags() });
   } catch (err) {
@@ -101,7 +101,7 @@ app.get('/api/campaigns/tags', auth, async (req, res) => {
 });
 
 // Who can be targeted, with counts: statuses that have contacts, all contacts, tags.
-app.get('/api/campaigns/audience-counts', auth, async (req, res) => {
+app.get('/api/campaigns/audience-counts', auth, requireSection('campaigns'), async (req, res) => {
   try {
     const clientId = req.query.client_id;
     if (clientId && !(await Clients.exists({ id: Number(clientId) }))) return res.status(404).json({ error: 'This brand was not found.' });
@@ -113,7 +113,7 @@ app.get('/api/campaigns/audience-counts', auth, async (req, res) => {
 });
 
 // The connected number's daily sending limit: "Today: X of Y messages used".
-app.get('/api/campaigns/sending-limit', auth, async (req, res) => {
+app.get('/api/campaigns/sending-limit', auth, requireSection('campaigns'), async (req, res) => {
   try {
     const fields = { _id: 0, id: 1, phone_number_id: 1, whatsapp_number: 1 };
     const brand = req.query.client_id
@@ -135,7 +135,7 @@ app.get('/api/campaigns/sending-limit', auth, async (req, res) => {
 
 // Sample contact list for a template: phone, name, whatsapp_opt_in and the
 // columns the chosen template takes from the sheet.
-app.get('/api/campaigns/audience/sample', auth, manage, async (req, res) => {
+app.get('/api/campaigns/audience/sample', auth, requireSection('campaigns'), manage, async (req, res) => {
   try {
     const buffer = campaignUpload.sampleWorkbook(parseMappings(req.query.mappings));
     res.setHeader('Content-Disposition', 'attachment; filename="campaign_contacts_sample.xlsx"');
@@ -149,7 +149,7 @@ app.get('/api/campaigns/audience/sample', auth, manage, async (req, res) => {
 
 // Checks an uploaded list row by row. With save=true the ready contacts are
 // stored as an upload batch and its id (target_status "csv_...") is returned.
-app.post('/api/campaigns/audience/upload', auth, manage, acceptList, async (req, res) => {
+app.post('/api/campaigns/audience/upload', auth, requireSection('campaigns'), manage, acceptList, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Choose a .csv or .xlsx file to upload.', code: 'LIST_INVALID' });
     const brand = req.body.client_id ? await Clients.findOne({ id: Number(req.body.client_id) }, { _id: 0, id: 1 }).lean() : null;
@@ -171,7 +171,7 @@ app.post('/api/campaigns/audience/upload', auth, manage, acceptList, async (req,
 
 // Preview before sending: who gets it, who is left out and why, example messages,
 // the number's limits and the schedule. Nothing is queued or sent.
-app.post('/api/campaigns/preview', auth, manage, async (req, res) => {
+app.post('/api/campaigns/preview', auth, requireSection('campaigns'), manage, async (req, res) => {
   try {
     const { name, client_id, template_id, target_status, scheduled_at, template_parameters = {} } = req.body || {};
     const audience = await audienceLabel(req.body);
@@ -190,7 +190,7 @@ app.post('/api/campaigns/preview', auth, manage, async (req, res) => {
   }
 });
 
-app.post('/api/campaigns', auth, manage, async (req, res) => {
+app.post('/api/campaigns', auth, requireSection('campaigns'), manage, async (req, res) => {
   try {
     const { name, client_id, template_id, target_status, scheduled_at, template_parameters = {}, preview_confirmed, send_rest_later } = req.body;
     // A label audience must be one of this workspace's labels.
@@ -287,7 +287,7 @@ app.post('/api/campaigns', auth, manage, async (req, res) => {
 
 // Live progress of one campaign, for the sending screen: queued, sent, failed,
 // skipped and delivery receipts. Polled every few seconds by the page.
-app.get('/api/campaigns/:id/progress', auth, async (req, res) => {
+app.get('/api/campaigns/:id/progress', auth, requireSection('campaigns'), async (req, res) => {
   try {
     const id = Number(req.params.id);
     const campaign = await Campaigns.findOne({ id }, { _id: 0, id: 1, name: 1, status: 1, scheduled_at: 1, launched_at: 1, created_at: 1 }).lean();
@@ -314,7 +314,7 @@ app.get('/api/campaigns/:id/progress', auth, async (req, res) => {
 });
 
 // Cancel a scheduled campaign before it starts.
-app.post('/api/campaigns/:id/cancel', auth, manage, async (req, res) => {
+app.post('/api/campaigns/:id/cancel', auth, requireSection('campaigns'), manage, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const result = await Campaigns.updateOne({ id, status: 'scheduled' }, { $set: { status: 'cancelled', cancelled_at: new Date(), cancelled_by: req.user.id } });
@@ -332,7 +332,7 @@ app.post('/api/campaigns/:id/cancel', auth, manage, async (req, res) => {
 });
 
 // Rename or move a scheduled campaign (only before it starts).
-app.patch('/api/campaigns/:id', auth, manage, async (req, res) => {
+app.patch('/api/campaigns/:id', auth, requireSection('campaigns'), manage, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const campaign = await Campaigns.findOne({ id }, NO_ID).lean();
@@ -374,7 +374,7 @@ app.patch('/api/campaigns/:id', auth, manage, async (req, res) => {
   }
 });
 
-app.delete('/api/campaigns/:id', auth, manage, async (req, res) => {
+app.delete('/api/campaigns/:id', auth, requireSection('campaigns'), manage, async (req, res) => {
   try {
     const { id } = req.params;
     const doomedCampaign = await Campaigns.findOne({ id: Number(id) }, { _id: 0, name: 1, status: 1 }).lean();
@@ -389,7 +389,7 @@ app.delete('/api/campaigns/:id', auth, manage, async (req, res) => {
 });
 
 // POST /api/campaigns/execute
-app.post('/api/campaigns/execute', internalAuth, async (req, res) => {
+app.post('/api/campaigns/execute', internalAuth, requireSection('campaigns'), async (req, res) => {
   try {
     const { campaign_id } = req.body;
     // Execute asynchronously without blocking
@@ -402,7 +402,7 @@ app.post('/api/campaigns/execute', internalAuth, async (req, res) => {
 });
 
 // POST /api/campaigns/:id/retry - Retry a failed/stuck campaign
-app.post('/api/campaigns/:id/retry', auth, manage, async (req, res) => {
+app.post('/api/campaigns/:id/retry', auth, requireSection('campaigns'), manage, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -450,7 +450,7 @@ app.post('/api/campaigns/:id/retry', auth, manage, async (req, res) => {
 });
 
 // GET /api/campaigns/:id/queue - Get queue status for specific campaign
-app.get('/api/campaigns/:id/queue', auth, async (req, res) => {
+app.get('/api/campaigns/:id/queue', auth, requireSection('campaigns'), async (req, res) => {
   try {
     const { id } = req.params;
     res.json({ queue: await campaignQueueStats({ campaign_id: Number(id) }) });
@@ -460,7 +460,7 @@ app.get('/api/campaigns/:id/queue', auth, async (req, res) => {
 });
 
 // GET /api/campaigns/:id/debug - Debug campaign recipients
-app.get('/api/campaigns/:id/debug', auth, async (req, res) => {
+app.get('/api/campaigns/:id/debug', auth, requireSection('campaigns'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -501,7 +501,7 @@ app.get('/api/campaigns/:id/debug', auth, async (req, res) => {
 });
 
 // GET /api/campaigns/queue/status - Get overall queue processing status
-app.get('/api/campaigns/queue/status', auth, async (req, res) => {
+app.get('/api/campaigns/queue/status', auth, requireSection('campaigns'), async (req, res) => {
   try {
     res.json({
       queue: await campaignQueueStats({}),
@@ -519,7 +519,7 @@ app.get('/api/campaigns/queue/status', auth, async (req, res) => {
 });
 
 // GET /api/campaigns/:id/logs
-app.get('/api/campaigns/:id/logs', auth, async (req, res) => {
+app.get('/api/campaigns/:id/logs', auth, requireSection('campaigns'), async (req, res) => {
   try {
     const { id } = req.params;
     const logRows = await CampaignLogs.find({ campaign_id: Number(id) }, NO_ID).lean();

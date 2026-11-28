@@ -131,7 +131,8 @@ test('Cross-customer security', async (t) => {
 
       // The list never shows B's people or invitations.
       const list = await request(app).get('/api/team/users').set(h);
-      if (role === 'agent') refused(list, 'agent team list', [403]);
+      // Old managers and agents are Staff now: no Team page.
+      if (['manager', 'agent'].includes(role)) refused(list, `${role} team list`, [403]);
       else {
         assert.strictEqual(list.status, 200);
         assert.ok(list.body.users.every((u) => u.tenant_id === 1), `${role}: only A users`);
@@ -177,7 +178,7 @@ test('Cross-customer security', async (t) => {
       refused(await request(app).delete(`/api/leads/${bLeadIds[0]}`).set(h), `${label} DELETE B lead`);
       refused(await request(app).post(`/api/leads/${bLeadIds[0]}/ai`).set(h).send({ paused: true }), `${label} pause AI on B lead`);
       // Exports of B ids: agents are refused, others match nothing.
-      refused(await request(app).post('/api/leads/exports').set(h).send({ mode: 'selected', ids: bLeadIds }), `${label} export B leads`, role === 'agent' ? [403] : [400]);
+      refused(await request(app).post('/api/leads/exports').set(h).send({ mode: 'selected', ids: bLeadIds }), `${label} export B leads`, ['manager', 'agent'].includes(role) ? [403] : [400]);
       // Filtering by a B assignee finds nothing.
       const filtered = await request(app).get(`/api/leads?assigned_to=${B.users.agent.id}`).set(h);
       assert.strictEqual(filtered.status, 200);
@@ -193,7 +194,8 @@ test('Cross-customer security', async (t) => {
       assert.ok(exp.status >= 400 || !String(exp.text).includes('Task 2'), `${label}: export of a B task`);
       // Activity log: only A's events, even when asking for a B person.
       const act = await request(app).get(`/api/activity?user_id=${B.users.owner.id}`).set(h);
-      if (['manager', 'agent'].includes(role)) refused(act, `${label} activity`, [403]);
+      // The activity log is for Owners.
+      if (role !== 'owner') refused(act, `${label} activity`, [403]);
       else {
         assert.strictEqual(act.status, 200);
         assert.strictEqual(act.body.events.length, 0, `${label}: no B events`);

@@ -3,6 +3,7 @@
  * Moved out of server.js unchanged; shared helpers still live in server.js and
  * arrive through `ctx`.
  */
+const { requireSection, ownDataOnly } = require('../../services/permissions');
 module.exports = function registerReportsRoutes(app, ctx) {
 const {
   Clients,
@@ -21,14 +22,18 @@ const {
   sumCapturedPayments,
 } = ctx;
 // GET /api/reports/summary — dashboard stats
-app.get('/api/reports/summary', auth, async (req, res) => {
+app.get('/api/reports/summary', auth, requireSection('dashboard', 'reports'), async (req, res) => {
   try {
     const range = req.query.range || '30d';
     const client_id = req.query.client_id;
     const filterBrand = client_id && client_id !== 'all' && client_id !== 'All Brands' && client_id !== 'undefined';
     const brandId = filterBrand ? Number(client_id) : null;
-    const brandFilter = filterBrand ? { client_id: brandId } : {};
-    const brandLeadIds = filterBrand ? await Leads.distinct('id', brandFilter) : null;
+    // Staff see only the leads assigned to them (and those leads' payments);
+    // Owners and Admins see the whole team.
+    const own = ownDataOnly(req.identity) ? { assigned_to: req.user.id } : {};
+    const brandFilter = { ...(filterBrand ? { client_id: brandId } : {}), ...own };
+    const scoped = filterBrand || Object.keys(own).length > 0;
+    const brandLeadIds = scoped ? await Leads.distinct('id', brandFilter) : null;
     const countLeads = (filter) => Leads.countDocuments({ ...brandFilter, ...filter });
 
     if (range === 'custom') {
@@ -144,7 +149,7 @@ app.get('/api/reports/summary', auth, async (req, res) => {
 });
 
 // GET /api/reports/leads — for reports page
-app.get('/api/reports/leads', auth, async (req, res) => {
+app.get('/api/reports/leads', auth, requireSection('reports'), async (req, res) => {
   try {
     const { from, to, brand } = req.query;
     const filter = {};
@@ -156,6 +161,8 @@ app.get('/api/reports/leads', auth, async (req, res) => {
       { id: 1, name: 1 }
     ).lean();
     if (brand && brand !== 'All Brands') filter.client_id = { $in: reportClients.map((c) => c.id) };
+    // Staff: only the leads assigned to them.
+    if (ownDataOnly(req.identity)) filter.assigned_to = req.user.id;
     const brandNames = new Map(reportClients.map((c) => [c.id, c.name]));
     const rows = (await Leads.find(filter, NO_ID).sort({ created_at: -1 }).limit(500).lean())
       .map((lead) => ({ ...lead, brand_name: brandNames.get(lead.client_id) ?? null }));

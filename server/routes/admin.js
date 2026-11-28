@@ -395,7 +395,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       const tenant = await loadTenant(tenantIdParam(req));
       if (!tenant || tenant.status === 'deleted') return res.status(404).json({ error: 'Tenant not found' });
       const result = await invitations.createInvitation({
-        tenantId: tenant.id, email: req.body?.email, name: req.body?.name, role: String(req.body?.role || 'agent').toLowerCase(),
+        tenantId: tenant.id, email: req.body?.email, name: req.body?.name, role: String(req.body?.role || 'staff').toLowerCase(), sections: Array.isArray(req.body?.sections) ? req.body.sections : undefined,
         invitedBy: { id: req.user.id, name: req.user.name }, req,
       });
       return res.status(201).json({ invitation: result.invitation, delivery: result.delivery }); // never the raw token
@@ -412,7 +412,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
       const body = req.body || {};
       const result = await teamMembers.createMember({
         tenantId: tenantIdParam(req), actor: staffActor(req),
-        name: body.name, email: body.email, phone: body.phone, role: body.role, method: body.method, password: body.password, req,
+        name: body.name, email: body.email, phone: body.phone, role: body.role, sections: body.sections, method: body.method, password: body.password, req,
       });
       return res.status(201).json(result); // never the password or an invitation token
     } catch (error) {
@@ -502,7 +502,8 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
         tenantId: tenant.id,
         email: body.email,
         name: body.name,
-        role: String(body.role || 'agent').toLowerCase(),
+        role: String(body.role || 'staff').toLowerCase(),
+        sections: Array.isArray(body.sections) ? body.sections : undefined,
         invitedBy: { id: req.user.id, name: req.user.name },
         req,
       });
@@ -522,7 +523,7 @@ function createAdminRouter({ verifyClientWhatsApp, metaInventory } = {}) {
   router.patch('/users/:userId/role', permit('platform.users.manage'), async (req, res) => {
     try {
       const tenantId = await tenantOfUser(req.params.userId);
-      return res.json({ user: await userAdmin.changeRole({ tenantId, userId: req.params.userId, newRole: req.body?.role, actor: staffActor(req), req }) });
+      return res.json({ user: await userAdmin.changeRole({ tenantId, userId: req.params.userId, newRole: req.body?.role, sections: req.body?.sections, actor: staffActor(req), req }) });
     } catch (error) {
       return fail(res, error);
     }

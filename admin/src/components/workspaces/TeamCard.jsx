@@ -16,8 +16,11 @@ import { cn } from '@/lib/utils';
 import { relativeTime, fullDateTime } from '../../utils/time';
 
 const apiError = (err, fallback) => err.response?.data?.error || fallback;
-const ROLES = [['owner', 'Owner'], ['admin', 'Admin'], ['manager', 'Manager'], ['agent', 'Agent']];
-const roleName = (role) => (ROLES.find(([value]) => value === role) || [null, role || '—'])[1];
+// Customer roles (server permissions.TENANT_ROLES). New Admins and Staff get the
+// default sections; the workspace Owner changes them in the app's Team page.
+const ROLES = [['owner', 'Owner'], ['admin', 'Admin'], ['staff', 'Staff']];
+const RETIRED_ROLES = { manager: 'Staff', agent: 'Staff' };
+const roleName = (role) => (ROLES.find(([value]) => value === role) || [null, RETIRED_ROLES[role] || role || '—'])[1];
 
 // Same rules as server/utils/passwordPolicy.js.
 const passwordProblem = (password, email) => {
@@ -34,7 +37,7 @@ const SHARE = 'Share it with them yourself. They must choose their own password 
 // they must change at first sign-in. Same rules and seat check as the
 // customer's Settings > Team (POST /api/admin/tenants/:id/users).
 function AddUserDialog({ open, onOpenChange, tenantId, onSaved }) {
-  const empty = { name: '', email: '', phone: '', role: 'agent', method: 'invite', password: '' };
+  const empty = { name: '', email: '', phone: '', role: 'staff', method: 'invite', password: '' };
   const [values, setValues] = useState(empty);
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);

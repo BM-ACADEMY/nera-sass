@@ -2,25 +2,51 @@ import test from 'node:test';
 import assert from 'node:assert';
 import {
   passwordProblem, assignableRoles, canSeeTeam, canActOn, memberStatus, seatSummary, addMemberProblem, editMemberProblem,
-  menuSections, addedNotice, resentNotice,
+  menuSections, addedNotice, resentNotice, defaultSections, mySections, hasSection, homePath, SECTION_KEYS, ROLE_HELP,
 } from './teamPolicy.js';
 
-test('the Team card is for people who may see the team; agents never see it', () => {
+test('the Team card is for people who may see the team; Staff never see it', () => {
   assert.strictEqual(canSeeTeam({ view_team: true }), true);
   assert.strictEqual(canSeeTeam({ view_team: false, manage_team: false }), false);
   assert.strictEqual(canSeeTeam(undefined), false);
 });
 
-test('roles: Owners give any role, Admins only Manager and Agent, others none', () => {
-  assert.deepStrictEqual(assignableRoles('owner'), ['owner', 'admin', 'manager', 'agent']);
-  assert.deepStrictEqual(assignableRoles('admin'), ['manager', 'agent']);
-  assert.deepStrictEqual(assignableRoles('manager'), []);
-  assert.deepStrictEqual(assignableRoles('agent'), []);
+test('roles: Owners give any role, Admins only Staff, Staff none', () => {
+  assert.deepStrictEqual(assignableRoles('owner'), ['owner', 'admin', 'staff']);
+  assert.deepStrictEqual(assignableRoles('admin'), ['staff']);
+  assert.deepStrictEqual(assignableRoles('staff'), []);
+  assert.strictEqual(ROLE_HELP.owner, 'Full access, including billing and the team.');
+  assert.strictEqual(ROLE_HELP.admin, 'The sections you pick, and can add Staff.');
+  assert.strictEqual(ROLE_HELP.staff, 'Only the sections you pick.');
 });
 
-test('actions: never on yourself, Admins leave Owners alone, managers only look', () => {
+test('sections: defaults, what someone has, and the first page they may open', () => {
+  assert.deepStrictEqual(defaultSections('staff'), ['leads', 'inbox']);
+  assert.deepStrictEqual(defaultSections('admin'), SECTION_KEYS);
+  assert.deepStrictEqual(defaultSections('owner'), []);
+  // An Admin adding someone ticks only sections the Admin has.
+  assert.deepStrictEqual(defaultSections('staff', ['leads', 'campaigns']), ['leads']);
+  assert.deepStrictEqual(mySections({ role: 'owner' }), SECTION_KEYS);
+  assert.deepStrictEqual(mySections({ role: 'staff', sections: ['inbox'] }), ['inbox']);
+  assert.strictEqual(mySections({ role: 'staff' }), null, 'unknown until the server answers');
+  assert.strictEqual(hasSection(['inbox'], 'campaigns'), false);
+  assert.strictEqual(hasSection(['inbox'], 'inbox'), true);
+  assert.strictEqual(hasSection(null, 'campaigns'), true);
+  const menu = [
+    { label: 'Overview', items: [{ path: '/dashboard', section: 'dashboard' }] },
+    { label: 'WhatsApp', items: [{ path: '/inbox', section: 'inbox' }, { path: '/whatsapp', permission: 'manage_whatsapp' }] },
+  ];
+  assert.strictEqual(homePath(['inbox'], menu), '/inbox');
+  assert.strictEqual(homePath(['dashboard', 'inbox'], menu), '/dashboard');
+  assert.strictEqual(homePath([], menu), '/settings');
+  const labels = (permissions) => menuSections(menu, permissions).flatMap((g) => g.items.map((i) => i.path));
+  assert.deepStrictEqual(labels({ sections: ['inbox'] }), ['/inbox']);
+  assert.deepStrictEqual(labels({ sections: ['inbox'], manage_whatsapp: true }), ['/inbox', '/whatsapp']);
+});
+
+test('actions: never on yourself, Admins act on Staff only, Staff only look', () => {
   const owner = { id: 1, role: 'owner' };
-  const agent = { id: 3, role: 'agent' };
+  const agent = { id: 3, role: 'staff' };
   assert.strictEqual(canActOn({ myRole: 'owner', myId: 1, canManage: true }, owner), false);
   assert.strictEqual(canActOn({ myRole: 'owner', myId: 1, canManage: true }, agent), true);
   assert.strictEqual(canActOn({ myRole: 'admin', myId: 2, canManage: true }, owner), false);
@@ -28,9 +54,9 @@ test('actions: never on yourself, Admins leave Owners alone, managers only look'
   // Admins leave other Admins to an Owner; Owners manage Admins.
   const otherAdmin = { id: 5, role: 'admin' };
   assert.strictEqual(canActOn({ myRole: 'admin', myId: 2, canManage: true }, otherAdmin), false);
-  assert.strictEqual(canActOn({ myRole: 'admin', myId: 2, canManage: true }, { id: 6, role: 'manager' }), true);
+  assert.strictEqual(canActOn({ myRole: 'admin', myId: 2, canManage: true }, { id: 6, role: 'staff' }), true);
   assert.strictEqual(canActOn({ myRole: 'owner', myId: 1, canManage: true }, otherAdmin), true);
-  assert.strictEqual(canActOn({ myRole: 'manager', myId: 4, canManage: false }, agent), false);
+  assert.strictEqual(canActOn({ myRole: 'staff', myId: 4, canManage: false }, agent), false);
 });
 
 test('status and seats', () => {
@@ -43,10 +69,12 @@ test('status and seats', () => {
 });
 
 test('add and edit forms are checked like the server', () => {
-  const ok = { name: 'Priya', email: 'priya@shop.in', phone: '+91 98765 43210', role: 'agent', method: 'password', password: 'Temporary-1x', confirm: 'Temporary-1x' };
+  const ok = { name: 'Priya', email: 'priya@shop.in', phone: '+91 98765 43210', role: 'staff', sections: ['leads', 'inbox'], method: 'password', password: 'Temporary-1x', confirm: 'Temporary-1x' };
   assert.strictEqual(addMemberProblem(ok, 'owner'), null);
   assert.strictEqual(addMemberProblem({ ...ok, method: 'invite', password: '', confirm: '' }, 'admin'), null);
   assert.match(addMemberProblem({ ...ok, role: 'admin' }, 'admin'), /role/);
+  assert.match(addMemberProblem({ ...ok, sections: [] }, 'owner'), /at least one section/);
+  assert.strictEqual(addMemberProblem({ ...ok, role: 'owner', sections: [] }, 'owner'), null, 'Owners need no sections');
   assert.match(addMemberProblem({ ...ok, password: 'short1', confirm: 'short1' }, 'owner'), /10 characters/);
   assert.match(addMemberProblem({ ...ok, confirm: 'other-pass-1' }, 'owner'), /do not match/);
   assert.match(addMemberProblem({ ...ok, email: 'nope' }, 'owner'), /email/);

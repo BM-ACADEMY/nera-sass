@@ -66,7 +66,7 @@ test('Team members', async (t) => {
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     assert.ok(!JSON.stringify(res.body).includes(TEMP), 'the password is never returned');
     assert.strictEqual(res.body.user.email, 'priya@acme.test');
-    assert.strictEqual(res.body.user.role, 'agent');
+    assert.strictEqual(res.body.user.role, 'staff', 'the retired agent role is added as Staff');
     assert.strictEqual(res.body.user.must_change_password, true);
     const row = await sys(() => Users.findOne({ email: 'priya@acme.test' }).lean());
     assert.strictEqual(row.tenant_id, 1);
@@ -113,7 +113,7 @@ test('Team members', async (t) => {
     const res = await addStaff(owner, { name: 'Ravi Manager', email: 'ravi@acme.test', phone: '+91 90000 00001', role: 'manager', method: 'invite' });
     assert.strictEqual(res.status, 201, JSON.stringify(res.body));
     assert.strictEqual(res.body.invitation.email, 'ravi@acme.test');
-    assert.strictEqual(res.body.invitation.role, 'manager');
+    assert.strictEqual(res.body.invitation.role, 'staff');
     assert.strictEqual(res.body.token, undefined, 'never the invitation token');
     const mail = notify.outbox().find((m) => m.to === 'ravi@acme.test');
     assert.ok(mail, 'invitation email sent');
@@ -121,7 +121,7 @@ test('Team members', async (t) => {
     const accepted = await request(app).post('/api/auth/invitations/accept').send({ token: link, name: 'Ravi', password: OWN });
     assert.strictEqual(accepted.status, 201, JSON.stringify(accepted.body));
     const row = await sys(() => Users.findOne({ email: 'ravi@acme.test' }).lean());
-    assert.strictEqual(row.role, 'manager');
+    assert.strictEqual(row.role, 'staff');
     assert.strictEqual(row.phone, '+91 90000 00001');
     assert.ok(!row.must_change_password, 'they chose their own password');
     // Invite with a password is refused (they choose their own).
@@ -172,7 +172,7 @@ test('Team members', async (t) => {
     assert.strictEqual((await addStaff(agent, body)).status, 403);
     assert.strictEqual((await request(app).get('/api/team/users').set(bearer(agent))).status, 403, 'agents do not see the team');
     assert.strictEqual((await request(app).get('/api/tenant').set(bearer(agent))).body.permissions.view_team, false);
-    assert.strictEqual((await request(app).get('/api/team/users').set(bearer(manager))).status, 200, 'managers may look');
+    assert.strictEqual((await request(app).get('/api/team/users').set(bearer(manager))).status, 403, 'old managers are Staff: no Team page');
     assert.strictEqual((await addStaff(manager, body)).status, 403);
     assert.strictEqual((await request(app).patch(`/api/team/users/${agent.id}`).set(bearer(manager)).send({ name: 'Changed' })).status, 403);
     assert.strictEqual((await request(app).post(`/api/team/users/${agent.id}/reset-password`).set(bearer(agent)).send({ password: TEMP })).status, 403);
@@ -193,10 +193,10 @@ test('Team members', async (t) => {
     const oldSession = (await login('agent@acme.test', 'Existing-Pass-1')).body.token;
     assert.strictEqual((await request(app).get('/api/tenant').set(auth(oldSession))).status, 200);
 
-    const edit = await request(app).patch(`/api/team/users/${agent.id}`).set(bearer(owner)).send({ name: 'Agent Renamed', phone: '+91 91234 56789', role: 'manager' });
+    const edit = await request(app).patch(`/api/team/users/${agent.id}`).set(bearer(owner)).send({ name: 'Agent Renamed', phone: '+91 91234 56789', role: 'admin' });
     assert.strictEqual(edit.status, 200, JSON.stringify(edit.body));
     assert.strictEqual(edit.body.user.name, 'Agent Renamed');
-    assert.strictEqual(edit.body.user.role, 'manager');
+    assert.strictEqual(edit.body.user.role, 'admin');
     assert.strictEqual((await request(app).patch(`/api/team/users/${agent.id}`).set(bearer(owner)).send({ phone: 'call me' })).status, 400);
 
     const reset = await request(app).post(`/api/team/users/${agent.id}/reset-password`).set(bearer(owner)).send({ password: TEMP });

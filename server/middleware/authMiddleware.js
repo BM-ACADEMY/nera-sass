@@ -136,6 +136,8 @@ function publicUser(user, identity, tenant) {
     email: user.email,
     phone: user.phone || null,
     role: identity.kind === 'tenant' ? identity.role : 'platform_staff',
+    // Customer users: the sidebar sections they can open (Owners: all).
+    sections: identity.kind === 'tenant' ? identity.sections : [],
     tenant_id: identity.kind === 'tenant' ? identity.tenantId : null,
     tenant_name: tenant?.name || null,
     is_platform_staff: identity.kind === 'staff',
