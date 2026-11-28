@@ -5,11 +5,13 @@
  */
 const crypto = require('crypto');
 const multer = require('multer');
-const { AiReplyLogs, BrainProfiles, Clients, Tenants } = require('../../models');
+const { AiReplyLogs, BrainProfiles, Clients, Leads, Tenants, Users } = require('../../models');
+const { confirmPassword } = require('../../services/stepUp');
 const { requirePermission, requireSection } = require('../../services/permissions');
 const { runAsSystem } = require('../../services/tenantContext');
 const prompts = require('../../services/brainPrompt');
 const brainEngine = require('../../services/brainEngine');
+const brandRouter = require('../../services/brandRouter');
 const activity = require('../../services/activity');
 
 const KIND_NAMES = { faq: 'FAQ', product: 'product', policy: 'policy', brochure: 'brochure', other: 'document' };
@@ -50,16 +52,39 @@ const workspaceOnly = (req, res, next) => (req.identity?.kind === 'tenant' ? nex
 
 const loadTenant = (id) => runAsSystem(() => Tenants.findOne({ id }, { _id: 0 }).lean(), 'ai-brain');
 const workspaceClient = () => Clients.findOne({}, { _id: 0, id: 1, name: 1 }).sort({ id: 1 }).lean();
-const loadBrain = () => BrainProfiles.findOne({}, { _id: 0 }).lean();
 
-async function brainResponse(req, brain = undefined) {
+// Brand brains: an optional client_id names the brand (services/brandRouter.js).
+// Absent = the workspace's brain, exactly as before brand brains existed.
+async function brandParam(value) {
+  if (value === undefined || value === null || value === '') return { clientId: null };
+  const id = Number(value);
+  if (!Number.isInteger(id) || id <= 0) return { error: 'client_id must be a brand of this workspace', status: 400 };
+  const { brands, client } = await brandRouter.loadBrands();
+  if (id === client?.id || brands.some((b) => b.client_id === id)) return { clientId: id };
+  return { error: 'Brand not found', status: 404 };
+}
+
+// The brain of a brand, or the workspace's brain (its own client's, else the first).
+async function loadBrain(clientId = null) {
+  const { brands, client } = await brandRouter.loadBrands();
+  if (clientId != null) return brands.find((b) => b.client_id === clientId)?.brain || null;
+  return brands.find((b) => b.client_id === (client?.id ?? null))?.brain || brands[0]?.brain || null;
+}
+
+const NOT_READY = 'This workspace cannot hold a brain per brand yet (run migration 045)';
+const brandLabel = (brain) => brain?.profile?.business_name || brain?.brand_name || 'this brand';
+
+async function brainResponse(req, brain = undefined, clientId = null) {
   const [saved, client, tenant] = await Promise.all([
-    brain === undefined ? loadBrain() : brain,
+    brain === undefined ? loadBrain(clientId) : brain,
     workspaceClient(),
     loadTenant(req.identity.tenantId),
   ]);
-  const profile = saved?.profile || { business_name: client?.name || tenant?.name || '', timezone: tenant?.timezone || 'Asia/Kolkata' };
+  const ownClient = clientId == null || clientId === client?.id;
+  const profile = saved?.profile || { business_name: (ownClient ? client?.name : saved?.brand_name) || tenant?.name || '', timezone: tenant?.timezone || 'Asia/Kolkata' };
   return {
+    client_id: saved?.client_id ?? clientId ?? null,
+    brand_name: saved?.brand_name || null,
     profile,
     version_type: saved?.version_type || 'client',
     brain_version: saved?.brain_version || 0,
@@ -106,7 +131,9 @@ app.post('/api/brain', auth, requireSection('ai_brain'), manageBrain, async (req
 // ── Brain profile ─────────────────────────────────────────
 app.get('/api/brain/profile', auth, requireSection('ai_brain'), workspaceOnly, async (req, res) => {
   try {
-    res.json(await brainResponse(req));
+    const target = await brandParam(req.query.client_id);
+    if (target.error) return res.status(target.status).json({ error: target.error });
+    res.json(await brainResponse(req, undefined, target.clientId));
   } catch (err) {
     console.error('[brain/profile]', err.message);
     res.status(500).json({ error: 'Server error' });
@@ -116,23 +143,31 @@ app.get('/api/brain/profile', auth, requireSection('ai_brain'), workspaceOnly, a
 // A save may be incomplete (a draft), except while the AI is on.
 app.put('/api/brain/profile', auth, requireSection('ai_brain'), workspaceOnly, manageBrain, async (req, res) => {
   try {
+    const target = await brandParam(req.body?.client_id ?? req.query.client_id);
+    if (target.error) return res.status(target.status).json({ error: target.error });
     const profile = prompts.cleanProfile(req.body?.profile);
-    const current = await loadBrain();
+    const current = await loadBrain(target.clientId);
     const missing = prompts.missingRequired(profile);
     if (current?.ai_enabled && missing.length) {
       return res.status(400).json({ error: `Turn the AI off before clearing required fields: ${missing.join(', ')}`, missing });
     }
     const set = { profile, updated_by: req.user.id, updated_at: new Date() };
-    const brain = current
-      ? await BrainProfiles.findOneAndUpdate({}, { $set: set, $inc: { brain_version: 1 } }, { new: true, projection: { _id: 0 } }).lean()
-      : (await BrainProfiles.create({ ...set, version_type: 'client', brain_version: 1 })).toObject();
+    let brain;
+    try {
+      brain = current
+        ? await BrainProfiles.findOneAndUpdate({ id: current.id }, { $set: set, $inc: { brain_version: 1 } }, { new: true, projection: { _id: 0 } }).lean()
+        : (await BrainProfiles.create({ ...set, ...(target.clientId != null && { client_id: target.clientId }), version_type: 'client', brain_version: 1 })).toObject();
+    } catch (err) {
+      if (err.code === 11000) return res.status(409).json({ error: NOT_READY, code: 'BRAND_BRAINS_NOT_READY' });
+      throw err;
+    }
     const fields = changedProfileFields(current?.profile, profile);
     await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, {
       targetType: 'brain_profile', targetId: brain?.id,
       summary: fields.length ? `Changed the AI Brain profile: ${fields.slice(0, 8).join(', ')}${fields.length > 8 ? ` and ${fields.length - 8} more` : ''}` : 'Saved the AI Brain profile (no changes)',
-      meta: { fields },
+      meta: { fields, ...(target.clientId != null && { client_id: target.clientId }) },
     });
-    res.json(await brainResponse(req, brain));
+    res.json(await brainResponse(req, brain, target.clientId));
   } catch (err) {
     console.error('[brain/profile]', err.message);
     res.status(500).json({ error: 'Server error' });
@@ -142,11 +177,11 @@ app.put('/api/brain/profile', auth, requireSection('ai_brain'), workspaceOnly, m
 // ── Knowledge items ───────────────────────────────────────
 const itemFilter = (req) => ({ id: Number(req.params.id), doc_type: /^(faq|product|policy|brochure|other):/ });
 
-async function createDoc({ kind, title, content }) {
-  const client = await workspaceClient();
-  if (!client) return null;
+async function createDoc({ kind, title, content, clientId = null }) {
+  const brandId = clientId ?? (await workspaceClient())?.id;
+  if (brandId == null) return null;
   return BrainDocs.create({
-    client_id: client.id,
+    client_id: brandId,
     doc_type: `${kind}:${crypto.randomUUID()}`,
     title: String(title || '').trim().slice(0, 200),
     content: String(content || '').trim().slice(0, MAX_DOC_CHARS),
@@ -160,7 +195,9 @@ app.post('/api/brain/docs', auth, requireSection('ai_brain'), workspaceOnly, man
     const { kind, title, content } = req.body || {};
     if (!DOC_KINDS.includes(kind)) return res.status(400).json({ error: 'Choose a valid document type' });
     if (!String(content || '').trim()) return res.status(400).json({ error: 'Content is required' });
-    const doc = await createDoc({ kind, title, content });
+    const target = await brandParam(req.body?.client_id);
+    if (target.error) return res.status(target.status).json({ error: target.error });
+    const doc = await createDoc({ kind, title, content, clientId: target.clientId });
     if (!doc) return res.status(409).json({ error: 'This workspace has no brand profile yet' });
     await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, { targetType: 'brain_doc', targetId: doc.id, summary: `Added ${docLabel(doc)} to the AI Brain` });
     res.json({ doc: doc.toObject() });
@@ -178,7 +215,9 @@ app.post('/api/brain/docs/upload', auth, requireSection('ai_brain'), workspaceOn
     const kind = DOC_KINDS.includes(req.body?.kind) ? req.body.kind : 'other';
     const content = (await fileText(req.file)).replace(/\n{3,}/g, '\n\n').trim();
     if (content.length < 20) return res.status(400).json({ error: 'No readable text found. A scanned PDF cannot be read.' });
-    const doc = await createDoc({ kind, title: req.body?.title || req.file.originalname, content });
+    const target = await brandParam(req.body?.client_id);
+    if (target.error) return res.status(target.status).json({ error: target.error });
+    const doc = await createDoc({ kind, title: req.body?.title || req.file.originalname, content, clientId: target.clientId });
     if (!doc) return res.status(409).json({ error: 'This workspace has no brand profile yet' });
     await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, { targetType: 'brain_doc', targetId: doc.id, summary: `Uploaded ${docLabel(doc)} to the AI Brain` });
     res.json({ doc: doc.toObject(), truncated: content.length > MAX_DOC_CHARS });
@@ -281,13 +320,22 @@ app.post('/api/brain/test', auth, requireSection('ai_brain'), workspaceOnly, man
   try {
     const message = String(req.body?.message || '').trim().slice(0, 1000);
     if (!message) return res.status(400).json({ error: 'Type a test message' });
-    const saved = await loadBrain();
-    const profile = prompts.cleanProfile(req.body?.profile || saved?.profile);
-    const missing = prompts.missingRequired(profile);
-    if (saved?.version_type !== 'nera' && missing.length) return res.status(400).json({ error: `Fill these first: ${missing.join(', ')}`, missing });
-    const client = await workspaceClient();
+    const target = await brandParam(req.body?.client_id);
+    if (target.error) return res.status(target.status).json({ error: target.error });
+    // mode: brand (the named brand answers), auto (the router picks, as in a
+    // live chat) or router (only which brand and why; no AI call).
+    const mode = ['brand', 'auto', 'router'].includes(req.body?.mode) ? req.body.mode : (target.clientId != null ? 'brand' : 'auto');
     const history = Array.isArray(req.body?.history) ? req.body.history : [];
-    res.json(await brainEngine.sandbox({ brain: { ...saved, profile, version_type: saved?.version_type || 'client' }, clientId: client?.id, message, history }));
+    const result = await brainEngine.testReply({
+      clientId: mode === 'brand' ? target.clientId : null,
+      mode,
+      profile: req.body?.profile || null,
+      profileClientId: target.clientId,
+      message,
+      history,
+    });
+    if (result.error) return res.status(result.status || 400).json(result.missing ? { error: result.error, missing: result.missing } : { error: result.error });
+    res.json(result);
   } catch (err) {
     console.error('[brain/test]', err.message);
     res.status(502).json({ error: 'The AI could not answer. Please try again.' });
@@ -299,23 +347,129 @@ app.post('/api/brain/test', auth, requireSection('ai_brain'), workspaceOnly, man
 app.post('/api/brain/ai-toggle', auth, requireSection('ai_brain'), workspaceOnly, adminOnly, async (req, res) => {
   try {
     const enabled = req.body?.enabled === true;
-    const current = await loadBrain();
+    const target = await brandParam(req.body?.client_id);
+    if (target.error) return res.status(target.status).json({ error: target.error });
+    const current = await loadBrain(target.clientId);
     const tenantId = req.identity.tenantId;
     if (enabled) {
       const missing = current?.version_type === 'nera' ? [] : prompts.missingRequired(current?.profile);
       if (!current || missing.length) return res.status(400).json({ error: `Fill these first: ${(missing.length ? missing : Object.values(prompts.REQUIRED_FIELDS)).join(', ')}`, missing });
       if (!process.env.N8N_BRAIN_WEBHOOK_URL) return res.status(409).json({ error: 'AI Brain replies are not set up on the server yet', code: 'AI_BRAIN_NOT_CONFIGURED' });
     }
-    if (current) await BrainProfiles.updateOne({}, { $set: { ai_enabled: enabled, updated_by: req.user.id, updated_at: new Date() } });
-    await runAsSystem(() => Tenants.updateOne({ id: tenantId }, { $set: { ai_enabled: enabled, updated_at: new Date() } }), 'ai-brain');
+    if (current) await BrainProfiles.updateOne({ id: current.id }, { $set: { ai_enabled: enabled, updated_by: req.user.id, updated_at: new Date() } });
+    // The workspace switch (also read by the older flow) stays on while any brand's AI is on.
+    const anyOn = enabled || Boolean(await BrainProfiles.exists({ ai_enabled: true }));
+    await runAsSystem(() => Tenants.updateOne({ id: tenantId }, { $set: { ai_enabled: anyOn, updated_at: new Date() } }), 'ai-brain');
+    const scope = target.clientId != null ? `for ${brandLabel(current)}` : 'for the workspace';
     await activity.log(req, enabled ? activity.EVENTS.AI_TURNED_ON : activity.EVENTS.AI_TURNED_OFF, {
       targetType: 'brain_profile', targetId: current?.id,
-      summary: enabled ? 'Turned AI replies on for the workspace' : 'Turned AI replies off for the workspace',
-      meta: { before: { ai_enabled: Boolean(current?.ai_enabled) }, after: { ai_enabled: enabled } },
+      summary: enabled ? `Turned AI replies on ${scope}` : `Turned AI replies off ${scope}`,
+      meta: { before: { ai_enabled: Boolean(current?.ai_enabled) }, after: { ai_enabled: enabled }, ...(target.clientId != null && { client_id: target.clientId }) },
     });
-    res.json(await brainResponse(req));
+    res.json(await brainResponse(req, undefined, target.clientId));
   } catch (err) {
     console.error('[brain/ai-toggle]', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Brand brains (several brands on one WhatsApp number) ──
+// GET /api/brain/brands: the workspace's brands, each with its own brain.
+app.get('/api/brain/brands', auth, requireSection('ai_brain'), workspaceOnly, async (req, res) => {
+  try {
+    const { brands, client } = await brandRouter.loadBrands();
+    const list = brands.map((b) => {
+      const missing = b.brain.version_type === 'nera' ? [] : prompts.missingRequired(b.brain.profile);
+      return {
+        client_id: b.client_id,
+        name: b.name,
+        ai_enabled: Boolean(b.brain.ai_enabled),
+        filled: !missing.length,
+        missing,
+        workspace_client: b.client_id === (client?.id ?? null),
+        route_keywords: b.brain.profile?.route_keywords || [],
+        route_ad_keywords: b.brain.profile?.route_ad_keywords || [],
+      };
+    });
+    if (!list.length && client) {
+      list.push({ client_id: client.id, name: client.name || '', ai_enabled: false, filled: false, missing: Object.values(prompts.REQUIRED_FIELDS), workspace_client: true, route_keywords: [], route_ad_keywords: [] });
+    }
+    res.json({ brands: list, multi: list.length > 1, max: brandRouter.MAX_BRANDS });
+  } catch (err) {
+    console.error('[brain/brands]', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/brain/brands { name }: another brand on this number gets its own
+// brain (AI off, empty profile). The workspace's current brain becomes the
+// brain of the workspace's own brand first.
+app.post('/api/brain/brands', auth, requireSection('ai_brain'), workspaceOnly, manageBrain, async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim().slice(0, 80);
+    if (name.length < 2) return res.status(400).json({ error: 'Type the brand name' });
+    const { brains, brands, client } = await brandRouter.loadBrands();
+    if (!client) return res.status(409).json({ error: 'This workspace has no brand profile yet' });
+    if (brands.length >= brandRouter.MAX_BRANDS) return res.status(400).json({ error: `Up to ${brandRouter.MAX_BRANDS} brands per workspace` });
+    if (brands.some((b) => b.name.toLowerCase() === name.toLowerCase())) return res.status(409).json({ error: 'A brand with this name already exists' });
+    const tenant = await loadTenant(req.identity.tenantId);
+    try {
+      const own = brains.find((b) => b.client_id === client.id);
+      const legacy = brains.find((b) => b.client_id == null);
+      if (!own && legacy) await BrainProfiles.updateOne({ id: legacy.id }, { $set: { client_id: client.id, updated_at: new Date() } });
+      else if (!own) {
+        await BrainProfiles.create({ client_id: client.id, profile: { business_name: client.name || '', timezone: tenant?.timezone || 'Asia/Kolkata' }, ai_enabled: false, version_type: 'client', brain_version: 1, updated_by: req.user.id });
+      }
+      // An id from the clients counter: never the id of a real client, so the
+      // documents keyed by it can only ever be this brand's.
+      const brandId = await Clients.nextId();
+      const brain = (await BrainProfiles.create({
+        client_id: brandId,
+        brand_name: name,
+        profile: { business_name: name, timezone: tenant?.timezone || 'Asia/Kolkata' },
+        ai_enabled: false, version_type: 'client', brain_version: 1, updated_by: req.user.id,
+      })).toObject();
+      await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, { targetType: 'brain_profile', targetId: brain.id, summary: `Added the brand "${name}" to the AI Brain`, meta: { client_id: brandId } });
+      res.json({ client_id: brandId, name });
+    } catch (err) {
+      if (err.code === 11000) return res.status(409).json({ error: NOT_READY, code: 'BRAND_BRAINS_NOT_READY' });
+      throw err;
+    }
+  } catch (err) {
+    console.error('[brain/brands]', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/brain/brands/:clientId/delete { password }: removes an added brand
+// with its brain and knowledge. Owner only, and the Owner types their password.
+// The workspace's own brand cannot be removed. Chats routed to it go back to
+// the router.
+app.post('/api/brain/brands/:clientId/delete', auth, requireSection('ai_brain'), workspaceOnly, adminOnly, async (req, res) => {
+  try {
+    const brandId = Number(req.params.clientId);
+    if (!Number.isInteger(brandId) || brandId <= 0) return res.status(404).json({ error: 'Brand not found' });
+    const user = await Users.findOne({ id: req.user.id }).lean();
+    const refused = await confirmPassword(user, req.body || {}, req);
+    if (refused) return res.status(refused.status).json(refused.body);
+    const client = await workspaceClient();
+    if (client && client.id === brandId) return res.status(400).json({ error: "The workspace's own brand cannot be removed", code: 'OWN_BRAND' });
+    const brain = await BrainProfiles.findOne({ client_id: brandId }, { _id: 0 }).lean();
+    if (!brain) return res.status(404).json({ error: 'Brand not found' });
+    const name = brandLabel(brain);
+    await BrainProfiles.deleteOne({ id: brain.id });
+    const docs = await BrainDocs.deleteMany({ client_id: brandId });
+    await Leads.updateMany({ brand_client_id: brandId }, { $unset: { brand_client_id: '' } });
+    const anyOn = Boolean(await BrainProfiles.exists({ ai_enabled: true }));
+    await runAsSystem(() => Tenants.updateOne({ id: req.identity.tenantId }, { $set: { ai_enabled: anyOn, updated_at: new Date() } }), 'ai-brain');
+    await activity.log(req, activity.EVENTS.AI_BRAIN_UPDATED, {
+      targetType: 'brain_profile', targetId: brain.id,
+      summary: `Removed the brand "${name}" from the AI Brain`,
+      meta: { client_id: brandId, docs_removed: docs.deletedCount || 0 },
+    });
+    res.json({ removed: true, client_id: brandId, name });
+  } catch (err) {
+    console.error('[brain/brands/delete]', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });

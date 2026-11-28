@@ -22,8 +22,12 @@ const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const NO_ID = { _id: 0 };
 
-async function loadSettings() {
-  const brain = await BrainProfiles.findOne({}, { _id: 0, profile: 1 }).lean();
+/** Appointment settings of a brand's brain (clientId), or of the workspace's brain. */
+async function loadSettings(clientId = null) {
+  const fields = { _id: 0, profile: 1 };
+  const brain = (clientId != null && await BrainProfiles.findOne({ client_id: Number(clientId) }, fields).lean())
+    || await BrainProfiles.findOne({ client_id: null }, fields).lean()
+    || await BrainProfiles.findOne({}, fields).sort({ id: 1 }).lean();
   return rules.settingsFromProfile(brain?.profile || {});
 }
 

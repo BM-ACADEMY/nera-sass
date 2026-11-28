@@ -137,6 +137,9 @@ function cleanProfile(input = {}) {
     // Fixed words checked before the AI runs (comma-separated or a list).
     brand_keep_keywords: keywordList(input.brand_keep_keywords),
     brand_skip_keywords: keywordList(input.brand_skip_keywords),
+    // Brand brains (several brands on one number): words that send a chat to this brand.
+    route_keywords: keywordList(input.route_keywords),
+    route_ad_keywords: keywordList(input.route_ad_keywords),
     industry: INDUSTRIES.includes(input.industry) ? input.industry : 'general',
     greeting_message: text(input.greeting_message, 300),
     booking_mode: input.booking_mode === 'appointments' ? 'appointments' : 'meetings',
@@ -392,6 +395,8 @@ module.exports = {
   REQUIRED_FIELDS,
   cleanProfile,
   brandDecision,
+  keywordList,
+  mentions,
   missingRequired,
   isOpenNow,
   renderClientBrain,
