@@ -13,6 +13,8 @@ module.exports = defineModel('leads', {
   source: { type: String },
   meta_lead_id: { type: String },
   ad_name: { type: String },
+  // Brand brains: the brand this chat is with once the router decided (services/brandRouter.js).
+  brand_client_id: { type: Number },
   follow_up_at: { type: Date },
   follow_up_note: { type: String },
   opted_out: { type: Boolean, default: false },

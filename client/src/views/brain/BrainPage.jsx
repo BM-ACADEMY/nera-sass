@@ -31,6 +31,10 @@ const DOC_KINDS = [['faq', 'FAQ'], ['product', 'Product'], ['policy', 'Policy'],
 const KNOWLEDGE = /^(faq|product|policy|brochure|other):/;
 const selectClass = 'h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50';
 
+// Brand brains: a brand's calls name it; a single-brand workspace sends nothing extra.
+const brandQuery = (brandId) => (brandId != null ? `?client_id=${brandId}` : '');
+const withBrand = (brandId, body = {}) => (brandId != null ? { ...body, client_id: brandId } : body);
+
 const splitLines = (value) => String(value || '').split('\n').map((line) => line.trim()).filter(Boolean);
 const splitComma = (value) => String(value || '').split(',').map((part) => part.trim()).filter(Boolean);
 
@@ -49,7 +53,7 @@ const Section = ({ title, children }) => (
   </Card>
 );
 
-function StatusCard({ brain, busy, onToggle }) {
+function StatusCard({ brain, busy, onToggle, brandName }) {
   const ready = !brain.missing.length;
   let note = 'The AI is answering your customers from this brain.';
   if (!brain.ai_enabled) {
@@ -62,7 +66,7 @@ function StatusCard({ brain, busy, onToggle }) {
         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><FiCpu className="size-5" /></span>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-bold">AI replies</span>
+            <span className="font-bold">{brandName ? `AI replies for ${brandName}` : 'AI replies'}</span>
             {brain.ai_enabled
               ? <Badge variant="success"><FiCheckCircle /> On</Badge>
               : <Badge variant="muted">Off</Badge>}
@@ -81,7 +85,7 @@ function StatusCard({ brain, busy, onToggle }) {
   );
 }
 
-function BusinessForm({ form, set }) {
+function BusinessForm({ form, set, routing = false }) {
   const hours = form.business_hours || {};
   const setHours = (changes) => set({ business_hours: { ...hours, ...changes } });
   const toggleDay = (day) => {
@@ -181,11 +185,23 @@ function BusinessForm({ form, set }) {
           <Input value={form.brand_keep_text || ''} placeholder="BM TechX, Google Maps, online store, website" onChange={(e) => set({ brand_keep_text: e.target.value })} />
         </Field>
       </Section>
+
+      {routing && (
+        <Section title="Routing">
+          <p className="-mt-2 text-sm text-muted-foreground">Which chats on your shared number come to this brand. Checked before the AI runs; once a chat is with a brand it stays there.</p>
+          <Field label="Words that mean this brand" hint="Comma-separated. A chat that mentions one of these (and no other brand's word) comes here.">
+            <Input value={form.route_text || ''} placeholder="BM Academy, course, placement" onChange={(e) => set({ route_text: e.target.value })} />
+          </Field>
+          <Field label="Ads for this brand" hint="Comma-separated words from the ad or campaign name the customer came from. The ad wins over words in the chat.">
+            <Input value={form.route_ad_text || ''} placeholder="Python batch, Academy admissions" onChange={(e) => set({ route_ad_text: e.target.value })} />
+          </Field>
+        </Section>
+      )}
     </div>
   );
 }
 
-function KnowledgeTab() {
+function KnowledgeTab({ brandId = null }) {
   const [docs, setDocs] = useState(null);
   const [draft, setDraft] = useState({ kind: 'faq', title: '', content: '' });
   const [busy, setBusy] = useState(false);
@@ -193,20 +209,20 @@ function KnowledgeTab() {
 
   const load = async () => {
     try {
-      const res = await api.get('/brain');
+      const res = await api.get(`/brain${brandQuery(brandId)}`);
       setDocs((res.docs || []).filter((doc) => KNOWLEDGE.test(doc.doc_type)));
     } catch (err) {
       toast.error(err.message || 'Could not load your documents');
       setDocs([]);
     }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [brandId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const add = async (e) => {
     e.preventDefault();
     setBusy(true);
     try {
-      const { doc } = await api.post('/brain/docs', draft);
+      const { doc } = await api.post('/brain/docs', withBrand(brandId, draft));
       setDocs((list) => [...list, doc]);
       setDraft({ kind: draft.kind, title: '', content: '' });
     } catch (err) {
@@ -224,6 +240,7 @@ function KnowledgeTab() {
       const data = new FormData();
       data.append('file', file);
       data.append('kind', draft.kind);
+      if (brandId != null) data.append('client_id', String(brandId));
       const res = await api.upload('/brain/docs/upload', data);
       setDocs((list) => [...list, res.doc]);
       toast.success(res.truncated ? 'Added. The file was long, so only the first part is used.' : 'File added', { id: toastId });
@@ -312,10 +329,13 @@ function KnowledgeTab() {
   );
 }
 
-function TestTab({ profile }) {
+function TestTab({ profile, brandId = null, brands = [] }) {
   const [chat, setChat] = useState([]);
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  // Several brands: let the router pick (as in a live chat) or test one brand.
+  const multi = brands.length > 1;
+  const [answerAs, setAnswerAs] = useState('auto');
 
   const send = async (e) => {
     e.preventDefault();
@@ -326,8 +346,17 @@ function TestTab({ profile }) {
     setText('');
     setBusy(true);
     try {
-      const res = await api.post('/brain/test', { message, history, profile });
-      setChat((list) => [...list, { direction: 'outbound', content: res.reply, handoff: res.handoff ? res.handoff_reason || 'Handed to your team' : null, leftAlone: res.in_scope === false }]);
+      const body = { message, history, profile };
+      if (multi) Object.assign(body, answerAs === 'auto' ? { mode: 'auto', client_id: brandId } : { mode: 'brand', client_id: Number(answerAs) });
+      const res = await api.post('/brain/test', body);
+      const router = res.router || null;
+      setChat((list) => [...list, {
+        direction: 'outbound',
+        content: res.reply,
+        handoff: res.handoff ? res.handoff_reason || 'Handed to your team' : null,
+        leftAlone: res.in_scope === false,
+        brand: router ? (res.brand_question ? `Not clear which brand: ${router.why}` : `Answered as ${router.name}: ${router.why}${router.ai_enabled ? '' : ' (AI is off for this brand: no reply would be sent)'}`) : null,
+      }]);
     } catch (err) {
       setChat((list) => [...list, { direction: 'error', content: err.message || 'The AI could not answer.' }]);
     } finally {
@@ -341,6 +370,14 @@ function TestTab({ profile }) {
         <h3 className="text-[15px] font-bold">Test your AI</h3>
         <p className="mt-1 text-sm text-muted-foreground">Chat as a customer. Nothing is sent on WhatsApp. This uses what is on your Business details tab, saved or not.</p>
       </div>
+      {multi && (
+        <Field label="Who answers" hint="The router picks the brand the way a live chat would: the chat's brand, then the ad, then the customer's words.">
+          <select className={selectClass} value={answerAs} onChange={(e) => { setAnswerAs(e.target.value); setChat([]); }}>
+            <option value="auto">The router picks the brand</option>
+            {brands.map((b) => <option key={b.client_id} value={String(b.client_id)}>{b.name}</option>)}
+          </select>
+        </Field>
+      )}
       <div className="flex min-h-64 flex-col gap-2 rounded-lg bg-muted/60 p-3" aria-live="polite">
         {!chat.length && <p className="m-auto text-sm text-muted-foreground">Try: "What are your timings?"</p>}
         {chat.map((m, i) => (
@@ -348,6 +385,7 @@ function TestTab({ profile }) {
             {m.content}
             {m.handoff && <div className="mt-1 text-xs font-semibold text-amber-700">Handed to your team: {m.handoff}</div>}
             {m.leftAlone && <div className="mt-1 text-xs font-semibold text-amber-700">Another brand on this number: this reply would not be sent</div>}
+            {m.brand && <div className="mt-1 text-xs font-semibold text-blue-700">{m.brand}</div>}
           </div>
         ))}
         {busy && <div className="self-start text-xs text-muted-foreground">Typing…</div>}
@@ -367,11 +405,22 @@ const toForm = (profile = {}) => ({
   languages_text: (profile.languages || []).join(', '),
   brand_keep_text: (profile.brand_keep_keywords || []).join(', '),
   brand_skip_text: (profile.brand_skip_keywords || []).join(', '),
+  route_text: (profile.route_keywords || []).join(', '),
+  route_ad_text: (profile.route_ad_keywords || []).join(', '),
 });
 
 const toProfile = (form) => {
-  const { products_text: products, questions_text: questions, languages_text: languages, brand_keep_text: keep, brand_skip_text: skip, ...rest } = form;
-  return { ...rest, products_and_services: splitLines(products), qualifying_questions: splitLines(questions), languages: splitComma(languages), brand_keep_keywords: splitComma(keep), brand_skip_keywords: splitComma(skip) };
+  const { products_text: products, questions_text: questions, languages_text: languages, brand_keep_text: keep, brand_skip_text: skip, route_text: route, route_ad_text: routeAd, ...rest } = form;
+  return {
+    ...rest,
+    products_and_services: splitLines(products),
+    qualifying_questions: splitLines(questions),
+    languages: splitComma(languages),
+    brand_keep_keywords: splitComma(keep),
+    brand_skip_keywords: splitComma(skip),
+    route_keywords: splitComma(route),
+    route_ad_keywords: splitComma(routeAd),
+  };
 };
 
 const TABS = [['business', 'Business details', FiBook], ['knowledge', 'Knowledge', FiCpu], ['test', 'Test', FiMessageCircle]];
@@ -384,19 +433,44 @@ export default function BrainPage() {
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [error, setError] = useState('');
+  // Brands on this number. One brand: no tabs and no client_id, exactly as before.
+  const [brands, setBrands] = useState([]);
+  const [brandId, setBrandId] = useState(null);
+  const [brandsReady, setBrandsReady] = useState(false);
+  const [maxBrands, setMaxBrands] = useState(5);
+  const multi = brands.length > 1;
+  const currentBrand = multi ? brands.find((b) => b.client_id === brandId) : null;
 
   const apply = (res) => { setBrain(res); setForm(toForm(res.profile)); };
+  const applyBrands = (res, pick) => {
+    const list = res?.brands || [];
+    setBrands(list);
+    setMaxBrands(res?.max || 5);
+    if (list.length > 1) setBrandId((current) => pick ?? (list.some((b) => b.client_id === current) ? current : list[0].client_id));
+    else setBrandId(null);
+    setBrandsReady(true);
+  };
+  const loadBrands = (pick) => api.get('/brain/brands').then((res) => applyBrands(res, pick)).catch(() => applyBrands(null));
+  useEffect(() => { loadBrands(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    api.get('/brain/profile').then(apply).catch((err) => setError(err.message || 'Could not load your AI Brain'));
-  }, []);
+    if (!brandsReady) return;
+    api.get(`/brain/profile${brandQuery(brandId)}`).then(apply).catch((err) => setError(err.message || 'Could not load your AI Brain'));
+  }, [brandId, brandsReady]);
+  const pickBrand = (id) => {
+    if (id === brandId) return;
+    setTab('business');
+    setBrain(null);
+    setBrandId(id);
+  };
 
   const set = (changes) => setForm((current) => ({ ...current, ...changes }));
 
   const save = async () => {
     setSaving(true);
     try {
-      apply(await api.put('/brain/profile', { profile: toProfile(form) }));
+      apply(await api.put('/brain/profile', withBrand(brandId, { profile: toProfile(form) })));
       toast.success('Saved');
+      if (multi) loadBrands();
     } catch (err) {
       toast.error(err.message || 'Could not save');
     } finally {
@@ -405,12 +479,13 @@ export default function BrainPage() {
   };
 
   const toggle = async (enabled) => {
-    if (!enabled && !window.confirm('Turn off AI replies? Your team will answer every chat.')) return;
+    if (!enabled && !window.confirm(currentBrand ? `Turn off AI replies for ${currentBrand.name}? Your team will answer its chats.` : 'Turn off AI replies? Your team will answer every chat.')) return;
     setToggling(true);
     try {
-      const res = await api.post('/brain/ai-toggle', { enabled });
+      const res = await api.post('/brain/ai-toggle', withBrand(brandId, { enabled }));
       setBrain(res);
       toast.success(enabled ? 'AI replies are on' : 'AI replies are off');
+      if (multi) loadBrands();
     } catch (err) {
       toast.error(err.message || 'Could not change this');
     } finally {
@@ -418,13 +493,49 @@ export default function BrainPage() {
     }
   };
 
+  const addBrand = async () => {
+    const name = (window.prompt('Name of the other brand on this WhatsApp number') || '').trim();
+    if (!name) return;
+    try {
+      const res = await api.post('/brain/brands', { name });
+      toast.success(`${res.name} added. Fill its details, then turn its AI on.`);
+      setBrain(null);
+      await loadBrands(res.client_id);
+    } catch (err) {
+      toast.error(err.message || 'Could not add this brand');
+    }
+  };
+  // Shown only to workspaces that already share their number (or have brands).
+  const canAddBrand = multi ? brands.length < maxBrands : Boolean(brain?.profile?.brand_scope || brain?.profile?.brand_skip_keywords?.length);
+
   if (error) return <div className="p-6"><Card className="items-center p-10 text-center text-sm text-muted-foreground">{error}</Card></div>;
   if (!brain) return <div className="flex flex-col gap-4 p-6" aria-busy="true"><Skeleton className="h-20" /><Skeleton className="h-96" /></div>;
   if (brain.legacy_editor) return <Suspense fallback={<div className="p-6"><Skeleton className="h-96" /></div>}><LegacyBrainEditor /></Suspense>;
 
   return (
     <div className="flex flex-col gap-5 p-4 sm:p-6">
-      <StatusCard brain={brain} busy={toggling} onToggle={toggle} />
+      {multi && (
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-1 rounded-lg bg-muted p-1" role="tablist" aria-label="Brands">
+            {brands.map((b) => (
+              <button
+                key={b.client_id}
+                type="button"
+                role="tab"
+                aria-selected={brandId === b.client_id}
+                onClick={() => pickBrand(b.client_id)}
+                className={cn('flex h-9 items-center gap-2 rounded-md px-3 text-[13px] font-semibold', brandId === b.client_id ? 'bg-background shadow-xs' : 'text-muted-foreground')}
+              >
+                <span className={cn('size-2 rounded-full', b.ai_enabled ? 'bg-emerald-500' : 'bg-muted-foreground/40')} aria-hidden="true" />
+                {b.name}
+                <span className="sr-only">{b.ai_enabled ? '(AI on)' : '(AI off)'}</span>
+              </button>
+            ))}
+          </div>
+          {canAddBrand && <Button variant="ghost" size="sm" onClick={addBrand}><FiPlus /> Add brand</Button>}
+        </div>
+      )}
+      <StatusCard brain={brain} busy={toggling} onToggle={toggle} brandName={currentBrand?.name} />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1 rounded-lg bg-muted p-1" role="tablist">
@@ -444,9 +555,15 @@ export default function BrainPage() {
         {tab === 'business' && <Button onClick={save} disabled={saving}><FiSave /> {saving ? 'Saving…' : 'Save'}</Button>}
       </div>
 
-      {tab === 'business' && <BusinessForm form={form} set={set} />}
-      {tab === 'knowledge' && <KnowledgeTab />}
-      {tab === 'test' && <TestTab profile={toProfile(form)} />}
+      {tab === 'business' && <BusinessForm form={form} set={set} routing={multi} />}
+      {tab === 'business' && !multi && canAddBrand && (
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          Another brand answers on this number too?
+          <Button variant="outline" size="sm" onClick={addBrand}><FiPlus /> Give it its own brain</Button>
+        </div>
+      )}
+      {tab === 'knowledge' && <KnowledgeTab key={brandId ?? 'one'} brandId={brandId} />}
+      {tab === 'test' && <TestTab key={brandId ?? 'one'} profile={toProfile(form)} brandId={brandId} brands={multi ? brands : []} />}
     </div>
   );
 }

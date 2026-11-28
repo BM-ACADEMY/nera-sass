@@ -234,7 +234,7 @@ app.get('/api/internal/context', internalAuth, async (req, res) => {
     const filter = { conversation_id: { $in: conversationIds } };
     if (Number.isInteger(before) && before > 0) filter.id = { $lt: before };
     const [brain, messages] = await Promise.all([
-      lead.client_id != null ? BrainDocs.find({ client_id: lead.client_id, is_active: { $ne: false } }, { _id: 0, doc_type: 1, content: 1 }).lean() : [],
+      (lead.brand_client_id ?? lead.client_id) != null ? BrainDocs.find({ client_id: lead.brand_client_id ?? lead.client_id, is_active: { $ne: false } }, { _id: 0, doc_type: 1, content: 1 }).lean() : [],
       Messages.find(filter, { _id: 0, id: 1, direction: 1, content: 1, is_ai: 1, sent_at: 1 }).sort({ id: -1 }).limit(limit).lean(),
     ]);
     const tenant = req.tenant || {};

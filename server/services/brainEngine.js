@@ -7,6 +7,7 @@
 const openRouter = require('./openrouter');
 const ai = require('./aiAutomation');
 const prompts = require('./brainPrompt');
+const brandRouter = require('./brandRouter');
 const booking = require('./brainBooking');
 const appointments = require('./appointments');
 const appointmentFlow = require('./appointmentFlow');
@@ -165,17 +166,27 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
   ).lean();
   if (!message) return { status: 404, error: 'Message not found on this lead' };
 
-  const brain = await BrainProfiles.findOne({}, { _id: 0 }).lean();
-  if (!brain?.ai_enabled) return { sent: false, reason: 'AI Brain is not turned on for this workspace' };
+  // Which brain answers: the only one, or the brand the router picks (no model call).
+  const earlierInbound = await Messages.find(
+    { conversation_id: { $in: conversationIds }, direction: 'inbound', id: { $lt: message.id } },
+    { _id: 0, content: 1 },
+  ).sort({ id: -1 }).limit(10).lean();
+  const route = await brandRouter.routeLead({ lead, message: message.content, earlierInbound: earlierInbound.map((m) => m.content || '') });
+  const routed = route.mode === 'routed';
+  if (!routed && !route.brand?.brain?.ai_enabled) return { sent: false, reason: 'AI Brain is not turned on for this workspace' };
+  if (routed && !(await BrainProfiles.exists({ ai_enabled: true }))) return { sent: false, reason: 'AI Brain is not turned on for this workspace' };
   const blocked = await ai.aiBlockReason(tenant, lead);
   if (blocked) return { sent: false, reason: blocked };
+  const brand = route.brand || null;
+  const brain = brand?.brain || null;
 
   // A retry of a message already taken stops here, before anything is sent.
   let log;
   try {
     log = await AiReplyLogs.create({
       lead_id: lead.id, conversation_id: message.conversation_id, message_id: message.id,
-      brain_version: brain.brain_version, layer1_version: prompts.LAYER1_VERSION,
+      brain_version: brain?.brain_version ?? null, layer1_version: prompts.LAYER1_VERSION,
+      ...(routed && { brand_client_id: brand?.client_id ?? null, brand_route: route.reason }),
     });
   } catch (err) {
     if (err.code === 11000) return { sent: false, reason: 'This message was already answered', duplicate: true };
@@ -189,29 +200,56 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
     await finish({ status: 'no_send', handoff: true, handoff_reason: reason, language: language.code, ...extra });
     return { sent: false, reason };
   };
+  const NO_COST = { model: null, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost_usd: 0, cost_basis: 'none' };
 
   if (OPT_OUT_MESSAGE.test(message.content || '')) {
     const sentId = await send(say('optOut', systemLanguage(message.content)));
     await markOptedOut(lead.id, now);
     // No model call, so no tokens and no cost.
-    await finish({ status: 'sent', sent_message_id: sentId, opt_out: true, language: language.code, model: null, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost_usd: 0, cost_basis: 'none' });
+    await finish({ status: 'sent', sent_message_id: sentId, opt_out: true, language: language.code, ...NO_COST });
     return { sent: true, opt_out: true };
   }
 
-  // Shared number: a chat for another brand is left to people before any model call.
-  if (brain.profile?.brand_skip_keywords?.length) {
-    const [earlier, aiRepliedBefore] = await Promise.all([
-      Messages.find({ conversation_id: { $in: conversationIds }, direction: 'inbound', id: { $lt: message.id } }, { _id: 0, content: 1 }).sort({ id: -1 }).limit(10).lean(),
-      Messages.exists({ conversation_id: { $in: conversationIds }, direction: 'outbound', is_ai: true }),
-    ]);
+  if (routed) {
+    // Not clear which brand: one fixed question, asked once per chat.
+    if (route.question) {
+      const askedBefore = await Messages.exists({ conversation_id: { $in: conversationIds }, direction: 'outbound', content: route.question });
+      const lastIn = new Date(lead.last_inbound_at || message.sent_at || 0).getTime();
+      if (askedBefore || now.getTime() - lastIn >= WINDOW_MS) {
+        await finish({ status: 'no_send', handoff: false, handoff_reason: 'Left alone: not clear which brand this chat is for', language: language.code, ...NO_COST });
+        return { sent: false, reason: 'Not clear which brand this chat is for: left for the team', out_of_scope: true };
+      }
+      let questionId;
+      try {
+        questionId = await send(route.question);
+      } catch (err) {
+        await finish({ status: 'failed', language: language.code, ...NO_COST });
+        return { sent: false, reason: err.message };
+      }
+      await finish({ status: 'sent', sent_message_id: questionId, answered_from: 'greeting', language: language.code, ...NO_COST });
+      return { sent: true, brand_question: true };
+    }
+    if (route.persist && brand) await brandRouter.fixBrand(lead.id, brand.client_id);
+    // The brand has no brain yet or its AI is off: people answer, at no cost.
+    if (!brain?.ai_enabled) {
+      const reason = brand ? `Left alone: AI is off for ${brand.name}` : 'Left alone: no brand on this number has AI on';
+      await finish({ status: 'no_send', handoff: false, handoff_reason: reason, language: language.code, ...NO_COST });
+      return { sent: false, reason: `${brand ? `This chat is for ${brand.name}` : 'No brand'}, which has AI off: left for the team`, out_of_scope: true, brand_client_id: brand?.client_id ?? null };
+    }
+  }
+
+  // Shared number with one brain (or only one brand switched on): the fixed
+  // keyword rule leaves another brand's chat to people before any model call.
+  if ((!routed || route.fallback) && brain.profile?.brand_skip_keywords?.length) {
+    const aiRepliedBefore = await Messages.exists({ conversation_id: { $in: conversationIds }, direction: 'outbound', is_ai: true });
     const decision = prompts.brandDecision(brain.profile, {
       message: message.content,
-      earlierInbound: earlier.map((m) => m.content || ''),
+      earlierInbound: earlierInbound.map((m) => m.content || ''),
       adText: [lead.campaign_name, lead.ad_name].filter(Boolean).join(' '),
       aiRepliedBefore: Boolean(aiRepliedBefore),
     });
     if (decision === 'skip') {
-      await finish({ status: 'no_send', handoff: false, handoff_reason: 'Left alone: another brand on this number (keyword rule)', language: language.code, model: null, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cost_usd: 0, cost_basis: 'none' });
+      await finish({ status: 'no_send', handoff: false, handoff_reason: 'Left alone: another brand on this number (keyword rule)', language: language.code, ...NO_COST });
       return { sent: false, reason: 'This chat is for another brand on this number: left for the team', out_of_scope: true };
     }
   }
@@ -227,7 +265,8 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
   }
   const left = gate.left;
 
-  const client = lead.client_id != null ? lead.client_id : (await Clients.findOne({}, { _id: 0, id: 1 }).lean())?.id;
+  // A routed brand reads only its own documents; otherwise as before.
+  const client = routed ? brand.client_id : (brain.client_id ?? (lead.client_id != null ? lead.client_id : (await Clients.findOne({}, { _id: 0, id: 1 }).lean())?.id));
   const allDocs = await activeDocs(client);
   const docs = prompts.selectDocs(allDocs, message.content);
   const history = (await Messages.find(
@@ -381,7 +420,7 @@ async function respond({ io, tenant, leadId, messageId, send, now = new Date() }
   await finish({ ...trace, status: 'sent', sent_message_id: sentId });
   // Overage is paid from the wallet per sent reply; the 20 percent notices go out here.
   await aiAllowance.settle(gate, { referenceType: 'message', referenceId: sentId, now });
-  return { sent: true, handoff: output.handoff, opt_out: output.opt_out };
+  return { sent: true, handoff: output.handoff, opt_out: output.opt_out, ...(routed && { brand_client_id: brand.client_id }) };
 }
 
 const markOptedOut = (leadId, at) => Leads.updateOne({ id: leadId }, {
@@ -389,8 +428,8 @@ const markOptedOut = (leadId, at) => Leads.updateOne({ id: leadId }, {
 });
 
 /** Brain screen sandbox: drafts a reply and never sends or stores anything. */
-async function sandbox({ brain, clientId, message, history = [], now = new Date() }) {
-  if (brain.profile?.brand_skip_keywords?.length) {
+async function sandbox({ brain, clientId, message, history = [], keywordRule = true, now = new Date() }) {
+  if (keywordRule && brain.profile?.brand_skip_keywords?.length) {
     const decision = prompts.brandDecision(brain.profile, {
       message,
       earlierInbound: history.filter((m) => m.direction !== 'outbound').map((m) => String(m.content || '')),
@@ -415,4 +454,52 @@ async function sandbox({ brain, clientId, message, history = [], now = new Date(
   return { ...output, retrieved: docs.map((d) => d.title || d.doc_type), latency_ms: latency };
 }
 
-module.exports = { brainActive, respond, sandbox, parseOutput, breaksPriceRule, inventsPhoneNumber };
+/**
+ * Brain screen test for a workspace: picks the brain the way a live chat would
+ * (brandRouter) unless a brand is named, then drafts with that brand's profile
+ * and documents only. mode 'router' only shows which brand would answer and
+ * why (no model call). `profile` (unsaved edits) applies to the brand
+ * `profileClientId` names, or to the only brain. Never sends or stores anything.
+ */
+async function testReply({ clientId = null, mode = 'auto', profile = null, profileClientId = null, message, history = [], now = new Date() }) {
+  const { brands, client } = await brandRouter.loadBrands();
+  const earlierInbound = history.filter((m) => m.direction !== 'outbound').map((m) => String(m.content || '')).reverse();
+  let route;
+  if (clientId != null) {
+    const brand = brands.find((b) => b.client_id === Number(clientId))
+      || (Number(clientId) === client?.id && !brands.length ? { client_id: client.id, name: client.name, brain: null } : null);
+    if (!brand) return { error: 'Brand not found', status: 404 };
+    route = { mode: brands.length > 1 ? 'routed' : 'single', brand, reason: 'chosen in the test' };
+  } else {
+    route = brandRouter.decide(brands, { message, earlierInbound });
+    if (route.mode === 'single' && !route.brand) route.brand = { client_id: client?.id ?? null, name: client?.name || '', brain: null };
+  }
+  const routed = route.mode === 'routed';
+  const summary = {
+    client_id: route.brand?.client_id ?? null,
+    name: route.brand?.name || null,
+    reason: route.reason,
+    why: brandRouter.REASONS[route.reason] || route.reason,
+    ai_enabled: Boolean(route.brand?.brain?.ai_enabled),
+    ...(route.question && { question: route.question }),
+  };
+  if (mode === 'router') return { router: summary, brands: brands.length };
+  if (route.question) {
+    return { reply: route.question, handoff: false, handoff_reason: null, lead_updates: {}, opt_out: false, in_scope: true, brand_question: true, retrieved: [], latency_ms: 0, ...(routed && { router: summary }) };
+  }
+  if (!route.brand) {
+    return { reply: '', handoff: false, handoff_reason: null, lead_updates: {}, opt_out: false, in_scope: false, left_alone: 'no brand has AI on', retrieved: [], latency_ms: 0, router: summary };
+  }
+  const saved = route.brand.brain || {};
+  const useEdits = profile && (!routed || Number(profileClientId) === route.brand.client_id);
+  const brain = { ...saved, profile: prompts.cleanProfile(useEdits ? profile : saved.profile), version_type: saved.version_type || 'client' };
+  const missing = prompts.missingRequired(brain.profile);
+  if (brain.version_type !== 'nera' && missing.length) {
+    return { error: `Fill these first${routed ? ` for ${route.brand.name}` : ''}: ${missing.join(', ')}`, missing, status: 400, ...(routed && { router: summary }) };
+  }
+  const docsClient = routed ? route.brand.client_id : (saved.client_id ?? client?.id ?? null);
+  const out = await sandbox({ brain, clientId: docsClient, message, history, keywordRule: !routed || Boolean(route.fallback), now });
+  return { ...out, ...(routed && { router: summary }) };
+}
+
+module.exports = { brainActive, respond, sandbox, testReply, parseOutput, breaksPriceRule, inventsPhoneNumber };

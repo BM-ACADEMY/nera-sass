@@ -11,6 +11,9 @@ module.exports = defineModel('ai_reply_logs', {
   status: { type: String, default: 'processing' }, // processing | sent | no_send | failed
   brain_version: { type: Number },
   layer1_version: { type: String },
+  // Brand brains: the brand that answered and why (services/brandRouter.js).
+  brand_client_id: { type: Number },
+  brand_route: { type: String },
   retrieved_doc_ids: { type: [Number], default: [] },
   prompt: { type: String },
   handoff: { type: Boolean, default: false },
